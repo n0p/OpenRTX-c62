@@ -48,6 +48,21 @@ static constexpr uint8_t M17_RX_AUDIO_GAIN2 = 0x3f;
 static constexpr uint8_t M17_MIC_GAIN = 0;
 
 /*
+ * C62 BK4819 settings for DMR, receive only. DMR channels are 12.5 kHz, but
+ * the demodulator needs the discriminator flat and wide: as with TETRA, the
+ * chip runs in 25 kHz mode with the widest RF filters (REG_43 0x7e28), which
+ * is what the host prototype was validated on. The receiver estimates its
+ * levels per burst, so the deviation (1944 Hz on ETSI, 1600 Hz on the C62)
+ * does not have to be configured.
+ */
+static constexpr uint8_t DMR_RF_BW = 7;      // 4.5 kHz
+static constexpr uint8_t DMR_RF_BW_WEAK = 7; // 4.5 kHz
+static constexpr uint8_t DMR_TX_LPF2_BW = 0; // 3 kHz, unused in RX
+static constexpr uint8_t DMR_RX_AUDIO_GAIN1 = 1; // -6 dB
+static constexpr uint8_t DMR_RX_AUDIO_GAIN2 = 0x3f;
+static constexpr uint8_t DMR_MIC_GAIN = 0;
+
+/*
  * C62 BK4819 settings for TETRA, receive only. TETRA channels are 25 kHz
  * wide, so the chip runs in 25 kHz mode with the widest RF filters
  * (REG_43 0x7e28): that is the flat receive path the measured equalizer taps
@@ -62,11 +77,11 @@ static constexpr uint8_t TETRA_MIC_GAIN = 0;
 
 /**
  * Digital modes receive the raw discriminator through the flat audio path:
- * M17, and TETRA (receive only).
+ * M17, and DMR and TETRA (both receive only).
  */
 static bool flatMode(enum opmode mode)
 {
-    return (mode == OPMODE_M17) || (mode == OPMODE_TETRA);
+    return (mode == OPMODE_M17) || (mode == OPMODE_DMR) || (mode == OPMODE_TETRA);
 }
 
 /*
@@ -185,6 +200,16 @@ void radio_setOpmode(const enum opmode mode)
         bk4819_setRxAudioGain(&c62_bk4819, M17_RX_AUDIO_GAIN1,
                               M17_RX_AUDIO_GAIN2);
         bk4819_setMicGain(&c62_bk4819, M17_MIC_GAIN);
+    } else if (mode == OPMODE_DMR) {
+        // Flat, wide receive path, as for TETRA
+        bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_BYPASS);
+        bk4819_setBandwidth(&c62_bk4819, BK4819_BW_25K);
+        bk4819_setRfFilter(&c62_bk4819, DMR_RF_BW, DMR_RF_BW_WEAK);
+        bk4819_setTxAudioFilter(&c62_bk4819, DMR_TX_LPF2_BW);
+        bk4819_setRxAudioGain(&c62_bk4819, DMR_RX_AUDIO_GAIN1,
+                              DMR_RX_AUDIO_GAIN2);
+        bk4819_setMicGain(&c62_bk4819, DMR_MIC_GAIN);
+        c62_rx_reg43 = 0x7e28;
     } else if (mode == OPMODE_TETRA) {
         // Flat, wide receive path: 25 kHz channel, widest RF filters
         bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_BYPASS);
@@ -259,7 +284,7 @@ void radio_enableRx()
          * symbols much more than the -3pi/4 ones. The wanted signal is centred
          * on the IF, so filtering DC at the IF input does not touch it.
          */
-        if (radioMode == OPMODE_TETRA)
+        if ((radioMode == OPMODE_TETRA) || (radioMode == OPMODE_DMR))
             bk4819_maskSetRegister(&c62_bk4819, 0x7E, 0x0007, 0x0006);
 #endif
     } else if (config->rxToneEn) {
@@ -272,8 +297,9 @@ void radio_enableRx()
 
 void radio_enableTx()
 {
-    // TETRA is receive only on this radio
-    if ((config->txDisable == 1) || (radioMode == OPMODE_TETRA))
+    // DMR and TETRA are receive only on this radio
+    if ((config->txDisable == 1) || (radioMode == OPMODE_DMR)
+        || (radioMode == OPMODE_TETRA))
         return;
 
     gpioDev_clear(LNA_VHF_EN);

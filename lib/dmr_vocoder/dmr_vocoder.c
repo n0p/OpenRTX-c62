@@ -31,7 +31,13 @@
  * the rest of the system.  Nothing is ever freed during normal operation
  * (dmr_vocoder_free() is a no-op) because the plan is created once and reused.
  */
-#define DMR_VOCODER_ARENA_BYTES 20480u
+/*
+ * Sized to the measured high-water mark plus 1 KiB of margin: the plan and the
+ * tables are built once, on the first decode, and the usage does not depend on
+ * the frame (11 200 B measured on x86-64 and on the Cortex-M33).  A frame that
+ * does not fit returns -2 and no frame is ever silently truncated.
+ */
+#define DMR_VOCODER_ARENA_BYTES 12288u
 #define DMR_VOCODER_ARENA_ALIGN 64u
 
 static uint8_t dmr_arena[DMR_VOCODER_ARENA_BYTES] __attribute__((aligned(DMR_VOCODER_ARENA_ALIGN)));

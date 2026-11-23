@@ -14,6 +14,10 @@
 #include "ui/ui_strings.h"
 #include "core/utils.h"
 #include "ui/utils.h"
+#ifdef CONFIG_DMR
+#include "protocols/DMR/DmrDefs.h"
+#include "protocols/DMR/DmrStatus.h"
+#endif
 #ifdef CONFIG_TETRA
 #include "protocols/TETRA/TetraStatus.h"
 
@@ -298,6 +302,59 @@ const char* _ui_getToneEnabledString(bool tone_tx_enable, bool tone_rx_enable,
     return strings[use_abbreviation][index];
 }
 
+#ifdef CONFIG_DMR
+/**
+ * DMR colour code, timeslot and call state, on line 2 (replacing the channel
+ * mode line) and line 1 (where TETRA puts its demodulator figures).
+ */
+static void _ui_drawDmrInfo(void)
+{
+    struct dmrStatus ds;
+    dmr_getStatus(&ds);
+    const uint16_t pad = layout.horizontal_pad;
+    char a[32];
+
+    if (!ds.sync) {
+        const char *searching[] = { "DMR searching" };
+        _ui_printFit(layout.line2_pos, layout.line2_font, pad, searching, 1);
+        return;
+    }
+
+    if (ds.colourCode >= 0)
+        snprintf(a, sizeof(a), "CC%u TS%d", ds.colourCode,
+                 (ds.timeslot > 0) ? ds.timeslot : 0);
+    else
+        snprintf(a, sizeof(a), "CC- TS%d", (ds.timeslot > 0) ? ds.timeslot : 0);
+
+    const char *info[] = { a };
+    _ui_printFit(layout.line2_pos, layout.line2_font, pad, info, 1);
+}
+
+/**
+ * Line 1 in DMR: what the last burst was, and how open its eye is.
+ */
+static void _ui_drawDmrLine1(void)
+{
+    struct dmrStatus ds;
+    dmr_getStatus(&ds);
+    const uint16_t pad = layout.horizontal_pad;
+    char a[40], b[40], c[24];
+
+    if (!ds.sync)
+        return;
+
+    const char *state = ds.voice ? "Voice" : "Data";
+    if (!ds.voice && (ds.lastType >= 0))
+        state = dmr_data_type_name((uint8_t)ds.lastType);
+
+    snprintf(a, sizeof(a), "%s e%u%%", state, (unsigned)(ds.evm / 10));
+    snprintf(b, sizeof(b), "e%u%%", (unsigned)(ds.evm / 10));
+    snprintf(c, sizeof(c), "%s", state);
+    const char *texts[] = { a, b, c };
+    _ui_printFit(layout.line1_pos, layout.line1_font, pad, texts, 3);
+}
+#endif
+
 void _ui_drawModeInfo(ui_state_t* ui_state)
 {
     char bw_str[8] = { 0 };
@@ -330,11 +387,11 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
             }
             break;
 
+#ifdef CONFIG_DMR
         case OPMODE_DMR:
-            // Print talkgroup
-            gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
-                    color_white, "DMR TG%s", "");
+            _ui_drawDmrInfo();
             break;
+#endif
 
         #ifdef CONFIG_M17
         case OPMODE_M17:
@@ -590,6 +647,11 @@ void _ui_drawMainVFO(ui_state_t* ui_state)
     // Show VFO frequency unless the mode shows a call (M17 LSF, TETRA call)
     if(_ui_callShown() == false)
         _ui_drawFrequency();
+
+#ifdef CONFIG_DMR
+    if(last_state.channel.mode == OPMODE_DMR)
+        _ui_drawDmrLine1();
+#endif
 
     #ifdef CONFIG_TETRA
     if(last_state.channel.mode == OPMODE_TETRA)

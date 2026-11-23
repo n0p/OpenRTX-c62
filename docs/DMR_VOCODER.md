@@ -130,11 +130,12 @@ Per object (Zephyr flags, `arm-none-eabi-size`):
 | **Total** | **~52 KiB** | **~52 KiB** | linked, after `--gc-sections`: +41.4 KiB flash |
 
 The RAM is three quarters of one frame of history (3 × `mbe_parms`, 7 824 B), the
-23 656 B DCT cosine cache and the 20 480 B arena that replaces the heap (the FFT
-plan lives there).  Two ways to trim it, neither done here: the DCT cache is a
+23 656 B DCT cosine cache and the 12 288 B arena that replaces the heap (the FFT
+plan lives there).  The arena was sized to the measured 11 200 B high-water mark
+plus 1 KiB of margin, which is 8 KiB less than the first measurement in this
+document.  One way to trim it further is not done here: the DCT cache is a
 constant table (23 656 B) that could be generated at build time into flash, and
-only 1 785 of its 5 832 floats are ever read; the arena could be sized to the
-measured 11 200 B high-water mark.
+only 1 785 of its 5 832 floats are ever read.
 
 ## Cost on the Cortex-M33
 

@@ -10,6 +10,9 @@
 #include "rtx/rtx.h"
 #include "rtx/OpMode_FM.hpp"
 #include "rtx/OpMode_M17.hpp"
+#ifdef CONFIG_DMR
+#include "rtx/OpMode_DMR.hpp"
+#endif
 #ifdef CONFIG_TETRA
 #include "rtx/OpMode_TETRA.hpp"
 #endif
@@ -28,6 +31,9 @@ static OpMode_M17 m17Mode;              // M17 mode handler
 #endif
 #ifdef CONFIG_TETRA
 static OpMode_TETRA tetraMode;          // TETRA mode handler
+#endif
+#ifdef CONFIG_DMR
+static OpMode_DMR dmrMode;              // DMR mode handler
 #endif
 
 
@@ -150,6 +156,9 @@ void rtx_task()
                 case OPMODE_FM:   currMode = &fmMode;  break;
                 #ifdef CONFIG_M17
                 case OPMODE_M17:  currMode = &m17Mode; break;
+                #endif
+                #ifdef CONFIG_DMR
+                case OPMODE_DMR:   currMode = &dmrMode;   break;
                 #endif
                 #ifdef CONFIG_TETRA
                 case OPMODE_TETRA: currMode = &tetraMode; break;

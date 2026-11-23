@@ -49,6 +49,17 @@ config C62_DMR_VOCODER
 	  encoder: the AMBE+2 encoder does not fit in the Cortex-M33's budget.
 	  See docs/DMR_VOCODER.md.
 
+config C62_DMR_RX
+	bool "DMR receive mode (PHY, AMBE+2 vocoder and UI)"
+	select C62_DMR_VOCODER
+	default n
+	help
+	  DMR receiver: 4FSK demodulation of the discriminator output, slot
+	  sync, CACH, colour code and timeslot, and voice through the AMBE+2
+	  decoder. Receive only, there is no DMR transmitter. Selects the
+	  vocoder. See docs/DMR_RX.md.
+	  Enable it with west build -b c62 ... -- -DCONFIG_C62_DMR_RX=y
+
 endmenu
 
 DT_COMPAT_LSF_SERVICE_CONTROLLER := lsf,service-controller

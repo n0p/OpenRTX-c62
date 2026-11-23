@@ -1008,20 +1008,38 @@ static void _ui_fsm_menuMacro(kbd_msg_t msg, bool *sync_rtx)
             }
             break;
         case 5:
-            // Cycle through radio modes: FM, M17, TETRA
-            #ifdef CONFIG_M17
+        {
+            // Cycle through radio modes: FM, M17, TETRA, DMR, back to FM
+#if defined(CONFIG_M17) || defined(CONFIG_TETRA) || defined(CONFIG_DMR)
+            static const uint8_t modes[] = {
+#ifdef CONFIG_M17
+                OPMODE_M17,
+#endif
+#ifdef CONFIG_TETRA
+                OPMODE_TETRA,
+#endif
+#ifdef CONFIG_DMR
+                OPMODE_DMR,
+#endif
+            };
+            uint8_t nextMode = OPMODE_FM;
+
+            for (size_t i = 0; i < ARRAY_SIZE(modes); i++)
+            {
+                if(state.channel.mode == modes[i])
+                    nextMode = (i + 1 < ARRAY_SIZE(modes)) ? modes[i + 1]
+                                                           : OPMODE_FM;
+            }
+            // Catch invalid states so they do not get locked out
             if(state.channel.mode == OPMODE_FM)
-                state.channel.mode = OPMODE_M17;
-            #ifdef CONFIG_TETRA
-            else if(state.channel.mode == OPMODE_M17)
-                state.channel.mode = OPMODE_TETRA;
-            #endif
-            else //catch any invalid states so they don't get locked out
-            #endif
-                state.channel.mode = OPMODE_FM;
+                nextMode = modes[0];
+
+            state.channel.mode = nextMode;
+#endif
             *sync_rtx = true;
             vp_announceRadioMode(state.channel.mode, queueFlags);
             break;
+        }
         case 6:
 
             switch(state.channel.power)

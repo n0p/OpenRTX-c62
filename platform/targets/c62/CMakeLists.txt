@@ -111,7 +111,7 @@ endif()
 # Builds lib/dmr_vocoder (the decoder half of OpenDMR, C only, static state, no
 # heap) and links it into the application. OFF by default: it costs 41 KiB of
 # flash and 52 KiB of RAM (measured, see docs/DMR_VOCODER.md), and nothing calls
-# it until the DMR receive path lands.
+# it until CONFIG_C62_DMR_RX is set.
 #
 if(CONFIG_C62_DMR_VOCODER)
   add_subdirectory(${OPENRTX_ROOT}/lib/dmr_vocoder ${CMAKE_BINARY_DIR}/dmr_vocoder)
@@ -148,6 +148,23 @@ if(CONFIG_C62_DMR_VOCODER)
 
   message(STATUS "C62: DMR AMBE+2 vocoder (decode only) enabled"
                  " (force link: ${C62_DMR_VOCODER_FORCE_LINK})")
+endif()
+
+#
+# C62_DMR_RX: DMR receive mode. The PHY, the FEC and the burst handling are the
+# C port of the host prototype in work/dmr-rx (see docs/DMR_RX.md); voice goes
+# through lib/dmr_vocoder, so this option selects C62_DMR_VOCODER.
+#
+if(CONFIG_C62_DMR_RX)
+  target_sources(app PRIVATE
+    ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrDefs.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrFec.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrPhy.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrSpeech.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrStatus.c
+    ${OPENRTX_ROOT}/openrtx/src/rtx/OpMode_DMR.cpp)
+  target_compile_definitions(app PRIVATE CONFIG_DMR)
+  message(STATUS "C62: DMR receive mode enabled")
 endif()
 
 if(C62_TETRA)
