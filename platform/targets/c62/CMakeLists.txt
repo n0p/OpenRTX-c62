@@ -106,6 +106,50 @@ if(C62_BASEBAND_DUMP)
     target_compile_definitions(app PRIVATE C62_BASEBAND_DUMP_BURST=0)
   endif()
 endif()
+#
+# C62_DMR_VOCODER: AMBE+2 voice decoder for the DMR receive mode.
+# Builds lib/dmr_vocoder (the decoder half of OpenDMR, C only, static state, no
+# heap) and links it into the application. OFF by default: it costs 41 KiB of
+# flash and 52 KiB of RAM (measured, see docs/DMR_VOCODER.md), and nothing calls
+# it until the DMR receive path lands.
+#
+if(CONFIG_C62_DMR_VOCODER)
+  add_subdirectory(${OPENRTX_ROOT}/lib/dmr_vocoder ${CMAKE_BINARY_DIR}/dmr_vocoder)
+  # Build it with the Zephyr compiler flags (CPU, FPU, ABI, include paths).
+  target_compile_options(dmr_vocoder PRIVATE
+    $<TARGET_PROPERTY:zephyr_interface,INTERFACE_COMPILE_OPTIONS>)
+  target_compile_definitions(dmr_vocoder PRIVATE
+    $<TARGET_PROPERTY:zephyr_interface,INTERFACE_COMPILE_DEFINITIONS>)
+  target_include_directories(dmr_vocoder PRIVATE
+    $<TARGET_PROPERTY:zephyr_interface,INTERFACE_INCLUDE_DIRECTORIES>)
+  target_include_directories(dmr_vocoder SYSTEM PRIVATE
+    $<TARGET_PROPERTY:zephyr_interface,INTERFACE_SYSTEM_INCLUDE_DIRECTORIES>)
+  # The vocoder is the hot path of DMR RX: -O2, and no FP contraction so the
+  # float pipeline stays bit-identical to the host reference build. The math
+  # constants are pinned here, after the firmware-wide -DM_PI=...f copied above,
+  # because the vocoder's reference build uses the double-precision values.
+  target_compile_options(dmr_vocoder PRIVATE -O2 -ffp-contract=off)
+  target_compile_definitions(dmr_vocoder PRIVATE
+    M_PI=3.14159265358979323846 M_SQRT1_2=0.70710678118654752440
+    M_SQRT2=1.41421356237309504880)
+  # Nothing calls the vocoder until the DMR receive mode is merged, and the
+  # linker drops an unreferenced static library.  This forces the symbol in
+  # anyway so its flash/RAM cost can be measured on the real firmware image;
+  # it is a measurement aid, off by default.
+  option(C62_DMR_VOCODER_FORCE_LINK
+         "Link the vocoder without a caller (size measurement only)" OFF)
+  if(C62_DMR_VOCODER_FORCE_LINK)
+    # Must precede the library on the link line: -u is position sensitive.
+    zephyr_link_libraries(-Wl,-u,dmr_vocoder_decode)
+  endif()
+
+  target_link_libraries(app PRIVATE dmr_vocoder)
+  target_compile_definitions(app PRIVATE CONFIG_DMR_VOCODER)
+
+  message(STATUS "C62: DMR AMBE+2 vocoder (decode only) enabled"
+                 " (force link: ${C62_DMR_VOCODER_FORCE_LINK})")
+endif()
+
 if(C62_TETRA)
   set(C62_LIBTETRA ${WEST_TOPDIR}/modules/lib/libtetra)
   if(NOT EXISTS ${C62_LIBTETRA}/CMakeLists.txt)
