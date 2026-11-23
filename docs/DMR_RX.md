@@ -118,7 +118,7 @@ alone (436 444 / 195 248, the measurement of `docs/DMR_VOCODER.md`):
 | vocoder only | 436 444 B | 195 248 B |
 | **DMR RX** | **443 440 B (42.29 %)** | **198 600 B (75.76 %)** |
 
-zephyr.bin 443 440 B, sha256 `aac8d120e0a6754505797e3f7e62f06294d683eb215d3c51bcc91fdae043bb45`.
+zephyr.bin 443 440 B, sha256 `c9978d49efb431360b8236ca71157b813a61af7519cbc6a54fc1dddf01189f1e`.
 
 The mode costs **+6 996 B of flash** (PHY, FEC, speech, status, handler) and
 **+3 352 B of RAM** over the vocoder alone, **+48 472 B of flash** and

@@ -35,8 +35,8 @@ endmenu
 # platform/targets/c62/CMakeLists.txt builds the library and links it into the
 # application when this is set. Enable it with
 #   west build -b c62 ... -- -DCONFIG_C62_DMR_VOCODER=y
-# OFF by default: it costs 41 KiB of flash and 52 KiB of RAM (measured), and the
-# DMR receive mode that calls it is not merged yet.
+# OFF by default: it costs 41 KiB of flash and 52 KiB of RAM (measured). Select
+# it, with the mode that calls it, through C62_DMR_RX below.
 #
 menu "DMR"
 
