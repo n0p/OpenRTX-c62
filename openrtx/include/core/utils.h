@@ -23,6 +23,28 @@ extern "C" {
  */
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 
+#ifndef MIN
+/**
+ * Get the smaller of two values.
+ *
+ * @param a: first value.
+ * @param b: second value.
+ * @return the smaller value.
+ */
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
+#endif
+
+#ifndef MAX
+/**
+ * Get the larger of two values.
+ *
+ * @param a: first value.
+ * @param b: second value.
+ * @return the larger value.
+ */
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
+#endif
+
 /**
  * Perform division of two integer numbers, with rounding up of the result.
  *
@@ -119,6 +141,24 @@ static inline int32_t fixedPointToCoord(const int32_t value, const uint8_t unit)
     return tmp;
 }
 
+/**
+ * Multiply two signed 16-bit values without wrap around.
+ *
+ * @param a: first value
+ * @param b: second value
+ * @return product of input parameters
+ */
+static inline int16_t s16_mulSat(int16_t a, int16_t b)
+{
+    int32_t result = (int32_t)a * (int32_t)b;
+
+    if (result > INT16_MAX)
+        return INT16_MAX;
+    if (result < INT16_MIN)
+        return INT16_MIN;
+
+    return (int16_t)result;
+}
 #ifdef __cplusplus
 }
 #endif

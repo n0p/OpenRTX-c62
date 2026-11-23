@@ -110,7 +110,9 @@ static void status(void)
                      "S t=%lu m=%u f=%lu rssi=%d sv=%lu fo=%ld",
                      (unsigned long)k_uptime_get_32(), mode,
                      (unsigned long)freq, (int)rtx_getRssi(),
-                     (unsigned long)state_nvmSaves, (long)c62_getRxOffset());
+                     /* Saves are debounced in the nvmem driver: no counter *
+                      * survives the merge with upstream, report zero.       */
+                     0UL, (long)c62_getRxOffset());
 #ifdef CONFIG_TETRA
     if (mode == OPMODE_TETRA && n > 0 && (size_t)n < sizeof(text)) {
         struct tetraDiag dg;
@@ -309,7 +311,7 @@ static void execute(char *cmd)
             reply("E rr reg");
             return;
         }
-        reply("rr 0x%02lx 0x%04x", reg, BK4819_readReg(&c62_bk4819, reg));
+        reply("rr 0x%02lx 0x%04x", reg, bk4819_readReg(&c62_bk4819, reg));
     } else if (!strcmp(argv[0], "rw") && argc == 3) {
         unsigned long reg = strtoul(argv[1], NULL, 0);
         unsigned long val = strtoul(argv[2], NULL, 0);
@@ -317,8 +319,8 @@ static void execute(char *cmd)
             reply("E rw reg");
             return;
         }
-        BK4819_writeReg(&c62_bk4819, reg, val);
-        reply("rw 0x%02lx 0x%04x", reg, BK4819_readReg(&c62_bk4819, reg));
+        bk4819_writeReg(&c62_bk4819, reg, val);
+        reply("rw 0x%02lx 0x%04x", reg, bk4819_readReg(&c62_bk4819, reg));
 #ifdef CONFIG_TETRA_AFC
     } else if (!strcmp(argv[0], "afc")) {
         if (argc == 2) {

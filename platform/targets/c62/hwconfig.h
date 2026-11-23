@@ -40,12 +40,6 @@ extern "C" {
 #define CONFIG_M17
 
 /*
- * Settings and VFO are saved a few seconds after they change: at power off
- * the supply collapses too fast for a reliable flash write.
- */
-#define CONFIG_NVM_SAVE_ON_CHANGE
-
-/*
  * TETRA automatic frequency correction, by fine tuning of the BK4819: the
  * phase error is lowest with the carrier off the nominal frequency (the
  * filters of the flat receive path are not centred), and the crystal error
@@ -64,7 +58,7 @@ extern "C" {
     { 0.007f, -0.004f, 0.036f, -0.185f, 1.149f, -0.187f, 0.033f, -0.001f, 0.0f }
 /* clang-format on */
 
-/* Microphone audio input, set for C62_ADC_MIC_GAIN_D below */
+/* Software gain of the M17 microphone input, set for C62_ADC_MIC_GAIN_A/D */
 #define CONFIG_MIC_GAIN 13
 
 /*
@@ -85,6 +79,14 @@ extern "C" {
  * with the board devicetree (gpioa/gpiob nodes).
  */
 extern const struct BK4819 c62_bk4819;
+extern const struct gpioDev c62_bk4819_gpio;
+
+/* BK4819 GPIOs */
+#define LNA_VHF_EN &c62_bk4819_gpio, 0
+#define LNA_UHF_EN &c62_bk4819_gpio, 1
+#define PA_VHF_EN &c62_bk4819_gpio, 2
+#define PA_UHF_EN &c62_bk4819_gpio, 3
+#define ALC_TX_LED_EN &c62_bk4819_gpio, 4
 
 /**
  * Set the fine RX tuning offset, added to the channel frequency (Hz, 10 Hz
@@ -96,7 +98,7 @@ void c62_setRxOffset(int32_t hz);
  * @return the fine RX tuning offset, Hz.
  */
 int32_t c62_getRxOffset(void);
-extern const struct gpioDev c62_bk4819_gpio;
+
 extern const struct BK1080 c62_bk1080;
 
 extern const struct gpio_dt_spec speaker_enable;
@@ -108,6 +110,18 @@ extern const struct gpio_dt_spec led_keyboard;
 extern const struct pwm_dt_spec pwm_lcd_backlight;
 extern const struct pwm_dt_spec pwm_rf_apc;
 extern const struct device *adc_dev;
+
+/*
+ * Persistence policy.
+ *
+ * The C62 has no graceful shutdown: the power knob cuts power, so
+ * state_terminate() never runs and a save on shutdown would be lost. Settings
+ * and VFO changes are therefore persisted by a debounced write while the
+ * radio is running. Platforms with a clean shutdown leave this undefined and
+ * keep saving from state_terminate() only.
+ */
+#define NVMEM_DEBOUNCED_WRITE
+#define NVM_WRITE_DEBOUNCE_MS 3000
 
 #ifdef __cplusplus
 }

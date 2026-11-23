@@ -6,7 +6,6 @@
 
 #include <interfaces/platform.h>
 #include <interfaces/delays.h>
-#include <interfaces/nvmem.h>
 #include <hwconfig.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
@@ -15,8 +14,17 @@
 #include <zephyr/drivers/uart.h>
 #include <zephyr/drivers/pinctrl.h>
 #include <zephyr/kernel.h>
+#include <zephyr/sys/reboot.h>
 #include <interfaces/audio.h>
+#include <interfaces/nvmem.h>
 #include "drivers/SPI/spi_zephyr.h"
+#include "drivers/audio/csk6_codec.h"
+#ifdef C62_BASEBAND_DUMP
+#include "drivers/audio/baseband_dump_c62.h"
+#ifdef C62_REMOTE
+#include "drivers/audio/c62_remote.h"
+#endif
+#endif
 #include "controller.h"
 #include "dsp.h"
 
@@ -33,21 +41,43 @@ static const hwInfo_t hwInfo = {
 
 // ADC
 #define ADC_RAW_CHARGING_THRESHOLD 2100
+#define BAT_DET_SETTLE_MS 10 // Measured: settles to 1 LSB in 5 ms
 static int32_t adc_vref = 0;
 static bool is_battery_charging = false;
 
+PINCTRL_DT_DEFINE(DT_NODELABEL(adc0));
+PINCTRL_DT_DEFINE(DT_CHOSEN(zephyr_console));
+
 /**
- * Re-apply the ADC pin configuration, which the DSP firmware overwrites when
- * it starts.
+ * Re-apply what the DSP firmware overwrites when it starts and sets up audio:
+ * the battery ADC pins, which also read the power knob, and the console pins
+ * and UART settings. Then wait for the battery reading to settle.
  */
-static void battery_restore_pins(void)
+static void restore_dsp_overwrites(void)
 {
-    struct adc_csk6_cfg {
-        uint8_t pin;
-        const struct pinctrl_dev_config *pcfg;
-    };
-    const struct adc_csk6_cfg *config = adc_dev->config;
-    pinctrl_apply_state(config->pcfg, PINCTRL_STATE_DEFAULT);
+    const struct device *console = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
+    struct uart_config config;
+
+    int adc = pinctrl_apply_state(PINCTRL_DT_DEV_CONFIG_GET(DT_NODELABEL(adc0)),
+                                  PINCTRL_STATE_DEFAULT);
+    int pins = pinctrl_apply_state(
+        PINCTRL_DT_DEV_CONFIG_GET(DT_CHOSEN(zephyr_console)),
+        PINCTRL_STATE_DEFAULT);
+    /* The driver keeps its configuration, which the DSP leaves alone */
+    int uart = 0;
+#ifdef C62_BASEBAND_DUMP
+    /* The baseband dump owns the console UART and its baud rate */
+    (void)config;
+#else
+    uart = uart_config_get(console, &config);
+    if (uart == 0)
+        uart = uart_configure(console, &config);
+#endif
+    if ((adc != 0) || (pins != 0) || (uart != 0))
+        printk("Restore after DSP start failed: adc=%d pins=%d uart=%d\n", adc,
+               pins, uart);
+
+    sleepFor(0, BAT_DET_SETTLE_MS);
 }
 
 static int battery_init(void)
@@ -56,8 +86,6 @@ static int battery_init(void)
         printk("ADC device not ready\n");
         return -1;
     }
-
-    battery_restore_pins();
 
     // Configure ADC channel
     struct adc_channel_cfg channel_cfg = {
@@ -88,7 +116,7 @@ static int battery_init(void)
 
 void platform_init_csk6()
 {
-    /* Settings and VFO storage, read by state_init() */
+    /* Initialise non volatile memory manager */
     nvm_init();
 
     // Configure the PTT key as input with pull-up
@@ -118,19 +146,31 @@ void platform_init_csk6()
 
     /*
      * Start the DSP only now, after the BK4819 microphone input has settled.
-     * The battery reading also tells the power knob state, so restore its
-     * pins once the DSP is up.
+     * It changes pins while it starts and sets up audio: restore them after
+     * audio_init(). Nothing reads the battery ADC before then.
      */
     int ret = lsf_dsp_init();
     if (ret == 0)
         ret = lsf_controller_init();
 
-    battery_restore_pins();
-
     /* Initialise audio, which runs on the DSP */
     if (ret == 0)
         audio_init();
-    else
+
+    restore_dsp_overwrites();
+
+#ifdef C62_BASEBAND_DUMP
+    /* After the console restore: it sets the dump baud rate on the UART */
+    if (ret == 0)
+        baseband_dump_init();
+#ifdef C62_REMOTE
+    /* After the dump: replies are dump control packets */
+    if (ret == 0)
+        c62_remote_init();
+#endif
+#endif
+
+    if (ret != 0)
         printk("DSP start failed, no audio: %d\n", ret);
 }
 
@@ -139,10 +179,13 @@ void platform_terminate()
     /*
      * C62 does not have a proper power on/off mechanism and the MCU is
      * always powered. Thus, for turn off, perform a system reset.
+     *
+     * With the charger connected the chip stays powered through the reset:
+     * stop the DSP and reset the peripherals along with the core, or the
+     * DSP's UART interrupt halts the next boot.
      */
-    NVIC_SystemReset();
-    while (1)
-        ;
+    lsf_dsp_terminate();
+    sys_reboot(SYS_REBOOT_COLD);
 }
 
 /**
@@ -194,13 +237,14 @@ uint16_t platform_getVbat()
     // Adapt for voltage divider 200K and 100K
     uint32_t battery_voltage_mv = bat_det_value * 3;
 
-    //printk("Battery: %d mV\n", battery_voltage_mv);
     return (uint16_t)battery_voltage_mv;
 }
 
 uint8_t platform_getMicLevel()
 {
-    return 0;
+    /* The meter is shown only in the M17 and DMR modes: scale it by the
+     * software gain to show what the encoder sees, so full scale is clipping */
+    return MIN((csk6codec_getMicPeak() * CONFIG_MIC_GAIN) >> 7, UINT8_MAX);
 }
 
 uint8_t platform_getVolumeLevel()
@@ -270,7 +314,7 @@ void platform_beepStart(uint16_t freq)
 {
     /*
      * No BK4819 beeps: they come out of its AF output, which the speaker
-     * mux doesn't select, and BK4819_BeepStart() stops RX until the next
+     * mux doesn't select, and bk4819_beepStart() stops RX until the next
      * retune.
      */
     (void)freq;

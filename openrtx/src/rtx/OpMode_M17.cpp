@@ -177,6 +177,10 @@ void OpMode_M17::rxState(rtxStatus_t *const status)
     // Reset frame decoder when transitioning from unlocked to locked state.
     if((lock == true) && (locked == false))
     {
+        // A new transmission opens its own audio path: end a held one
+        codec_stop(rxAudioPath);
+        audioPath_release(rxAudioPath);
+
         decoder.reset();
         locked = lock;
     }
@@ -294,8 +298,13 @@ void OpMode_M17::rxState(rtxStatus_t *const status)
         status->M17_refl[0] = '\0';
 
         metaText.reset();
-        codec_stop(rxAudioPath);
-        audioPath_release(rxAudioPath);
+
+        // Let the codec play the audio already queued, unless leaving RX
+        if((status->opStatus != RX) || codec_queueEmpty(rxAudioPath))
+        {
+            codec_stop(rxAudioPath);
+            audioPath_release(rxAudioPath);
+        }
     }
 }
 

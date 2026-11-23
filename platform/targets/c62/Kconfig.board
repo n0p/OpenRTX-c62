@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 config BOARD_C62
-   bool "Retevis C62"
-   depends on SOC_CSK6
+	bool "Retevis C62"
+	depends on SOC_CSK6
 
 menu "DSP Manipulation"
 
@@ -34,5 +34,5 @@ config LSF_SERVICE_CONTROLLER
 	select REQUIRES_FULL_LIBC
 
 if LSF_SERVICE_CONTROLLER
-rsource "services/Kconfig"
+orsource "services/Kconfig"
 endif # LSF_SERVICE_CONTROLLER
