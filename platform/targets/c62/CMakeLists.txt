@@ -45,6 +45,8 @@ target_sources(app
 # or use a fresh build directory to change them.
 #
 # C62_WIDE_RX: widest BK4819 RX channel filter in M17 mode (REG_43 0x7e28).
+#   TETRA RX always uses that setting: its equalizer taps were measured on it.
+#   OFF gives upstream's reviewed M17 setting, 12.5 kHz mode (0x7808).
 # C62_BASEBAND_DUMP: stream the raw 48 kHz RX audio over the console UART,
 #   muting the log. See platform/drivers/audio/baseband_dump_c62.h and
 #   scripts/c62_bbdump.py.

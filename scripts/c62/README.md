@@ -59,7 +59,7 @@ docker run --rm -it --user "$(id -u):$(id -g)" \
 
 | Option | Default | Effect |
 |---|---|---|
-| `C62_WIDE_RX` | `ON` | M17-mode RX uses BK4819 `REG_43 = 0x7e28`, the widest documented filter (see section 4) |
+| `C62_WIDE_RX` | `ON` | M17-mode RX uses BK4819 `REG_43 = 0x7e28`, the widest documented filter (see section 4). `OFF` gives upstream's reviewed 12.5 kHz setting, `0x7808`; TETRA RX always uses `0x7e28` |
 | `C62_BASEBAND_DUMP` | `ON` | Send raw 48 kHz RX audio over the UART. The console log is muted after audio starts |
 | `C62_BASEBAND_DUMP_BAUD` | `115200` | UART baud rate during the dump |
 | `C62_BASEBAND_DUMP_BURST` | `ON` | Record 1 MiB (10.4 s) to PSRAM, send it, repeat |

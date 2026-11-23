@@ -68,6 +68,7 @@ static void restore_dsp_overwrites(void)
 #ifdef C62_BASEBAND_DUMP
     /* The baseband dump owns the console UART and its baud rate */
     (void)config;
+    (void)console;
 #else
     uart = uart_config_get(console, &config);
     if (uart == 0)

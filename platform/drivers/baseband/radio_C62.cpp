@@ -14,6 +14,9 @@
 #include "calibration/calib_C62.h"
 #include "drivers/baseband/BK4819.h"
 #include "radioUtils.h"
+#ifdef C62_BASEBAND_DUMP
+#include "../audio/baseband_dump_c62.h"
+#endif
 
 #include <zephyr/drivers/pwm.h>
 #include <zephyr/kernel.h>
@@ -76,6 +79,29 @@ static volatile int32_t rxOffset;
 extern "C" {
 volatile uint16_t c62_rx_reg43 = 0x7808;
 }
+
+#ifdef C62_REG43_SWEEP
+/*
+ * Cycle REG_43 through these values in the digital RX modes,
+ * C62_REG43_SWEEP_MS each, to measure them with a fixed test signal. Each
+ * dump packet carries the value in use. The last three have undocumented bits
+ * set. The sweep clock only runs while the dump records, so with the default
+ * dwell one 10.4 s burst covers all seven values.
+ */
+static const uint16_t reg43Sweep[] = {
+    0x7808, // M17 default, 12.5 kHz
+    0x7828, // 25 kHz, weak-signal filter 3.75 kHz
+    0x7e28, // 25 kHz, weak-signal filter 4.5 kHz
+    0x7e2c, // as above, +6 dB after demodulation
+    0x7e38, // BW mode 3 (undocumented)
+    0x7e20, // bit 3 cleared (undocumented)
+    0xfe28, // bit 15 set (undocumented)
+};
+static size_t reg43SweepIndex;
+static int64_t reg43SweepLast;    // Uptime at the previous check
+static int64_t reg43SweepElapsed; // Recorded time on the current value
+static bool reg43SweepStarted;
+#endif
 
 static struct C62Calib calData;  // TX calibration
 static struct C62CalPoint txCal; // TX calibration at the TX frequency
@@ -144,9 +170,17 @@ void radio_setOpmode(const enum opmode mode)
     if (mode == OPMODE_M17) {
         bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_BYPASS);
         bk4819_setTxDeviation(&c62_bk4819, true, M17_TX_DEVIATION);
+#ifdef C62_WIDE_RX
+        // 25 kHz mode with the widest documented RF filters (REG_43 0x7e28)
+        bk4819_setBandwidth(&c62_bk4819, BK4819_BW_25K);
+        bk4819_setRfFilter(&c62_bk4819, M17_RF_BW, 7);
+        c62_rx_reg43 = 0x7e28;
+#else
         // 12.5 kHz bandwidth mode; the M17 filters then replace its filters
         bk4819_setBandwidth(&c62_bk4819, BK4819_BW_12K5);
         bk4819_setRfFilter(&c62_bk4819, M17_RF_BW, M17_RF_BW_WEAK);
+        c62_rx_reg43 = 0x7808;
+#endif
         bk4819_setTxAudioFilter(&c62_bk4819, M17_TX_LPF2_BW);
         bk4819_setRxAudioGain(&c62_bk4819, M17_RX_AUDIO_GAIN1,
                               M17_RX_AUDIO_GAIN2);
@@ -334,6 +368,28 @@ void radio_updateConfiguration()
 
 rssi_t radio_getRssi()
 {
+#ifdef C62_REG43_SWEEP
+    /* Called by the rtx thread in RX, so it can own the BK4819 here */
+    if (flatMode(radioMode) && (radioStatus == RX)) {
+        int64_t now = k_uptime_get();
+        bool recording = true;
+#ifdef C62_BASEBAND_DUMP
+        recording = baseband_dump_recording();
+#endif
+        if (reg43SweepStarted && recording)
+            reg43SweepElapsed += now - reg43SweepLast;
+        reg43SweepLast = now;
+        if (!reg43SweepStarted || (reg43SweepElapsed >= C62_REG43_SWEEP_MS)) {
+            if (reg43SweepStarted)
+                reg43SweepIndex =
+                    (reg43SweepIndex + 1) % ARRAY_SIZE(reg43Sweep);
+            reg43SweepStarted = true;
+            reg43SweepElapsed = 0;
+            c62_rx_reg43 = reg43Sweep[reg43SweepIndex];
+            bk4819_writeReg(&c62_bk4819, 0x43, c62_rx_reg43);
+        }
+    }
+#endif
     return bk4819_getRssi(&c62_bk4819);
 }
 
