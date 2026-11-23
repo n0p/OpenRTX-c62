@@ -60,7 +60,6 @@ void dmrStatus_burst(const struct dmrBurst *burst)
 
     lastBurst = getTick();
     status.evm = (uint16_t)(burst->evm * 1000.0f);
-    status.phase = dmrPhy_phase();
 
     if (burst->cachValid) {
         status.accessType = burst->accessType;

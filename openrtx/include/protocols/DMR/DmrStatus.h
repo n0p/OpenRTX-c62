@@ -39,7 +39,6 @@ struct dmrStatus {
     uint32_t frames;      ///< AMBE+2 frames handed to the vocoder
     uint32_t crcChecks;   ///< Data blocks with a CRC, and those that passed
     uint32_t crcOk;
-    int phase;            ///< Coarse sampling phase in use
 };
 
 /**

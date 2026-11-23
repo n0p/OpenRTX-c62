@@ -256,8 +256,10 @@ int main(int argc, char **argv)
         dmrPhy_push(samples + offset, n, onBurst, NULL);
     }
 
-    printf("bursts %u, voice frames %u, gaps %u, %.2f s of audio\n", bursts,
-           frames, gapCount, (double)pcmWritten / PCM_RATE);
+    printf("bursts %u, voice frames %u, gaps %u, %.2f s of audio, "
+           "sampling phase %d\n",
+           bursts, frames, gapCount, (double)pcmWritten / PCM_RATE,
+           dmrPhy_phase());
 
     if (pcmFile != NULL) {
         fseek(pcmFile, 0, SEEK_SET);
