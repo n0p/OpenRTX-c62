@@ -31,30 +31,30 @@ extern "C" {
 
 /** Air-interface geometry, in symbols (each symbol is a dibit). */
 enum dmrAir {
-    DMR_SYMBOL_RATE = 4800,     ///< Symbols (dibits) per second
-    DMR_SLOT_SYMBOLS = 144,     ///< One 30 ms timeslot
-    DMR_FRAME_SYMBOLS = 288,    ///< One 60 ms TDMA frame, two slots
-    DMR_BURST_SYMBOLS = 132,    ///< 264 bits: 54 + sync 24 + 54
-    DMR_SYNC_SYMBOLS = 24,      ///< 48 bit slot sync
-    DMR_CACH_SYMBOLS = 12,      ///< 24 bit CACH, before the payload
-    DMR_BURST_BITS = 264,       ///< Payload bits of a burst, sync included
-    DMR_CACH_BITS = 24,         ///< CACH bits
-    DMR_HALF_BITS = 108,        ///< Payload bits on either side of the sync
-    DMR_PAYLOAD_BITS = 216,     ///< Three 72-bit AMBE+2 frames
-    DMR_INFO_BITS = 196,        ///< Two 98-bit halves, BPTC(196,96) input
-    DMR_AMBE_BITS = 72,         ///< One AMBE+2 voice frame
-    DMR_AMBE_BYTES = 9,         ///< Same frame, packed
-    DMR_FRAMES_PER_BURST = 3,   ///< AMBE+2 frames carried by a voice burst
-    DMR_PCM_PER_BURST = 480,    ///< 60 ms of 8 kHz audio
+    DMR_SYMBOL_RATE = 4800,   ///< Symbols (dibits) per second
+    DMR_SLOT_SYMBOLS = 144,   ///< One 30 ms timeslot
+    DMR_FRAME_SYMBOLS = 288,  ///< One 60 ms TDMA frame, two slots
+    DMR_BURST_SYMBOLS = 132,  ///< 264 bits: 54 + sync 24 + 54
+    DMR_SYNC_SYMBOLS = 24,    ///< 48 bit slot sync
+    DMR_CACH_SYMBOLS = 12,    ///< 24 bit CACH, before the payload
+    DMR_BURST_BITS = 264,     ///< Payload bits of a burst, sync included
+    DMR_CACH_BITS = 24,       ///< CACH bits
+    DMR_HALF_BITS = 108,      ///< Payload bits on either side of the sync
+    DMR_PAYLOAD_BITS = 216,   ///< Three 72-bit AMBE+2 frames
+    DMR_INFO_BITS = 196,      ///< Two 98-bit halves, BPTC(196,96) input
+    DMR_AMBE_BITS = 72,       ///< One AMBE+2 voice frame
+    DMR_AMBE_BYTES = 9,       ///< Same frame, packed
+    DMR_FRAMES_PER_BURST = 3, ///< AMBE+2 frames carried by a voice burst
+    DMR_PCM_PER_BURST = 480,  ///< 60 ms of 8 kHz audio
 };
 
 /** Received sync word. */
 enum dmrSync {
-    DMR_SYNC_NONE = 0,  ///< No sync
-    DMR_SYNC_BS_VOICE,  ///< Base station, voice
-    DMR_SYNC_BS_DATA,   ///< Base station, data
-    DMR_SYNC_MS_VOICE,  ///< Mobile station, voice
-    DMR_SYNC_MS_DATA,   ///< Mobile station, data
+    DMR_SYNC_NONE = 0, ///< No sync
+    DMR_SYNC_BS_VOICE, ///< Base station, voice
+    DMR_SYNC_BS_DATA,  ///< Base station, data
+    DMR_SYNC_MS_VOICE, ///< Mobile station, voice
+    DMR_SYNC_MS_DATA,  ///< Mobile station, data
 };
 
 /** Burst data types (TS 102 361-1 table 6.6). */
@@ -75,9 +75,9 @@ enum dmrDataType {
 
 /** Sync word of each of the four slot formats, MSB first, 48 bits. */
 #define DMR_SYNC_WORD_BS_VOICE 0x0000755FD7DF75F7ULL
-#define DMR_SYNC_WORD_BS_DATA  0x0000DFF57D75DF5DULL
+#define DMR_SYNC_WORD_BS_DATA 0x0000DFF57D75DF5DULL
 #define DMR_SYNC_WORD_MS_VOICE 0x00007F7D5DD57DFDULL
-#define DMR_SYNC_WORD_MS_DATA  0x0000D5D7F77FD757ULL
+#define DMR_SYNC_WORD_MS_DATA 0x0000D5D7F77FD757ULL
 
 /** CACH bit positions of the (7,4) Hamming word {AT,TC,LS1,LS0,H0,H1,H2}. */
 extern const uint8_t dmr_cach_tact_pos[7];

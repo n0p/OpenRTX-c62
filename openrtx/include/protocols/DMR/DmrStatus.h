@@ -25,14 +25,14 @@ extern "C" {
 struct dmrBurst;
 
 struct dmrStatus {
-    bool sync;          ///< A burst was decoded in the last 300 ms
-    bool voice;         ///< A voice burst arrived in the last second
-    int8_t colourCode;  ///< Colour code, -1 until a slot type decodes
-    int8_t timeslot;    ///< Timeslot 1 or 2 from the CACH, 0 if unknown
-    uint8_t accessType; ///< CACH access type of the last burst
-    bool lateEntry;     ///< CACH late entry flag of the last burst
-    uint16_t evm;       ///< EVM of the last burst, in thousandths
-    int8_t lastType;    ///< Last data type seen, -1 if none
+    bool sync;            ///< A burst was decoded in the last 300 ms
+    bool voice;           ///< A voice burst arrived in the last second
+    int8_t colourCode;    ///< Colour code, -1 until a slot type decodes
+    int8_t timeslot;      ///< Timeslot 1 or 2 from the CACH, 0 if unknown
+    uint8_t accessType;   ///< CACH access type of the last burst
+    bool lateEntry;       ///< CACH late entry flag of the last burst
+    uint16_t evm;         ///< EVM of the last burst, in thousandths
+    int8_t lastType;      ///< Last data type seen, -1 if none
 
     uint32_t bursts;      ///< Bursts decoded since the mode was enabled
     uint32_t voiceBursts; ///< Of which voice

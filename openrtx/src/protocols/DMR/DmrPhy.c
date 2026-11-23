@@ -76,26 +76,26 @@
  * Regenerate with scripts/gen_dmr_rrc.py.
  */
 static const float dmr_rrc[DMR_MF_TAPS] = {
-    8.656555859e-03f, 6.031442977e-03f, 2.235020933e-03f, -2.384808633e-03f,
+    8.656555859e-03f,  6.031442977e-03f,  2.235020933e-03f,  -2.384808633e-03f,
     -7.330730141e-03f, -1.200305434e-02f, -1.576462128e-02f, -1.801719139e-02f,
     -1.828097858e-02f, -1.626786627e-02f, -1.193878807e-02f, -5.536830589e-03f,
-    2.410222124e-03f, 1.112111611e-02f, 1.962566710e-02f, 2.685826042e-02f,
-    3.177228436e-02f, 3.346444934e-02f, 3.129596224e-02f, 2.499686974e-02f,
-    1.474070833e-02f, 1.178894526e-03f, -1.457211399e-02f, -3.099328423e-02f,
+    2.410222124e-03f,  1.112111611e-02f,  1.962566710e-02f,  2.685826042e-02f,
+    3.177228436e-02f,  3.346444934e-02f,  3.129596224e-02f,  2.499686974e-02f,
+    1.474070833e-02f,  1.178894526e-03f,  -1.457211399e-02f, -3.099328423e-02f,
     -4.627240185e-02f, -5.845259980e-02f, -6.560768581e-02f, -6.602845603e-02f,
     -5.840218720e-02f, -4.196726040e-02f, -1.662647831e-02f, 1.699400444e-02f,
-    5.754840415e-02f, 1.030401309e-01f, 1.509519069e-01f, 1.984273216e-01f,
-    2.424887347e-01f, 2.802725793e-01f, 3.092610513e-01f, 3.274891331e-01f,
-    3.337079221e-01f, 3.274891331e-01f, 3.092610513e-01f, 2.802725793e-01f,
-    2.424887347e-01f, 1.984273216e-01f, 1.509519069e-01f, 1.030401309e-01f,
-    5.754840415e-02f, 1.699400444e-02f, -1.662647831e-02f, -4.196726040e-02f,
+    5.754840415e-02f,  1.030401309e-01f,  1.509519069e-01f,  1.984273216e-01f,
+    2.424887347e-01f,  2.802725793e-01f,  3.092610513e-01f,  3.274891331e-01f,
+    3.337079221e-01f,  3.274891331e-01f,  3.092610513e-01f,  2.802725793e-01f,
+    2.424887347e-01f,  1.984273216e-01f,  1.509519069e-01f,  1.030401309e-01f,
+    5.754840415e-02f,  1.699400444e-02f,  -1.662647831e-02f, -4.196726040e-02f,
     -5.840218720e-02f, -6.602845603e-02f, -6.560768581e-02f, -5.845259980e-02f,
     -4.627240185e-02f, -3.099328423e-02f, -1.457211399e-02f, 1.178894526e-03f,
-    1.474070833e-02f, 2.499686974e-02f, 3.129596224e-02f, 3.346444934e-02f,
-    3.177228436e-02f, 2.685826042e-02f, 1.962566710e-02f, 1.112111611e-02f,
-    2.410222124e-03f, -5.536830589e-03f, -1.193878807e-02f, -1.626786627e-02f,
+    1.474070833e-02f,  2.499686974e-02f,  3.129596224e-02f,  3.346444934e-02f,
+    3.177228436e-02f,  2.685826042e-02f,  1.962566710e-02f,  1.112111611e-02f,
+    2.410222124e-03f,  -5.536830589e-03f, -1.193878807e-02f, -1.626786627e-02f,
     -1.828097858e-02f, -1.801719139e-02f, -1.576462128e-02f, -1.200305434e-02f,
-    -7.330730141e-03f, -2.384808633e-03f, 2.235020933e-03f, 6.031442977e-03f,
+    -7.330730141e-03f, -2.384808633e-03f, 2.235020933e-03f,  6.031442977e-03f,
     8.656555859e-03f,
 };
 
@@ -110,24 +110,25 @@ static const float dmr_rrc[DMR_MF_TAPS] = {
 #define DMR_TIMING_LIMIT 4.0f
 
 struct dmrPhy {
-    float hist[DMR_HIST_LEN];  ///< Input at 48 kHz, circular
-    float ring[DMR_RING_LEN];  ///< Matched filter at 24 kHz, circular
-    long inIndex;              ///< Absolute index of the newest 48 kHz sample
-    long ringIndex;            ///< Absolute index of the newest 24 kHz sample
-    long scan;                 ///< Next symbol index to test for a sync
-    long lastBurstSample;      ///< 48 kHz sample index of the last burst
-    int phase;                 ///< Coarse phase, in 48 kHz samples
-    float timing;              ///< Fractional offset, 48 kHz samples
-    bool timed;                ///< The coarse phase has been acquired
-    unsigned weakBursts;       ///< Consecutive bursts with a closed eye
-    long grid;                 ///< Symbol of the last burst, -1 without grid
-    unsigned gridMisses;       ///< Slot positions searched without a burst
+    float hist[DMR_HIST_LEN]; ///< Input at 48 kHz, circular
+    float ring[DMR_RING_LEN]; ///< Matched filter at 24 kHz, circular
+    long inIndex;             ///< Absolute index of the newest 48 kHz sample
+    long ringIndex;           ///< Absolute index of the newest 24 kHz sample
+    long scan;                ///< Next symbol index to test for a sync
+    long lastBurstSample;     ///< 48 kHz sample index of the last burst
+    int phase;                ///< Coarse phase, in 48 kHz samples
+    float timing;             ///< Fractional offset, 48 kHz samples
+    bool timed;               ///< The coarse phase has been acquired
+    unsigned weakBursts;      ///< Consecutive bursts with a closed eye
+    long grid;                ///< Symbol of the last burst, -1 without grid
+    unsigned gridMisses;      ///< Slot positions searched without a burst
 };
 
 static struct dmrPhy phy;
 
 static const enum dmrSync syncCandidates[4] = {
-    DMR_SYNC_BS_VOICE, DMR_SYNC_BS_DATA, DMR_SYNC_MS_VOICE, DMR_SYNC_MS_DATA};
+    DMR_SYNC_BS_VOICE, DMR_SYNC_BS_DATA, DMR_SYNC_MS_VOICE, DMR_SYNC_MS_DATA
+};
 
 void dmrPhy_init(void)
 {
@@ -208,19 +209,12 @@ static int level_to_dibit(float y, float thresholdMid, float thresholdOuter)
     return 1;
 }
 
-/** Nominal level of a dibit, for the EVM. */
+/** Nominal level of a dibit, for the EVM: 0 and 2 are the inner levels. */
 static float nominal_level(int dibit, float inner, float outer)
 {
-    switch (dibit) {
-        case 3:
-            return outer;
-        case 2:
-            return inner;
-        case 0:
-            return -inner;
-        default:
-            return -outer;
-    }
+    float magnitude = ((dibit == 0) || (dibit == 2)) ? inner : outer;
+
+    return (dibit < 2) ? -magnitude : magnitude;
 }
 
 /**

@@ -48,7 +48,7 @@ static unsigned gapCount;
 
 static void putSilence(long samples)
 {
-    static const int16_t zero[160] = {0};
+    static const int16_t zero[160] = { 0 };
 
     while (samples > 0) {
         long n = (samples > 160) ? 160 : samples;
@@ -66,8 +66,7 @@ static void onBurst(const struct dmrBurst *burst, void *user)
     bursts++;
 
     if (csvFile != NULL) {
-        fprintf(csvFile,
-                "%u,%ld,%s,%s,%d,%.4f,%d,%u,%d,%d,%d,%d,%d,%d,%d,%d\n",
+        fprintf(csvFile, "%u,%ld,%s,%s,%d,%.4f,%d,%u,%d,%d,%d,%d,%d,%d,%d,%d\n",
                 bursts, burst->symbol, dmr_sync_name(burst->sync),
                 burst->voice ? "V" : "D", burst->syncErrors, burst->evm,
                 burst->cachValid, burst->accessType, burst->timeslot2,

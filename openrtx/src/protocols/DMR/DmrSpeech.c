@@ -231,7 +231,7 @@ void dmrSpeech_stats(uint32_t *queuedFrames, uint32_t *playedFrames,
     *bursts = statBursts;
 }
 
-#else /* CONFIG_DMR */
+#else  /* CONFIG_DMR */
 
 void dmrSpeech_start(void)
 {

@@ -14,71 +14,76 @@
 #include "protocols/DMR/DmrDefs.h"
 #include "protocols/DMR/DmrFec.h"
 
+/*
+ * Syndrome of the Hamming(15,11,3) word to the bit it implicates: the 15
+ * correctable patterns plus "no error" (0xFF) and "not a single error" (0xFE).
+ */
+static const uint8_t hamming15113Bit[16] = {
+    [0] = 0xFF, [1] = 11, [2] = 12, [3] = 8,  [4] = 13, [5] = 5,
+    [6] = 9,    [7] = 3,  [8] = 14, [9] = 0,  [10] = 6, [11] = 1,
+    [12] = 10,  [13] = 7, [14] = 4, [15] = 2,
+};
+
 /** Correct one bit of a Hamming(15,11,3) word: DMR "second" variant. */
 static bool hamming_15113_fix(uint8_t d[15])
 {
-    uint8_t c0 = d[0] ^ d[1] ^ d[2] ^ d[3] ^ d[5] ^ d[7] ^ d[8];
-    uint8_t c1 = d[1] ^ d[2] ^ d[3] ^ d[4] ^ d[6] ^ d[8] ^ d[9];
-    uint8_t c2 = d[2] ^ d[3] ^ d[4] ^ d[5] ^ d[7] ^ d[9] ^ d[10];
-    uint8_t c3 = d[0] ^ d[1] ^ d[2] ^ d[4] ^ d[6] ^ d[7] ^ d[10];
-    unsigned syndrome = 0;
+    unsigned c0 = d[0] ^ d[1] ^ d[2] ^ d[3] ^ d[5] ^ d[7] ^ d[8];
+    unsigned c1 = d[1] ^ d[2] ^ d[3] ^ d[4] ^ d[6] ^ d[8] ^ d[9];
+    unsigned c2 = d[2] ^ d[3] ^ d[4] ^ d[5] ^ d[7] ^ d[9] ^ d[10];
+    unsigned c3 = d[0] ^ d[1] ^ d[2] ^ d[4] ^ d[6] ^ d[7] ^ d[10];
+    unsigned syndrome = (c0 != d[11]) ? 0x01u : 0u;
 
-    syndrome |= (c0 != d[11]) ? 0x01u : 0u;
     syndrome |= (c1 != d[12]) ? 0x02u : 0u;
     syndrome |= (c2 != d[13]) ? 0x04u : 0u;
     syndrome |= (c3 != d[14]) ? 0x08u : 0u;
 
-    switch (syndrome) {
-        case 0x01u: d[11] ^= 1; return true;
-        case 0x02u: d[12] ^= 1; return true;
-        case 0x04u: d[13] ^= 1; return true;
-        case 0x08u: d[14] ^= 1; return true;
-        case 0x09u: d[0] ^= 1; return true;
-        case 0x0Bu: d[1] ^= 1; return true;
-        case 0x0Fu: d[2] ^= 1; return true;
-        case 0x07u: d[3] ^= 1; return true;
-        case 0x0Eu: d[4] ^= 1; return true;
-        case 0x05u: d[5] ^= 1; return true;
-        case 0x0Au: d[6] ^= 1; return true;
-        case 0x0Du: d[7] ^= 1; return true;
-        case 0x03u: d[8] ^= 1; return true;
-        case 0x06u: d[9] ^= 1; return true;
-        case 0x0Cu: d[10] ^= 1; return true;
-        default: return false;
-    }
+    uint8_t bit = hamming15113Bit[syndrome];
+    if (bit > 14)
+        return false;
+
+    d[bit] ^= 1;
+    return true;
 }
+
+/*
+ * Syndrome of the Hamming(13,9,3) word to the bit it implicates, same encoding
+ * as the (15,11) table above.
+ */
+static const uint8_t hamming1393Bit[16] = {
+    [0] = 0xFF, [1] = 9,  [2] = 10, [3] = 6,  [4] = 11, [5] = 3,
+    [6] = 7,    [7] = 1,  [8] = 12, [9] = 0,  [10] = 4, [11] = 0xFE,
+    [12] = 8,   [13] = 5, [14] = 2, [15] = 0,
+};
 
 /** Correct one bit of a Hamming(13,9,3) word: BPTC columns. */
 static bool hamming_1393_fix(uint8_t d[13])
 {
-    uint8_t c0 = d[0] ^ d[1] ^ d[3] ^ d[5] ^ d[6];
-    uint8_t c1 = d[0] ^ d[1] ^ d[2] ^ d[4] ^ d[6] ^ d[7];
-    uint8_t c2 = d[0] ^ d[1] ^ d[2] ^ d[3] ^ d[5] ^ d[7] ^ d[8];
-    uint8_t c3 = d[0] ^ d[2] ^ d[4] ^ d[5] ^ d[8];
-    unsigned syndrome = 0;
+    unsigned c0 = d[0] ^ d[1] ^ d[3] ^ d[5] ^ d[6];
+    unsigned c1 = d[0] ^ d[1] ^ d[2] ^ d[4] ^ d[6] ^ d[7];
+    unsigned c2 = d[0] ^ d[1] ^ d[2] ^ d[3] ^ d[5] ^ d[7] ^ d[8];
+    unsigned c3 = d[0] ^ d[2] ^ d[4] ^ d[5] ^ d[8];
+    unsigned syndrome = (c0 != d[9]) ? 0x01u : 0u;
 
-    syndrome |= (c0 != d[9]) ? 0x01u : 0u;
     syndrome |= (c1 != d[10]) ? 0x02u : 0u;
     syndrome |= (c2 != d[11]) ? 0x04u : 0u;
     syndrome |= (c3 != d[12]) ? 0x08u : 0u;
 
-    switch (syndrome) {
-        case 0x01u: d[9] ^= 1; return true;
-        case 0x02u: d[10] ^= 1; return true;
-        case 0x04u: d[11] ^= 1; return true;
-        case 0x08u: d[12] ^= 1; return true;
-        case 0x0Fu: d[0] ^= 1; return true;
-        case 0x07u: d[1] ^= 1; return true;
-        case 0x0Eu: d[2] ^= 1; return true;
-        case 0x05u: d[3] ^= 1; return true;
-        case 0x0Au: d[4] ^= 1; return true;
-        case 0x0Du: d[5] ^= 1; return true;
-        case 0x03u: d[6] ^= 1; return true;
-        case 0x06u: d[7] ^= 1; return true;
-        case 0x0Cu: d[8] ^= 1; return true;
-        default: return false;
-    }
+    uint8_t bit = hamming1393Bit[syndrome];
+    if (bit > 12)
+        return false;
+
+    d[bit] ^= 1;
+    return true;
 }
+
+/*
+ * CACH syndrome to the codeword position it implicates, or 0xFF when the error
+ * is not a single one.  Columns of the parity-check matrix for {AT, TC, LS1,
+ * LS0, H0, H1, H2}.
+ */
+static const uint8_t cachSyndromePos[8] = { [0] = 0xFF, [1] = 4, [2] = 5,
+                                            [3] = 2,    [4] = 6, [5] = 0,
+                                            [6] = 3,    [7] = 1 };
 
 int dmr_fec_cach_decode(uint8_t cach[24])
 {
@@ -91,27 +96,14 @@ int dmr_fec_cach_decode(uint8_t cach[24])
     uint8_t h2 = cach[dmr_cach_tact_pos[6]];
     int syndrome = (at ^ tc ^ ls1 ^ h0) | ((tc ^ ls1 ^ ls0 ^ h1) << 1)
                  | ((at ^ tc ^ ls0 ^ h2) << 2);
-    int pos;
 
     if (syndrome == 0)
         return 0;
 
-    /*
-     * Columns of the parity-check matrix for the seven codeword positions
-     * {AT, TC, LS1, LS0, H0, H1, H2}.
-     */
-    switch (syndrome) {
-        case 0x5: pos = 0; break;
-        case 0x7: pos = 1; break;
-        case 0x3: pos = 2; break;
-        case 0x6: pos = 3; break;
-        case 0x1: pos = 4; break;
-        case 0x2: pos = 5; break;
-        case 0x4: pos = 6; break;
-        default: return -1;
-    }
+    if (cachSyndromePos[syndrome] == 0xFF)
+        return -1;
 
-    cach[dmr_cach_tact_pos[pos]] ^= 1;
+    cach[dmr_cach_tact_pos[cachSyndromePos[syndrome]]] ^= 1;
     return 1;
 }
 

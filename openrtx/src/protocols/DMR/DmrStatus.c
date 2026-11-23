@@ -100,7 +100,7 @@ void dmr_getStatus(struct dmrStatus *out)
     pthread_mutex_unlock(&statusMutex);
 }
 
-#else /* CONFIG_DMR */
+#else  /* CONFIG_DMR */
 
 void dmrStatus_clear(void)
 {

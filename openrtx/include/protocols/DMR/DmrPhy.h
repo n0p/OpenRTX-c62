@@ -40,23 +40,23 @@ extern "C" {
 
 /** What one decoded burst carries. */
 struct dmrBurst {
-    long symbol;                  ///< Symbol index of the sync, for traces
-    enum dmrSync sync;            ///< Sync word found
-    bool voice;                   ///< Voice burst (BS/MS voice sync)
-    int syncErrors;               ///< Sign errors in the 24 sync symbols
-    float evm;                    ///< RMS error to the symbol levels, 0..1
-    bool cachValid;               ///< CACH decoded with at most one error
-    uint8_t accessType;           ///< CACH AT
-    bool timeslot2;               ///< CACH TC: false = TS1, true = TS2
-    bool lateEntry;               ///< CACH LS
-    bool slotTypeValid;           ///< Colour code and data type are valid
-    uint8_t colourCode;           ///< Colour code of the burst
-    uint8_t dataType;             ///< Burst data type (data bursts only)
-    bool crcChecked;              ///< Data burst with a known CRC mask
-    bool crcOk;                   ///< ... and it passed
-    uint8_t frameCount;           ///< AMBE+2 frames (voice bursts), 0..3
+    long symbol;        ///< Symbol index of the sync, for traces
+    enum dmrSync sync;  ///< Sync word found
+    bool voice;         ///< Voice burst (BS/MS voice sync)
+    int syncErrors;     ///< Sign errors in the 24 sync symbols
+    float evm;          ///< RMS error to the symbol levels, 0..1
+    bool cachValid;     ///< CACH decoded with at most one error
+    uint8_t accessType; ///< CACH AT
+    bool timeslot2;     ///< CACH TC: false = TS1, true = TS2
+    bool lateEntry;     ///< CACH LS
+    bool slotTypeValid; ///< Colour code and data type are valid
+    uint8_t colourCode; ///< Colour code of the burst
+    uint8_t dataType;   ///< Burst data type (data bursts only)
+    bool crcChecked;    ///< Data burst with a known CRC mask
+    bool crcOk;         ///< ... and it passed
+    uint8_t frameCount; ///< AMBE+2 frames (voice bursts), 0..3
     uint8_t frame[DMR_FRAMES_PER_BURST][DMR_AMBE_BYTES]; ///< Canonical A|B|C
-    uint8_t lc[12];               ///< Data bursts: the 96-bit block
+    uint8_t lc[12]; ///< Data bursts: the 96-bit block
 };
 
 /**
