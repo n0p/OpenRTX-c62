@@ -216,7 +216,12 @@ void platform_init_csk6()
      * After the console restore, which the dump overrides with its own baud
      * rate. Only when the A/B key asked for a capture: an idle dump would mute
      * the log and hold a megabyte of PSRAM for nothing.
+     *
+     * The message goes out before baseband_dump_init() mutes the log.
      */
+    if (ret == 0)
+        printk("C62: baseband dump %s (hold A/B at power on to record)\n",
+               dumpRequested ? "armed" : "off");
     if ((ret == 0) && dumpRequested)
         baseband_dump_init();
 #ifdef C62_REMOTE
@@ -224,9 +229,6 @@ void platform_init_csk6()
     if ((ret == 0) && dumpRequested)
         c62_remote_init();
 #endif
-    if (ret == 0)
-        printk("C62: baseband dump %s (hold A/B at power on to record)\n",
-               dumpRequested ? "armed" : "off");
 #endif
 
     if (ret != 0)
