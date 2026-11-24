@@ -18,6 +18,8 @@
 #endif
 #ifdef CONFIG_DMR
 #include "rtx/OpMode_DMR.hpp"
+#endif
+#ifdef CONFIG_YSF
 #include "rtx/OpMode_YSF.hpp"
 #endif
 #ifdef CONFIG_TETRA
