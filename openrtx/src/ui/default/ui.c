@@ -104,6 +104,9 @@ extern void _ui_drawSettingsTetra(ui_state_t* ui_state);
 #endif
 extern void _ui_drawSettingsVoicePrompts(ui_state_t* ui_state);
 extern void _ui_drawSettingsReset2Defaults(ui_state_t* ui_state);
+#ifdef CONFIG_APRS
+#include "ui/ui_aprs.h"
+#endif
 extern void _ui_drawSettingsRadio(ui_state_t* ui_state);
 extern bool _ui_drawMacroMenu(ui_state_t* ui_state);
 extern void _ui_reset_menu_anouncement_tracking();
@@ -1464,6 +1467,35 @@ void ui_updateFSM(bool *sync_rtx)
         kbd_msg_t msg;
         msg.value = event.payload;
         bool f1Handled = false;
+#ifdef CONFIG_APRS
+        /*
+         * The APRS screens own their key handling. Dispatching here, before
+         * the main switch, keeps the rework of that switch independent.
+         */
+        if (ui_aprs_isScreen(state.ui_screen))
+        {
+            if (ui_aprs_fsm(msg, sync_rtx))
+            {
+                redraw_needed = true;
+                return;
+            }
+        }
+
+        /*
+         * Entry point: on the FM main screen a long press of P2 opens the
+         * APRS screens. It is a long press on purpose, so that the short
+         * press stays with whatever the main screen does with P2, and so that
+         * nothing about APRS is reachable by accident while operating.
+         */
+        if ((state.ui_screen == MAIN_VFO)
+            && (state.channel.mode == OPMODE_FM)
+            && (msg.keys & KEY_F2) && msg.long_press)
+        {
+            ui_aprs_enter();
+            redraw_needed = true;
+            return;
+        }
+#endif
         enum vpQueueFlags queueFlags = vp_getVoiceLevelQueueFlags();
         // If we get out of standby, we ignore the kdb event
         // unless is the MONI key for the MACRO functions
@@ -2741,6 +2773,20 @@ bool ui_updateGUI()
         case MAIN_MEM:
             _ui_drawMainMEM(&ui_state);
             break;
+#ifdef CONFIG_APRS
+        /*
+         * APRS screens draw themselves: they are self contained so that the
+         * menus and hints rework does not collide with them.
+         */
+        case MENU_APRS:
+        case APRS_DETAIL:
+        case APRS_MSGS:
+        case APRS_MSG_VIEW:
+        case APRS_MSG_EDIT:
+        case APRS_CFG:
+            ui_aprs_draw(last_state.ui_screen);
+            break;
+#endif
         // Top menu screen
         case MENU_TOP:
             _ui_drawMenuTop(&ui_state);

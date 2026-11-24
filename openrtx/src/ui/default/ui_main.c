@@ -10,6 +10,9 @@
 #include <stdio.h>
 #include <stdint.h>
 #include "ui/ui_default.h"
+#ifdef CONFIG_APRS
+#include "ui/ui_aprs.h"
+#endif
 #include <string.h>
 #include "ui/ui_strings.h"
 #include "core/utils.h"
@@ -371,7 +374,22 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
     switch(last_state.channel.mode)
     {
         case OPMODE_FM:
-
+        {
+#ifdef CONFIG_APRS
+            /*
+             * APRS indicator: replaces the bandwidth line while decoding is
+             * active, so the operator can see at a glance that the receiver
+             * is decoding and whether anything arrived.
+             */
+            char aprs_line[16] = { 0 };
+            ui_aprs_statusLine(aprs_line, sizeof(aprs_line));
+            if (aprs_line[0] != '\0')
+            {
+                gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
+                          yellow_fab413, "%s", aprs_line);
+                break;
+            }
+#endif
             // Get Bandwidth string
             if(last_state.channel.bandwidth == BW_12_5)
                 sniprintf(bw_str, 8, "NFM");
@@ -395,6 +413,7 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
                           color_white, "%s", bw_str );
             }
             break;
+        }
 
 #ifdef CONFIG_DMR
         case OPMODE_DMR:

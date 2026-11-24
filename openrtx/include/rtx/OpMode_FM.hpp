@@ -82,6 +82,20 @@ private:
     bool   enterRx;     ///< Flag for RX management.
     pathId rxAudioPath; ///< Audio path ID for RX
     pathId txAudioPath; ///< Audio path ID for TX
+
+#ifdef CONFIG_APRS
+    /**
+     * Transmit one APRS packet on the current FM channel.
+     *
+     * Keys the radio, sends the TXDELAY silence, the flags and the frame, then
+     * unkeys and leaves the mode ready to receive again. Blocks for the
+     * duration of the packet (under two seconds), like the digital modes do.
+     */
+    void aprsSendPacket(const char *info);
+
+    /** Receive step: open, poll or close the APRS tap. */
+    void aprsReceiveStep(bool squelchOpen);
+#endif
 };
 
 #endif /* OPMODE_FM_H */

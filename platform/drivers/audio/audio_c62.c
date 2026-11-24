@@ -130,8 +130,23 @@ bool audio_checkPathCompatibility(const enum AudioSource p1Source,
                                   const enum AudioSource p2Source,
                                   const enum AudioSink p2Sink)
 {
-    /* Physical sources and sinks are exclusive. MCU is a memory endpoint,
-     * so separate capture and playback streams can share it. */
+    /*
+     * Physical sources and sinks are exclusive. MCU is a memory endpoint,
+     * so separate capture and playback streams can share it.
+     *
+     * A path into SINK_MCU is also compatible with another path from the same
+     * source: the codec captures every physical source into the application
+     * buffers and into the FM passthrough queues from the same frame
+     * (captureFrame() in csk6_codec.c), so the discriminator can feed the
+     * speaker and the APRS decoder at the same time without touching audio.
+     * Only one capture per source is allowed, which the SOURCE_RTX/SINK_MCU
+     * path is.
+     */
+    if ((p1Sink == SINK_MCU) && (p1Source == p2Source))
+        return true;
+    if ((p2Sink == SINK_MCU) && (p2Source == p1Source))
+        return true;
+
     return ((p1Source != p2Source) || (p1Source == SOURCE_MCU))
-        && ((p1Sink != p2Sink) || (p1Sink == SINK_MCU));
+        && ((p1Sink != p2Sink) || (p1Sink == SOURCE_MCU));
 }

@@ -55,6 +55,17 @@ enum uiScreen
     SETTINGS_FM,
     SETTINGS_ACCESSIBILITY,
     SETTINGS_RESET2DEFAULTS,
+    /*
+     * APRS screens. They live in ui_aprs.c so that the rework of the menus
+     * and of the hints row can proceed in parallel: this enum block and the
+     * two dispatch points in ui.c are the only places the two touch.
+     */
+    MENU_APRS,
+    APRS_DETAIL,
+    APRS_MSGS,
+    APRS_MSG_VIEW,
+    APRS_MSG_EDIT,
+    APRS_CFG,
     LOW_BAT
 };
 
