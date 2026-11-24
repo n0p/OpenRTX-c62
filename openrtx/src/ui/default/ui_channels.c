@@ -25,8 +25,9 @@
  *   list    UP/DOWN scroll, green tunes, P1 adds (duplicating the selected
  *           channel, or the VFO when the bank is empty), P2 edits, P2 long
  *           press deletes after a confirmation, red goes back.
- *   editor  UP/DOWN changes field, green enters/leaves the field, LEFT/RIGHT
- *           moves inside a name or a frequency, P2 saves, red cancels.
+ *   editor  UP/DOWN changes field, green enters/leaves the field, P1/P2 move
+ *           inside a name or a frequency while editing (the C62 has no arrow
+ *           keys: see keyboard_c62.c), P2 saves, red cancels.
  *
  * Everything is drawn with the 5 and 6 point fonts so that the whole bank is
  * readable on the 160x128 C62 display. Nothing here talks to the radio: a
@@ -628,8 +629,11 @@ static bool editKey(kbd_msg_t *msg, bool *sync_rtx)
             fieldChange(-1, msg->long_press);
         else
             field = fieldStep(field, -1);
-    } else if (msg->keys & (KEY_LEFT | KEY_RIGHT)) {
-        fieldCursorStep((msg->keys & KEY_LEFT) ? -1 : 1);
+    } else if (fieldEdit && (msg->keys & KEY_F1)) {
+        /* The keypad has no left/right: P1/P2 move the caret */
+        fieldCursorStep(-1);
+    } else if (fieldEdit && (msg->keys & KEY_F2)) {
+        fieldCursorStep(+1);
     } else if (msg->keys & KEY_ENTER) {
         if (field == CF_SIMPLEX) {
             fieldChange(1, false);
@@ -646,6 +650,7 @@ static bool editKey(kbd_msg_t *msg, bool *sync_rtx)
             }
         }
     } else if (msg->keys & KEY_F2) {
+        /* Short P2 is free: while editing it moved the caret above */
         editorSave();
     } else if (msg->keys & KEY_ESC) {
         if (fieldEdit) {
@@ -904,9 +909,10 @@ static void drawEditor(void)
 
     if (msgBuf[0] != '\0' && getTick() < msgUntil)
         ui_channels_drawHints(msgBuf, NULL, NULL, "BACK");
+    else if (fieldEdit)
+        ui_channels_drawHints("OK", "<", ">", "BACK");
     else
-        ui_channels_drawHints(fieldEdit ? "OK" : "EDIT", NULL, "SAVE",
-                              fieldEdit ? "BACK" : "CANCEL");
+        ui_channels_drawHints("EDIT", NULL, "SAVE", "CANCEL");
 }
 
 static void drawConfirm(void)

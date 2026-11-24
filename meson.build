@@ -57,6 +57,10 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/core/voicePromptData.S',
                'openrtx/src/core/nvmem_access.c',
                'openrtx/src/core/channel_store.c',
+               'openrtx/src/core/slot_store.c',
+               'openrtx/src/core/contact_store.c',
+               'openrtx/src/core/msg_store.c',
+               'openrtx/src/core/msg_service.c',
                'openrtx/src/rtx/rtx.cpp',
                'openrtx/src/rtx/OpMode_FM.cpp',
                'openrtx/src/rtx/OpMode_M17.cpp',
@@ -82,7 +86,9 @@ ui_src_default = ['openrtx/src/ui/default/ui.c',
                   'openrtx/src/ui/default/ui_hints.c',
                   'openrtx/src/ui/default/ui_quickmenu.c',
                   'openrtx/src/ui/default/ui_strings.c',
-                  'openrtx/src/ui/default/ui_channels.c']
+                  'openrtx/src/ui/default/ui_channels.c',
+                  'openrtx/src/ui/default/ui_contacts.c',
+                  'openrtx/src/ui/default/ui_messages.c']
 
 ui_src_module17 = ['openrtx/src/ui/module17/ui.c',
                    'openrtx/src/ui/module17/ui_main.c',
@@ -1280,6 +1286,10 @@ m17_packet_test = executable('m17_packet_test',
 m17_decoder_test = executable('m17_decoder_test',
                               sources : unit_test_src + ['tests/unit/M17_decoder.cpp'],
                               kwargs  : unit_test_opts)
+user_stores_test = executable('user_stores_test',
+                                sources : unit_test_src + ['tests/unit/user_stores.cpp'],
+                                kwargs : unit_test_opts)
+
 channel_store_test = executable('channel_store_test',
                                 sources : unit_test_src + ['tests/unit/channel_store.cpp'],
                                 kwargs  : unit_test_opts)
@@ -1346,6 +1356,7 @@ test('M17 Packet Frame Test', m17_packet_test)
 test('M17 Frame Decoder Test', m17_decoder_test)
 test('C62 Calibration Test', c62_calib_test)
 test('Channel Store Test',   channel_store_test)
+test('User Stores Test',     user_stores_test)
 test('DSP Oversampling Test', dsp_oversampling_test)
 test('DSP DC Block Test',    dsp_dcblock_test)
 test('GFX Text Test',        gfx_text_test)

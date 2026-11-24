@@ -57,6 +57,8 @@
 #include "interfaces/display.h"
 #include "interfaces/cps_io.h"
 #include "ui/ui_channels.h"
+#include "ui/ui_contacts.h"
+#include "ui/ui_messages.h"
 #include "interfaces/nvmem.h"
 #include "interfaces/delays.h"
 #include <string.h>
@@ -121,6 +123,7 @@ const char *menu_items[] =
     "Banks",
     "Channels",
     "Contacts",
+    "Messages",
 #ifdef CONFIG_GPS
     "GPS",
 #endif
@@ -1535,6 +1538,36 @@ static enum vpGPSInfoFlags GetGPSDirectionOrSpeedChanged()
 
 void ui_updateFSM(bool *sync_rtx)
 {
+    long long now = getTick();
+    bool txOngoing = platform_getPttStatus();
+
+    /*
+     * Periodic part: it must run even when no key event arrives, otherwise the
+     * quick menu timeout would only expire on the next keypress (which is
+     * exactly the bug that made the 15 s auto-close dead code), and the
+     * message poll would never refresh a delivery state on its own.
+     */
+    if(macro_latched && txOngoing)
+    {
+        macro_latched = false;
+        macro_menu = false;
+        redraw_needed = true;
+    }
+
+    /* The quick menu is an overlay: PTT closes it and keys the radio */
+    if(qm_state.open && txOngoing)
+    {
+        qm_close();
+        redraw_needed = true;
+    }
+
+    /* Auto-close the quick menu and follow mode changes made elsewhere */
+    if(qm_tick(now))
+        redraw_needed = true;
+
+    /* Delivery states, received messages and the compose draft */
+    ui_msgs_tick(now);
+
     // Check for events
     if(evQueue_wrPos == evQueue_rdPos) return;
 
@@ -1552,7 +1585,6 @@ void ui_updateFSM(bool *sync_rtx)
     // Check is skipped if there is an ongoing transmission, since the voltage
     // drop caused by the RF PA power absorption causes spurious triggers of
     // the low battery alert.
-    bool txOngoing = platform_getPttStatus();
 #if !defined(PLATFORM_TTWRPLUS)
     if ((!state.emergency) && (!txOngoing) && (state.charge <= 0))
     {
@@ -1565,23 +1597,6 @@ void ui_updateFSM(bool *sync_rtx)
         return;
     }
 #endif // PLATFORM_TTWRPLUS
-
-    // Unlatch and exit from macro menu on PTT press
-    if(macro_latched && txOngoing)
-    {
-        macro_latched = false;
-        macro_menu = false;
-    }
-
-    // The quick menu is an overlay: PTT closes it and keys the radio
-    if(qm_state.open && txOngoing)
-        qm_close();
-
-    long long now = getTick();
-
-    /* Auto-close the quick menu and follow mode changes made elsewhere */
-    if(qm_tick(now))
-        redraw_needed = true;
 
     // Process pressed keys
     if(event.type == EVENT_KBD)
@@ -1607,13 +1622,21 @@ void ui_updateFSM(bool *sync_rtx)
                 qm_move(-1);
             else if(msg.keys & (KEY_DOWN | KNOB_RIGHT))
                 qm_move(+1);
+            else if(msg.keys & KEY_F1)
+                qm_adjust(-1);          /* P1: value down */
+            else if(msg.keys & KEY_F2)
+            {
+                /* P2 short: value up. P2 long: latch the popup open. */
+                if(msg.long_press)
+                    qm_toggleLatch();
+                else
+                    qm_adjust(+1);
+            }
             else if(msg.keys & KEY_ENTER)
                 qm_enter();
             else if(msg.keys & KEY_ESC)
                 qm_cancel();
-            else if(msg.long_press && (msg.keys & (KEY_F2 | KEY_MONI)))
-                qm_toggleLatch();
-            else if(input_isNumberPressed(msg) && !qm_state.editing)
+            else if(input_isNumberPressed(msg))
             {
                 uint8_t digit = input_getPressedNumber(msg);
                 qm_select(digit == 0 ? 9 : digit - 1);
@@ -1655,6 +1678,40 @@ void ui_updateFSM(bool *sync_rtx)
                 redraw_needed = true;
                 return;
             }
+        }
+
+        /*
+         * Messaging screens (ui_messages.c) and the contact book
+         * (ui_contacts.c) own the keypad and keep the radio from
+         * transmitting, exactly like the channel list and the APRS screens.
+         * They sit after the quick menu and before the macro grid, so P2 long
+         * keeps opening the macro grid on the main screens.
+         */
+        if (ui_msgs_isScreen(state.ui_screen))
+        {
+            ui_msgs_handleEvent(&msg, sync_rtx);
+
+            bool wantDisabled = ui_msgs_isScreen(state.ui_screen);
+            if (state.txDisable != wantDisabled)
+            {
+                state.txDisable = wantDisabled;
+                *sync_rtx = true;
+            }
+            redraw_needed = true;
+            return;
+        }
+
+        if ((state.ui_screen == MENU_CONTACTS) && ui_contacts_isOpen())
+        {
+            ui_contacts_handleEvent(&msg, sync_rtx);
+
+            if (state.txDisable != true)
+            {
+                state.txDisable = true;
+                *sync_rtx = true;
+            }
+            redraw_needed = true;
+            return;
         }
 
         /*
@@ -2103,10 +2160,22 @@ void ui_updateFSM(bool *sync_rtx)
                             state.ui_screen = MENU_BANK;
                             break;
                         case M_CHANNEL:
+#if defined(PLATFORM_C62)
+                            /* No codeplug on this radio: the CPS list would be
+                               empty. Open the in-radio bank editor instead;
+                               the F1 long shortcut still works too. */
+                            ui_channels_open();
+                            redraw_needed = true;
+#else
                             state.ui_screen = MENU_CHANNEL;
+#endif
                             break;
                         case M_CONTACTS:
                             state.ui_screen = MENU_CONTACTS;
+                            ui_contacts_open();
+                            break;
+                        case M_MESSAGES:
+                            ui_msgs_open();
                             break;
 #ifdef CONFIG_GPS
                         case M_GPS:
@@ -3146,6 +3215,14 @@ bool ui_updateGUI()
             ui_aprs_draw(last_state.ui_screen);
             break;
 #endif
+        /* Messaging screens draw themselves, like the APRS ones */
+        case MENU_MESSAGES:
+        case MSG_VIEW:
+        case MSG_SENT:
+        case MSG_COMPOSE:
+        case MSG_STATUS:
+            ui_msgs_draw(last_state.ui_screen);
+            break;
         // Top menu screen
         case MENU_TOP:
             _ui_drawMenuTop(&ui_state);
@@ -3158,9 +3235,12 @@ bool ui_updateGUI()
         case MENU_CHANNEL:
             _ui_drawMenuChannel(&ui_state);
             break;
-        // Contacts menu screen
+        // Contacts menu screen: the in-radio book owns it on the C62
         case MENU_CONTACTS:
-            _ui_drawMenuContacts(&ui_state);
+            if (ui_contacts_isOpen())
+                ui_contacts_draw();
+            else
+                _ui_drawMenuContacts(&ui_state);
             break;
 #ifdef CONFIG_GPS
         // GPS menu screen

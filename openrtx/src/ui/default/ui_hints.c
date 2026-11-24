@@ -41,12 +41,13 @@ const ui_hints_t *ui_hints_for_screen(uint8_t screen)
             return &hints_nav;
 
         /*
-         * The channel list has no per-entry action yet (there is no codeplug:
-         * cps_io_stub), so P1/P2 stay empty. The stock's CH SAVE/CH DELETE
-         * (menu 1, items 18-19) need the CPS first; see docs/UI.md.
+         * The CPS channel list has no per-entry action yet on the targets that
+         * still use it (there is no codeplug behind cps_io_stub), so P1/P2
+         * stay empty. MENU_CONTACTS is deliberately absent: the in-radio
+         * contact book (ui_contacts.c) draws its own bar, and so do the
+         * channel editor and the messaging screens.
          */
         case MENU_CHANNEL:
-        case MENU_CONTACTS:
             return &hints_channel;
 
         case SETTINGS_DISPLAY:
