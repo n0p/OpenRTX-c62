@@ -156,32 +156,68 @@ static void draftDrop(void)
 
 static uint8_t textMax(void)
 {
-    return msg_service_maxLen(mg.tp);
+    /* With no transport available the draft still has to be writable: fall
+       back to the roomiest limit of any transport, not to zero. */
+    uint8_t m = (mg.tp < MSG_TP_NUM) ? msg_service_maxLen(mg.tp) : MSG_TEXT_MAX;
+    if (m == 0 || m > MSG_TEXT_MAX)
+        m = MSG_TEXT_MAX;
+    return m;
+}
+
+/*
+ * The composer types into the field under the cursor: the recipient (TO) or
+ * the message body (TXT). Both are plain C strings, but the recipient has its
+ * own limit and character set.
+ */
+static char *activeBuf(void)
+{
+    return (mg.row == MG_ROW_TO) ? mg.peer : mg.text;
+}
+
+static uint8_t activeMax(void)
+{
+    return (mg.row == MG_ROW_TO) ? (MSG_PEER_LEN - 1) : textMax();
+}
+
+static bool peerChar(char c)
+{
+    return isalnum((unsigned char)c) || c == '-' || c == '/' || c == '_';
 }
 
 static void textChanged(void)
 {
-    mg.pos = (uint8_t)strlen(mg.text);
+    mg.pos = (uint8_t)strlen(activeBuf());
     mg.lastEdit = getTick();
     mg.draftDirty = true;
 }
 
 static void textAppend(char c)
 {
-    size_t len = strlen(mg.text);
-    if (len >= textMax() || len >= MSG_TEXT_MAX)
+    char *buf = activeBuf();
+    size_t len = strlen(buf);
+
+    if (len >= (size_t)activeMax())
         return;
-    mg.text[len] = c;
-    mg.text[len + 1] = '\0';
+
+    if (buf == mg.peer) {
+        c = (char)toupper((unsigned char)c);
+        if (!peerChar(c))
+            return;               /* a callsign has no spaces nor commas */
+    }
+
+    buf[len] = c;
+    buf[len + 1] = '\0';
     textChanged();
 }
 
 static void textBackspace(void)
 {
-    size_t len = strlen(mg.text);
+    char *buf = activeBuf();
+    size_t len = strlen(buf);
+
     if (len == 0)
         return;
-    mg.text[len - 1] = '\0';
+    buf[len - 1] = '\0';
     mg.tapKey = 0xFF;
     textChanged();
 }
@@ -202,26 +238,29 @@ static void tapKeyPress(uint8_t digit, bool literal, long long now)
         return;
     }
 
-    size_t len = strlen(mg.text);
+    char *buf = activeBuf();
+    size_t len = strlen(buf);
     bool continueBurst = (mg.tapKey == digit)
                       && ((now - mg.tapTick) < MG_TAP_MS)
                       && ((size_t)mg.tapPos < len)
                       && ((size_t)mg.tapPos + 1 == len);
 
     if (continueBurst) {
+        char c = group[mg.tapIdx];
         mg.tapIdx = (uint8_t)((mg.tapIdx + 1) % n);
-        mg.text[mg.tapPos] = group[mg.tapIdx];
+        buf[mg.tapPos] = group[mg.tapIdx];
         mg.pos = mg.tapPos + 1;
         mg.lastEdit = now;
         mg.draftDirty = true;
+        (void)c;
     } else {
-        if (len >= (size_t)textMax() || len >= MSG_TEXT_MAX)
+        if (len >= (size_t)activeMax())
             return;
         mg.tapKey = digit;
         mg.tapIdx = 0;
         mg.tapPos = (uint8_t)len;
-        mg.text[len] = group[0];
-        mg.text[len + 1] = '\0';
+        buf[len] = group[0];
+        buf[len + 1] = '\0';
         textChanged();
     }
 
@@ -709,8 +748,14 @@ static void drawCompose(void)
         else if (row == MG_ROW_TO)
             snprintf(value, sizeof(value), "%s",
                      mg.peer[0] ? mg.peer : "-");
-        else if (row == MG_ROW_TEXT)
-            snprintf(value, sizeof(value), "%s", mg.text[0] ? mg.text : "-");
+        else if (row == MG_ROW_TEXT) {
+            /* One line of 38 characters on the row itself; the rest is shown
+               in the typing box or in the view screen. */
+            if (mg.text[0])
+                snprintf(value, sizeof(value), "%.38s", mg.text);
+            else
+                snprintf(value, sizeof(value), "-");
+        }
         else
             snprintf(value, sizeof(value), "%s", ">");
 

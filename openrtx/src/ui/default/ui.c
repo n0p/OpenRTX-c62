@@ -1705,9 +1705,11 @@ void ui_updateFSM(bool *sync_rtx)
         {
             ui_contacts_handleEvent(&msg, sync_rtx);
 
-            if (state.txDisable != true)
+            /* The editor disables TX; leaving it (red) re-arms the PTT */
+            bool wantDisabled = (state.ui_screen == MENU_CONTACTS);
+            if (state.txDisable != wantDisabled)
             {
-                state.txDisable = true;
+                state.txDisable = wantDisabled;
                 *sync_rtx = true;
             }
             redraw_needed = true;
@@ -2165,6 +2167,9 @@ void ui_updateFSM(bool *sync_rtx)
                                empty. Open the in-radio bank editor instead;
                                the F1 long shortcut still works too. */
                             ui_channels_open();
+                            /* No TX while the editor owns the screen */
+                            state.txDisable = true;
+                            *sync_rtx = true;
                             redraw_needed = true;
 #else
                             state.ui_screen = MENU_CHANNEL;
@@ -2173,9 +2178,13 @@ void ui_updateFSM(bool *sync_rtx)
                         case M_CONTACTS:
                             state.ui_screen = MENU_CONTACTS;
                             ui_contacts_open();
+                            state.txDisable = true;
+                            *sync_rtx = true;
                             break;
                         case M_MESSAGES:
                             ui_msgs_open();
+                            state.txDisable = true;
+                            *sync_rtx = true;
                             break;
 #ifdef CONFIG_GPS
                         case M_GPS:

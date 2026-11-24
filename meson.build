@@ -1286,6 +1286,10 @@ m17_packet_test = executable('m17_packet_test',
 m17_decoder_test = executable('m17_decoder_test',
                               sources : unit_test_src + ['tests/unit/M17_decoder.cpp'],
                               kwargs  : unit_test_opts)
+ui_messages_test = executable('ui_messages_test',
+                              sources : unit_test_src + ['tests/unit/ui_messages.cpp'],
+                              kwargs : unit_test_opts)
+
 user_stores_test = executable('user_stores_test',
                                 sources : unit_test_src + ['tests/unit/user_stores.cpp'],
                                 kwargs : unit_test_opts)
@@ -1357,6 +1361,7 @@ test('M17 Frame Decoder Test', m17_decoder_test)
 test('C62 Calibration Test', c62_calib_test)
 test('Channel Store Test',   channel_store_test)
 test('User Stores Test',     user_stores_test)
+test('UI Messages Test',     ui_messages_test)
 test('DSP Oversampling Test', dsp_oversampling_test)
 test('DSP DC Block Test',    dsp_dcblock_test)
 test('GFX Text Test',        gfx_text_test)
