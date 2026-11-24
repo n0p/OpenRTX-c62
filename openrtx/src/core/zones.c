@@ -176,7 +176,8 @@ bool zones_channelValid(const zone_channel_t *zc)
         return false;
 
     if (zc->mode != OPMODE_FM && zc->mode != OPMODE_M17 &&
-        zc->mode != OPMODE_DMR && zc->mode != OPMODE_TETRA)
+        zc->mode != OPMODE_DMR && zc->mode != OPMODE_TETRA &&
+        zc->mode != OPMODE_DPMR)
         return false;
 
     return true;

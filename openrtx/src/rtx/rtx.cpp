@@ -19,6 +19,9 @@
 #ifdef CONFIG_DMR
 #include "rtx/OpMode_DMR.hpp"
 #endif
+#ifdef CONFIG_DPMR
+#include "rtx/OpMode_DPMR.hpp"
+#endif
 #ifdef CONFIG_TETRA
 #include "rtx/OpMode_TETRA.hpp"
 #endif
@@ -60,6 +63,9 @@ static OpMode_TETRA tetraMode;          // TETRA mode handler
 #endif
 #ifdef CONFIG_DMR
 static OpMode_DMR dmrMode;              // DMR mode handler
+#endif
+#ifdef CONFIG_DPMR
+static OpMode_DPMR dpmrMode;            // dPMR mode handler (receive only)
 #endif
 
 
@@ -321,6 +327,9 @@ void rtx_task()
                 #ifdef CONFIG_DMR
                 case OPMODE_DMR:   currMode = &dmrMode;   break;
                 #endif
+                #ifdef CONFIG_DPMR
+                case OPMODE_DPMR:  currMode = &dpmrMode;  break;
+                #endif
                 #ifdef CONFIG_TETRA
                 case OPMODE_TETRA: currMode = &tetraMode; break;
                 #endif
@@ -404,6 +413,9 @@ bool opmode_canTransmit(uint8_t mode)
             return true;
         case OPMODE_M17:
             return true;
+        case OPMODE_DPMR:
+            /* Receive only: no transmit chain for dPMR on this radio */
+            return false;
         case OPMODE_DMR:
 #ifdef CONFIG_DMR_TX
             /* Transmit chain and AMBE+2 encoder compiled in: duplex mode */
