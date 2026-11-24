@@ -508,6 +508,21 @@ int pc_proto_platformTxTrace(char *buf, size_t cap)
     return 0;
 }
 
+#else /* !CONFIG_C62_DEBUG_PROTO */
+
+/*
+ * A production build has no capture, but the codec worker calls the hook
+ * unconditionally (it is compiled with C62_PC_PROTO): the stub keeps the call
+ * and costs four instructions, and the 32 kB of PSRAM the buffer would take
+ * are not there at all.
+ */
+void pc_proto_capturePush(const int16_t *samples, size_t stride, size_t count)
+{
+    (void)samples;
+    (void)stride;
+    (void)count;
+}
+
 #endif /* CONFIG_C62_DEBUG_PROTO */
 
 /* ------------------------------------------------------------------------- */
