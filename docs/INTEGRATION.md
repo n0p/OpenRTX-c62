@@ -388,6 +388,13 @@ meson test -C build_host --suite OpenRTX --print-errorlogs --no-rebuild
 sigue excluido porque ya estaba roto antes de esta integración: no está
 registrado en `meson.build` y no se construye.
 
+**El cuarto pase sube la cuenta a 47** con `ui_regressions_test` (y su variante
+sin APRS), que son las pruebas *por síntoma* de lo que el operador reportó en la
+radio: menú rápido con P2, una página de Ajustes por modo, entrada de frecuencia
+y ENTER, búsqueda tras tres segundos, menú de mensajes y PTT de DMR. Las seis
+funciones estaban probadas por debajo del despacho y no a través de él, que es
+donde estaban los fallos; §6.1 recoge los dos que aparecieron.
+
 Lo que añade la tercera pasada: el `dmr_tx_fsm_test` se va con su máquina de
 estados y entra `dmr_glue_test` (los *records* que lee el paquete, el retardo de
 aire y su pre-roll), así que la cuenta no cambia; `dmr_lc_dest_test` y
@@ -444,3 +451,22 @@ de fondo, no de registro:
   pero no hay transporte de dPMR en `core/messaging` (`docs/RX_DPMR.md`).
 - **Voz del P25 y del YSF en modo 2** y el resto de lo que cada `docs/RX_*.md`
   deja escrito en su última sección.
+
+## 6.1 Cuarto pase: lo que el operador encontró en la radio
+
+Seis síntomas reportados sobre la build de `c62/mega` flasheada. Dos eran
+fallos reales de cableado; los otros cuatro no se reproducen en el FSM (el
+despacho actual los hace bien) y quedan cubiertos por pruebas para que un
+cambio futuro no los rompa en silencio.
+
+| Síntoma | Causa | Arreglo |
+|---|---|---|
+| DMR ya no emite | `OpMode_DMR::startTx()` del paquete se negaba a emitir sin ID propio válido; el registro de ajustes creció dos bytes y el CRC descartó el anterior, así que la radio volvió al `dmr_id = 0` de fábrica: PTT muerto, sin error | `dmrKey_allowed()` (`rtx/DmrKey.h`): el ID propio no es condición, solo un destino no codificable; y el rechazo marca `txBlocked` en vez de reintentar cada 30 ms |
+| El menú rápido de P2 no abre, no hay knobs, el keypad no entra frecuencia, la búsqueda no arranca | los cuatro son la pantalla principal: `ui_state.edit_mode` solo tiene salida dentro del `#ifdef CONFIG_M17`, y lo pone la tecla # de M17. Un cambio de modo con el destino M17 en edición dejaba la pantalla sorda a todas las teclas | al entrar en `MAIN_VFO`/`MAIN_MEM`, un `edit_mode` que no es de M17 se descarta |
+| No hay menú de mensajes | el `#ifdef CONFIG_APRS` del despacho de APRS seguía abierto cien líneas más abajo y se tragaba el despacho de mensajes, contactos y zonas: en una build sin APRS (y en los tests de host) la bandeja abría pero el teclado iba al FSM anterior | el bloque de APRS se cierra donde acaba y el despacho de las otras tres pantallas es incondicional |
+| Ajustes sin páginas por modo | no reproducido: `settings_items[]` sale de `UI_MODE_PAGES` y la build lleva las siete páginas (`NXDN`, `dPMR`, `P25`, `YSF`, `DSTAR`, `AM`, `WFM`), comprobado leyendo la tabla del `zephyr.elf` | prueba por síntoma: la lista tiene una página por modo compilado y cada una abre, responde a P2 y se cierra |
+
+Nota de uso para el operador: la entrada de frecuencia del VFO en FM/M17 pide
+**RX y luego TX**; con menos de ocho dígitos el primer ENTER pasa al campo TX y
+el segundo copia RX y aplica. La entrada de una sola frecuencia (modos de solo
+recepción) aplica al terminar los dígitos o con el primer ENTER.
