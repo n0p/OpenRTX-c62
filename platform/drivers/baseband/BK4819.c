@@ -271,7 +271,50 @@ void bk4819_disableRtx(const struct BK4819 *dev)
 
 void bk4819_setModulation(const struct BK4819 *dev, bool fm)
 {
+    /*
+     * The AM detector is an undocumented value of the AF output selector (7,
+     * "reserved" in the V3 register list); the FM one is the documented normal
+     * AF output.
+     */
     bk4819_setAfOutput(dev, fm ? BK4819_AF_FM : BK4819_AF_AM);
+
+    /* Top step of the RX AGC gain table, and the undocumented REG_4A */
+    bk4819_writeReg(dev, 0x13, fm ? BK4819_REG13_AGC_TOP_FM
+                                  : BK4819_REG13_AGC_TOP_AM);
+    bk4819_writeReg(dev, 0x4A, fm ? BK4819_REG4A_RX_FM : BK4819_REG4A_RX_AM);
+
+    /*
+     * AM carries no pre-emphasis at the transmitter, so the receiver must not
+     * de-emphasise it, and no compander either: the expander would undo part
+     * of what the AGC does. Both filters stay as the FM path leaves them
+     * otherwise (300 Hz HPF, 3 kHz LPF), the HPF being what removes the DC of
+     * the detected carrier.
+     */
+    bk4819_maskSetRegister(dev, 0x2B, BK4819_REG2B_RX_DEEMPHASIS_DISABLE,
+                           fm ? 0 : BK4819_REG2B_RX_DEEMPHASIS_DISABLE);
+    bk4819_maskSetRegister(dev, 0x28, BK4819_REG28_EXPANDER_MASK,
+                           fm ? BK4819_REG28_EXPANDER_1_2
+                              : BK4819_REG28_EXPANDER_OFF);
+}
+
+void bk4819_setAmReceive(const struct BK4819 *dev, enum bk4819_amBw bw)
+{
+    /*
+     * REG_43: 12.5 kHz mode with the 1.7 kHz IF is the stock firmware's AM
+     * setting (0x0048), narrow enough for 8.33 kHz channel spacing. The wide
+     * one is 25 kHz mode, where REG_43<5> = 1 doubles the 3 kHz IF to 6 kHz,
+     * which fits the +-3 kHz of a 25 kHz AM channel.
+     */
+    const uint16_t reg43 = (bw == BK4819_AM_WIDE)
+        ? BK4819_REG43_RF_BW(3) | BK4819_REG43_RF_BW_WEAK(3)
+              | BK4819_REG43_AF_TX_LPF2_BW(0) | BK4819_REG43_BW_MODE(2)
+              | BK4819_REG43_UNDOC3
+        : BK4819_REG43_RF_BW(0) | BK4819_REG43_RF_BW_WEAK(0)
+              | BK4819_REG43_AF_TX_LPF2_BW(1) | BK4819_REG43_BW_MODE(0)
+              | BK4819_REG43_UNDOC3;
+
+    bk4819_writeReg(dev, 0x43, reg43);
+    bk4819_setModulation(dev, false);
 }
 
 void bk4819_setAfOutput(const struct BK4819 *dev, enum bk4819_afOutput af)

@@ -55,6 +55,18 @@ enum bk4819_bandwidth {
 };
 
 /**
+ * Receive filters of the AM demodulator, see bk4819_setAmReceive().
+ *
+ * The AM detector has no separate bandwidth setting: what limits it is the
+ * RF/IF filter of REG_43<14:12>, so a channel spacing is chosen by picking the
+ * filter that fits it.
+ */
+enum bk4819_amBw {
+    BK4819_AM_NARROW = 0, ///< 12.5 kHz mode, 1.7 kHz IF: 8.33 kHz spacing.
+    BK4819_AM_WIDE = 1,   ///< 25 kHz mode, 3 kHz IF doubled to 6 kHz.
+};
+
+/**
  * GPIO pins, named after their use in the UV-K5:
  * https://github.com/DualTachyon/uv-k5-firmware/blob/6f8afac8864e0349ecf8b10f91ce8f69273013db/driver/bk4819-regs.h#L97-L104
  */
@@ -183,12 +195,44 @@ void bk4819_enableTx(const struct BK4819 *dev);
 void bk4819_disableRtx(const struct BK4819 *dev);
 
 /**
- * Select the AM or FM demodulator.
+ * Select the AM or FM demodulator and its receive profile.
+ *
+ * FM is the channel the radio uses for everything analog: normal AF output,
+ * de-emphasis and the AF expander on, and the top step of the RX AGC table at
+ * the values bk4819_init() sets. AM is DSB with carrier as used in the
+ * aeronautical band, see bk4819_setAmReceive(): amplitude detector on the AF
+ * output, no de-emphasis (there is none on an AM transmitter either), no
+ * expander (it would work against the AGC that AM needs) and the AGC top step
+ * at 0 dB per stage.
  *
  * @param dev: pointer to device data.
  * @param fm: true for FM, false for AM.
  */
 void bk4819_setModulation(const struct BK4819 *dev, bool fm);
+
+/**
+ * Configure the analog AM receive path of the aeronautical band, DSB with
+ * carrier.
+ *
+ * The chip has no AM mode in its register list; the stock C62 firmware's
+ * radio_rx_tune() (@0x18019648) receives 100-134 MHz as AM by writing a value
+ * that only exists in the vendor firmware (REG_47<11:8> = 7, "reserved" in the
+ * V3 register list), together with REG_43 = 0x0048, REG_13 = 0x03ff and
+ * REG_4A = 0x5448. This sets the same, and adds what AM needs and the stock
+ * firmware leaves at the FM values: the AF de-emphasis and the AF expander
+ * are switched off.
+ *
+ * The AM envelope is produced inside the chip and comes out on the same AF
+ * output the FM demodulator uses, so no other change to the receive path is
+ * needed: everything upstream (LNA, mixer, IF filter, the RSSI of REG_67 and
+ * the RSSI squelch of REG_78) keeps working, and the AF output level follows
+ * the carrier amplitude, which is what the AGC in core/agc.h then holds
+ * steady.
+ *
+ * @param dev: pointer to device data.
+ * @param bw: IF filter, by channel spacing.
+ */
+void bk4819_setAmReceive(const struct BK4819 *dev, enum bk4819_amBw bw);
 
 /**
  * Set the AF output mode.
