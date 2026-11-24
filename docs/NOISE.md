@@ -130,7 +130,8 @@ the production route is the HiFi4.
 
 ## Quality (measured, real audio)
 
-Method (`/home/n0p/.hermes/cache/scratch/nr/evaluate.py`): 30 s of speech from
+Method (`scripts/rnnoise/evaluate.py`, material and `quality.json` in the same
+directory): 30 s of speech from
 LibriSpeech `dev‑clean` (6 utterances, resampled to 48 kHz, −20 dBFS), mixed
 with two noises; the mixture goes through **the same library build the firmware
 uses**; the output is realigned by the measured 480‑sample delay before scoring.
@@ -202,8 +203,8 @@ Same configuration for both images: `CONFIG_C62_DMR_RX=y CONFIG_C62_APRS=y`
 | | FLASH | RAM | PSRAM |
 |---|---|---|---|
 | without the option | 508 092 B (48.46 %) | 195 672 B (74.64 %) | 379 064 B (20.66 %) |
-| `CONFIG_C62_NOISE_SUPPRESS=y` | **611 220 B** (58.29 %) | **201 584 B** (76.90 %) | 449 416 B (24.49 %) |
-| delta | **+103 128 B** | **+5 912 B** (3 864 B of it `.bss` tables) | +70 352 B |
+| `CONFIG_C62_NOISE_SUPPRESS=y` | **611 196 B** (58.29 %) | **201 584 B** (76.90 %) | 449 416 B (24.49 %) |
+| delta | **+103 104 B** | **+5 912 B** (3 864 B of it `.bss` tables) | +70 352 B |
 
 The flash delta is the 87.5 KiB weight table plus ~15 KiB of code (RNNoise
 objects: 87 503 B of `.rodata` for the weights, 15 232 B of `.text`). The 5.9 KiB of
@@ -278,6 +279,8 @@ must reproduce.
   single local patch in `src/denoise.c` (per‑frame scratch moved out of the
   stack; output bit‑identical on 7 146 frames). Not a submodule: the build runs
   offline in a container.
+* `scripts/rnnoise/` — the host driver and the evaluation that produce the
+  quality table, plus the `quality.json` quoted here.
 * `openrtx/src/core/noise_suppress.c`, `openrtx/include/core/noise_suppress.h` —
   the stage, the switch, and the enable/disable plumbing.
 * `platform/drivers/audio/csk6_codec.c` — the hook in `captureFrame()`.

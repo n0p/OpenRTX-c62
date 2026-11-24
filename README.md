@@ -110,6 +110,12 @@ Opciones de compilación relevantes:
   modo digital que no decodifica; ver `docs/DMR_RX.md`.
 - `C62_DMR_12K5` — DMR en el modo de canal de 12,5 kHz del BK4819 (filtros de FI de
   4,5 kHz, `REG_43 = 0x7e48`) en vez del de 25 kHz (`0x7e28`). Apagada por defecto.
+- `CONFIG_C62_NOISE_SUPPRESS` — supresión de ruido RNNoise (v0.1.1, BSD-3) en la
+  recepción de FM, tras el interruptor *Settings → Audio → RX Noise*. **Apagada
+  por defecto, y el interruptor también**: cuesta 1,9 M instrucciones por trama
+  de 10 ms (66-73 % del M33 a 300 MHz) y 103 KiB de flash, así que en el M33 es
+  una ruta de laboratorio; el informe con las cifras, la evaluación de calidad y
+  el diseño para el DSP está en `docs/NOISE.md`.
 
 ## Repositorio
 
@@ -117,7 +123,7 @@ Opciones de compilación relevantes:
 - `c62/dmr-tx` — cadena TX de DMR y encoder, en desarrollo.
 - `Retevis-c62` — base del port.
 - `docs/` — notas de integración: `UI.md`, `CHANNELS.md`, `APRS.md`, `DMR_TX.md`,
-  `DMR_VOCODER.md`, `DMR_RX.md`, `openrtx_integration.md`.
+  `DMR_VOCODER.md`, `DMR_RX.md`, `NOISE.md`, `openrtx_integration.md`.
 
 ## Qué falta
 
