@@ -63,13 +63,22 @@ ARM="-mcpu=cortex-m33 -mthumb -mfpu=fpv5-sp-d16 -mfloat-abi=hard"
 objs=""
 if [ -n "${FIRMWARE_BUILD:-}" ]; then
     echo "   using the firmware objects from $FIRMWARE_BUILD"
-    for o in dstar_vocoder dstar_decoder; do
-        p="$FIRMWARE_BUILD/CMakeFiles/app.dir/lib/dstar_vocoder/$o.c.obj"
-        [ -f "$p" ] || { echo "missing $p" >&2; exit 1; }
-        objs="$objs $p"
+    # The Zephyr build compiles every source of the app target into
+    # CMakeFiles/app.dir/<path as seen by cmake>.c.obj, so walk it by path
+    # instead of guessing a flat layout.
+    for p in \
+        lib/dstar_vocoder/dstar_vocoder.c.obj \
+        lib/dstar_vocoder/dstar_decoder.c.obj \
+        openrtx/src/protocols/DSTAR/DStarVocoder.c.obj; do
+        o="$FIRMWARE_BUILD/CMakeFiles/app.dir/$p"
+        [ -f "$o" ] || o=$(find "$FIRMWARE_BUILD" -name "$(basename "$p")" \
+                                  -path '*app.dir*' | head -1)
+        [ -n "$o" ] && [ -f "$o" ] || { echo "missing $p" >&2; exit 1; }
+        objs="$objs $o"
     done
     for o in dmr_fft dmr_golay dmr_golay_table; do
-        p=$(find "$FIRMWARE_BUILD" -name "$o.c.obj" | head -1)
+        p=$(find "$FIRMWARE_BUILD" -name "$o.c.obj" -path '*app.dir*' | head -1)
+        [ -n "$p" ] || p=$(find "$FIRMWARE_BUILD" -name "$o.c.obj" | head -1)
         [ -n "$p" ] || { echo "missing $o" >&2; exit 1; }
         objs="$objs $p"
     done
@@ -97,7 +106,7 @@ for n in 0 1 $NF; do
         -c "$TESTS/pcm_dump.c" -o "pcm_dump_$n.o"
     arm-none-eabi-gcc $ARM -Wl,--gc-sections -T "$HERE/mps2.ld" \
         -specs=rdimon.specs -o "dstar_$n.elf" startup.o "pcm_dump_$n.o" $objs \
-        -lrdimon -lc
+        -lrdimon -lc -lm
     arm-none-eabi-size "dstar_$n.elf" | tail -1 |
         awk -v n=$n '{printf "   ELF iters=%s: text=%s data=%s bss=%s\n", n, $1, $2, $3}'
 done
