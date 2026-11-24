@@ -36,6 +36,7 @@ static struct
     uint8_t station;      /**< index into the station list              */
     uint8_t message;      /**< index into the inbox                     */
     uint8_t field;        /**< configuration page: selected field       */
+    uint8_t cfgReturn;    /**< screen the configuration page returns to */
 
     char    editTo[APRS_CALL_MAX];
     char    editText[APRS_MSG_TEXT_MAX + 1];
@@ -55,7 +56,19 @@ void ui_aprs_enter(void)
     uia.station = 0;
     uia.message = 0;
     uia.field   = 0;
+    uia.cfgReturn = MENU_APRS;
     state.ui_screen = MENU_APRS;
+}
+
+/*
+ * The configuration page as a quick menu entry: it opens over the main screen
+ * and red returns there, not to the station list the operator never saw.
+ */
+void ui_aprs_config(void)
+{
+    uia.field = 0;
+    uia.cfgReturn = (state.ui_screen == MENU_APRS) ? MENU_APRS : MAIN_VFO;
+    state.ui_screen = APRS_CFG;
 }
 
 /* ------------------------------------------------------------- drawing --- */
@@ -470,6 +483,7 @@ bool ui_aprs_fsm(kbd_msg_t msg, bool *sync_rtx)
             if (msg.keys & KEY_F2)             /* P2: the setup screen */
             {
                 uia.field = 0;
+                uia.cfgReturn = MENU_APRS;
                 state.ui_screen = APRS_CFG;
                 return true;
             }
@@ -621,16 +635,20 @@ bool ui_aprs_fsm(kbd_msg_t msg, bool *sync_rtx)
                 uia.field = (uint8_t)((uia.field + 8u) % 9u);
                 return true;
             }
-            if (msg.keys & KEY_RIGHT) { configAdjust(+1); return true; }
-            if (msg.keys & KEY_LEFT)  { configAdjust(-1); return true; }
-            if (msg.keys & KEY_F2)             /* save to NVM */
+            /* P1/P2 change the value: the C62 keypad has no LEFT/RIGHT */
+            if (msg.keys & KEY_F2) { configAdjust(+1); return true; }
+            if (msg.keys & KEY_F1) { configAdjust(-1); return true; }
+            if (msg.keys & KEY_ENTER)          /* save to NVM */
             {
                 nvm_writeSettings(&state.settings);
                 return true;
             }
             if (msg.keys & KEY_ESC)
             {
-                state.ui_screen = MENU_APRS;
+                /* Back where the page was opened from: the APRS list or the
+                   quick menu over the main screen. */
+                state.ui_screen = (uia.cfgReturn != APRS_CFG)
+                                ? uia.cfgReturn : MENU_APRS;
                 return true;
             }
             return true;

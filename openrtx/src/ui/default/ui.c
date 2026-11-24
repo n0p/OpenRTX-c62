@@ -69,6 +69,7 @@
 #include "core/voicePromptUtils.h"
 #include "core/beeps.h"
 #include "ui/ui_hints.h"
+#include "ui/ui_zones.h"
 #include "ui/ui_quickmenu.h"
 #ifdef CONFIG_APRS
 #include "ui/ui_aprs.h"
@@ -122,6 +123,7 @@ const char *menu_items[] =
 {
     "Banks",
     "Channels",
+    "Zones",
     "Contacts",
     "Messages",
 #ifdef CONFIG_GPS
@@ -1473,6 +1475,72 @@ void ui_setInputLock(bool on)
     ui_state.input_locked = on;
 }
 
+/*
+ * Overlay entry point (quick menu, macro grid). Duplicated by hand in a dozen
+ * places before: half of them forgot txDisable, and the ones that opened a
+ * Settings page forgot the row. See ui_open_screen() in ui_default.h.
+ */
+void ui_menu_select(uint8_t index)
+{
+    ui_state.menu_selected = index;
+}
+
+void ui_open_screen(uint8_t screen, uint8_t item)
+{
+    /* Come back to the main screen the overlay was on, not to the first one */
+    if ((state.ui_screen == MAIN_VFO) || (state.ui_screen == MAIN_MEM))
+        ui_state.last_main_state = state.ui_screen;
+
+    /* An overlay is never opened in the middle of a field edit, and a stale
+       edit_mode would make the first key on the new screen a "leave edit"
+       instead of a navigation: clear it here, once. */
+    ui_state.edit_mode = false;
+    ui_state.menu_selected = item;
+
+    switch (screen) {
+        case MENU_MESSAGES:
+            ui_msgs_open();
+            break;
+
+        case MSG_COMPOSE:
+            /* Compose with the transport of the current mode (msg_service) */
+            ui_msgs_compose(NULL);
+            break;
+
+#ifdef CONFIG_APRS
+        case APRS_CFG:
+            ui_aprs_config();
+            break;
+#endif
+
+        case MENU_CONTACTS:
+            state.ui_screen = MENU_CONTACTS;
+            ui_contacts_open();
+            break;
+
+        case MENU_ZONES:
+            state.ui_screen = MENU_ZONES;
+            ui_zones_open();
+            break;
+
+        default:
+            state.ui_screen = screen;
+            break;
+    }
+
+    /* Screens that own the keypad never transmit: same rule as the channels */
+    bool ownsKeys = ui_channels_isOpen() || ui_contacts_isOpen()
+                 || ui_zones_isOpen() || ui_msgs_isScreen(state.ui_screen)
+#ifdef CONFIG_APRS
+                 || ui_aprs_isScreen(state.ui_screen)
+#endif
+                 ;
+    if (state.txDisable != ownsKeys) {
+        state.txDisable = ownsKeys;
+        ui_rtxSyncRequest = true;
+    }
+}
+
 #ifdef CONFIG_GPS
 static uint16_t priorGPSSpeed = 0;
 static int16_t  priorGPSAltitude = 0;
@@ -1623,14 +1691,14 @@ void ui_updateFSM(bool *sync_rtx)
             else if(msg.keys & (KEY_DOWN | KNOB_RIGHT))
                 qm_move(+1);
             else if(msg.keys & KEY_F1)
-                qm_adjust(-1);          /* P1: value down */
+                qm_adjust_step(-1, msg.long_press);   /* P1: value down */
             else if(msg.keys & KEY_F2)
             {
                 /* P2 short: value up. P2 long: latch the popup open. */
                 if(msg.long_press)
                     qm_toggleLatch();
                 else
-                    qm_adjust(+1);
+                    qm_adjust_step(+1, false);
             }
             else if(msg.keys & KEY_ENTER)
                 qm_enter();
@@ -1707,6 +1775,21 @@ void ui_updateFSM(bool *sync_rtx)
 
             /* The editor disables TX; leaving it (red) re-arms the PTT */
             bool wantDisabled = (state.ui_screen == MENU_CONTACTS);
+            if (state.txDisable != wantDisabled)
+            {
+                state.txDisable = wantDisabled;
+                *sync_rtx = true;
+            }
+            redraw_needed = true;
+            return;
+        }
+
+        /* Zone browser: same contract as the channel list */
+        if ((state.ui_screen == MENU_ZONES) && ui_zones_isOpen())
+        {
+            ui_zones_handleEvent(&msg, sync_rtx);
+
+            bool wantDisabled = (state.ui_screen == MENU_ZONES);
             if (state.txDisable != wantDisabled)
             {
                 state.txDisable = wantDisabled;
@@ -2174,6 +2257,10 @@ void ui_updateFSM(bool *sync_rtx)
 #else
                             state.ui_screen = MENU_CHANNEL;
 #endif
+                            break;
+                        case M_ZONES:
+                            ui_open_screen(MENU_ZONES, 0);
+                            *sync_rtx = true;
                             break;
                         case M_CONTACTS:
                             state.ui_screen = MENU_CONTACTS;
@@ -3193,6 +3280,12 @@ bool ui_updateGUI()
     if(ui_channels_isOpen())
     {
         ui_channels_draw();
+        return true;
+    }
+    // Zone browser draws itself, with its own header and hint bar
+    if(ui_zones_isOpen())
+    {
+        ui_zones_draw();
         return true;
     }
     // Draw current GUI page

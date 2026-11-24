@@ -85,6 +85,8 @@ ui_src_default = ['openrtx/src/ui/default/ui.c',
                   'openrtx/src/ui/default/ui_main.c',
                   'openrtx/src/ui/default/ui_menu.c',
                   'openrtx/src/ui/default/ui_hints.c',
+                  'openrtx/src/ui/default/ui_layout.c',
+                  'openrtx/src/ui/default/ui_zones.c',
                   'openrtx/src/ui/default/ui_quickmenu.c',
                   'openrtx/src/ui/default/ui_strings.c',
                   'openrtx/src/ui/default/ui_channels.c',
@@ -1291,6 +1293,14 @@ ui_messages_test = executable('ui_messages_test',
                               sources : unit_test_src + ['tests/unit/ui_messages.cpp'],
                               kwargs : unit_test_opts)
 
+ui_layout_test = executable('ui_layout_test',
+                            sources : unit_test_src + ['tests/unit/ui_layout.cpp'],
+                            kwargs : unit_test_opts)
+
+ui_zones_test = executable('ui_zones_test',
+                           sources : unit_test_src + ['tests/unit/ui_zones.cpp'],
+                           kwargs : unit_test_opts)
+
 user_stores_test = executable('user_stores_test',
                                 sources : unit_test_src + ['tests/unit/user_stores.cpp'],
                                 kwargs : unit_test_opts)
@@ -1373,6 +1383,8 @@ test('C62 Calibration Test', c62_calib_test)
 test('Channel Store Test',   channel_store_test)
 test('User Stores Test',     user_stores_test)
 test('UI Messages Test',     ui_messages_test)
+test('UI Layout Test',       ui_layout_test)
+test('UI Zones Test',        ui_zones_test)
 test('DSP Oversampling Test', dsp_oversampling_test)
 test('DSP DC Block Test',    dsp_dcblock_test)
 test('GFX Text Test',        gfx_text_test)

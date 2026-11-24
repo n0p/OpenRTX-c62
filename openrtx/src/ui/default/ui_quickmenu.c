@@ -36,6 +36,7 @@
 #include "rtx/rtx.h"
 #include "ui/ui_default.h"
 #include "ui/ui_hints.h"
+#include "ui/ui_layout.h"
 #include "ui/ui_messages.h"
 #include "ui/ui_quickmenu.h"
 #ifdef CONFIG_TETRA
@@ -53,6 +54,7 @@ qm_state_t qm_state;
 static const ui_hints_t qm_hints = { "OK", "-", "+", "Close" };
 
 static void qm_scroll(void);
+static void qm_rebuild(void);
 
 /* ------------------------------------------------------------------------- */
 /* Helpers                                                                    */
@@ -91,10 +93,12 @@ static const qm_menu_t *qm_active(void)
 /* ------------------------------------------------------------------------- */
 
 const char *const qm_names_onoff[] = { "OFF", "ON" };
-const char *const qm_names_mode[] = { "FM", "M17", "TETRA", "DMR" };
 const char *const qm_names_bw[] = { "12.5", "25", "6.25" };
 const char *const qm_names_ctcss[] = { "OFF", "TX", "RX", "BOTH" };
 const char *const qm_names_shift[] = { "OFF", "-600k", "+600k", "-5M", "+5M" };
+#ifdef DMR_ID_MAX
+const char *const qm_names_destType[] = { "GROUP", "USER" };
+#endif
 
 static const int32_t qm_shift_hz[] = { 0, -600000, 600000, -5000000, 5000000 };
 
@@ -197,21 +201,57 @@ void qm_set_keylight(int on)
 }
 #endif
 
-int qm_get_mode(void)
+#if defined(CONFIG_DMR) && defined(DMR_ID_MAX)
+/*
+ * DMR call destination (docs/UI.md, "DMR"): the talkgroup or the subscriber ID
+ * the next call is addressed to. The values live in settings (the model's
+ * settings record) and reach the transmitter through the RTX resync, so the
+ * quick menu only writes them and asks for a sync; the UI never touches
+ * rtxStatus_t.
+ */
+int qm_dmr_getDestType(void)
 {
-    return state.channel.mode;
+    return (state.settings.dmr_dest_type == DMR_DEST_USER) ? DMR_DEST_USER
+                                                           : DMR_DEST_GROUP;
 }
 
-void qm_set_mode(int opmode)
+void qm_dmr_setDestType(int type)
 {
-    state.channel.mode = (uint8_t)opmode;
+    state.settings.dmr_dest_type = (uint8_t)((type == DMR_DEST_USER)
+                                             ? DMR_DEST_USER : DMR_DEST_GROUP);
     qm_requestSync();
-    vp_announceRadioMode(state.channel.mode, qm_vpFlags());
-    /* The table depends on the mode: rebuild and keep the cursor in range */
-    qm_state.qm = qm_findMenu(state.channel.mode);
-    qm_state.selected = 0;
-    qm_state.first = 0;
+    vp_beep(BEEP_KEY_GENERIC, SHORT_BEEP);
 }
+
+int qm_dmr_getDest(void)
+{
+    int id = (int)state.settings.dmr_dest_id;
+
+    if (id < (int)DMR_ID_MIN)
+        id = (int)DMR_ID_MIN;
+    if (id > (int)DMR_ID_MAX)
+        id = (int)DMR_ID_MAX;
+    return id;
+}
+
+void qm_dmr_setDest(int id)
+{
+    if (id < (int)DMR_ID_MIN)
+        id = (int)DMR_ID_MIN;
+    if (id > (int)DMR_ID_MAX)
+        id = (int)DMR_ID_MAX;
+
+    state.settings.dmr_dest_id = (uint32_t)id;
+    qm_requestSync();
+}
+
+void qm_dmr_fmt_dest(char *buf, int len)
+{
+    snprintf(buf, len, "%s%d",
+             (state.settings.dmr_dest_type == DMR_DEST_USER) ? "ID" : "TG",
+             qm_dmr_getDest());
+}
+#endif /* CONFIG_DMR && DMR_ID_MAX */
 
 /* Unread messages badge, shown on the MSGS row of every table */
 static void qm_fmt_unread(char *buf, int len)
@@ -485,22 +525,51 @@ void qm_dmr_fmt_sync(char *buf, int len)
 /* ------------------------------------------------------------------------- */
 
 #define QM_ITEM_INT(label, min, max, step, get, set) \
-    { label, QM_INT, min, max, step, get, set, NULL, NULL, 0, 0 }
+    { label, QM_INT, min, max, step, 0, get, set, NULL, NULL, 0, 0 }
 #define QM_ITEM_INT_F(label, min, max, step, get, set, fmt) \
-    { label, QM_INT, min, max, step, get, set, NULL, fmt, 0, 0 }
+    { label, QM_INT, min, max, step, 0, get, set, NULL, fmt, 0, 0 }
+#define QM_ITEM_INT_FF(label, min, max, step, fast, get, set, fmt) \
+    { label, QM_INT, min, max, step, fast, get, set, NULL, fmt, 0, 0 }
 #define QM_ITEM_ENUM(label, min, max, get, set, names, fmt) \
-    { label, QM_ENUM, min, max, 1, get, set, names, fmt, 0, 0 }
+    { label, QM_ENUM, min, max, 1, 0, get, set, names, fmt, 0, 0 }
+#define QM_ITEM_ENUM_FF(label, min, max, fast, get, set, names, fmt) \
+    { label, QM_ENUM, min, max, 1, fast, get, set, names, fmt, 0, 0 }
 #define QM_ITEM_TOGGLE(label, get, set) \
-    { label, QM_TOGGLE, 0, 1, 1, get, set, qm_names_onoff, NULL, 0, 0 }
+    { label, QM_TOGGLE, 0, 1, 1, 0, get, set, qm_names_onoff, NULL, 0, 0 }
 #define QM_ITEM_INFO(label, fmt) \
-    { label, QM_INFO, 0, 0, 1, NULL, NULL, NULL, fmt, 0, 0 }
+    { label, QM_INFO, 0, 0, 1, 0, NULL, NULL, NULL, fmt, 0, 0 }
 #define QM_ITEM_GOTO(label, screen, item) \
-    { label, QM_GOTO, 0, 0, 1, NULL, NULL, NULL, NULL, screen, item }
+    { label, QM_GOTO, 0, 0, 1, 0, NULL, NULL, NULL, NULL, screen, item }
 #define QM_ITEM_GOTO_F(label, screen, fmt) \
-    { label, QM_GOTO, 0, 0, 1, NULL, NULL, NULL, fmt, screen, 0 }
-#define QM_ITEM_MODE() \
-    { "MODE", QM_MODE, 0, 3, 1, qm_get_mode, qm_set_mode, qm_names_mode, \
-      NULL, 0, 0 }
+    { label, QM_GOTO, 0, 0, 1, 0, NULL, NULL, NULL, fmt, screen, 0 }
+
+/*
+ * The two rows every mode shares. MSG opens the composer with the transport of
+ * the current mode (msg_service decides), so a text can be written without
+ * walking the menu, and it is the same screen from FM, DMR, M17 and TETRA.
+ * The mode itself is not here: the side key changes it, and a second way to do
+ * it from a popup that rebuilds itself under the finger was the worst part of
+ * the old table (docs/UI.md).
+ */
+#define QM_ITEM_MSG() \
+    { "MSG", QM_GOTO, 0, 0, 1, 0, NULL, NULL, NULL, NULL, MSG_COMPOSE, 0 }
+
+#ifdef CONFIG_APRS
+#define QM_ITEM_APRS() \
+    { "APRS", QM_GOTO, 0, 0, 1, 0, NULL, NULL, NULL, NULL, APRS_CFG, 0 }
+#else
+#define QM_ITEM_APRS()
+#endif
+
+#if defined(CONFIG_DMR) && defined(DMR_ID_MAX)
+#define QM_ITEM_DMR_DEST() \
+    QM_ITEM_ENUM("CALL", DMR_DEST_GROUP, DMR_DEST_USER, qm_dmr_getDestType, \
+                 qm_dmr_setDestType, qm_names_destType, NULL), \
+    QM_ITEM_INT_FF("DEST", (int)DMR_ID_MIN, (int)DMR_ID_MAX, 1, 100, \
+                   qm_dmr_getDest, qm_dmr_setDest, qm_dmr_fmt_dest),
+#else
+#define QM_ITEM_DMR_DEST()
+#endif
 
 static const qm_item_t qm_items_fm[] =
 {
@@ -509,8 +578,9 @@ static const qm_item_t qm_items_fm[] =
                   qm_fmt_power),
     QM_ITEM_ENUM("CTCSS", 0, 3, qm_fm_get_ctcss, qm_fm_set_ctcss,
                  qm_names_ctcss, NULL),
-    QM_ITEM_ENUM("TONE", 0, CTCSS_FREQ_NUM - 1, qm_fm_get_tone, qm_fm_set_tone,
-                 NULL, qm_fm_fmt_tone),
+    /* 50 tones: a long press walks them ten at a time */
+    QM_ITEM_ENUM_FF("TONE", 0, CTCSS_FREQ_NUM - 1, 10, qm_fm_get_tone,
+                    qm_fm_set_tone, NULL, qm_fm_fmt_tone),
     QM_ITEM_ENUM("BW", BW_12_5, BW_6_25, qm_fm_get_bw, qm_fm_set_bw,
                  qm_names_bw, NULL),
     QM_ITEM_ENUM("SHIFT", 0, 4, qm_fm_get_shift, qm_fm_set_shift,
@@ -522,7 +592,8 @@ static const qm_item_t qm_items_fm[] =
 #endif
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
-    QM_ITEM_MODE(),
+    QM_ITEM_MSG(),
+    QM_ITEM_APRS()
 };
 
 static const qm_item_t qm_items_m17[] =
@@ -540,7 +611,7 @@ static const qm_item_t qm_items_m17[] =
 #endif
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
-    QM_ITEM_MODE(),
+    QM_ITEM_MSG()
 };
 
 #ifdef CONFIG_TETRA
@@ -548,8 +619,8 @@ static const qm_item_t qm_items_tetra[] =
 {
     QM_ITEM_TOGGLE("AFC", qm_tetra_get_afc, qm_tetra_set_afc),
 #ifdef CONFIG_RX_FINE_OFFSET
-    QM_ITEM_INT_F("FINE", -500, 500, 10, qm_get_rx_fine, qm_set_rx_fine,
-                  qm_fmt_fine),
+    QM_ITEM_INT_FF("FINE", -500, 500, 10, 100, qm_get_rx_fine,
+                   qm_set_rx_fine, qm_fmt_fine),
 #endif
     QM_ITEM_INFO("CELL", qm_tetra_fmt_cell),
     QM_ITEM_INFO("LA/CC", qm_tetra_fmt_lacc),
@@ -560,7 +631,7 @@ static const qm_item_t qm_items_tetra[] =
 #endif
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
-    QM_ITEM_MODE(),
+    QM_ITEM_MSG()
 };
 #endif /* CONFIG_TETRA */
 
@@ -570,9 +641,10 @@ static const qm_item_t qm_items_dmr[] =
     QM_ITEM_INFO("CC", qm_dmr_fmt_cc),
     QM_ITEM_INFO("TS", qm_dmr_fmt_ts),
     QM_ITEM_INFO("SYNC", qm_dmr_fmt_sync),
+    QM_ITEM_DMR_DEST()
 #ifdef CONFIG_RX_FINE_OFFSET
-    QM_ITEM_INT_F("FINE", -500, 500, 10, qm_get_rx_fine, qm_set_rx_fine,
-                  qm_fmt_fine),
+    QM_ITEM_INT_FF("FINE", -500, 500, 10, 100, qm_get_rx_fine,
+                   qm_set_rx_fine, qm_fmt_fine),
 #endif
     QM_ITEM_INT("BKL", 5, 100, 5, qm_get_brightness, qm_set_brightness),
 #ifdef CONFIG_KEY_BACKLIGHT
@@ -580,7 +652,7 @@ static const qm_item_t qm_items_dmr[] =
 #endif
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
-    QM_ITEM_MODE(),
+    QM_ITEM_MSG()
 };
 #endif /* CONFIG_DMR */
 
@@ -618,8 +690,9 @@ const qm_menu_t *qm_findMenu(uint8_t opmode)
 
 /*
  * Geometry. The screen is 160x128, layout.top_h is 16 and the hint bar takes
- * the last 11 px, so the popup has 16..116 for a 14 px header and 10 px rows:
- * eight rows fit and the ninth would land on the hints.
+ * the last 11 px, so the popup has 16..116 for a 14 px header and 12 px rows
+ * of the 6 pt font: seven rows fit (16 + 14 + 7*12 = 114) and an eighth would
+ * land on the hints.
  */
 uint8_t qm_rowHeight(void)
 {
@@ -645,32 +718,38 @@ int16_t qm_rowTop(uint8_t row)
     return (int16_t)(QM_TOP_Y + QM_HEADER_H + row * QM_ROW_H);
 }
 
+/* Pick the table of the current mode and remember which mode it is for */
+static void qm_rebuild(void)
+{
+    qm_state.mode = state.channel.mode;
+    qm_state.qm = qm_findMenu(qm_state.mode);
+    qm_state.selected = 0;
+    qm_state.first = 0;
+}
+
 static void qm_scroll(void)
 {
     const qm_menu_t *qm = qm_active();
     uint8_t rows = qm_visibleRows();
+    uint16_t sel;
+    uint16_t first;
 
-    if ((qm == NULL) || (rows == 0))
+    if (qm == NULL)
         return;
 
-    if (qm_state.selected < qm_state.first)
-        qm_state.first = qm_state.selected;
-    if (qm_state.selected >= qm_state.first + rows)
-        qm_state.first = (uint8_t)(qm_state.selected - rows + 1);
-
-    /* Never leave blank lines above the last items */
-    if (qm->count > rows && qm_state.first > (uint8_t)(qm->count - rows))
-        qm_state.first = (uint8_t)(qm->count - rows);
+    sel = qm_state.selected;
+    first = qm_state.first;
+    ui_list_clamp(&sel, &first, qm->count, rows);
+    qm_state.selected = (uint8_t)sel;
+    qm_state.first = (uint8_t)first;
 }
 
 void qm_open(void)
 {
-    qm_state.qm = qm_findMenu(state.channel.mode);
     qm_state.open = true;
     qm_state.latched = false;   /* long P2 latches it, see qm_toggleLatch() */
-    qm_state.selected = 0;
-    qm_state.first = 0;
     qm_state.lastKeyTick = getTick();
+    qm_rebuild();
     vp_playMenuBeepIfNeeded(true);
 }
 
@@ -722,7 +801,24 @@ static const qm_item_t *qm_selected(void)
     return &qm_state.qm->items[qm_state.selected];
 }
 
-void qm_adjust(int delta)
+/* Enumerations wrap: the last entry is next to the first one */
+static int qm_wrap(const qm_item_t *item, int value, int dir)
+{
+    int span = item->max - item->min + 1;
+
+    if (span <= 0)
+        return value;
+
+    while (value < item->min)
+        value += span;
+    while (value > item->max)
+        value -= span;
+
+    (void)dir;
+    return value;
+}
+
+void qm_adjust_step(int delta, bool coarse)
 {
     const qm_item_t *item = qm_selected();
 
@@ -736,22 +832,31 @@ void qm_adjust(int delta)
         return;
     }
 
-    int value = qm_current(item) + delta * item->step;
+    int step = item->step;
+
+    /* A long press walks the value faster on the rows that say so */
+    if (coarse && item->fast_step > 0) {
+        step = item->fast_step;
+        /* Do not jump over the limit and stop there: land on it */
+        int value = qm_current(item) + delta * step;
+        if ((delta > 0) && (value > item->max))
+            value = item->max;
+        if ((delta < 0) && (value < item->min))
+            value = item->min;
+        if ((item->type != QM_ENUM) && (item->type != QM_TOGGLE)) {
+            item->set(value);
+            vp_playMenuBeepIfNeeded(false);
+            return;
+        }
+    }
+
+    int value = qm_current(item) + delta * step;
 
     switch (item->type) {
         case QM_ENUM:
         case QM_TOGGLE:
-        case QM_MODE: {
-            /* Enumerations wrap: the last entry is next to the first one */
-            int span = item->max - item->min + 1;
-            if (span <= 0)
-                return;
-            while (value < item->min)
-                value += span * abs(delta);
-            while (value > item->max)
-                value -= span * abs(delta);
+            value = qm_wrap(item, value, delta);
             break;
-        }
 
         case QM_INT:
         default:
@@ -761,6 +866,11 @@ void qm_adjust(int delta)
     }
 
     item->set(value);
+}
+
+void qm_adjust(int delta)
+{
+    qm_adjust_step(delta, false);
 }
 
 void qm_enter(void)
@@ -774,17 +884,19 @@ void qm_enter(void)
         case QM_INT:
         case QM_ENUM:
         case QM_TOGGLE:
-        case QM_MODE:
             /* Green is the same as P2: cycle forward. It never closes. */
             qm_adjust(+1);
             break;
 
         case QM_GOTO:
+            /*
+             * One entry point for every screen an overlay can open: it picks
+             * the row (DEST/META used to land on the first field of the page),
+             * clears any stale edit_mode and arms or disarms the transmitter
+             * the way that screen needs. See ui_open_screen().
+             */
             qm_close();
-            if (item->goto_screen == MENU_MESSAGES)
-                ui_msgs_open();
-            else
-                state.ui_screen = item->goto_screen;
+            ui_open_screen(item->goto_screen, item->goto_item);
             break;
 
         case QM_INFO:
@@ -804,11 +916,18 @@ bool qm_tick(long long now)
     if (!qm_state.open)
         return false;
 
-    /* A mode change from outside (key 5) must follow the table */
-    if ((qm_state.qm != NULL) && (qm_state.qm->mode != state.channel.mode)) {
-        qm_state.qm = qm_findMenu(state.channel.mode);
-        qm_state.selected = 0;
-        qm_state.first = 0;
+    /*
+     * A mode change from outside (the side key) must follow the table.
+     *
+     * Compare against the mode the table was chosen for, never against the
+     * table's own mode field: a mode with no table of its own falls back to the
+     * FM one, and comparing pointers' contents there rebuilt the popup on every
+     * pass - the cursor jumped back to the first row each time the user moved
+     * it, which is the "the quick menu stops working" report. With the mode
+     * recorded in the state, the table is rebuilt exactly once per change.
+     */
+    if (qm_state.mode != state.channel.mode) {
+        qm_rebuild();
         return true;
     }
 
@@ -839,8 +958,8 @@ bool qm_value_text(uint8_t index, char *buf, int len)
         item->fmt(buf, len);
         return true;
     }
-    if ((item->type == QM_ENUM || item->type == QM_TOGGLE
-         || item->type == QM_MODE) && item->names != NULL && item->get != NULL) {
+    if ((item->type == QM_ENUM || item->type == QM_TOGGLE)
+        && item->names != NULL && item->get != NULL) {
         int value = qm_current(item) - item->min;
         if (value < 0 || value > item->max - item->min)
             return false;
@@ -855,13 +974,16 @@ bool qm_value_text(uint8_t index, char *buf, int len)
 }
 
 /*
- * Make a value fit in `avail` pixels of the 5 pt font. Long values are cut on
+ * Make a value fit in `avail` pixels of the row font. Long values are cut on
  * the left, where the least information is (a frequency keeps its tail), and
  * marked with '<' so that a shortened value never looks like a real one.
  */
 static void qm_fitValue(char *buf, size_t len, uint16_t avail)
 {
-    if ((buf[0] == '\0') || (gfx_getTextWidth(FONT_SIZE_5PT, buf) <= avail))
+    if ((buf[0] == '\0') || (avail < 8))
+        return;   /* nothing to trim into: leave the row as it is */
+
+    if (gfx_getTextWidth(QM_FONT, buf) <= avail)
         return;
 
     size_t n = strlen(buf);
@@ -869,7 +991,7 @@ static void qm_fitValue(char *buf, size_t len, uint16_t avail)
         char tmp[QM_VALUE_BUF];
         memmove(tmp, buf + (strlen(buf) - n), n);
         tmp[n] = '\0';
-        if (gfx_getTextWidth(FONT_SIZE_5PT, tmp) <= avail - 4)
+        if (gfx_getTextWidth(QM_FONT, tmp) <= avail - 6)
             break;
         n--;
     }
@@ -885,10 +1007,10 @@ static void qm_fitValue(char *buf, size_t len, uint16_t avail)
 static void qm_drawHeader(void)
 {
     char right[QM_VALUE_BUF] = "";
-    point_t pos = { QM_TEXT_X, (int16_t)(QM_TOP_Y + QM_HEADER_H - 4) };
+    int16_t baseline = (int16_t)(QM_TOP_Y + QM_HEADER_BASELINE);
 
-    gfx_print(pos, FONT_SIZE_8PT, TEXT_ALIGN_LEFT, yellow_fab413, "%s",
-              qm_state.qm->title);
+    gfx_print((point_t){ QM_TEXT_X, baseline }, FONT_SIZE_8PT, TEXT_ALIGN_LEFT,
+              yellow_fab413, "%s", qm_state.qm->title);
 
     if (qm_state.qm->mode == OPMODE_TETRA) {
 #ifdef CONFIG_TETRA
@@ -905,8 +1027,8 @@ static void qm_drawHeader(void)
     if (right[0] == '\0')
         qm_fmt_frequency(right, sizeof(right));
 
-    gfx_print((point_t){ QM_VALUE_X, pos.y }, FONT_SIZE_8PT, TEXT_ALIGN_RIGHT,
-              color_white, "%s", right);
+    gfx_print((point_t){ CONFIG_SCREEN_WIDTH - QM_VALUE_X, baseline },
+              FONT_SIZE_8PT, TEXT_ALIGN_RIGHT, color_white, "%s", right);
 }
 
 void qm_draw(void)
@@ -931,9 +1053,13 @@ void qm_draw(void)
         const qm_item_t *item = &qm_state.qm->items[index];
         bool selected = (index == qm_state.selected);
         int16_t top = qm_rowTop(row);
-        /* Baseline inside the row: glyphs occupy top+3 .. top+7 (5 pt cap
-           height is 5 px with a yOffset of -5), so the text can never spill
-           into the row above, which was the visible bug. */
+        /*
+         * The rectangle and the baseline come from the same `top`: QM_ROW_H
+         * high, text at top + 9. The 6 pt glyph box is top+2..top+8 and its
+         * descenders reach top+10, so the black-on-white text sits inside the
+         * white rectangle instead of floating five pixels above it (the bug
+         * that made the 5 pt popup unreadable).
+         */
         int16_t baseline = (int16_t)(top + QM_ROW_BASELINE);
         char value[QM_VALUE_BUF] = "";
 
@@ -942,17 +1068,17 @@ void qm_draw(void)
                          color_white, true);
 
         color_t fg = selected ? color_black : color_white;
-        uint16_t label_w = gfx_getTextWidth(FONT_SIZE_5PT, item->label);
-        uint16_t value_x = (uint16_t)(QM_TEXT_X + label_w + 4);
+        uint16_t label_w = gfx_getTextWidth(QM_FONT, item->label);
+        uint16_t value_x = (uint16_t)(QM_TEXT_X + label_w + 6);
         uint16_t avail = (uint16_t)(CONFIG_SCREEN_WIDTH - QM_VALUE_X - value_x);
 
-        gfx_print((point_t){ QM_TEXT_X, baseline }, FONT_SIZE_5PT,
+        gfx_print((point_t){ QM_TEXT_X, baseline }, QM_FONT,
                   TEXT_ALIGN_LEFT, fg, "%s", item->label);
 
         if (qm_value_text(index, value, sizeof(value))) {
             qm_fitValue(value, sizeof(value), avail);
-            gfx_print((point_t){ QM_VALUE_X, baseline }, FONT_SIZE_5PT,
-                      TEXT_ALIGN_RIGHT, fg, "%s", value);
+            gfx_print((point_t){ CONFIG_SCREEN_WIDTH - QM_VALUE_X, baseline },
+                      QM_FONT, TEXT_ALIGN_RIGHT, fg, "%s", value);
         }
     }
 

@@ -16,6 +16,7 @@
 #include "ui/ui_default.h"
 #include "ui/ui_channels.h"
 #include "ui/ui_hints.h"
+#include "ui/ui_layout.h"
 
 /*
  * In-radio channel editor.
@@ -29,19 +30,29 @@
  *           inside a name or a frequency while editing (the C62 has no arrow
  *           keys: see keyboard_c62.c), P2 saves, red cancels.
  *
- * Everything is drawn with the 5 and 6 point fonts so that the whole bank is
- * readable on the 160x128 C62 display. Nothing here talks to the radio: a
- * channel reaches the RTX by being copied into state.channel and asking the
- * main loop for a synchronisation.
+ * Geometry comes from ui/ui_layout.h: the 14 px header band with the title at
+ * the shared baseline, then 20 px two-line rows (6 pt name over 5 pt detail)
+ * whose baselines are measured from the top of the row, so the inverted
+ * selection rectangle holds both lines instead of being drawn a few pixels
+ * above them. Before, the title was printed on y = 2 as if it were a top
+ * coordinate and the rows on y + 1: with gfx_print() taking the baseline, the
+ * header ended up half off the top of the screen and the text of every row sat
+ * outside its own rectangle.
+ *
+ * Nothing here talks to the radio: a channel reaches the RTX by being copied
+ * into state.channel and asking the main loop for a synchronisation.
  */
 
-#define CH_HEADER_H 12
+#define CH_HEADER_H UI_HEADER_H
 /* Same hint bar as the rest of the UI (ui_hints.c): 11 px, 5 pt */
 #define CH_HINTS_H  UI_HINTS_H
 #define CH_ROW_H    20
 #define CH_FIELD_H  12
-#define CH_LIST_ROWS  ((CONFIG_SCREEN_HEIGHT - CH_HEADER_H - CH_HINTS_H) / CH_ROW_H)
-#define CH_FIELD_ROWS ((CONFIG_SCREEN_HEIGHT - CH_HEADER_H - CH_HINTS_H) / CH_FIELD_H)
+/* Baselines inside a 20 px two-line row: 6 pt name, 5 pt detail */
+#define CH_ROW_L1   9
+#define CH_ROW_L2   19
+#define CH_LIST_ROWS  ((CONFIG_SCREEN_HEIGHT - UI_LIST_TOP - CH_HINTS_H) / CH_ROW_H)
+#define CH_FIELD_ROWS ((CONFIG_SCREEN_HEIGHT - UI_LIST_TOP - CH_HINTS_H) / CH_FIELD_H)
 
 #define CH_MSG_MS 2000
 
@@ -149,20 +160,7 @@ static void clampList(void)
 {
     uint16_t count = (uint16_t)chstore_count();
 
-    if (count == 0) {
-        listSel = 0;
-        listTop = 0;
-        return;
-    }
-
-    if (listSel >= count)
-        listSel = count - 1;
-
-    if (listSel < listTop)
-        listTop = listSel;
-
-    if ((uint16_t)(listSel - listTop) >= CH_LIST_ROWS)
-        listTop = (uint16_t)(listSel - CH_LIST_ROWS + 1);
+    ui_list_clamp(&listSel, &listTop, count, (uint8_t)CH_LIST_ROWS);
 }
 
 /******************************************************************************
@@ -329,19 +327,35 @@ static void toneStep(bool tx, int dir)
     }
 }
 
+/* Modes this firmware can actually tune, in the order UP/DOWN walks them. A
+   channel can hold any of them; the list is filtered so that the editor never
+   offers a mode the build does not have. */
+static const uint8_t chModes[] = {
+    OPMODE_FM,
+#ifdef CONFIG_M17
+    OPMODE_M17,
+#endif
+#ifdef CONFIG_DMR
+    OPMODE_DMR,
+#endif
+#ifdef CONFIG_TETRA
+    OPMODE_TETRA,
+#endif
+};
+
+#define CH_MODES ((uint8_t)(sizeof(chModes) / sizeof(chModes[0])))
+
 static void modeStep(int dir)
 {
-    static const uint8_t modes[] = { OPMODE_FM, OPMODE_M17, OPMODE_DMR,
-                                     OPMODE_TETRA };
     int cur = 0;
 
-    for (size_t i = 0; i < sizeof(modes); i++) {
-        if (modes[i] == edit.mode)
+    for (uint8_t i = 0; i < CH_MODES; i++) {
+        if (chModes[i] == edit.mode)
             cur = (int)i;
     }
 
-    cur = (cur + dir + (int)sizeof(modes)) % (int)sizeof(modes);
-    edit.mode = modes[cur];
+    cur = (cur + dir + CH_MODES) % CH_MODES;
+    edit.mode = chModes[cur];
 
     if (edit.mode == OPMODE_DMR && edit.dmr_cc == 0)
         edit.dmr_cc = 1;
@@ -425,10 +439,26 @@ static void fieldChange(int dir, bool coarse)
             break;
 
         case CF_DMR:
+            /* Colour code on UP/DOWN, timeslot on P1/P2 (see fieldChange) */
+            edit.dmr_cc = (uint8_t)((edit.dmr_cc + 1) & 0x0F);
+            break;
+
         default:
-            /* Colour code and timeslot are read only here */
             break;
     }
+}
+
+/*
+ * The colour code and the timeslot of a DMR channel are part of the record, so
+ * the editor offers them instead of beeping: UP/DOWN walks the colour code
+ * 0..15 and P1/P2 flip the timeslot. (They were read only while the record had
+ * nowhere to keep them; chstore_channel_t has carried both since the bank was
+ * written.)
+ */
+static void dmrTimeslotStep(int dir)
+{
+    edit.dmr_ts = (uint8_t)((edit.dmr_ts == 0) ? 1 : 0);
+    (void)dir;
 }
 
 static void fieldCursorStep(int dir)
@@ -631,15 +661,20 @@ static bool editKey(kbd_msg_t *msg, bool *sync_rtx)
         else
             field = fieldStep(field, 1);
     } else if (fieldEdit && (msg->keys & KEY_F1)) {
-        /* The keypad has no left/right: P1/P2 move the caret */
-        fieldCursorStep(-1);
+        /* The keypad has no left/right: P1/P2 move the caret, and flip the
+           DMR timeslot on the one field that has no caret */
+        if (field == CF_DMR)
+            dmrTimeslotStep(-1);
+        else
+            fieldCursorStep(-1);
     } else if (fieldEdit && (msg->keys & KEY_F2)) {
-        fieldCursorStep(+1);
+        if (field == CF_DMR)
+            dmrTimeslotStep(+1);
+        else
+            fieldCursorStep(+1);
     } else if (msg->keys & KEY_ENTER) {
         if (field == CF_SIMPLEX) {
             fieldChange(1, false);
-        } else if (field == CF_DMR) {
-            beepError();
         } else {
             fieldEdit = !fieldEdit;
             if (fieldEdit && (field == CF_RX || field == CF_TX)) {
@@ -714,14 +749,10 @@ void ui_channels_drawHints(const char *green, const char *p1, const char *p2,
 
 static void drawHeader(const char *title)
 {
-    point_t pos = { 2, 2 };
-    gfx_print(pos, FONT_SIZE_6PT, TEXT_ALIGN_LEFT, color_white, "%s", title);
+    char right[12];
 
-    point_t bat = { CONFIG_SCREEN_WIDTH - 2, 2 };
-    gfx_print(bat, FONT_SIZE_5PT, TEXT_ALIGN_RIGHT, color_white, "%u%%",
-              (unsigned)state.charge);
-
-    drawHLine(CH_HEADER_H - 1);
+    snprintf(right, sizeof(right), "%u%%", (unsigned)state.charge);
+    ui_list_header(title, right);
 }
 
 static void drawList(void)
@@ -734,7 +765,7 @@ static void drawList(void)
     drawHeader(title);
 
     if (count == 0) {
-        point_t p = { CONFIG_SCREEN_WIDTH / 2, CH_HEADER_H + 30 };
+        point_t p = { CONFIG_SCREEN_WIDTH / 2, (int16_t)(UI_LIST_TOP + 24) };
         gfx_print(p, FONT_SIZE_6PT, TEXT_ALIGN_CENTER, color_white,
                   "No channels");
         p.y += 14;
@@ -753,19 +784,16 @@ static void drawList(void)
         if (chstore_get(idx, &ch) != 0)
             break;
 
-        uint16_t y = (uint16_t)(CH_HEADER_H + row * CH_ROW_H);
+        int16_t y = (int16_t)(UI_LIST_TOP + row * CH_ROW_H);
         bool selected = (idx == listSel);
 
-        if (selected) {
-            point_t rect = { 0, (int16_t)y };
-            gfx_drawRect(rect, CONFIG_SCREEN_WIDTH, CH_ROW_H, color_white,
-                         true);
-        }
+        if (selected)
+            ui_row_selection(y, CH_ROW_H, true);
 
         color_t fg = selected ? color_black : color_white;
 
-        point_t l1 = { 2, (int16_t)(y + 1) };
-        gfx_print(l1, FONT_SIZE_6PT, TEXT_ALIGN_LEFT, fg, "%02u %s",
+        gfx_print((point_t){ UI_TEXT_X, (int16_t)(y + CH_ROW_L1) },
+                  FONT_SIZE_6PT, TEXT_ALIGN_LEFT, fg, "%02u %s",
                   (unsigned)(idx + 1), ch.name);
 
         char freq[16];
@@ -775,8 +803,8 @@ static void drawList(void)
         if (ch.tx_tone_en)
             snprintf(tone, sizeof(tone), " T");
 
-        point_t l2 = { 2, (int16_t)(y + 11) };
-        gfx_print(l2, FONT_SIZE_5PT, TEXT_ALIGN_LEFT, fg, "%s %s%s%s", freq,
+        gfx_print((point_t){ UI_TEXT_X, (int16_t)(y + CH_ROW_L2) },
+                  FONT_SIZE_5PT, TEXT_ALIGN_LEFT, fg, "%s %s%s%s", freq,
                   chstore_modeName(ch.mode),
                   (ch.flags & CHSTORE_FLAG_RX_ONLY) ? " RX" : tone,
                   (ch.flags & CHSTORE_FLAG_SIMPLEX) ? " S" : "");
@@ -870,26 +898,25 @@ static void drawEditor(void)
             continue;
         }
 
-        uint16_t y = (uint16_t)(CH_HEADER_H + (row - scroll) * CH_FIELD_H);
+        int16_t y = (int16_t)(UI_LIST_TOP + (row - scroll) * CH_FIELD_H);
         bool selected = (f == field);
+        int16_t baseline = ui_row_baseline_at(y, CH_FIELD_H);
         color_t fg = color_white;
         bool full = true;
 
         if (selected) {
-            point_t rect = { 0, (int16_t)y };
             full = !fieldEdit;
             fg = fieldEdit ? color_white : color_black;
-            gfx_drawRect(rect, CONFIG_SCREEN_WIDTH, CH_FIELD_H, color_white,
-                         full);
+            ui_row_selection(y, CH_FIELD_H, full);
         }
 
         snprintf(label, sizeof(label), "%s", fieldLabels[f]);
-        point_t lp = { 2, (int16_t)(y + 2) };
-        gfx_print(lp, FONT_SIZE_5PT, TEXT_ALIGN_LEFT, fg, "%s", label);
+        gfx_print((point_t){ UI_TEXT_X, baseline }, FONT_SIZE_5PT,
+                  TEXT_ALIGN_LEFT, fg, "%s", label);
 
         fieldValue(f, value, sizeof(value));
 
-        point_t vp = { 47, (int16_t)(y + 2) };
+        point_t vp = { 47, baseline };
         gfx_print(vp, FONT_SIZE_5PT, TEXT_ALIGN_LEFT, fg, "%s", value);
 
         /* Underline the character being edited */
@@ -906,7 +933,7 @@ static void drawEditor(void)
         row++;
     }
 
-    drawHLine(CH_HEADER_H + (CH_FIELD_ROWS * CH_FIELD_H) + 1);
+    drawHLine(UI_LIST_TOP + (CH_FIELD_ROWS * CH_FIELD_H) + 1);
 
     if (msgBuf[0] != '\0' && getTick() < msgUntil)
         ui_channels_drawHints(msgBuf, NULL, NULL, "BACK");
@@ -921,7 +948,7 @@ static void drawConfirm(void)
     drawHeader("DELETE");
 
     chstore_channel_t ch;
-    point_t p = { CONFIG_SCREEN_WIDTH / 2, CH_HEADER_H + 26 };
+    point_t p = { CONFIG_SCREEN_WIDTH / 2, (int16_t)(UI_LIST_TOP + 20) };
 
     if (chstore_get(listSel, &ch) == 0)
         gfx_print(p, FONT_SIZE_6PT, TEXT_ALIGN_CENTER, color_white,

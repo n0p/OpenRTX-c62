@@ -38,6 +38,7 @@ enum uiScreen
     MENU_TOP,
     MENU_BANK,
     MENU_CHANNEL,
+    MENU_ZONES,
     MENU_CONTACTS,
     MENU_GPS,
     MENU_SETTINGS,
@@ -95,6 +96,7 @@ enum menuItems
 {
     M_BANK = 0,
     M_CHANNEL,
+    M_ZONES,
     M_CONTACTS,
     M_MESSAGES,
 #ifdef CONFIG_GPS
@@ -328,5 +330,27 @@ extern const color_t color_black;
 extern const color_t color_grey;
 extern const color_t color_white;
 extern const color_t yellow_fab413;
+
+/**
+ * Move the cursor of the screen that is being shown (the menus keep it in
+ * ui_state.menu_selected). Used by the quick menu when it opens a Settings
+ * page on a given row, so that "META" lands on the meta text field and not on
+ * the first entry of the page.
+ */
+void ui_menu_select(uint8_t index);
+
+/**
+ * Switch screen from an overlay (the quick menu, the macro grid).
+ *
+ * Everything a menu entry does by hand - remember where to come back to, set
+ * the cursor, stop the radio from transmitting while a screen that owns the
+ * keypad is open, and call the module's own open() - happens in one place, so
+ * the quick menu and the menus can never disagree about what opening the
+ * message list means.
+ *
+ * @param screen: destination, one of enum uiScreen.
+ * @param item: row to select on the destination screen, 0 for the first.
+ */
+void ui_open_screen(uint8_t screen, uint8_t item);
 
 #endif /* UI_DEFAULT_H */

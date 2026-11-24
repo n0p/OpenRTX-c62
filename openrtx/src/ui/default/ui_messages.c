@@ -18,6 +18,7 @@
 #include "ui/ui_default.h"
 #include "ui/ui_hints.h"
 #include "ui/ui_messages.h"
+#include "ui/ui_layout.h"
 #include "ui/ui_contacts.h"
 
 /*
@@ -40,9 +41,9 @@
  * same two-sector discipline as the queues.
  */
 
-#define MG_HEADER_H 12
-#define MG_ROW_H    10
-#define MG_ROWS     ((CONFIG_SCREEN_HEIGHT - MG_HEADER_H - UI_HINTS_H) / MG_ROW_H)
+#define MG_HEADER_H UI_HEADER_H
+#define MG_ROW_H    UI_ROW_H
+#define MG_ROWS     ((CONFIG_SCREEN_HEIGHT - UI_LIST_TOP - UI_HINTS_H) / MG_ROW_H)
 #define MG_MSG_MS   2000
 #define MG_TAP_MS   1200   /* multi-tap window                          */
 #define MG_POLL_MS  500
@@ -654,13 +655,7 @@ bool ui_msgs_handleEvent(kbd_msg_t *msg, bool *sync_rtx)
 
 static void drawHeader(const char *title, const char *right)
 {
-    gfx_clearScreen();
-    gfx_print((point_t){ 2, MG_HEADER_H - 3 }, FONT_SIZE_6PT, TEXT_ALIGN_LEFT,
-              yellow_fab413, "%s", title);
-    if (right != NULL && right[0] != '\0')
-        gfx_print((point_t){ CONFIG_SCREEN_WIDTH - 2, MG_HEADER_H - 3 },
-                  FONT_SIZE_5PT, TEXT_ALIGN_RIGHT, color_white, "%s", right);
-    gfx_drawHLine(MG_HEADER_H - 1, 1, color_grey);
+    ui_list_header(title, (right != NULL && right[0] != '\0') ? right : NULL);
 }
 
 /* Wrap the text into `width` characters per line, `max` lines. */
@@ -693,10 +688,10 @@ static void drawFolder(bool sent)
     drawHeader(sent ? "SENT" : "INBOX", right);
 
     if (n == 0) {
-        gfx_print((point_t){ CONFIG_SCREEN_WIDTH / 2, MG_HEADER_H + 30 },
+        gfx_print((point_t){ CONFIG_SCREEN_WIDTH / 2, UI_LIST_TOP + 24 },
                   FONT_SIZE_6PT, TEXT_ALIGN_CENTER, color_white,
                   sent ? "Nothing sent" : "No messages");
-        gfx_print((point_t){ CONFIG_SCREEN_WIDTH / 2, MG_HEADER_H + 46 },
+        gfx_print((point_t){ CONFIG_SCREEN_WIDTH / 2, UI_LIST_TOP + 40 },
                   FONT_SIZE_5PT, TEXT_ALIGN_CENTER, color_white,
                   "P1 switches folder");
         ui_hints_draw(&(ui_hints_t){ sent ? "STATUS" : "OPEN", "INBOX",
@@ -712,12 +707,12 @@ static void drawFolder(bool sent)
         if (r == NULL)
             break;
 
-        int16_t y = (int16_t)(MG_HEADER_H + row * MG_ROW_H);
+        int16_t y = (int16_t)(UI_LIST_TOP + row * MG_ROW_H);
+        int16_t baseline = ui_row_baseline_at(y, MG_ROW_H);
         bool selected = (row == mg.sel);
 
         if (selected)
-            gfx_drawRect((point_t){ 0, y }, CONFIG_SCREEN_WIDTH, MG_ROW_H,
-                         color_white, true);
+            ui_row_selection(y, MG_ROW_H, true);
 
         color_t fg = selected ? color_black : color_white;
         char who[MSG_PEER_LEN + 2];
@@ -726,9 +721,9 @@ static void drawFolder(bool sent)
         peerText(r, peer, sizeof(peer));
         snprintf(who, sizeof(who), "%s%s",
                  (r->flags & MSG_FLAG_UNREAD) ? "*" : "", peer);
-        gfx_print((point_t){ 2, (int16_t)(y + 8) }, FONT_SIZE_5PT,
+        gfx_print((point_t){ UI_TEXT_X, baseline }, FONT_SIZE_6PT,
                   TEXT_ALIGN_LEFT, fg, "%s", who);
-        gfx_print((point_t){ CONFIG_SCREEN_WIDTH - 2, (int16_t)(y + 8) },
+        gfx_print((point_t){ CONFIG_SCREEN_WIDTH - UI_TEXT_X, baseline },
                   FONT_SIZE_5PT, TEXT_ALIGN_RIGHT, fg, "%s",
                   sent ? msg_service_statusText(r->state) : tpName(r->transport));
     }
@@ -746,7 +741,7 @@ static void drawView(void)
 
     if (r == NULL) {
         drawHeader("MESSAGE", NULL);
-        gfx_print((point_t){ CONFIG_SCREEN_WIDTH / 2, MG_HEADER_H + 30 },
+        gfx_print((point_t){ CONFIG_SCREEN_WIDTH / 2, UI_LIST_TOP + 24 },
                   FONT_SIZE_6PT, TEXT_ALIGN_CENTER, color_white, "Gone");
         ui_hints_draw(&(ui_hints_t){ NULL, NULL, NULL, "BACK" });
         return;
@@ -758,7 +753,7 @@ static void drawView(void)
 
     uint8_t n = textLines(r->text, lines, 6, 38);
     for (uint8_t i = 0; i < n; i++) {
-        gfx_print((point_t){ 2, (int16_t)(MG_HEADER_H + 4 + i * 9) },
+        gfx_print((point_t){ 2, (int16_t)(UI_LIST_TOP + 4 + i * 9) },
                   FONT_SIZE_5PT, TEXT_ALIGN_LEFT, color_white, "%s", lines[i]);
     }
 
@@ -782,7 +777,7 @@ static void drawCompose(void)
     uint8_t shown = 0;
     for (uint8_t row = 0; row < MG_ROW_NUM; row++) {
         bool selected = (row == mg.row);
-        int16_t y = (int16_t)(MG_HEADER_H + 2 + shown * 9);
+        int16_t y = (int16_t)(UI_LIST_TOP + 2 + shown * 9);
 
         if (selected && !mg.typing)
             gfx_drawRect((point_t){ 0, y }, CONFIG_SCREEN_WIDTH, 9, color_white,
@@ -844,7 +839,7 @@ static void drawStatus(void)
 
     if (r == NULL) {
         drawHeader("STATUS", NULL);
-        gfx_print((point_t){ CONFIG_SCREEN_WIDTH / 2, MG_HEADER_H + 30 },
+        gfx_print((point_t){ CONFIG_SCREEN_WIDTH / 2, UI_LIST_TOP + 24 },
                   FONT_SIZE_6PT, TEXT_ALIGN_CENTER, color_white, "Gone");
         ui_hints_draw(&(ui_hints_t){ NULL, NULL, NULL, "BACK" });
         return;
@@ -854,16 +849,16 @@ static void drawStatus(void)
     snprintf(right, sizeof(right), "%s", tpName(r->transport));
     drawHeader(peer, right);
 
-    gfx_print((point_t){ 2, (int16_t)(MG_HEADER_H + 6) }, FONT_SIZE_6PT,
+    gfx_print((point_t){ 2, (int16_t)(UI_LIST_TOP + 6) }, FONT_SIZE_6PT,
               TEXT_ALIGN_LEFT, yellow_fab413, "%s",
               msg_service_statusText(r->state));
-    gfx_print((point_t){ 2, (int16_t)(MG_HEADER_H + 18) }, FONT_SIZE_5PT,
+    gfx_print((point_t){ 2, (int16_t)(UI_LIST_TOP + 18) }, FONT_SIZE_5PT,
               TEXT_ALIGN_LEFT, color_white, "try %u of %u",
               (unsigned)r->attempts, (unsigned)MSG_MAX_ATTEMPTS);
 
     uint8_t n = textLines(r->text, lines, 2, 38);
     for (uint8_t i = 0; i < n; i++) {
-        gfx_print((point_t){ 2, (int16_t)(MG_HEADER_H + 30 + i * 9) },
+        gfx_print((point_t){ 2, (int16_t)(UI_LIST_TOP + 24 + i * 9) },
                   FONT_SIZE_5PT, TEXT_ALIGN_LEFT, color_white, "%s", lines[i]);
     }
 

@@ -32,8 +32,7 @@ enum qm_type
     QM_ENUM,      /**< Index into names[]                                */
     QM_TOGGLE,    /**< QM_ENUM with the OFF/ON names                     */
     QM_INFO,      /**< Read only, rendered by fmt()                      */
-    QM_GOTO,      /**< ENTER opens another screen (mode specific editor) */
-    QM_MODE       /**< Operating mode selector, rebuilds the table       */
+    QM_GOTO       /**< ENTER leaves the popup for another screen         */
 };
 
 /** One quick menu row. */
@@ -44,6 +43,7 @@ typedef struct
     int min;
     int max;
     int step;
+    int fast_step;              /**< Step of a long press, 0 = same as step */
 
     int (*get)(void);           /**< Current value, NULL for QM_INFO       */
     void (*set)(int);           /**< Store a new value, NULL for QM_INFO   */
@@ -77,6 +77,7 @@ typedef struct
     uint8_t selected;           /**< Cursor, index into qm->items          */
     uint8_t first;              /**< First visible row                     */
     long long lastKeyTick;      /**< Auto-close timer                      */
+    uint8_t mode;               /**< Operating mode the table was chosen for */
     const qm_menu_t *qm;        /**< Active table, NULL while closed       */
 } qm_state_t;
 
@@ -117,6 +118,17 @@ void qm_move(int delta);
  */
 void qm_adjust(int delta);
 
+/**
+ * Same, with the coarse step (a long press of P1/P2).
+ *
+ * A 24-bit DMR destination or a CTCSS tone cannot be walked one unit at a time
+ * on a keypad: rows that declare a fast_step move by it while the key is held.
+ *
+ * @param delta: -1 or +1.
+ * @param coarse: true for a long press.
+ */
+void qm_adjust_step(int delta, bool coarse);
+
 /** ENTER: cycle a value, toggle it, or open the screen of a QM_GOTO row. */
 void qm_enter(void);
 
@@ -140,13 +152,22 @@ void qm_draw(void);
 /*
  * Row geometry, for the layout test and for anything that needs to line up
  * with the popup. All values are pixels; QM_ROW_BASELINE is measured from the
- * top of the row and is where gfx_print() puts the 5 pt baseline.
+ * top of the row and is where gfx_print() puts the 6 pt baseline.
+ *
+ * The row is 12 px because the font says so: UbuntuRegular6pt7b draws a cap
+ * from baseline-7 to baseline-1 and a descender to baseline+1, so 7 px of
+ * ascent plus 2 of descent leave 3 px of slack in 12. The baseline sits at
+ * +9, which puts the ink at +2..+8 and the descenders at +10, inside the
+ * selection rectangle with one pixel of air above and below. Seven rows fit
+ * between the 14 px header and the 11 px hint bar (87 / 12 = 7.25).
  */
-#define QM_HEADER_H   14   /* header band, 8 pt title                   */
-#define QM_ROW_H      10   /* one row, 5 pt text with 2 px of slack     */
-#define QM_ROW_BASELINE 8  /* baseline offset inside a row               */
+#define QM_HEADER_H   14   /* header band, 8 pt title + frequency        */
+#define QM_HEADER_BASELINE 11 /* baseline of the header text             */
+#define QM_ROW_H      12   /* one row, 6 pt text                         */
+#define QM_ROW_BASELINE 9  /* baseline offset inside a row               */
 #define QM_TEXT_X      2   /* left margin of the labels                  */
 #define QM_VALUE_X     2   /* right margin of the values                 */
+#define QM_FONT        FONT_SIZE_6PT
 
 uint8_t  qm_rowHeight(void);
 uint8_t  qm_rowBaseline(void);

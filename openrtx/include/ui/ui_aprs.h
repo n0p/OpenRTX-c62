@@ -49,6 +49,12 @@ void ui_aprs_statusLine(char *buf, size_t cap);
 /** Enter the APRS screens from the FM main screen (green key long press). */
 void ui_aprs_enter(void);
 
+/**
+ * Open the APRS configuration page directly (quick menu "APRS" row).
+ * Red returns to the screen it was opened from.
+ */
+void ui_aprs_config(void);
+
 #ifdef __cplusplus
 }
 #endif

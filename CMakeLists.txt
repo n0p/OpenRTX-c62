@@ -151,6 +151,8 @@ target_sources(app
     openrtx/src/ui/default/ui_main.c
     openrtx/src/ui/default/ui_menu.c
     openrtx/src/ui/default/ui_hints.c
+    openrtx/src/ui/default/ui_layout.c
+    openrtx/src/ui/default/ui_zones.c
     openrtx/src/ui/default/ui_quickmenu.c
     openrtx/src/ui/default/ui_strings.c
     openrtx/src/ui/default/ui_channels.c

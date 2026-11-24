@@ -16,6 +16,7 @@
 #include "ui/ui_default.h"
 #include "ui/ui_contacts.h"
 #include "ui/ui_hints.h"
+#include "ui/ui_layout.h"
 
 /*
  * Contact book screens, on top of MENU_CONTACTS:
@@ -31,9 +32,9 @@
  * down, F1, F2, MONI and the 12 digits).
  */
 
-#define CT_HEADER_H 12
+#define CT_HEADER_H UI_HEADER_H
 #define CT_ROW_H    12
-#define CT_ROWS     ((CONFIG_SCREEN_HEIGHT - CT_HEADER_H - UI_HINTS_H) / CT_ROW_H)
+#define CT_ROWS     ((CONFIG_SCREEN_HEIGHT - UI_LIST_TOP - UI_HINTS_H) / CT_ROW_H)
 #define CT_MSG_MS   2000
 
 enum ctScreen
@@ -105,17 +106,7 @@ static void clampList(void)
 {
     uint16_t count = (uint16_t)cstore_count();
 
-    if (count == 0) {
-        ct.sel = 0;
-        ct.top = 0;
-        return;
-    }
-    if (ct.sel >= count)
-        ct.sel = (uint16_t)(count - 1);
-    if (ct.sel < ct.top)
-        ct.top = ct.sel;
-    if ((uint16_t)(ct.sel - ct.top) >= CT_ROWS)
-        ct.top = (uint16_t)(ct.sel - CT_ROWS + 1);
+    ui_list_clamp(&ct.sel, &ct.top, count, (uint8_t)CT_ROWS);
 }
 
 /* ------------------------------------------------------------------------ */
@@ -371,13 +362,7 @@ bool ui_contacts_handleEvent(kbd_msg_t *msg, bool *sync_rtx)
 
 static void drawHeader(const char *title, const char *right)
 {
-    gfx_clearScreen();
-    gfx_print((point_t){ 2, CT_HEADER_H - 3 }, FONT_SIZE_6PT, TEXT_ALIGN_LEFT,
-              yellow_fab413, "%s", title);
-    if (right != NULL)
-        gfx_print((point_t){ CONFIG_SCREEN_WIDTH - 2, CT_HEADER_H - 3 },
-                  FONT_SIZE_5PT, TEXT_ALIGN_RIGHT, color_white, "%s", right);
-    gfx_drawHLine(CT_HEADER_H - 1, 1, color_grey);
+    ui_list_header(title, right);
 }
 
 static void drawList(void)
@@ -390,10 +375,12 @@ static void drawList(void)
     drawHeader("CONTACTS", right);
 
     if (count == 0) {
-        gfx_print((point_t){ CONFIG_SCREEN_WIDTH / 2, CT_HEADER_H + 30 },
+        gfx_print((point_t){ CONFIG_SCREEN_WIDTH / 2,
+                             (int16_t)(UI_LIST_TOP + 24) },
                   FONT_SIZE_6PT, TEXT_ALIGN_CENTER, color_white,
                   "No contacts");
-        gfx_print((point_t){ CONFIG_SCREEN_WIDTH / 2, CT_HEADER_H + 46 },
+        gfx_print((point_t){ CONFIG_SCREEN_WIDTH / 2,
+                             (int16_t)(UI_LIST_TOP + 40) },
                   FONT_SIZE_5PT, TEXT_ALIGN_CENTER, color_white,
                   "P1 / green adds one");
         ui_hints_draw(&(ui_hints_t){ "ADD", "ADD", NULL, "BACK" });
@@ -409,17 +396,17 @@ static void drawList(void)
         if (cstore_get(idx, &c) != 0)
             break;
 
-        int16_t y = (int16_t)(CT_HEADER_H + row * CT_ROW_H);
+        int16_t y = (int16_t)(UI_LIST_TOP + row * CT_ROW_H);
+        int16_t baseline = ui_row_baseline_at(y, CT_ROW_H);
         bool selected = (idx == ct.sel);
 
         if (selected)
-            gfx_drawRect((point_t){ 0, y }, CONFIG_SCREEN_WIDTH, CT_ROW_H,
-                         color_white, true);
+            ui_row_selection(y, CT_ROW_H, true);
 
         color_t fg = selected ? color_black : color_white;
-        gfx_print((point_t){ 2, (int16_t)(y + 9) }, FONT_SIZE_6PT,
+        gfx_print((point_t){ UI_TEXT_X, baseline }, FONT_SIZE_6PT,
                   TEXT_ALIGN_LEFT, fg, "%s", c.call);
-        gfx_print((point_t){ CONFIG_SCREEN_WIDTH - 2, (int16_t)(y + 9) },
+        gfx_print((point_t){ CONFIG_SCREEN_WIDTH - UI_TEXT_X, baseline },
                   FONT_SIZE_5PT, TEXT_ALIGN_RIGHT, fg, "%s",
                   modeName(c.mode));
     }
@@ -443,17 +430,18 @@ static void drawEditor(void)
 
     drawHeader(title, NULL);
 
-    uint16_t y = CT_HEADER_H + 6;
+    uint16_t y = UI_LIST_TOP + 4;
     for (uint8_t f = 0; f < CTF_NUM; f++) {
         bool selected = (f == ct.field);
         int16_t rowY = (int16_t)(y + f * 16);
+        int16_t baseline = ui_row_baseline_at(rowY, 14);
 
         if (selected) {
-            gfx_print((point_t){ 2, (int16_t)(rowY + 6) }, FONT_SIZE_5PT,
+            gfx_print((point_t){ UI_TEXT_X, baseline }, FONT_SIZE_5PT,
                       TEXT_ALIGN_LEFT, yellow_fab413, ">");
         }
 
-        gfx_print((point_t){ 12, (int16_t)(rowY + 6) }, FONT_SIZE_5PT,
+        gfx_print((point_t){ 12, baseline }, FONT_SIZE_5PT,
                   TEXT_ALIGN_LEFT, selected ? yellow_fab413 : color_white,
                   "%s", fieldLabels[f]);
 
@@ -462,7 +450,7 @@ static void drawEditor(void)
         else
             snprintf(value, sizeof(value), "%s", fieldText(f));
 
-        gfx_print((point_t){ 48, (int16_t)(rowY + 6) }, FONT_SIZE_6PT,
+        gfx_print((point_t){ 48, baseline }, FONT_SIZE_6PT,
                   TEXT_ALIGN_LEFT, color_white, "%s", value);
 
         /* Caret under the character being changed */
@@ -477,7 +465,7 @@ static void drawEditor(void)
                                                           prefix));
             uint16_t x1 = (uint16_t)(48 + gfx_getTextWidth(FONT_SIZE_6PT,
                                                            value));
-            gfx_drawRect((point_t){ (int16_t)x0, (int16_t)(rowY + 10) },
+            gfx_drawRect((point_t){ (int16_t)x0, (int16_t)(baseline + 3) },
                          (uint16_t)((x1 > x0 + 6) ? 6 : (x1 - x0)), 1,
                          yellow_fab413, true);
         }

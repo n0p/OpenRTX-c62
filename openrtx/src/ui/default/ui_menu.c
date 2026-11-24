@@ -10,6 +10,7 @@
 #include <inttypes.h>
 #include "core/utils.h"
 #include "ui/ui_default.h"
+#include "ui/ui_layout.h"
 #include "ui/ui_messages.h"
 #include "interfaces/nvmem.h"
 #include "interfaces/cps_io.h"
@@ -147,93 +148,122 @@ static void announceMenuItemIfNeeded(char* name, char* value, bool editMode)
     vp_play();
 }
 
-void _ui_drawMenuList(uint8_t selected, int (*getCurrentEntry)(char *buf, uint8_t max_len, uint8_t index))
+/* Number of entries a menu getter offers (-1 terminates the list) */
+static uint16_t menuEntryCount(int (*getCurrentEntry)(char *, uint8_t, uint8_t))
 {
-    point_t pos = layout.line1_pos;
-    // Number of menu entries that fit above the hints row
-    uint8_t entries_in_screen = (CONFIG_SCREEN_HEIGHT - 1 - UI_HINTS_H - pos.y)
-                              / layout.menu_h + 1;
-    uint8_t scroll = 0;
+    char buf[MAX_ENTRY_LEN];
+    uint16_t n = 0;
+
+    while ((n < 255) && (getCurrentEntry(buf, sizeof(buf), (uint8_t)n) != -1))
+        n++;
+
+    return n;
+}
+
+/*
+ * One list, one geometry. Every menu of this UI draws its rows through these
+ * two functions, so the header band, the row height, the baseline inside the
+ * inverted rectangle and the scroll window are the same in the main menu, the
+ * settings, the channel and contact lists and the zone browser (ui/ui_layout.h).
+ * The title used to be printed on the top bar by each caller and the rows
+ * started at layout.line1_pos, which is why a menu row never lined up with a
+ * row of the channel list.
+ */
+void _ui_drawMenuList(const char *title, uint8_t selected,
+                      int (*getCurrentEntry)(char *buf, uint8_t max_len,
+                                             uint8_t index))
+{
+    uint16_t count = menuEntryCount(getCurrentEntry);
+    uint8_t rows = ui_rows_fit(ui_row_height());
+    uint16_t sel = selected;
+    uint16_t first = 0;
     char entry_buf[MAX_ENTRY_LEN] = "";
-    color_t text_color = color_white;
-    for(int item=0, result=0; (result == 0) && (pos.y < CONFIG_SCREEN_HEIGHT - UI_HINTS_H); item++)
-    {
-        // If selection is off the screen, scroll screen
-        if(selected >= entries_in_screen)
-            scroll = selected - entries_in_screen + 1;
-        // Call function pointer to get current menu entry string
-        result = (*getCurrentEntry)(entry_buf, sizeof(entry_buf), item+scroll);
-        if(result != -1)
-        {
-            text_color = color_white;
-            if(item + scroll == selected)
-            {
-                text_color = color_black;
-                // Draw rectangle under selected item, compensating for text height
-                point_t rect_pos = {0, pos.y - layout.menu_h + 3};
-                gfx_drawRect(rect_pos, CONFIG_SCREEN_WIDTH, layout.menu_h, color_white, true);
-                announceMenuItemIfNeeded(entry_buf, NULL, false);
-            }
-            gfx_print(pos, layout.menu_font, TEXT_ALIGN_LEFT, text_color, entry_buf);
-            pos.y += layout.menu_h;
+
+    ui_list_clamp(&sel, &first, count, rows);
+    ui_list_header(title, NULL);
+
+    for (uint8_t row = 0; row < rows; row++) {
+        uint16_t index = (uint16_t)(first + row);
+
+        if (index >= count)
+            break;
+
+        if (getCurrentEntry(entry_buf, sizeof(entry_buf), (uint8_t)index) == -1)
+            break;
+
+        int16_t y = ui_row_top(row);
+        int16_t baseline = (int16_t)(y + ui_row_baseline());
+        bool is_sel = (index == sel);
+
+        if (is_sel) {
+            ui_row_selection(y, ui_row_height(), true);
+            announceMenuItemIfNeeded(entry_buf, NULL, false);
         }
+
+        gfx_print((point_t){ UI_TEXT_X, baseline }, FONT_SIZE_6PT,
+                  TEXT_ALIGN_LEFT, is_sel ? color_black : color_white,
+                  "%s", entry_buf);
     }
 }
 
-void _ui_drawMenuListValue(ui_state_t* ui_state, uint8_t selected,
+void _ui_drawMenuListValue(const char *title, ui_state_t* ui_state,
+                           uint8_t selected,
                            int (*getCurrentEntry)(char *buf, uint8_t max_len, uint8_t index),
                            int (*getCurrentValue)(char *buf, uint8_t max_len, uint8_t index))
 {
-    point_t pos = layout.line1_pos;
-    // Number of menu entries that fit above the hints row
-    uint8_t entries_in_screen = (CONFIG_SCREEN_HEIGHT - 1 - UI_HINTS_H - pos.y)
-                              / layout.menu_h + 1;
-    uint8_t scroll = 0;
+    uint16_t count = menuEntryCount(getCurrentEntry);
+    uint8_t rows = ui_rows_fit(ui_row_height());
+    uint16_t sel = selected;
+    uint16_t first = 0;
     char entry_buf[MAX_ENTRY_LEN] = "";
     char value_buf[MAX_ENTRY_LEN] = "";
-    color_t text_color = color_white;
-    for(int item=0, result=0; (result == 0) && (pos.y < CONFIG_SCREEN_HEIGHT - UI_HINTS_H); item++)
-    {
-        // If selection is off the screen, scroll screen
-        if(selected >= entries_in_screen)
-            scroll = selected - entries_in_screen + 1;
-        // Call function pointer to get current menu entry string
-        result = (*getCurrentEntry)(entry_buf, sizeof(entry_buf), item+scroll);
-        // Call function pointer to get current entry value string
-        result = (*getCurrentValue)(value_buf, sizeof(value_buf), item+scroll);
-        if(result != -1)
-        {
-            text_color = color_white;
-            if(item + scroll == selected)
-            {
-                // Draw rectangle under selected item, compensating for text height
-                // If we are in edit mode, draw a hollow rectangle
+
+    ui_list_clamp(&sel, &first, count, rows);
+    ui_list_header(title, NULL);
+
+    for (uint8_t row = 0; row < rows; row++) {
+        uint16_t index = (uint16_t)(first + row);
+
+        if (index >= count)
+            break;
+
+        if (getCurrentEntry(entry_buf, sizeof(entry_buf), (uint8_t)index) == -1)
+            break;
+        if (getCurrentValue(value_buf, sizeof(value_buf), (uint8_t)index) == -1)
+            break;
+
+        int16_t y = ui_row_top(row);
+        int16_t baseline = (int16_t)(y + ui_row_baseline());
+        bool is_sel = (index == sel);
+        color_t text_color = color_white;
+        bool full_rect = true;
+
+        if (is_sel) {
+            /* Edit mode: hollow rectangle and white text, as before */
+            if (ui_state->edit_mode) {
+                text_color = color_white;
+                full_rect = false;
+            } else {
                 text_color = color_black;
-                bool full_rect = true;
-                if(ui_state->edit_mode)
-                {
-                    text_color = color_white;
-                    full_rect = false;
-                }
-                point_t rect_pos = {0, pos.y - layout.menu_h + 3};
-                gfx_drawRect(rect_pos, CONFIG_SCREEN_WIDTH, layout.menu_h, color_white, full_rect);
-                bool editModeChanged = priorEditMode != ui_state->edit_mode;
-                priorEditMode = ui_state->edit_mode;
-                // force the menu item to be spoken  when the edit mode changes.
-                // E.g. when pressing Enter on Display Brightness etc.
-                if (editModeChanged)
-                    priorSelectedMenuName[0]='\0';
-                if (!ui_state->edit_mode || editModeChanged)
-                {// If in edit mode, only want to speak the char being entered,,
-            //not repeat the entire display.
-                    announceMenuItemIfNeeded(entry_buf, value_buf,
-                                             ui_state->edit_mode);
-                }
             }
-            gfx_print(pos, layout.menu_font, TEXT_ALIGN_LEFT, text_color, entry_buf);
-            gfx_print(pos, layout.menu_font, TEXT_ALIGN_RIGHT, text_color, value_buf);
-            pos.y += layout.menu_h;
+            ui_row_selection(y, ui_row_height(), full_rect);
+
+            bool editModeChanged = priorEditMode != ui_state->edit_mode;
+            priorEditMode = ui_state->edit_mode;
+            /* Force the entry to be spoken when the edit mode changes, e.g.
+               when pressing ENTER on Display Brightness */
+            if (editModeChanged)
+                priorSelectedMenuName[0] = '\0';
+            if (!ui_state->edit_mode || editModeChanged)
+                announceMenuItemIfNeeded(entry_buf, value_buf,
+                                         ui_state->edit_mode);
         }
+
+        gfx_print((point_t){ UI_TEXT_X, baseline }, FONT_SIZE_6PT,
+                  TEXT_ALIGN_LEFT, text_color, "%s", entry_buf);
+        gfx_print((point_t){ CONFIG_SCREEN_WIDTH - UI_TEXT_X, baseline },
+                  FONT_SIZE_6PT, TEXT_ALIGN_RIGHT, text_color, "%s",
+                  value_buf);
     }
 }
 
@@ -746,52 +776,29 @@ int _ui_getContactName(char *buf, uint8_t max_len, uint8_t index)
 
 void _ui_drawMenuTop(ui_state_t* ui_state)
 {
-    gfx_clearScreen();
-    // Print "Menu" on top bar
-    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->menu);
-    // Print menu entries
-    _ui_drawMenuList(ui_state->menu_selected, _ui_getMenuTopEntryName);
+    _ui_drawMenuList(currentLanguage->menu, ui_state->menu_selected, _ui_getMenuTopEntryName);
 }
 
 void _ui_drawMenuBank(ui_state_t* ui_state)
 {
-    gfx_clearScreen();
-    // Print "Bank" on top bar
-    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->banks);
-    // Print bank entries
-    _ui_drawMenuList(ui_state->menu_selected, _ui_getBankName);
+    _ui_drawMenuList(currentLanguage->banks, ui_state->menu_selected, _ui_getBankName);
 }
 
 void _ui_drawMenuChannel(ui_state_t* ui_state)
 {
-    gfx_clearScreen();
-    // Print "Channel" on top bar
-    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->channels);
-    // Print channel entries
-    _ui_drawMenuList(ui_state->menu_selected, _ui_getChannelName);
+    _ui_drawMenuList(currentLanguage->channels, ui_state->menu_selected, _ui_getChannelName);
 }
 
 void _ui_drawMenuContacts(ui_state_t* ui_state)
 {
-    gfx_clearScreen();
-    // Print "Contacts" on top bar
-    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->contacts);
-    // Print contact entries
-    _ui_drawMenuList(ui_state->menu_selected, _ui_getContactName);
+    _ui_drawMenuList(currentLanguage->contacts, ui_state->menu_selected, _ui_getContactName);
 }
 
 #ifdef CONFIG_GPS
 void _ui_drawMenuGPS()
 {
     char *fix_buf, *type_buf;
-    gfx_clearScreen();
-    // Print "GPS" on top bar
-    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->gps);
+    ui_list_header(currentLanguage->gps, NULL);
     point_t fix_pos = {layout.line2_pos.x, CONFIG_SCREEN_HEIGHT * 2 / 5};
     // Print GPS status, if no fix, hide details
     if(!last_state.gpsDetected)
@@ -893,32 +900,19 @@ void _ui_drawMenuGPS()
 
 void _ui_drawMenuSettings(ui_state_t* ui_state)
 {
-    gfx_clearScreen();
-    // Print "Settings" on top bar
-    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->settings);
-    // Print menu entries
-    _ui_drawMenuList(ui_state->menu_selected, _ui_getSettingsEntryName);
+    _ui_drawMenuList(currentLanguage->settings, ui_state->menu_selected, _ui_getSettingsEntryName);
 }
 
 void _ui_drawMenuBackupRestore(ui_state_t* ui_state)
 {
-    gfx_clearScreen();
-    // Print "Backup & Restore" on top bar
-    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->backupAndRestore);
-    // Print menu entries
-    _ui_drawMenuList(ui_state->menu_selected, _ui_getBackupRestoreEntryName);
+    _ui_drawMenuList(currentLanguage->backupAndRestore, ui_state->menu_selected, _ui_getBackupRestoreEntryName);
 }
 
 void _ui_drawMenuBackup(ui_state_t* ui_state)
 {
     (void) ui_state;
 
-    gfx_clearScreen();
-    // Print "Flash Backup" on top bar
-    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->flashBackup);
+    ui_list_header(currentLanguage->flashBackup, NULL);
     // Print backup message
     point_t line = layout.line2_pos;
     gfx_print(line, FONT_SIZE_8PT, TEXT_ALIGN_CENTER,
@@ -941,10 +935,7 @@ void _ui_drawMenuRestore(ui_state_t* ui_state)
 {
     (void) ui_state;
 
-    gfx_clearScreen();
-    // Print "Flash Restore" on top bar
-    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->flashRestore);
+    ui_list_header(currentLanguage->flashRestore, NULL);
     // Print backup message
     point_t line = layout.line2_pos;
     gfx_print(line, FONT_SIZE_8PT, TEXT_ALIGN_CENTER,
@@ -965,12 +956,7 @@ void _ui_drawMenuRestore(ui_state_t* ui_state)
 
 void _ui_drawMenuInfo(ui_state_t* ui_state)
 {
-    gfx_clearScreen();
-    // Print "Info" on top bar
-    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->info);
-    // Print menu entries
-    _ui_drawMenuListValue(ui_state, ui_state->menu_selected, _ui_getInfoEntryName,
+    _ui_drawMenuListValue(currentLanguage->info, ui_state, ui_state->menu_selected, _ui_getInfoEntryName,
                            _ui_getInfoValueName);
 }
 
@@ -1011,24 +997,14 @@ void _ui_drawMenuAbout(ui_state_t* ui_state)
 
 void _ui_drawSettingsDisplay(ui_state_t* ui_state)
 {
-    gfx_clearScreen();
-    // Print "Display" on top bar
-    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->display);
-    // Print display settings entries
-    _ui_drawMenuListValue(ui_state, ui_state->menu_selected, _ui_getDisplayEntryName,
+    _ui_drawMenuListValue(currentLanguage->display, ui_state, ui_state->menu_selected, _ui_getDisplayEntryName,
                            _ui_getDisplayValueName);
 }
 
 #ifdef CONFIG_GPS
 void _ui_drawSettingsGPS(ui_state_t* ui_state)
 {
-    gfx_clearScreen();
-    // Print "GPS Settings" on top bar
-    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->gpsSettings);
-    // Print display settings entries
-    _ui_drawMenuListValue(ui_state, ui_state->menu_selected,
+    _ui_drawMenuListValue(currentLanguage->gpsSettings, ui_state, ui_state->menu_selected,
                           _ui_getSettingsGPSEntryName,
                           _ui_getSettingsGPSValueName);
 }
@@ -1037,12 +1013,9 @@ void _ui_drawSettingsGPS(ui_state_t* ui_state)
 #ifdef CONFIG_RTC
 void _ui_drawSettingsTimeDate()
 {
-    gfx_clearScreen();
+    ui_list_header(currentLanguage->timeAndDate, NULL);
     datetime_t local_time = utcToLocalTime(last_state.time,
                                            last_state.settings.utc_timezone);
-    // Print "Time&Date" on top bar
-    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->timeAndDate);
     // Print current time and date
     gfx_print(layout.line2_pos, layout.input_font, TEXT_ALIGN_CENTER,
               color_white, "%02d/%02d/%02d",
@@ -1056,10 +1029,7 @@ void _ui_drawSettingsTimeDateSet(ui_state_t* ui_state)
 {
     (void) last_state;
 
-    gfx_clearScreen();
-    // Print "Time&Date" on top bar
-    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->timeAndDate);
+    ui_list_header(currentLanguage->timeAndDate, NULL);
     if(ui_state->input_position <= 0)
     {
         strcpy(ui_state->new_date_buf, "__/__/__");
@@ -1096,10 +1066,6 @@ void _ui_drawSettingsTimeDateSet(ui_state_t* ui_state)
 #ifdef CONFIG_M17
 void _ui_drawSettingsM17(ui_state_t* ui_state)
 {
-    gfx_clearScreen();
-    // Print "M17 Settings" on top bar
-    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->m17settings);
     if((ui_state->edit_mode) && (ui_state->menu_selected == M17_CALLSIGN))
     {
         uint16_t rect_width = CONFIG_SCREEN_WIDTH - (layout.horizontal_pad * 2);
@@ -1153,7 +1119,7 @@ void _ui_drawSettingsM17(ui_state_t* ui_state)
     }
     else
     {
-        _ui_drawMenuListValue(ui_state, ui_state->menu_selected, _ui_getM17EntryName,
+        _ui_drawMenuListValue(currentLanguage->m17settings, ui_state, ui_state->menu_selected, _ui_getM17EntryName,
                               _ui_getM17ValueName);
     }
 }
@@ -1162,33 +1128,20 @@ void _ui_drawSettingsM17(ui_state_t* ui_state)
 #ifdef CONFIG_TETRA_AFC
 void _ui_drawSettingsTetra(ui_state_t *ui_state)
 {
-    gfx_clearScreen();
-    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER, color_white,
-              "TETRA");
-    _ui_drawMenuListValue(ui_state, ui_state->menu_selected,
+    _ui_drawMenuListValue("TETRA", ui_state, ui_state->menu_selected,
                           _ui_getTetraEntryName, _ui_getTetraValueName);
 }
 #endif
 
 void _ui_drawSettingsFM(ui_state_t* ui_state)
 {
-    gfx_clearScreen();
-    // Print "FM Settings" on top bar
-    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER, color_white,
-              currentLanguage->fm);
-    // Print FM settings entries
-    _ui_drawMenuListValue(ui_state, ui_state->menu_selected, _ui_getFMEntryName,
+    _ui_drawMenuListValue(currentLanguage->fm, ui_state, ui_state->menu_selected, _ui_getFMEntryName,
                           _ui_getFMValueName);
 }
 
 void _ui_drawSettingsAccessibility(ui_state_t* ui_state)
 {
-    gfx_clearScreen();
-    // Print "Accessibility" on top bar
-    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->accessibility);
-    // Print accessibility settings entries
-    _ui_drawMenuListValue(ui_state, ui_state->menu_selected, _ui_getAccessibilityEntryName,
+    _ui_drawMenuListValue(currentLanguage->accessibility, ui_state, ui_state->menu_selected, _ui_getAccessibilityEntryName,
                            _ui_getAccessibilityValueName);
 }
 
@@ -1199,9 +1152,7 @@ void _ui_drawSettingsReset2Defaults(ui_state_t* ui_state)
     static int drawcnt = 0;
     static long long lastDraw = 0;
 
-    gfx_clearScreen();
-    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->resetToDefaults);
+    ui_list_header(currentLanguage->resetToDefaults, NULL);
 
     // Make text flash yellow once every 1s
     color_t textcolor = drawcnt % 2 == 0 ? color_white : yellow_fab413;
@@ -1223,13 +1174,8 @@ void _ui_drawSettingsReset2Defaults(ui_state_t* ui_state)
 
 void _ui_drawSettingsRadio(ui_state_t* ui_state)
 {
-    gfx_clearScreen();
 
-    // Print "Radio Settings" on top bar
-    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->radioSettings);
 
-    // Handle the special case where a frequency is being input
     if ((ui_state->menu_selected == R_OFFSET) && (ui_state->edit_mode))
     {
         char buf[17] = { 0 };
@@ -1267,17 +1213,14 @@ void _ui_drawSettingsRadio(ui_state_t* ui_state)
     else
     {
         // Print radio settings entries
-        _ui_drawMenuListValue(ui_state, ui_state->menu_selected, _ui_getRadioEntryName,
+        _ui_drawMenuListValue(currentLanguage->radioSettings, ui_state, ui_state->menu_selected, _ui_getRadioEntryName,
                                _ui_getRadioValueName);
     }
 }
 
 void _ui_drawSettingsAudio(ui_state_t* ui_state)
 {
-    gfx_clearScreen();
-    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER, color_white,
-              "Audio");
-    _ui_drawMenuListValue(ui_state, ui_state->menu_selected,
+    _ui_drawMenuListValue("Audio", ui_state, ui_state->menu_selected,
                           _ui_getAudioEntryName, _ui_getAudioValueName);
 }
 
