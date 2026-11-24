@@ -29,7 +29,8 @@ using namespace M17;
 
 OpMode_M17::OpMode_M17() : startRx(false), startTx(false), locked(false),
                            dataValid(false), extendedCall(false),
-                           invertTxPhase(false), invertRxPhase(false)
+                           invertTxPhase(false), invertRxPhase(false),
+                           rxAudioPath(-1), txAudioPath(-1), gpsTimer(0)
 {
 
 }
@@ -57,8 +58,20 @@ void OpMode_M17::disable()
     startTx = false;
     platform_ledOff(GREEN);
     platform_ledOff(RED);
+
+    /*
+     * Stop the codec thread before its path is released.  A thread that finds
+     * its path closed exits on its own, and then nobody joins it: its 16 KiB
+     * of stack is malloc'd by startThread() and only stopThread() frees it.
+     */
+    codec_stop(rxAudioPath);
+    codec_stop(txAudioPath);
+
     audioPath_release(rxAudioPath);
     audioPath_release(txAudioPath);
+    rxAudioPath = -1;
+    txAudioPath = -1;
+
     codec_terminate();
     radio_disableRtx();
     modulator.terminate();
@@ -307,6 +320,23 @@ void OpMode_M17::rxState(rtxStatus_t *const status)
     }
 }
 
+bool OpMode_M17::popFrame(uint8_t *dst)
+{
+    for(unsigned i = 0; i < TX_FRAME_WAIT_MS; i++)
+    {
+        if(codec_popFrame(dst, false) == 0)
+            return true;
+
+        /* The encoder thread stopped: no frame is ever going to arrive */
+        if(codec_running() == false)
+            return false;
+
+        sleepFor(0, 1);
+    }
+
+    return false;
+}
+
 void OpMode_M17::txState(rtxStatus_t *const status)
 {
     frame_t m17Frame;
@@ -345,11 +375,37 @@ void OpMode_M17::txState(rtxStatus_t *const status)
         encoder.encodeLsf(lsf, m17Frame);
 
         txAudioPath = audioPath_request(SOURCE_MIC, SINK_MCU, PRIO_TX);
-        codec_startEncode(txAudioPath);
+        if((txAudioPath < 0) || (codec_startEncode(txAudioPath) == false))
+        {
+            /* No encoder: keying the PA would transmit an empty stream and,
+             * with nobody pushing frames, block this thread for ever */
+            audioPath_release(txAudioPath);
+            txAudioPath = -1;
+            radio_disableRtx();
+            startRx = true;
+            status->opStatus = OFF;
+            return;
+        }
+
+        /*
+         * The baseband stream and the audio path come before the PA: if the
+         * modulator cannot start (no baseband buffer, no SINK_RTX path) there
+         * is nothing to transmit, and holding the PA would only splatter.
+         */
+        if(modulator.start() == false)
+        {
+            codec_stop(txAudioPath);
+            audioPath_release(txAudioPath);
+            txAudioPath = -1;
+            radio_disableRtx();
+            startRx = true;
+            status->opStatus = OFF;
+            return;
+        }
+
         radio_enableTx();
 
         modulator.invertPhase(invertTxPhase);
-        modulator.start();
         modulator.sendPreamble();
         modulator.sendFrame(m17Frame);
     }
@@ -357,8 +413,17 @@ void OpMode_M17::txState(rtxStatus_t *const status)
     bool      lastFrame = false;
 
     // Wait until there are 16 bytes of compressed speech, then send them
-    codec_popFrame(dataFrame.data(),     true);
-    codec_popFrame(dataFrame.data() + 8, true);
+    if(!popFrame(dataFrame.data()) || !popFrame(dataFrame.data() + 8))
+    {
+        /*
+         * The encoder died under us.  End the over here instead of waiting on a
+         * condition that will never be signalled: the radio would stay keyed.
+         */
+        memset(dataFrame.data(), 0x00, dataFrame.size());
+        lastFrame = true;
+        startRx   = true;
+        status->opStatus = OFF;
+    }
 
     if(platform_getPttStatus() == false)
     {

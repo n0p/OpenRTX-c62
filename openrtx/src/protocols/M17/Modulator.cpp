@@ -32,12 +32,17 @@ void Modulator::init()
 {
     /*
      * Allocate a chunk of memory to contain two complete buffers for baseband
-     * audio.
+     * audio.  The allocation can fail -- the kernel heap also holds the thread
+     * stacks -- and everything below writes through these pointers, so a
+     * failure leaves the modulator unstartable instead of dereferencing NULL.
      */
 
     baseband_buffer = std::make_unique< int16_t[] >(2 * FRAME_SAMPLES);
     idleBuffer      = baseband_buffer.get();
     txRunning       = false;
+    outStream       = -1;
+    outPath         = -1;
+    invPhase        = false;
     #if defined(PLATFORM_MD3x0) || defined(PLATFORM_MDUV3x0)
     pwmComp.reset();
     #endif
@@ -64,6 +69,10 @@ bool Modulator::start()
     if(txRunning)
         return true;
 
+    /* No baseband buffer: do not pretend to transmit */
+    if(baseband_buffer == nullptr)
+        return false;
+
     #ifndef PLATFORM_LINUX
     outPath = audioPath_request(SOURCE_MCU, SINK_RTX, PRIO_TX);
     if(outPath < 0)
@@ -74,7 +83,12 @@ bool Modulator::start()
                                   STREAM_OUTPUT | BUF_CIRC_DOUBLE);
 
     if(outStream < 0)
+    {
+        /* Do not leave the path of a stream that never started open */
+        audioPath_release(outPath);
+        outPath = -1;
         return false;
+    }
 
     idleBuffer = outputStream_getIdleBuffer(outStream);
     #endif
@@ -137,6 +151,11 @@ void Modulator::invertPhase(const bool status)
 
 void Modulator::symbolsToBaseband()
 {
+    /* Nothing allocated, nothing to render: sendPreamble()/sendFrame() are
+     * called from the rtx thread and must not write through a NULL pointer. */
+    if(idleBuffer == nullptr)
+        return;
+
     memset(idleBuffer, 0x00, FRAME_SAMPLES * sizeof(stream_sample_t));
 
     for(size_t i = 0; i < symbols.size(); i++)
