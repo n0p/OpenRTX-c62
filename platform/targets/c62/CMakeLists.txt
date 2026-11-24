@@ -204,6 +204,41 @@ if(CONFIG_C62_APRS)
 endif()
 
 #
+# CONFIG_C62_DPMR_RX: the dPMR mode (ETSI TS 102 490), receive only.
+#
+# 4FSK at 2400 symbols/s on a 6,25 kHz channel, 80 ms frames of 384 bits,
+# AMBE+2 3600x2450 voice through lib/dmr_vocoder.  Its own demodulator, coding
+# layer, short data, playout and mode: a 161 tap matched filter at 48 kHz
+# decimated to 9,6 kHz, a 1024 sample ring, and no transmitter at all.  The
+# option is a Kconfig symbol in Kconfig.board, and it selects C62_DMR_VOCODER
+# when DMR RX is not built, because the block above is what builds the library.
+# See docs/RX_DPMR.md for the measured numbers.
+#
+if(CONFIG_C62_DPMR_RX)
+  target_sources(app PRIVATE
+    ${OPENRTX_ROOT}/openrtx/src/protocols/DPMR/DpmrDefs.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/DPMR/DpmrData.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/DPMR/DpmrPhy.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/DPMR/DpmrSpeech.c
+    ${OPENRTX_ROOT}/openrtx/src/rtx/OpMode_DPMR.cpp)
+  target_compile_definitions(app PRIVATE CONFIG_DPMR)
+
+  # The slicer and the sync search decide on margins (EVM, correlation score),
+  # so the receiver must not depend on whether the compiler fuses multiply-adds:
+  # the same capture gives 111 frames with contraction and 121 without.  -Os,
+  # which is what this image uses, and -O2 then agree, host and firmware.
+  set_source_files_properties(
+    ${OPENRTX_ROOT}/openrtx/src/protocols/DPMR/DpmrPhy.c
+    PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+
+  if(CONFIG_C62_DMR_VOCODER)
+    target_link_libraries(app PRIVATE dmr_vocoder)
+  endif()
+
+  message(STATUS "C62: dPMR receive mode enabled")
+endif()
+
+#
 # CONFIG_DMR_SMS: short messages in the DMR mode (protocols/DMR/DmrSms.c).
 # A data call carries the text, one burst per TDMA frame; the message store
 # (CONFIG_MESSAGING) holds the queue the UI writes to.  Needs CONFIG_DMR_TX to

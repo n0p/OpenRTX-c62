@@ -105,13 +105,36 @@ static constexpr uint8_t TETRA_RX_AUDIO_GAIN1 = 1; // -6 dB
 static constexpr uint8_t TETRA_RX_AUDIO_GAIN2 = 0x3f;
 static constexpr uint8_t TETRA_MIC_GAIN = 0;
 
+/*
+ * C62 BK4819 settings for dPMR, receive only.  A dPMR channel is 6,25 kHz, half
+ * of what the chip can filter: its narrowest IF filter is 4,5 kHz, in 12,5 kHz
+ * mode, so the radio runs the 12,5 kHz receive path (REG_43 0x7e48, the word
+ * the stock firmware uses for its own 4FSK mode) and the 6,25 kHz
+ * selectivity comes from the mode's own square root raised cosine matched
+ * filter, alpha = 0.2, which is what TS 102 490 clause 12.2.2.2 asks for
+ * anyway.  A wider filter costs adjacent channel immunity, not sensitivity, and
+ * the alternative -- 25 kHz mode, 9 kHz of IF -- lets a whole neighbour in.
+ *
+ * The RX audio gain is the DMR one: it is the same discriminator output through
+ * the same audio bypass, and the slicer estimates its own levels per frame, so
+ * the deviation the chip delivers (+-1,6 kHz measured against ETSI's 1,05 kHz)
+ * does not have to be corrected here.
+ */
+static constexpr uint8_t DPMR_RF_BW = 7;      // 4.5 kHz, 12.5 kHz mode
+static constexpr uint8_t DPMR_RF_BW_WEAK = 7; // 4.5 kHz
+static constexpr uint8_t DPMR_TX_LPF2_BW = 0; // 3 kHz, no transmitter
+static constexpr uint8_t DPMR_RX_AUDIO_GAIN1 = 1; // -6 dB
+static constexpr uint8_t DPMR_RX_AUDIO_GAIN2 = 0x3f;
+static constexpr uint8_t DPMR_MIC_GAIN = 0;   // no transmitter
+
 /**
  * Digital modes receive the raw discriminator through the flat audio path:
  * M17, and DMR (which transmits from the same flat path).
  */
 static bool flatMode(enum opmode mode)
 {
-    return (mode == OPMODE_M17) || (mode == OPMODE_DMR) || (mode == OPMODE_TETRA);
+    return (mode == OPMODE_M17) || (mode == OPMODE_DMR)
+           || (mode == OPMODE_TETRA) || (mode == OPMODE_DPMR);
 }
 
 /*
@@ -273,6 +296,20 @@ void radio_setOpmode(const enum opmode mode)
         bk4819_setRxAudioGain(&c62_bk4819, DMR_RX_AUDIO_GAIN1,
                               DMR_RX_AUDIO_GAIN2);
         bk4819_setMicGain(&c62_bk4819, DMR_MIC_GAIN);
+    } else if (mode == OPMODE_DPMR) {
+        /*
+         * Flat, narrow receive path: 4FSK baseband straight to the DSP, with
+         * the mode's own matched filter doing the shaping.  No transmit setup:
+         * the mode has no transmitter.
+         */
+        bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_BYPASS);
+        bk4819_setBandwidth(&c62_bk4819, BK4819_BW_12K5);
+        bk4819_setRfFilter(&c62_bk4819, DPMR_RF_BW, DPMR_RF_BW_WEAK);
+        bk4819_setTxAudioFilter(&c62_bk4819, DPMR_TX_LPF2_BW);
+        bk4819_setRxAudioGain(&c62_bk4819, DPMR_RX_AUDIO_GAIN1,
+                              DPMR_RX_AUDIO_GAIN2);
+        bk4819_setMicGain(&c62_bk4819, DPMR_MIC_GAIN);
+        c62_rx_reg43 = 0x7808;
     } else if (mode == OPMODE_TETRA) {
         // Flat, wide receive path: 25 kHz channel, widest RF filters
         bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_BYPASS);
