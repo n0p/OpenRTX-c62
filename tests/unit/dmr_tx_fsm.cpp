@@ -244,3 +244,112 @@ TEST_CASE("A finished transmission asks for no more slots", "[dmr][tx]")
     REQUIRE(fsm.burstSlot == true);
     REQUIRE(fsm.slotsAfterPtt == 0);
 }
+
+TEST_CASE("The call keeps one timeslot from the header to the terminator",
+          "[dmr][tx]")
+{
+    /*
+     * A DMR frame is 60 ms and holds two 30 ms slots.  Every burst of a call
+     * -- voice LC header, each voice burst, the terminator -- must fall in the
+     * same slot, which here is "the same parity of the rendered slot".  The
+     * old machine announced the header one slot before the voice phase and
+     * closed the call in whichever slot the PTT release landed on.
+     */
+    for (uint8_t ts = 1; ts <= 2; ts++) {
+        dmrTxFsm fsm;
+        dmrTxFsm_initSlot(&fsm, ts);
+
+        std::vector<bool> ptt(SLOT_LIMIT, true);
+        std::vector<bool> frames(SLOT_LIMIT, true);
+        for (size_t i = 10; i < SLOT_LIMIT; i++)
+            ptt[i] = false;
+
+        auto slots = run(fsm, ptt, frames);
+        REQUIRE(ends(slots));
+
+        int phase = -1;
+        size_t bursts = 0;
+
+        for (size_t i = 0; i < slots.size(); i++) {
+            const auto kind = slots[i].step.kind;
+            if ((kind != DMR_TXB_VOICE_LC) && (kind != DMR_TXB_VOICE) &&
+                (kind != DMR_TXB_TERMINATOR))
+                continue;
+
+            INFO("timeslot " << (int)ts << " slot " << i);
+            if (phase < 0)
+                phase = (int)(i & 1u);
+            REQUIRE((int)(i & 1u) == phase);
+            bursts++;
+        }
+
+        /* Header, several voice bursts and the terminator went out */
+        REQUIRE(countKind(slots, DMR_TXB_VOICE_LC) == 1);
+        REQUIRE(countKind(slots, DMR_TXB_VOICE) >= 2);
+        REQUIRE(countKind(slots, DMR_TXB_TERMINATOR) == 1);
+        REQUIRE(bursts >= 4);
+
+        /* Slot 1 opens on the first slot, slot 2 on the second one */
+        REQUIRE(phase == (ts == 1 ? 0 : 1));
+    }
+}
+
+TEST_CASE("Timeslot 2 starts the call one slot later than timeslot 1",
+          "[dmr][tx]")
+{
+    dmrTxFsm fsm1;
+    dmrTxFsm fsm2;
+    dmrTxFsm_initSlot(&fsm1, 1);
+    dmrTxFsm_initSlot(&fsm2, 2);
+
+    std::vector<bool> ptt(SLOT_LIMIT, true);
+    std::vector<bool> frames(SLOT_LIMIT, true);
+    for (size_t i = 10; i < SLOT_LIMIT; i++)
+        ptt[i] = false;
+
+    auto s1 = run(fsm1, ptt, frames);
+    auto s2 = run(fsm2, ptt, frames);
+
+    REQUIRE(ends(s1));
+    REQUIRE(ends(s2));
+
+    /* The header goes out in the first slot on TS1 and in the second on TS2 */
+    REQUIRE(s1[0].step.kind == DMR_TXB_VOICE_LC);
+    REQUIRE(s2[0].step.kind == DMR_TXB_EMPTY);
+    REQUIRE(s2[1].step.kind == DMR_TXB_VOICE_LC);
+
+    /* The same call, one slot (30 ms) later, never more */
+    REQUIRE(s2.size() <= s1.size() + 1);
+    REQUIRE(s1.size() <= s2.size() + 1);
+
+    /* An out-of-range timeslot is not slot 2 */
+    dmrTxFsm fsm3;
+    dmrTxFsm_initSlot(&fsm3, 7);
+    REQUIRE(fsm3.burstSlot == true);
+}
+
+TEST_CASE("A data call keeps its timeslot too", "[dmr][tx]")
+{
+    for (uint8_t ts = 1; ts <= 2; ts++) {
+        dmrTxData data;
+        dmrTxData_initSlot(&data, 2, ts);
+
+        int phase = -1;
+
+        for (unsigned i = 0; i < DMR_TX_DATA_MAX_SLOTS; i++) {
+            dmrTxStep step = dmrTxData_next(&data);
+
+            if (step.kind == DMR_TXB_DATA) {
+                INFO("timeslot " << (int)ts << " slot " << i);
+                if (phase < 0)
+                    phase = (int)(i & 1u);
+                REQUIRE((int)(i & 1u) == phase);
+            }
+
+            if (step.finished)
+                break;
+        }
+
+        REQUIRE(phase == (ts == 1 ? 0 : 1));
+    }
+}

@@ -10,6 +10,7 @@
 #include "interfaces/nvmem.h"
 #include "calibration/calib_C62.h"
 #include "core/crc.h"
+#include "core/settings_record.h"
 
 /*
  * Settings and VFO data are kept in separate erase sectors of the storage
@@ -119,6 +120,37 @@ void nvm_init()
         storage = NULL;
 }
 
+/**
+ * Read a block without the magic/CRC framing of readRecord().  Settings carry
+ * their own (core/settings_record.h), because the version of the payload has
+ * to be checked before the payload is interpreted, and one framing is enough.
+ */
+static int readBlob(uint32_t off, void *buf, size_t len)
+{
+    if (storage == NULL)
+        return -1;
+
+    return flash_area_read(storage, off, buf, len);
+}
+
+/** Erase the sector and write a block, padded to the flash write unit. */
+static int writeBlob(uint32_t off, const void *data, size_t len)
+{
+    uint8_t buf[NVM_RECORD_MAX];
+    size_t padded = (len + NVM_WRITE_ALIGN - 1U) & ~(NVM_WRITE_ALIGN - 1U);
+
+    if ((storage == NULL) || (padded > sizeof(buf)))
+        return -1;
+
+    memcpy(buf, data, len);
+    memset(buf + len, 0xFF, padded - len);
+
+    if (flash_area_erase(storage, off, SECTOR_SIZE) < 0)
+        return -1;
+
+    return flash_area_write(storage, off, buf, padded);
+}
+
 void nvm_terminate()
 {
     if (storage != NULL) {
@@ -170,15 +202,30 @@ int nvm_readVfoChannelData(channel_t *channel)
 
 int nvm_readSettings(settings_t *settings)
 {
+    uint8_t buf[SETTINGS_RECORD_SIZE];
+    uint8_t cause = SETTINGS_RESET_BLANK;
+
     if (settings == NULL)
         return -1;
 
     memset(settings, 0x00, sizeof(settings_t));
+    memset(buf, 0xFF, sizeof(buf));
 
-    if (readRecord(SETTINGS_ADDR, settings, sizeof(settings_t)) < 0)
-        return -1;
+    if (readBlob(SETTINGS_ADDR, buf, sizeof(buf)) < 0)
+        return -(int)SETTINGS_RESET_BLANK;
 
-    settingsCrc = crc_ccitt(settings, sizeof(settings_t));
+    /*
+     * The version lives in the record header, so an old settings_t is dropped
+     * as a whole (see core/settings_record.h) and the reason reaches the
+     * screen through state.settings_reset.
+     */
+    int ret = settings_recordLoad(buf, sizeof(buf), settings, &cause);
+
+    /* Debounce key: the record as it is on flash, not the parsed structure */
+    settingsCrc = crc_ccitt(buf, sizeof(buf));
+
+    if (ret != 0)
+        return -(int)cause;
 
     return 0;
 }
@@ -191,10 +238,16 @@ int nvm_writeSettings(const settings_t *settings)
 int nvm_writeSettingsAndVfo(const settings_t *settings, const channel_t *vfo)
 {
     if (settings != NULL) {
-        uint16_t crc = crc_ccitt(settings, sizeof(settings_t));
+        uint8_t buf[SETTINGS_RECORD_SIZE];
+        int n = settings_recordPack(buf, sizeof(buf), settings);
+
+        if (n < 0)
+            return -1;
+
+        uint16_t crc = crc_ccitt(buf, (size_t)n);
 
         if (crc != settingsCrc) {
-            if (writeRecord(SETTINGS_ADDR, settings, sizeof(settings_t)) < 0)
+            if (writeBlob(SETTINGS_ADDR, buf, (size_t)n) < 0)
                 return -1;
 
             settingsCrc = crc;

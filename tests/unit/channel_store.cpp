@@ -25,12 +25,15 @@
 
 extern "C" {
 #include "core/channel_store.h"
+#include "core/crc.h"
 }
 
-static_assert(sizeof(chstore_channel_t) == 32, "channel record size");
+static_assert(sizeof(chstore_channel_v1_t) == 32, "version 1 record size");
+static_assert(sizeof(chstore_channel_t) == 37, "channel record size");
 static_assert(sizeof(chstore_hdr_t) == 32, "record header size");
-static_assert(CHSTORE_MAX_CHANNELS * sizeof(chstore_channel_t) == 4096,
-              "a full bank has to fit in one 4 KiB sector");
+static_assert(CHSTORE_MAX_CHANNELS * sizeof(chstore_channel_t) + 32
+                  <= CHSTORE_SLOT_SIZE,
+              "a full bank has to fit in one ping-pong slot");
 static_assert(CHSTORE_SLOT_SIZE == 2 * CHSTORE_SECTOR_SIZE, "slot geometry");
 
 namespace {
@@ -170,6 +173,8 @@ chstore_channel_t makeChannel(const char *name, uint32_t rx, uint32_t tx,
     c.bandwidth = BW_12_5;
     c.dmr_cc = 1;
     c.dmr_ts = 0;
+    c.dmr_dest_type = DMR_DEST_NONE;
+    c.dmr_dest_id = 0;
     if (rx == tx)
         c.flags |= CHSTORE_FLAG_SIMPLEX;
     return c;
@@ -486,4 +491,222 @@ TEST_CASE("A device without a flash backend reports an empty bank",
     /* Writes have nowhere to go: they fail instead of pretending */
     REQUIRE(addChannel("X", 145500000, 145500000) < 0);
     REQUIRE(chstore_count() == 0);
+}
+
+/* ------------------------------------------------------------------ v1 → v2 --- */
+
+/*
+ * Write a bank with the version 1 layout straight into the fake flash, as the
+ * first firmware that had an on-radio bank left it: 32-byte records and a
+ * header that says version 1.
+ */
+void writeLegacyBank(FakeFlash &flash, const chstore_channel_v1_t *recs,
+                     uint16_t count, uint16_t lastUsed)
+{
+    chstore_hdr_t hdr;
+    memset(&hdr, 0, sizeof(hdr));
+    hdr.magic = CHSTORE_MAGIC;
+    hdr.version = CHSTORE_VERSION_LEGACY;
+    hdr.count = count;
+    hdr.sequence = 7;
+    hdr.last_used = lastUsed;
+
+    chstore_hdr_t copy = hdr;
+    copy.hcrc = 0;
+    copy.pcrc = 0;
+    hdr.hcrc = crc_ccitt(&copy, sizeof(copy));
+    hdr.pcrc = crc_ccitt(recs, (size_t)count * sizeof(*recs));
+
+    memcpy(&flash.mem[0], &hdr, sizeof(hdr));
+    memcpy(&flash.mem[sizeof(hdr)], recs, (size_t)count * sizeof(*recs));
+}
+
+chstore_channel_v1_t legacyChannel(const char *name, uint32_t rx, uint32_t tx,
+                                   uint8_t mode)
+{
+    chstore_channel_v1_t c;
+    memset(&c, 0, sizeof(c));
+    snprintf(c.name, sizeof(c.name), "%s", name);
+    c.rx_freq = rx;
+    c.tx_freq = tx;
+    c.power = 1000;
+    c.mode = mode;
+    c.bandwidth = BW_12_5;
+    c.dmr_cc = 5;
+    c.dmr_ts = 1;
+    if (rx == tx)
+        c.flags |= CHSTORE_FLAG_SIMPLEX;
+    return c;
+}
+
+TEST_CASE("A version 1 bank is migrated and rewritten as version 2", "[chstore]")
+{
+    TestBank tb;
+    chstore_channel_v1_t recs[2] = {
+        legacyChannel("LEGACY-FM", 145500000, 145500000, OPMODE_FM),
+        legacyChannel("LEGACY-DMR", 433500000, 433500000, OPMODE_DMR),
+    };
+
+    writeLegacyBank(tb.flash, recs, 2, 1);
+    tb.boot();
+
+    REQUIRE(chstore_count() == 2);
+    REQUIRE(nameOf(0) == "LEGACY-FM");
+    REQUIRE(nameOf(1) == "LEGACY-DMR");
+    REQUIRE(chstore_lastUsed() == 1);
+
+    chstore_channel_t c;
+    REQUIRE(chstore_get(1, &c) == 0);
+    REQUIRE(c.mode == OPMODE_DMR);
+    REQUIRE(c.dmr_cc == 5);
+    REQUIRE(c.dmr_ts == 1);
+    /* A v1 channel had no destination: it keeps using the radio's default */
+    REQUIRE(c.dmr_dest_type == DMR_DEST_NONE);
+    REQUIRE(c.dmr_dest_id == 0);
+
+    /* The first save writes the new layout; the bank survives the upgrade */
+    REQUIRE(addChannel("NEW", 145000000, 145000000) == 2);
+    tb.boot();
+    REQUIRE(chstore_count() == 3);
+    REQUIRE(nameOf(0) == "LEGACY-FM");
+    REQUIRE(nameOf(2) == "NEW");
+
+    /* And what is on flash now says version 2 */
+    chstore_hdr_t hdr;
+    memcpy(&hdr, &tb.flash.mem[0], sizeof(hdr));
+    REQUIRE((hdr.version == CHSTORE_VERSION_LEGACY ||
+             hdr.version == CHSTORE_VERSION));
+}
+
+TEST_CASE("A bank written by a newer firmware is left alone", "[chstore]")
+{
+    TestBank tb;
+    fillThree(tb);
+
+    /* Pretend the newest slot came from a later version of the format */
+    chstore_hdr_t hdr;
+    memcpy(&hdr, &tb.flash.mem[0], sizeof(hdr));
+    hdr.version = (uint16_t)(CHSTORE_VERSION + 1);
+    chstore_hdr_t copy = hdr;
+    copy.hcrc = 0;
+    copy.pcrc = 0;
+    hdr.hcrc = crc_ccitt(&copy, sizeof(copy));
+    memcpy(&tb.flash.mem[0], &hdr, sizeof(hdr));
+
+    /* Corrupt the older slot too, so both are unusable */
+    tb.flash.mem[CHSTORE_SLOT_SIZE] ^= 0xFF;
+
+    tb.boot();
+    REQUIRE(chstore_count() == 0);
+}
+
+TEST_CASE("The DMR destination of a channel round-trips and is validated",
+          "[chstore]")
+{
+    TestBank tb;
+    tb.boot();
+
+    chstore_channel_t c = makeChannel("TG-2142", 433450000, 433450000,
+                                      OPMODE_DMR);
+    c.dmr_dest_type = DMR_DEST_GROUP;
+    c.dmr_dest_id = 2142;
+    REQUIRE(chstore_valid(&c));
+    REQUIRE(chstore_add(&c) == 0);
+
+    chstore_channel_t dmrUser = makeChannel("UNIT-9", 433475000, 433475000,
+                                            OPMODE_DMR);
+    dmrUser.dmr_dest_type = DMR_DEST_USER;
+    dmrUser.dmr_dest_id = 1234567;
+    REQUIRE(chstore_valid(&dmrUser));
+    REQUIRE(chstore_add(&dmrUser) == 1);
+
+    tb.boot();
+
+    chstore_channel_t back;
+    REQUIRE(chstore_get(0, &back) == 0);
+    REQUIRE(back.dmr_dest_type == DMR_DEST_GROUP);
+    REQUIRE(back.dmr_dest_id == 2142);
+
+    REQUIRE(chstore_get(1, &back) == 0);
+    REQUIRE(back.dmr_dest_type == DMR_DEST_USER);
+    REQUIRE(back.dmr_dest_id == 1234567);
+
+    /* 0 is "no address" and 2^24 does not fit in the LC */
+    chstore_channel_t bad = c;
+    bad.dmr_dest_id = 0;
+    REQUIRE_FALSE(chstore_valid(&bad));
+    bad.dmr_dest_id = 0x1000000;
+    REQUIRE_FALSE(chstore_valid(&bad));
+
+    bad = c;
+    bad.dmr_dest_type = 7;
+    REQUIRE_FALSE(chstore_valid(&bad));
+    bad.dmr_dest_type = DMR_DEST_NONE;
+    bad.dmr_dest_id = 0;
+    REQUIRE(chstore_valid(&bad));
+
+    /*
+     * The colour code is a 4-bit field, so an out-of-range value cannot be
+     * constructed: it is truncated by the assignment, never written as 20.
+     */
+    bad = c;
+    bad.dmr_cc = 20;
+    REQUIRE(bad.dmr_cc == 4);
+}
+
+TEST_CASE("A stored channel fills the RTX configuration, DMR included",
+          "[chstore]")
+{
+    TestBank tb;
+    tb.boot();
+
+    chstore_channel_t c = makeChannel("RPT-TG", 438650000, 431050000,
+                                      OPMODE_DMR);
+    c.power = 5000;
+    c.bandwidth = BW_12_5;
+    c.dmr_cc = 3;
+    c.dmr_ts = 1;
+    c.dmr_dest_type = DMR_DEST_GROUP;
+    c.dmr_dest_id = 91;
+    c.flags = 0;    /* a repeater channel: TX is not the RX frequency */
+    REQUIRE(chstore_add(&c) == 0);
+
+    rtxStatus_t rtx;
+    memset(&rtx, 0, sizeof(rtx));
+    REQUIRE(chstore_applyRtx(0, &rtx) == 0);
+
+    REQUIRE(rtx.opMode == OPMODE_DMR);
+    REQUIRE(rtx.rxFrequency == 438650000);
+    REQUIRE(rtx.txFrequency == 431050000);
+    REQUIRE(rtx.txPower == 5000);
+    REQUIRE(rtx.dmrColourCode == 3);
+    REQUIRE(rtx.dmrTimeslot == 2);
+    REQUIRE(rtx.dmrDestType == DMR_DEST_GROUP);
+    REQUIRE(rtx.dmrDestId == 91);
+    REQUIRE(rtx.txDisable == 0);
+
+    REQUIRE(chstore_applyRtx(9, &rtx) < 0);
+
+    /*
+     * Selecting the channel copies its DMR destination and timeslot into the
+     * settings, which is where the transmitter reads them from.
+     */
+    settings_t st = default_settings;
+    st.dmr_dest_type = DMR_DEST_USER;
+    st.dmr_dest_id = 42;
+    st.dmr_timeslot = 1;
+
+    REQUIRE(chstore_applySettings(0, &st) == 0);
+    REQUIRE(st.dmr_dest_type == DMR_DEST_GROUP);
+    REQUIRE(st.dmr_dest_id == 91);
+    REQUIRE(st.dmr_timeslot == 2);
+
+    /* An FM channel leaves the DMR settings alone */
+    chstore_channel_t fm = makeChannel("FM-ONLY", 145500000, 145500000);
+    REQUIRE(chstore_add(&fm) == 1);
+    REQUIRE(chstore_applySettings(1, &st) == 0);
+    REQUIRE(st.dmr_dest_id == 91);
+    REQUIRE(st.dmr_timeslot == 2);
+
+    REQUIRE(chstore_applySettings(9, &st) < 0);
 }

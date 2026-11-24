@@ -31,6 +31,14 @@
  * other slot (the slot in between is an empty one: TDMA phase).  TAIL renders
  * the empty slot whose start the terminator's PA ramp already descended into.
  *
+ * The TDMA phase is the timeslot: a DMR frame is 60 ms and holds two 30 ms
+ * slots, and a call owns one of them.  dmrTxFsm_initSlot() starts the machine
+ * on slot 1 or slot 2 of the frame; from there every burst of the call -- the
+ * voice LC header, each voice burst and the terminator -- is emitted in that
+ * same slot and every other slot is silence, so the carrier presents one
+ * consistent timeslot to the receiver.  On slot 2 the call starts one slot
+ * (30 ms) later than on slot 1, and so does every control burst.
+ *
  * Safety exit: a state machine that only leaves TX when some condition inside
  * a state becomes true can be trapped by a condition that never becomes true --
  * releasing the PTT during the lead time, with an empty vocoder queue, was
@@ -90,16 +98,29 @@ struct dmrTxStep {
 };
 
 /**
- * Reset a state machine for a new transmission.
+ * Reset a state machine for a new transmission on a given timeslot.
+ *
+ * @param fsm: state machine to initialise.
+ * @param timeslot: 1 or 2, the slot of the 60 ms frame the call uses.  Slot 2
+ *        means the first 30 ms of the frame are silence: the call starts one
+ *        slot later.
+ */
+static inline void dmrTxFsm_initSlot(struct dmrTxFsm *fsm, uint8_t timeslot)
+{
+    fsm->stage = DMR_TX_STAGE_LEAD;
+    fsm->burstSlot = (timeslot != 2);
+    fsm->slotsAfterPtt = 0;
+    fsm->leadSlots = 0;
+}
+
+/**
+ * Reset a state machine for a new transmission on timeslot 1.
  *
  * @param fsm: state machine to initialise.
  */
 static inline void dmrTxFsm_init(struct dmrTxFsm *fsm)
 {
-    fsm->stage = DMR_TX_STAGE_LEAD;
-    fsm->burstSlot = true;
-    fsm->slotsAfterPtt = 0;
-    fsm->leadSlots = 0;
+    dmrTxFsm_initSlot(fsm, 1);
 }
 
 /**
@@ -114,6 +135,14 @@ static inline struct dmrTxStep dmrTxFsm_next(struct dmrTxFsm *fsm, bool ptt,
                                              bool haveFrames)
 {
     struct dmrTxStep step = { DMR_TXB_EMPTY, 0, false };
+
+    /*
+     * Is this slot the one the frame assigns to us?  The phase advances with
+     * every rendered slot below, so a machine that spends a slot in LEAD or
+     * waiting for its turn keeps the 30 ms grid.
+     */
+    const bool mine = fsm->burstSlot;
+    fsm->burstSlot = !fsm->burstSlot;
 
     if (ptt)
         fsm->slotsAfterPtt = 0;
@@ -130,18 +159,23 @@ static inline struct dmrTxStep dmrTxFsm_next(struct dmrTxFsm *fsm, bool ptt,
     switch (fsm->stage) {
         case DMR_TX_STAGE_LEAD:
             /*
-             * The PA is up but the call has not been announced: the LC header
-             * opens a call and the first voice burst follows one slot later,
-             * so keying it with an empty queue would put a header and then
-             * silence on the air.  Wait for one frame; if the operator let go
-             * in the meantime, end here: nothing was announced and the empty
-             * slot of this very slot is the last thing transmitted.
+             * The PA is up but the call has not been announced.  Two things
+             * have to be true before the header goes out: there is a vocoder
+             * frame queued (a header followed by silence announces a call that
+             * does not exist) and the slot is ours (a burst in the other slot
+             * would make the call appear in the wrong timeslot).  The header
+             * and the first voice burst then follow the same rule as the rest
+             * of the call: one burst per frame, in our slot.
              */
             if (ptt == false) {
                 step.finished = true;
+            } else if (!mine) {
+                if (++fsm->leadSlots > DMR_TX_MAX_LEAD_SLOTS)
+                    step.finished = true;
             } else if (haveFrames) {
                 fsm->leadSlots = 0;
-                fsm->stage = DMR_TX_STAGE_LC_HEADER;
+                step.kind = DMR_TXB_VOICE_LC;
+                fsm->stage = DMR_TX_STAGE_VOICE;
             } else if (++fsm->leadSlots > DMR_TX_MAX_LEAD_SLOTS) {
                 /* One second without a frame: the vocoder is not producing */
                 step.finished = true;
@@ -149,8 +183,11 @@ static inline struct dmrTxStep dmrTxFsm_next(struct dmrTxFsm *fsm, bool ptt,
             break;
 
         case DMR_TX_STAGE_LC_HEADER:
-            step.kind = DMR_TXB_VOICE_LC;
-            fsm->stage = DMR_TX_STAGE_VOICE;
+            /* Entry point kept for callers that start from the header stage */
+            if (mine) {
+                step.kind = DMR_TXB_VOICE_LC;
+                fsm->stage = DMR_TX_STAGE_VOICE;
+            }
             break;
 
         case DMR_TX_STAGE_VOICE:
@@ -160,20 +197,22 @@ static inline struct dmrTxStep dmrTxFsm_next(struct dmrTxFsm *fsm, bool ptt,
              * between is silence, not a shorter burst; a handheld that keys the
              * other slot would trample the station that owns it.
              */
-            if (fsm->burstSlot) {
+            if (mine)
                 step.kind = DMR_TXB_VOICE;
-                fsm->burstSlot = false;
-            } else {
-                step.kind = DMR_TXB_EMPTY;
-                fsm->burstSlot = true;
-            }
             if (ptt == false)
                 fsm->stage = DMR_TX_STAGE_TERMINATOR;
             break;
 
         case DMR_TX_STAGE_TERMINATOR:
-            step.kind = DMR_TXB_TERMINATOR;
-            fsm->stage = DMR_TX_STAGE_TAIL;
+            /*
+             * The terminator closes the call in the same timeslot as the
+             * speech it closes, so it waits for our slot instead of going out
+             * in whichever one the release happened to land on.
+             */
+            if (mine) {
+                step.kind = DMR_TXB_TERMINATOR;
+                fsm->stage = DMR_TX_STAGE_TAIL;
+            }
             break;
 
         case DMR_TX_STAGE_TAIL:
@@ -231,17 +270,30 @@ struct dmrTxData {
 };
 
 /**
- * Reset the data machine for a new message.
+ * Reset the data machine for a new message on a given timeslot.
+ *
+ * @param data: state machine to initialise.
+ * @param blocks: rate 1/2 blocks the packet carries, header excluded.
+ * @param timeslot: 1 or 2, the slot of the frame the data call uses.
+ */
+static inline void dmrTxData_initSlot(struct dmrTxData *data, unsigned blocks,
+                                      uint8_t timeslot)
+{
+    data->stage = DMR_TXD_HEADER;
+    data->blocks = blocks;
+    data->slots = 0;
+    data->burstSlot = (timeslot != 2);
+}
+
+/**
+ * Reset the data machine for a new message on timeslot 1.
  *
  * @param data: state machine to initialise.
  * @param blocks: rate 1/2 blocks the packet carries, header excluded.
  */
 static inline void dmrTxData_init(struct dmrTxData *data, unsigned blocks)
 {
-    data->stage = DMR_TXD_HEADER;
-    data->blocks = blocks;
-    data->slots = 0;
-    data->burstSlot = true;
+    dmrTxData_initSlot(data, blocks, 1);
 }
 
 /**

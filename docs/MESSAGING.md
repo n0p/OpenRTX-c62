@@ -87,8 +87,62 @@ Numeración de bits = orden de transmisión (bit 0 = primer bit = MSB del octeto
 * **Nunca pisa la voz**: `needDataTx()` exige que no haya PTT, que TX no esté
   deshabilitado y que el modo esté en RX. Un mensaje encolado durante una
   llamada espera a que termine; un ACK tiene prioridad sobre un mensaje.
-* La codificación de un mensaje usa `IP_HC` (la cabecera más corta) por
-  defecto: entran ~150 caracteres en un paquete.
+* La codificación de un mensaje usa el **formato elegido en los ajustes**
+  (`settings.sms_format`, ver §2.4): con `auto` es `IP_HC`, la cabecera más
+  corta, y entran ~150 caracteres en un paquete.
+
+### 2.4 El formato de envío es un ajuste
+
+`settings.sms_format` (`enum dmrSmsFormat`, `include/core/datatypes.h`) elige
+cuál de las siete variantes se **transmite**:
+
+| valor en el ajuste | app que se construye |
+|---|---|
+| `DMR_SMS_FMT_AUTO` (0, por defecto) | `DMR_SMS_APP_IP_HC` |
+| `DMR_SMS_FMT_DD_UTF16BE` | `DMR_SMS_APP_DD_UTF16BE` |
+| `DMR_SMS_FMT_DD_UTF8` | `DMR_SMS_APP_DD_UTF8` |
+| `DMR_SMS_FMT_IP_5016` | `DMR_SMS_APP_IP` |
+| `DMR_SMS_FMT_IP_HC` | `DMR_SMS_APP_IP_HC` |
+| `DMR_SMS_FMT_ANYTONE` | `DMR_SMS_APP_ANYTONE` |
+| `DMR_SMS_FMT_TMS` | `DMR_SMS_APP_TMS` |
+| `DMR_SMS_FMT_HYTERA` | `DMR_SMS_APP_HYTERA` |
+
+`dmrSms_appForFormat()` hace la traducción y **degrada a `IP_HC`** con un valor
+fuera de rango (un registro de ajustes de otra compilación no puede dejar el SMS
+mudo). `auto` es exactamente lo que este firmware enviaba antes del ajuste: una
+actualización no cambia lo que sale por el aire hasta que el operador elija otro
+formato.
+
+La elección importa porque cada fabricante lee uno: ETSI (DD o IP 5016) es lo
+estándar, TMS es Motorola, AnyTone y Hytera tienen sus prefijos. Con un solo
+formato elegido, un mensaje a una radio de otra marca se puede ver como datos
+crudos.
+
+### 2.5 El DMRID propio va en la cabecera
+
+`settings.dmr_id` (24 bits, 1..16777215, validado con `settings_dmrIdValid()`)
+es la identidad de la radio: se copia a `rtxStatus.dmrSourceId` en
+`threads.c` y de ahí al **campo origen de cada cabecera** —link control de voz
+(`dmrTx_linkControl`), cabecera de datos del SMS (`req.src` en
+`OpMode_DMR::startDataTx`), terminador (`dmrTx_dataTerminator`) y respuesta de
+entrega—. Sin DMRID válido el modo DMR **no transmite** voz: una llamada desde
+la dirección 0 no la puede contestar nadie. El valor por defecto es 0 («sin
+configurar»), así que el operador tiene que ponerlo una vez.
+
+### 2.6 El destino DMR de la llamada
+
+`settings.dmr_dest_type` (`DMR_DEST_NONE` / `DMR_DEST_GROUP` / `DMR_DEST_USER`)
+y `settings.dmr_dest_id` son el destino por defecto; un canal del banco puede
+llevar el suyo (`chstore_channel_t.dmr_dest_type/dmr_dest_id`) y
+`chstore_applyRtx()` lo pone en `rtxStatus`. El modo DMR construye el link
+control con él:
+
+* `DMR_DEST_GROUP` → FLCO `0x00`, llamada de grupo al talkgroup;
+* `DMR_DEST_USER` → FLCO `0x03`, llamada de unidad a un DMRID concreto;
+* `DMR_DEST_NONE` → **no se transmite**: no hay a quién llamar.
+
+En un SMS el destino es el de la dirección del mensaje (`msg->dst`) y el tipo lo
+decide el modo: grupo salvo que el destino configurado sea `USER`.
 
 ---
 
@@ -330,17 +384,27 @@ el PDU para diagnóstico y para el transmisor futuro.
    reintenta. El arreglo de verdad es del estimador de niveles del PHY, no de
    esta capa; está documentado aquí para que no se confunda con un fallo del
    SMS. Los mensajes de prueba del lazo se eligen para llenar los bloques.
-6. **Grupo o individual**: el mensaje se marca como de grupo si su destino
-   coincide con el talkgroup configurado en el modo; si no, es una llamada
-   individual. Un destino que sea un talkgroup distinto del seleccionado
-   saldría como individual.
+6. **Grupo o individual**: el mensaje va como llamada de grupo salvo que el
+   destino configurado en el modo sea `DMR_DEST_USER` (§2.6). La dirección del
+   mensaje no distingue por sí sola un talkgroup de un DMRID de unidad.
 7. **ACK de capa 2 sin reintento selectivo**: se responde ACK (clase 00) cuando
    el paquete está íntegro; NACK/SACK no se emiten (el receptor descarta y el
    emisor reintenta el mensaje entero).
 
 ---
 
-## 7. Reproducir
+## 7. Verificación del modelo (host)
+
+Además de las pruebas de protocolo de §4, `tests/unit/` cubre la parte que
+antes no tenía ninguna:
+
+| prueba | qué comprueba |
+|---|---|
+| `dmr_sms_format.cpp` | las ocho opciones de `sms_format` producen la app que dicen, `auto` = `IP_HC`, un valor inválido degrada a `IP_HC`, y el texto sobrevive en las siete variantes (codifica con `dmrSms_encode`, decodifica con `dmrSms_decodePacket`, y un caso se reensambla ráfaga a ráfaga con `dmrSmsRx_feed`) |
+| `dmr_lc_dest.cpp` | el link control lleva el destino (FLCO `0x00` grupo / `0x03` unidad), el origen en su campo, los 24 bits completos sin desbordar y el terminador de datos conserva destino y bit G/I |
+| `settings_record.cpp` | `dmr_id`/`dmr_dest_id` se validan en 1..16777215, `sms_format` en 0..7, y un registro de ajustes de otra versión se descarta entero |
+
+## 8. Reproducir
 
 ```sh
 # pruebas de host del SMS (7 variantes, lazo TX→RX por la PHY, vectores)

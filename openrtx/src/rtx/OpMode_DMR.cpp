@@ -24,6 +24,8 @@
 #include "protocols/DMR/DmrVocoder.h"
 #endif
 
+#include "core/state.h"
+
 /* 30 ms of baseband at 48 kHz: one burst arrives every 60 ms per timeslot */
 #define HALF_SAMPLES 1440
 
@@ -326,8 +328,14 @@ bool OpMode_DMR::startBaseband(const rtxStatus_t *status)
     memset(&cfg, 0, sizeof(cfg));
     cfg.colourCode = status->dmrColourCode;
     cfg.sourceId = status->dmrSourceId;
-    cfg.destId = status->dmrTalkgroup;
-    cfg.group = true;
+    cfg.destId = status->dmrDestId;
+    /*
+     * The link control says whether the call is addressed to a talkgroup or to
+     * a single subscriber (TS 102 361-1 clause 9.3.6): a unit call is what the
+     * destination type USER asks for, anything else is a group call, which is
+     * what every DMR network this radio is likely to meet expects.
+     */
+    cfg.group = (status->dmrDestType != DMR_DEST_USER);
     cfg.timeslot = (status->dmrTimeslot == 2) ? 1 : 0;
     cfg.layout = DMR_TX_LAYOUT_MS;
     cfg.ramp = true;
@@ -352,6 +360,17 @@ bool OpMode_DMR::startTx(const rtxStatus_t *status)
     if (!dmrVocoder_available())
         return false;
 
+    /*
+     * A voice call needs somewhere to go and an identity to come from: with
+     * the destination at "none" or the radio ID unset the link control would
+     * announce a call to address 0 from address 0, which no receiver lists and
+     * no operator can answer.  The mode stays in receive.
+     */
+    if (!settings_dmrDestValid(status->dmrDestType, status->dmrDestId) ||
+        status->dmrDestType == DMR_DEST_NONE ||
+        !settings_dmrIdValid(status->dmrSourceId))
+        return false;
+
     if (!startBaseband(status)) {
         stopTx();
         return false;
@@ -372,7 +391,12 @@ bool OpMode_DMR::startTx(const rtxStatus_t *status)
 
     frameHead = 0;
     frameCount = 0;
-    dmrTxFsm_init(&fsm);
+    /*
+     * The call is announced and carried in the timeslot the operator chose:
+     * on slot 2 the first 30 ms of the frame are silence, so the header and
+     * the end of the call also start one slot later.
+     */
+    dmrTxFsm_initSlot(&fsm, status->dmrTimeslot);
     txIsData = false;
     txAcking = false;
     txMsgId = 0;
@@ -564,10 +588,17 @@ bool OpMode_DMR::startDataTx(const rtxStatus_t *status)
         struct dmrSmsEncode req;
 
         memset(&req, 0, sizeof(req));
-        req.app = DMR_SMS_APP_IP_HC; /* the shortest header: more text fits */
+        /*
+         * The payload flavour is the operator's choice (settings.sms_format);
+         * "auto" is the IP compressed header this firmware always sent, the
+         * shortest one, so more text fits in a data call.  The destination is
+         * the message's own address; whether it is a talkgroup or a unit
+         * follows the mode's destination type.
+         */
+        req.app = dmrSms_appForFormat(state.settings.sms_format);
         req.src = status->dmrSourceId;
         req.dst = msg->dst;
-        req.group = (msg->dst == status->dmrTalkgroup);
+        req.group = (status->dmrDestType != DMR_DEST_USER);
         req.confirmed = (msg->flags & MSG_FLAG_CONFIRM) != 0;
         req.tmsSeq = 0;
         req.text = msg->text;
@@ -582,7 +613,7 @@ bool OpMode_DMR::startDataTx(const rtxStatus_t *status)
     }
 
     txIsData = true;
-    dmrTxData_init(&dataFsm, blocks);
+    dmrTxData_initSlot(&dataFsm, blocks, status->dmrTimeslot);
     txRunning = true;
 
     radio_enableTx();

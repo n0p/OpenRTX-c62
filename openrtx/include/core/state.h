@@ -44,6 +44,7 @@ typedef struct {
 
     bool emergency;
     settings_t settings;
+    uint8_t settings_reset;   /**< enum settingsReset: why the defaults came back */
     gps_t gps_data;
     bool gps_set_time;
     bool gpsDetected;
@@ -101,6 +102,18 @@ void state_task();
  * Reset the fields of radio state containing user settings and VFO channel.
  */
 void state_resetSettingsAndVfo();
+
+/**
+ * Why the settings in RAM are not the ones from flash, as an enum
+ * settingsReset value: SETTINGS_NO_RESET when they loaded, otherwise the
+ * record was blank, written by another version of the firmware or damaged, and
+ * the defaults are in use.  The operator interface shows this once and calls
+ * state_settingsResetAck().
+ */
+uint8_t state_settingsResetCause(void);
+
+/** Forget the "settings were reset" notice, after showing it once. */
+void state_settingsResetAck(void);
 
 #ifdef __cplusplus
 } // extern "C"

@@ -57,6 +57,9 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/core/voicePromptData.S',
                'openrtx/src/core/nvmem_access.c',
                'openrtx/src/core/channel_store.c',
+               'openrtx/src/core/settings.c',
+               'openrtx/src/core/settings_record.c',
+               'openrtx/src/core/zones.c',
                'openrtx/src/core/slot_store.c',
                'openrtx/src/core/contact_store.c',
                'openrtx/src/core/msg_service.c',
@@ -1309,6 +1312,44 @@ channel_store_test = executable('channel_store_test',
                                 sources : unit_test_src + ['tests/unit/channel_store.cpp'],
                                 kwargs  : unit_test_opts)
 
+# Zonas: los planes de canales como datos (repetidoras R0-R7 y U0-U100, PMR446)
+zones_test = executable('zones_test',
+                        sources : unit_test_src + ['tests/unit/zones.cpp'],
+                        kwargs  : unit_test_opts)
+
+# Registro de ajustes: version, CRC y descarte limpio de un registro viejo
+settings_record_test = executable('settings_record_test',
+                                  sources : unit_test_src + ['tests/unit/settings_record.cpp'],
+                                  kwargs  : unit_test_opts)
+
+# APRS: validacion de indicativo, SSID y path antes de emitir
+aprs_config_test = executable('aprs_config_test',
+                              sources : unit_test_src + [
+                                  'openrtx/src/protocols/APRS/ax25.c',
+                                  'openrtx/src/protocols/APRS/aprs.c',
+                                  'tests/unit/aprs_config.cpp'],
+                              kwargs  : unit_test_opts)
+
+# Cabecera de llamada de DMR: el destino configurado llega al LC
+dmr_lc_dest_test = executable('dmr_lc_dest_test',
+                              sources : unit_test_src + [
+                                  'openrtx/src/protocols/DMR/DmrDefs.c',
+                                  'openrtx/src/protocols/DMR/DmrFec.c',
+                                  'openrtx/src/protocols/DMR/DmrTx.c',
+                                  'openrtx/src/protocols/DMR/DmrTxTables.c',
+                                  'tests/unit/dmr_lc_dest.cpp'],
+                              kwargs  : unit_test_opts)
+
+# DMR SMS: formato de payload elegido en los ajustes
+dmr_sms_format_test = executable('dmr_sms_format_test',
+                                 sources : unit_test_src + [
+                                     'openrtx/src/protocols/DMR/DmrDefs.c',
+                                     'openrtx/src/protocols/DMR/DmrFec.c',
+                                     'openrtx/src/protocols/DMR/DmrSms.c',
+                                     'openrtx/src/protocols/DMR/DmrSmsApp.c',
+                                     'tests/unit/dmr_sms_format.cpp'],
+                                 kwargs  : unit_test_opts)
+
 c62_calib_test = executable('c62_calib_test',
                             sources : ['tests/unit/C62_calib.cpp',
                                        'platform/targets/c62/calib_C62.c'],
@@ -1381,6 +1422,11 @@ test('M17 Packet Frame Test', m17_packet_test)
 test('M17 Frame Decoder Test', m17_decoder_test)
 test('C62 Calibration Test', c62_calib_test)
 test('Channel Store Test',   channel_store_test)
+test('Zones Test',           zones_test)
+test('Settings Record Test', settings_record_test)
+test('APRS Config Test',     aprs_config_test)
+test('DMR SMS Format Test',  dmr_sms_format_test)
+test('DMR LC Destination Test', dmr_lc_dest_test)
 test('User Stores Test',     user_stores_test)
 test('UI Messages Test',     ui_messages_test)
 test('UI Layout Test',       ui_layout_test)

@@ -119,6 +119,20 @@ void aprs_clearStations(void);
 /** True when a beacon transmission is enabled in the settings. */
 bool aprs_beaconEnabled(void);
 
+/**
+ * True when the station configuration is usable for transmission: callsign,
+ * SSID, path, symbol table and position all inside what goes on the wire.
+ * When it is false nothing is transmitted and aprs_configError() says why.
+ */
+bool aprs_configValid(void);
+
+/**
+ * The reason the configuration cannot be transmitted, in the operator's terms
+ * ("path: WIDE1-1,WIDE2-1 or a callsign"), or "" when everything is fine.
+ * The string is static and meant for the status line of the APRS screen.
+ */
+const char *aprs_configError(void);
+
 /** Interval to the next beacon in seconds, 0 if beacons are off. */
 uint32_t aprs_beaconIntervalS(void);
 

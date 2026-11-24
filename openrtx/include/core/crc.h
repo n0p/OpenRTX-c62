@@ -41,6 +41,20 @@ uint16_t crc_m17(const void *data, const size_t len);
  */
 uint16_t crc_ccitt(const void *data, const size_t len);
 
+/**
+ * Continue a CCITT 16-bit CRC over another block.
+ *
+ * crc_ccitt(data, len) is crc_ccitt_update(0, data, len); a record made of
+ * several pieces can be checked with one running value instead of a copy of
+ * the whole thing in RAM.
+ *
+ * @param crc: CRC of the previous blocks, 0 to start.
+ * @param data: input data.
+ * @param len: data length, in bytes.
+ * @return the updated CCITT CRC.
+ */
+uint16_t crc_ccitt_update(uint16_t crc, const void *data, const size_t len);
+
 #ifdef __cplusplus
 }
 #endif

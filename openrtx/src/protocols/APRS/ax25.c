@@ -243,3 +243,187 @@ uint8_t ax25_parse_path(const char *path, ax25_addr_t *digis, uint8_t max)
 
     return n;
 }
+
+/* ------------------------------------------------------------ validation --- */
+
+static bool isAlnum(char c)
+{
+    return ((c >= '0') && (c <= '9')) ||
+           ((c >= 'A') && (c <= 'Z')) ||
+           ((c >= 'a') && (c <= 'z'));
+}
+
+bool ax25_addrValid(const char *call)
+{
+    if (call == NULL)
+        return false;
+
+    size_t len = 0;
+    int letters = 0;
+    int digits = 0;
+
+    for (const char *p = call; *p != '\0'; p++) {
+        if (!isAlnum(*p) || (++len > AX25_CALL_LEN))
+            return false;
+
+        if ((*p >= '0') && (*p <= '9'))
+            digits++;
+        else
+            letters++;
+    }
+
+    /*
+     * One character minimum, one letter and one digit: every amateur callsign
+     * has both, and a bare "12345" or "ABC" would be taken as a callsign by
+     * other stations and never deliver a message.  Padding with spaces (the
+     * AX.25 on-wire form) is not accepted here, callers give the plain form.
+     */
+    return (len > 0) && (letters > 0) && (digits > 0);
+}
+
+bool ax25_ssidValid(int ssid)
+{
+    return (ssid >= 0) && (ssid <= 15);
+}
+
+/*
+ * Splits "CALL[-SSID]" in place terms: returns the length of the call part or
+ * -1, and fills ssid with 0 when there is no -SSID.
+ */
+static int addrSplit(const char *alias, size_t *callLen, int *ssid)
+{
+    const char *dash = NULL;
+
+    *ssid = 0;
+
+    for (const char *p = alias; *p != '\0'; p++) {
+        if (*p == '-') {
+            if (dash != NULL)
+                return -1;              /* two dashes */
+            dash = p;
+        }
+    }
+
+    *callLen = (dash == NULL) ? strlen(alias) : (size_t)(dash - alias);
+
+    if (dash != NULL) {
+        const char *s = dash + 1;
+
+        if (*s == '\0')
+            return -1;                  /* "CALL-" */
+
+        int v = 0;
+        for (const char *p = s; *p != '\0'; p++) {
+            if ((*p < '0') || (*p > '9'))
+                return -1;
+            v = v * 10 + (*p - '0');
+            if (v > 15)
+                return -1;              /* out of SSID range */
+        }
+
+        *ssid = v;
+    }
+
+    return (int)*callLen;
+}
+
+bool ax25_digiValid(const char *alias)
+{
+    if (alias == NULL || *alias == '\0')
+        return false;
+
+    size_t len = strlen(alias);
+    if (len > 11)                       /* six characters + "-15" is 9 */
+        return false;
+
+    char call[8];
+    size_t callLen = 0;
+    int ssid = 0;
+    int n = addrSplit(alias, &callLen, &ssid);
+
+    if (n < 0 || callLen >= sizeof(call))
+        return false;
+
+    memcpy(call, alias, callLen);
+    call[callLen] = '\0';
+
+    for (size_t i = 0; i < callLen; i++) {
+        if ((call[i] >= 'a') && (call[i] <= 'z'))
+            call[i] = (char)(call[i] - 'a' + 'A');
+    }
+
+    if (strncmp(call, "WIDE", 4) == 0) {
+        /*
+         * WIDE (no number) is the pre-1.0 alias and needs an SSID; WIDEn-n
+         * requires n in 1..7 and the count in 1..7 (APRS 1.0.1 §3.3.5).
+         */
+        if (callLen == 4)
+            return ssid > 0;
+
+        if (callLen != 5 || call[4] < '1' || call[4] > '7')
+            return false;
+
+        return (ssid >= 1) && (ssid <= 7);
+    }
+
+    if ((strcmp(call, "TRACE") == 0) || (strcmp(call, "RELAY") == 0) ||
+        (strcmp(call, "GATE") == 0))
+        return false;
+
+    if (!ax25_addrValid(call))
+        return false;
+
+    return ax25_ssidValid(ssid);
+}
+
+bool ax25_pathValid(const char *path, uint8_t *nDigis)
+{
+    uint8_t count = 0;
+
+    if (nDigis != NULL)
+        *nDigis = 0;
+
+    if (path == NULL || *path == '\0')
+        return true;                    /* direct, no digipeaters */
+
+    /*
+     * Eight addresses of up to eleven characters, commas included.  The
+     * settings field is shorter on purpose (aprs_path[24]): what fits there is
+     * up to the screen, not a property of the protocol.
+     */
+    if (strlen(path) > 72)
+        return false;
+
+    char item[12];
+    size_t len = 0;
+
+    for (const char *p = path; ; p++) {
+        char c = *p;
+
+        if (c == ',' || c == '\0') {
+            if (len == 0)
+                return false;           /* ",," or a leading/trailing comma */
+
+            item[len] = '\0';
+            if (!ax25_digiValid(item))
+                return false;
+
+            if (++count > AX25_MAX_DIGIS)
+                return false;
+
+            len = 0;
+
+            if (c == '\0')
+                break;
+        } else {
+            if (c == ' ' || len >= (sizeof(item) - 1))
+                return false;
+            item[len++] = c;
+        }
+    }
+
+    if (nDigis != NULL)
+        *nDigis = count;
+
+    return true;
+}

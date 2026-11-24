@@ -95,6 +95,51 @@ static aprs_pos_t localPosition(void)
     return p;
 }
 
+/* ------------------------------------------------------------ settings --- */
+
+/**
+ * The first thing wrong with the station configuration, or "" when the radio
+ * can transmit.  Every item is checked against what goes on the wire, not
+ * against what the menu allowed: a callsign that is not an AX.25 address, an
+ * SSID above 15, a path with a typo or a position outside the planet produce
+ * frames that other stations cannot answer, and the operator has to be told
+ * which one it is instead of watching a beacon that never appears.
+ */
+static const char *configProblem(void)
+{
+    if (!ax25_addrValid(state.settings.callsign))
+        return "callsign: 1-6 chars, letters and digits";
+
+    if (!ax25_ssidValid((int)state.settings.aprs_ssid))
+        return "SSID: 0-15";
+
+    if (!ax25_pathValid(state.settings.aprs_path, NULL))
+        return "path: WIDE1-1,WIDE2-1 or a callsign";
+
+    if (state.settings.aprs_lat_e4 < -900000 ||
+        state.settings.aprs_lat_e4 >  900000)
+        return "latitude: -90.0000..90.0000";
+
+    if (state.settings.aprs_lon_e4 < -1800000 ||
+        state.settings.aprs_lon_e4 >  1800000)
+        return "longitude: -180.0000..180.0000";
+
+    if (state.settings.aprs_table != '/' && state.settings.aprs_table != '\\')
+        return "symbol table: / or \\";
+
+    return "";
+}
+
+bool aprs_configValid(void)
+{
+    return configProblem()[0] == '\0';
+}
+
+const char *aprs_configError(void)
+{
+    return configProblem();
+}
+
 static uint32_t nowMs(void)
 {
     /* getTick() is k_uptime_get() on the C62 (platform/mcu/CSK6011B/drivers/
@@ -294,6 +339,17 @@ bool aprs_requestBeacon(uint32_t now)
 
 bool aprs_sendMessage(const char *to, const char *text, uint32_t now)
 {
+    /*
+     * The addressee is an AX.25 address with an optional SSID, and the station
+     * itself has to be able to transmit: a message queued for a peer nobody
+     * can address would only fill the outbox with retries.
+     */
+    if (!aprs_configValid())
+        return false;
+
+    if (!ax25_digiValid(to))
+        return false;
+
     return aprs_mbox_queue(&svc.mbox, to, text, now);
 }
 
@@ -325,6 +381,9 @@ uint32_t aprs_beaconIntervalS(void)
 
 bool aprs_txPending(uint32_t now)
 {
+    if (!aprs_configValid())
+        return false;
+
     if (channelBusy(now))
         return false;
 
@@ -343,6 +402,9 @@ bool aprs_txPending(uint32_t now)
 bool aprs_txPrepare(char *info, size_t cap, aprs_pkt_t *kind, uint32_t now)
 {
     svc.txMsg = NULL;
+
+    if (!aprs_configValid())
+        return false;
 
     if (channelBusy(now))
         return false;

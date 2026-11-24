@@ -40,6 +40,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "core/datatypes.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -275,6 +276,27 @@ int dmrSms_decodePacket(const uint8_t header[12],
 
 /** @return a stable short name of the application, for logs and the UI. */
 const char *dmrSms_appName(enum dmrSmsApp app);
+
+/* -------------------------------------------------------------- settings --- */
+
+/**
+ * Payload format to build for a value of settings.sms_format (enum
+ * dmrSmsFormat: 0 = auto).  Auto is the format this firmware has always sent,
+ * DMR_SMS_APP_IP_HC, so that an upgrade changes nothing on the air until the
+ * operator picks something else.
+ *
+ * @param format: enum dmrSmsFormat value from the settings.
+ * @return the corresponding application, DMR_SMS_APP_IP_HC for AUTO and for an
+ *         unknown value (a corrupt settings record must not stop the SMS).
+ */
+enum dmrSmsApp dmrSms_appForFormat(uint8_t format);
+
+/**
+ * True if a device that receives `app` can be expected to read our text: the
+ * two defined data formats and the four IP flavours are text; the raw one is
+ * not.
+ */
+bool dmrSms_appIsText(enum dmrSmsApp app);
 
 #ifdef __cplusplus
 }
