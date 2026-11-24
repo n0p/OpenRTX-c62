@@ -56,6 +56,7 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/core/voicePromptUtils.c',
                'openrtx/src/core/voicePromptData.S',
                'openrtx/src/core/nvmem_access.c',
+               'openrtx/src/core/channel_store.c',
                'openrtx/src/rtx/rtx.cpp',
                'openrtx/src/rtx/OpMode_FM.cpp',
                'openrtx/src/rtx/OpMode_M17.cpp',
@@ -80,7 +81,8 @@ ui_src_default = ['openrtx/src/ui/default/ui.c',
                   'openrtx/src/ui/default/ui_menu.c',
                   'openrtx/src/ui/default/ui_hints.c',
                   'openrtx/src/ui/default/ui_quickmenu.c',
-                  'openrtx/src/ui/default/ui_strings.c']
+                  'openrtx/src/ui/default/ui_strings.c',
+                  'openrtx/src/ui/default/ui_channels.c']
 
 ui_src_module17 = ['openrtx/src/ui/module17/ui.c',
                    'openrtx/src/ui/module17/ui_main.c',
@@ -1275,6 +1277,10 @@ m17_packet_test = executable('m17_packet_test',
                               sources : unit_test_src + ['tests/unit/M17_packet.cpp'],
                               kwargs  : unit_test_opts)
 
+channel_store_test = executable('channel_store_test',
+                                sources : unit_test_src + ['tests/unit/channel_store.cpp'],
+                                kwargs  : unit_test_opts)
+
 c62_calib_test = executable('c62_calib_test',
                             sources : ['tests/unit/C62_calib.cpp',
                                        'platform/targets/c62/calib_C62.c'],
@@ -1327,6 +1333,7 @@ test('UI VFO Input Test', ui_vfo_input_test)
 test('UI Quick Menu Test', ui_quickmenu_test)
 test('M17 Packet Frame Test', m17_packet_test)
 test('C62 Calibration Test', c62_calib_test)
+test('Channel Store Test',   channel_store_test)
 test('DSP Oversampling Test', dsp_oversampling_test)
 test('GFX Text Test',        gfx_text_test)
 test('Audio Codec Test',     audio_codec_test)

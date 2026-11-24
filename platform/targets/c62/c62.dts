@@ -260,7 +260,9 @@
 			read-only;
 		};
 
-		/* OpenRTX storage: erased in every factory dump examined */
+		/* OpenRTX storage: erased in every factory dump examined.
+		 * Settings, VFO, TETRA SDS and other small records live here.
+		 */
 		storage_partition: partition@2b0000 {
 			reg = <0x2b0000 0xa0000>;
 		};
@@ -280,10 +282,15 @@
 			read-only;
 		};
 
-		/* OEM channel store */
-		factory_chan: partition@3c0000 {
+		/* OEM channel store, 256 KiB. The in-radio channel editor owns
+		 * it now: the store keeps two 8 KiB ping-pong slots at its
+		 * beginning (see docs/CHANNELS.md). Going back to the stock
+		 * firmware means reflashing the whole flash, so the factory
+		 * memories do not need to survive.
+		 */
+		channels_partition: partition@3c0000 {
+			label = "channels";
 			reg = <0x3c0000 0x40000>;
-			read-only;
 		};
 	};
 };
