@@ -22,6 +22,9 @@
 #ifdef CONFIG_TETRA
 #include "rtx/OpMode_TETRA.hpp"
 #endif
+#ifdef CONFIG_NXDN
+#include "rtx/OpMode_NXDN.hpp"
+#endif
 
 static pthread_mutex_t   *cfgMutex;     // Mutex for incoming config messages
 static const rtxStatus_t *newCnf;       // Pointer for incoming config messages
@@ -60,6 +63,9 @@ static OpMode_TETRA tetraMode;          // TETRA mode handler
 #endif
 #ifdef CONFIG_DMR
 static OpMode_DMR dmrMode;              // DMR mode handler
+#endif
+#ifdef CONFIG_NXDN
+static OpMode_NXDN nxdnMode;            // NXDN mode handler
 #endif
 
 
@@ -323,6 +329,9 @@ void rtx_task()
                 #endif
                 #ifdef CONFIG_TETRA
                 case OPMODE_TETRA: currMode = &tetraMode; break;
+#ifdef CONFIG_NXDN
+                case OPMODE_NXDN:  currMode = &nxdnMode;  break;
+#endif
                 #endif
                 default:   currMode = &noMode;
             }
@@ -414,6 +423,9 @@ bool opmode_canTransmit(uint8_t mode)
 #endif
         case OPMODE_TETRA:
             /* Receive only: OpMode_TETRA forces the status back to RX */
+            return false;
+        case OPMODE_NXDN:
+            /* Receive only: there is no NXDN transmitter in this firmware */
             return false;
         default:
             return false;

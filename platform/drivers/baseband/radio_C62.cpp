@@ -111,7 +111,8 @@ static constexpr uint8_t TETRA_MIC_GAIN = 0;
  */
 static bool flatMode(enum opmode mode)
 {
-    return (mode == OPMODE_M17) || (mode == OPMODE_DMR) || (mode == OPMODE_TETRA);
+    return (mode == OPMODE_M17) || (mode == OPMODE_DMR)
+           || (mode == OPMODE_TETRA) || (mode == OPMODE_NXDN);
 }
 
 /*
@@ -269,6 +270,25 @@ void radio_setOpmode(const enum opmode mode)
         bk4819_setRfFilter(&c62_bk4819, DMR_RF_BW, DMR_RF_BW_WEAK);
         c62_rx_reg43 = 0x7e28;
 #endif
+        bk4819_setTxAudioFilter(&c62_bk4819, DMR_TX_LPF2_BW);
+        bk4819_setRxAudioGain(&c62_bk4819, DMR_RX_AUDIO_GAIN1,
+                              DMR_RX_AUDIO_GAIN2);
+        bk4819_setMicGain(&c62_bk4819, DMR_MIC_GAIN);
+    } else if (mode == OPMODE_NXDN) {
+        /*
+         * NXDN is 4FSK at 2400 symbols/s with a 2.9 kHz occupied bandwidth in
+         * a 6.25 kHz channel, and the same waveform in 12.5 kHz.  The BK4819
+         * has no 6.25 kHz mode, so the narrowest it offers is used (12.5 kHz
+         * channel, RF filters not doubled: REG_43 = 0x7e48, the stock
+         * firmware's own digital setting) and the demodulator's 81-tap
+         * matched filter does the channel selection.  AUDIO_BYPASS is what the
+         * DC-coupled 4FSK baseband needs: no de-emphasis, no compander, no
+         * high-pass (REG_7E = 0, the defect that costs DMR its payload).
+         */
+        bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_BYPASS);
+        bk4819_setBandwidth(&c62_bk4819, BK4819_BW_12K5);
+        bk4819_setRfFilter(&c62_bk4819, 7, 7);
+        c62_rx_reg43 = 0x7e48;
         bk4819_setTxAudioFilter(&c62_bk4819, DMR_TX_LPF2_BW);
         bk4819_setRxAudioGain(&c62_bk4819, DMR_RX_AUDIO_GAIN1,
                               DMR_RX_AUDIO_GAIN2);

@@ -204,6 +204,28 @@ if(CONFIG_C62_APRS)
 endif()
 
 #
+# C62_NXDN_RX: NXDN receive mode (see docs/RX_NXDN.md).  The PHY, the FEC and
+# the frame handling are in protocols/NXDN; voice goes through lib/dmr_vocoder,
+# which is the same AMBE+2 decoder DMR uses because a NXDN voice channel is one
+# AMBE+2 3600x2450 frame.  Receive only: there is no transmitter.
+#
+if(CONFIG_C62_NXDN_RX)
+  if(NOT CONFIG_C62_DMR_VOCODER)
+    message(FATAL_ERROR "CONFIG_C62_NXDN_RX needs CONFIG_C62_DMR_VOCODER")
+  endif()
+  target_sources(app PRIVATE
+    ${OPENRTX_ROOT}/openrtx/src/protocols/NXDN/NxdnDefs.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/NXDN/NxdnFec.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrDefs.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/NXDN/NxdnPhy.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/NXDN/NxdnSpeech.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/NXDN/NxdnStatus.c
+    ${OPENRTX_ROOT}/openrtx/src/rtx/OpMode_NXDN.cpp)
+  target_compile_definitions(app PRIVATE CONFIG_NXDN)
+  message(STATUS "C62: NXDN receive mode enabled")
+endif()
+
+#
 # CONFIG_DMR_SMS: short messages in the DMR mode (protocols/DMR/DmrSms.c).
 # A data call carries the text, one burst per TDMA frame; the message store
 # (CONFIG_MESSAGING) holds the queue the UI writes to.  Needs CONFIG_DMR_TX to

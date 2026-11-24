@@ -64,6 +64,27 @@ endmenu
 # OFF by default: it costs 41 KiB of flash and 52 KiB of RAM (measured). Select
 # it, with the mode that calls it, through C62_DMR_RX below.
 #
+menu "NXDN"
+
+config C62_NXDN_RX
+	bool "NXDN receive mode (PHY, SACCH, AMBE+2 voice)"
+	select C62_DMR_VOCODER
+	default n
+	help
+	  NXDN receive: 4FSK at 2400 symbols/s (NXDN48, 4800 bit/s) in a
+	  6.25 or 12.5 kHz channel, frame sync, LICH, the SACCH superframe
+	  with its layer 3 messages (source and destination IDs) and voice
+	  through the AMBE+2 decoder. A NXDN voice channel carries one
+	  AMBE+2 3600x2450 frame, the same 72 bits DMR transmits, so the
+	  DMR vocoder is reused unchanged.
+
+	  Receive only, and the UI has to add OPMODE_NXDN to its mode
+	  list. See docs/RX_NXDN.md.
+
+	  Enable it with west build -b c62 ... -- -DCONFIG_C62_NXDN_RX=y
+
+endmenu
+
 menu "DMR"
 
 config C62_DMR_VOCODER
