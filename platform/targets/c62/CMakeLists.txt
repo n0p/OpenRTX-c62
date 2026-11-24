@@ -211,6 +211,36 @@ endif()
 #
 option(CONFIG_DMR_SMS "DMR short messages (data calls)" ON)
 
+if(CONFIG_C62_DSTAR)
+  target_sources(app PRIVATE
+    ${OPENRTX_ROOT}/openrtx/src/protocols/DSTAR/DStarFec.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/DSTAR/DStarPhy.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/DSTAR/DStarSlowData.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/DSTAR/DStarSpeech.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/DSTAR/DStarStatus.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/DSTAR/DStarVocoder.c
+    ${OPENRTX_ROOT}/openrtx/src/rtx/OpMode_DSTAR.cpp)
+  target_compile_definitions(app PRIVATE CONFIG_DSTAR)
+  if(CONFIG_MESSAGING)
+    target_compile_definitions(app PRIVATE CONFIG_DSTAR_MESSAGING)
+  endif()
+  message(STATUS "C62: D-STAR DV mode enabled")
+
+  # The voice front end (Golay + PN of the AMBE 2400 channel frame) reuses the
+  # Golay decoder of the DMR vocoder library.
+  target_sources(app PRIVATE
+    ${OPENRTX_ROOT}/lib/dmr_vocoder/dmr_golay.c
+    ${OPENRTX_ROOT}/lib/dmr_vocoder/dmr_golay_table.c)
+  target_include_directories(app PRIVATE ${OPENRTX_ROOT}/lib/dmr_vocoder)
+
+  if(CONFIG_DSTAR_TX)
+    target_sources(app PRIVATE
+      ${OPENRTX_ROOT}/openrtx/src/protocols/DSTAR/DStarTx.c)
+    target_compile_definitions(app PRIVATE CONFIG_DSTAR_TX)
+    message(STATUS "C62: D-STAR transmitter enabled")
+  endif()
+endif()
+
 if(CONFIG_C62_DMR_RX)
   target_sources(app PRIVATE
     ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrDefs.c

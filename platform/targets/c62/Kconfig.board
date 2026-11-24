@@ -105,6 +105,30 @@ config DMR_TX
 	  bench (docs/DMR_TX.md).
 	  Enable it with west build -b c62 ... -- -DCONFIG_C62_DMR_RX=y -DCONFIG_DMR_TX=y
 
+config C62_DSTAR
+	bool "D-STAR DV mode (receive, slow data, transmitter)"
+	select MESSAGING
+	default n
+	help
+	  D-STAR DV: GMSK 4800 bit/s in a 6.25 kHz channel -- the radio header
+	  (callsigns, flags, CRC), the voice frames and the slow-data channel
+	  (20-character message, NMEA and D-PRS positions).  See docs/RX_DSTAR.md.
+
+	  CONFIG_DSTAR_TX (default y with this option) builds the transmit
+	  chain and keys the PA on PTT.  Voice needs an AMBE 3600x2400 codec;
+	  without one the chain sends the D-STAR null frame, which is what an
+	  Icom radio transmits with no microphone input.
+
+	  Enable it with west build -b c62 ... -- -DCONFIG_C62_DSTAR=y
+
+config DSTAR_TX
+	bool "D-STAR transmitter"
+	depends on C62_DSTAR
+	default y
+	help
+	  The DV transmit chain (bit stream and GMSK shaper).  Turning it off
+	  keeps PTT inert in D-STAR mode and saves the baseband buffer.
+
 config DMR_TX_ENC
 	bool "DMR transmitter: AMBE+2 encoder (lib/dmr_encoder)"
 	depends on DMR_TX

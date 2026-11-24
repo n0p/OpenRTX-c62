@@ -24,6 +24,8 @@
 #define APRS_TEXT_MAX 67
 #define DMR_SMS_TEXT_MAX 160
 #define TETRA_SDS_TEXT_MAX 140
+/* A D-STAR DV transmission carries a 20-character label, not a message */
+#define DSTAR_TEXT_MAX 20
 
 const char *msg_service_name(enum msgTransport tp)
 {
@@ -31,6 +33,7 @@ const char *msg_service_name(enum msgTransport tp)
         case MSG_TRANSPORT_APRS:  return "APRS";
         case MSG_TRANSPORT_DMR:   return "DMR SMS";
         case MSG_TRANSPORT_TETRA: return "TETRA SDS";
+        case MSG_TRANSPORT_DSTAR: return "D-STAR";
         default:                  return "?";
     }
 }
@@ -41,6 +44,7 @@ uint8_t msg_service_maxLen(enum msgTransport tp)
         case MSG_TRANSPORT_APRS:  return APRS_TEXT_MAX;
         case MSG_TRANSPORT_DMR:   return DMR_SMS_TEXT_MAX;
         case MSG_TRANSPORT_TETRA: return TETRA_SDS_TEXT_MAX;
+        case MSG_TRANSPORT_DSTAR: return DSTAR_TEXT_MAX;
         default:                  return 0;
     }
 }
@@ -78,6 +82,19 @@ bool msg_service_available(enum msgTransport tp)
             return false;
 #endif
 
+        case MSG_TRANSPORT_DSTAR:
+            /*
+             * D-STAR has no addressed messaging: the text is a 20-character
+             * label carried in the slow data of the operator's own DV
+             * transmission, so it can only be queued while that mode is
+             * selected and its transmitter is built in.
+             */
+#if defined(CONFIG_DSTAR) && defined(CONFIG_DSTAR_TX)
+            return state.channel.mode == OPMODE_DSTAR;
+#else
+            return false;
+#endif
+
         default:
             return false;
     }
@@ -94,6 +111,8 @@ enum msgTransport msg_service_default(void)
         first = MSG_TRANSPORT_DMR;
     else if (state.channel.mode == OPMODE_TETRA)
         first = MSG_TRANSPORT_TETRA;
+    else if (state.channel.mode == OPMODE_DSTAR)
+        first = MSG_TRANSPORT_DSTAR;
 
     if ((first != MSG_TRANSPORT_COUNT) && msg_service_available(first))
         return first;

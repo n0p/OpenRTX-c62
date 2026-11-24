@@ -18,6 +18,7 @@
 #endif
 #ifdef CONFIG_DMR
 #include "rtx/OpMode_DMR.hpp"
+#include "rtx/OpMode_DSTAR.hpp"
 #endif
 #ifdef CONFIG_TETRA
 #include "rtx/OpMode_TETRA.hpp"
@@ -60,6 +61,7 @@ static OpMode_TETRA tetraMode;          // TETRA mode handler
 #endif
 #ifdef CONFIG_DMR
 static OpMode_DMR dmrMode;              // DMR mode handler
+static OpMode_DSTAR dstarMode;          // D-STAR DV mode handler
 #endif
 
 
@@ -324,6 +326,9 @@ void rtx_task()
                 #ifdef CONFIG_TETRA
                 case OPMODE_TETRA: currMode = &tetraMode; break;
                 #endif
+                #ifdef CONFIG_DSTAR
+                case OPMODE_DSTAR: currMode = &dstarMode; break;
+                #endif
                 default:   currMode = &noMode;
             }
 
@@ -415,6 +420,13 @@ bool opmode_canTransmit(uint8_t mode)
         case OPMODE_TETRA:
             /* Receive only: OpMode_TETRA forces the status back to RX */
             return false;
+        case OPMODE_DSTAR:
+#ifdef CONFIG_DSTAR_TX
+            /* The transmit chain and its stage machine are compiled in */
+            return true;
+#else
+            return false;
+#endif
         default:
             return false;
     }
