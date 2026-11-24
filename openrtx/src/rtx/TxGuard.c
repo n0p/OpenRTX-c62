@@ -10,7 +10,7 @@
 #include <string.h>
 
 static const char *const reasonNames[TXG_REASON_COUNT] = {
-    "none",     "ptt",      "mode",     "start", "encoder",
+    "none",     "ptt",      "mode",     "start",  "encoder",
     "to-start", "to-first", "to-drain", "to-max",
 };
 
@@ -208,8 +208,8 @@ enum txGuardAction txg_tick(struct txGuard *guard, uint32_t now, bool ptt)
     }
 
     (void)ptt;
-    return (guard->phase == TXG_PHASE_ABORT) ? TXG_ACTION_ABORT
-                                             : TXG_ACTION_CONTINUE;
+    return (guard->phase == TXG_PHASE_ABORT) ? TXG_ACTION_ABORT :
+                                               TXG_ACTION_CONTINUE;
 }
 
 const char *txg_reasonName(uint8_t reason)
@@ -219,35 +219,31 @@ const char *txg_reasonName(uint8_t reason)
 
 const char *txg_phaseName(uint8_t phase)
 {
-    return (phase < sizeof(phaseNames) / sizeof(phaseNames[0]))
-               ? phaseNames[phase]
-               : "?";
+    return (phase < sizeof(phaseNames) / sizeof(phaseNames[0])) ?
+               phaseNames[phase] :
+               "?";
 }
 
 int txg_format(const struct txGuard *guard, char *buf, size_t len)
 {
-    int n = snprintf(buf, len,
-                     "TX n=%lu ab=%lu ph=%s rs=%s ent=%lu str=+%ld fst=+%ld "
-                     "blk=%lu slip=%lu lat=%lu tail=%lu",
-                     (unsigned long)guard->transmissions,
-                     (unsigned long)guard->aborts,
-                     txg_phaseName(guard->phase),
-                     txg_reasonName(guard->reason),
-                     (unsigned long)guard->enterTime,
-                     (long)(guard->streamTime - guard->enterTime),
-                     (long)((guard->firstTime == 0 ? guard->exitTime
-                                                   : guard->firstTime)
-                            - guard->enterTime),
-                     (unsigned long)guard->blocks,
-                     (unsigned long)guard->slips,
-                     (unsigned long)guard->lastLatencyMs,
-                     (unsigned long)guard->lastTailMs);
+    int n = snprintf(
+        buf, len,
+        "TX n=%lu ab=%lu ph=%s rs=%s ent=%lu str=+%ld fst=+%ld "
+        "blk=%lu slip=%lu lat=%lu tail=%lu",
+        (unsigned long)guard->transmissions, (unsigned long)guard->aborts,
+        txg_phaseName(guard->phase), txg_reasonName(guard->reason),
+        (unsigned long)guard->enterTime,
+        (long)(guard->streamTime - guard->enterTime),
+        (long)((guard->firstTime == 0 ? guard->exitTime : guard->firstTime)
+               - guard->enterTime),
+        (unsigned long)guard->blocks, (unsigned long)guard->slips,
+        (unsigned long)guard->lastLatencyMs, (unsigned long)guard->lastTailMs);
     return n;
 }
 
 static const char *const eventNames[] = {
-    "enter", "open", "openfail", "first", "finish",
-    "exit",  "abort", "keyed",   "enc",   "late",
+    "enter", "open",  "openfail", "first", "finish",
+    "exit",  "abort", "keyed",    "enc",   "late",
 };
 
 int txg_formatTrace(const struct txGuard *guard, char *buf, size_t len)
@@ -257,9 +253,10 @@ int txg_formatTrace(const struct txGuard *guard, char *buf, size_t len)
 
     for (uint8_t i = 0; (i < guard->traceCount) && (used < len); i++) {
         const struct txGuardEvent *ev = &guard->trace[i];
-        const char *name = (ev->code < sizeof(eventNames) / sizeof(*eventNames))
-                               ? eventNames[ev->code]
-                               : "?";
+        const char *name = (ev->code
+                            < sizeof(eventNames) / sizeof(*eventNames)) ?
+                               eventNames[ev->code] :
+                               "?";
         n = snprintf(buf + used, len - used, "%s%ld:%s", (i == 0) ? "" : " ",
                      (long)(ev->time - guard->enterTime), name);
         if (n < 0)

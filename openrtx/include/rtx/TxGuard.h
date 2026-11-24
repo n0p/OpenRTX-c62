@@ -49,21 +49,21 @@ extern "C" {
 
 /** Lifecycle phases of a transmission. */
 enum txGuardPhase {
-    TXG_PHASE_IDLE = 0, ///< Not transmitting
-    TXG_PHASE_STARTING, ///< PTT seen, opening the streams
+    TXG_PHASE_IDLE = 0,   ///< Not transmitting
+    TXG_PHASE_STARTING,   ///< PTT seen, opening the streams
     TXG_PHASE_WAIT_FIRST, ///< Streams open, no block handed to the sink yet
-    TXG_PHASE_RUNNING,  ///< Blocks flowing, the operator keys the radio
-    TXG_PHASE_DRAINING, ///< PTT released, terminator and tail on the air
-    TXG_PHASE_ABORT    ///< Aborted by the supervisor, waiting for the exit
+    TXG_PHASE_RUNNING,    ///< Blocks flowing, the operator keys the radio
+    TXG_PHASE_DRAINING,   ///< PTT released, terminator and tail on the air
+    TXG_PHASE_ABORT       ///< Aborted by the supervisor, waiting for the exit
 };
 
 /** Why a transmission ended, or why it was aborted. */
 enum txGuardReason {
-    TXG_REASON_NONE = 0,    ///< Still transmitting
-    TXG_REASON_PTT,         ///< The operator released the PTT
-    TXG_REASON_MODE,        ///< The mode ended the call (terminator, EOT)
-    TXG_REASON_START_FAILED,///< The streams could not be opened
-    TXG_REASON_ENCODER,     ///< The encoder stopped producing
+    TXG_REASON_NONE = 0,      ///< Still transmitting
+    TXG_REASON_PTT,           ///< The operator released the PTT
+    TXG_REASON_MODE,          ///< The mode ended the call (terminator, EOT)
+    TXG_REASON_START_FAILED,  ///< The streams could not be opened
+    TXG_REASON_ENCODER,       ///< The encoder stopped producing
     TXG_REASON_TIMEOUT_START, ///< Aborted: the streams never opened
     TXG_REASON_TIMEOUT_FIRST, ///< Aborted: no block reached the sink
     TXG_REASON_TIMEOUT_DRAIN, ///< Aborted: the tail never ended
@@ -81,9 +81,9 @@ enum txGuardAction {
  * Phase budgets, in milliseconds.  They are the numbers the radio is required
  * to meet, not estimates: what does not fit is a failure to report.
  */
-#define TXG_START_MS 250   ///< PTT to streams open
-#define TXG_FIRST_MS 300   ///< Streams open to the first block in the sink
-#define TXG_DRAIN_MS 160   ///< PTT released to out of TX (the UI asks < 200)
+#define TXG_START_MS 250     ///< PTT to streams open
+#define TXG_FIRST_MS 300     ///< Streams open to the first block in the sink
+#define TXG_DRAIN_MS 160     ///< PTT released to out of TX (the UI asks < 200)
 #define TXG_MAX_TX_MS 300000 ///< Five minutes: a stuck PTT, not a conversation
 /** Events kept in the trace of the last transmission. */
 #define TXG_TRACE_EVENTS 10
@@ -98,36 +98,36 @@ struct txGuardEvent {
 
 /** Everything the supervisor, the trace and the tests look at. */
 struct txGuard {
-    uint8_t phase;        ///< enum txGuardPhase
-    uint8_t reason;       ///< enum txGuardReason, once the transmission ended
-    uint32_t enterTime;   ///< PTT seen
-    uint32_t streamTime;  ///< Streams open
-    uint32_t firstTime;   ///< First block handed to the sink
-    uint32_t finishTime;  ///< PTT released / last block rendered
-    uint32_t exitTime;    ///< Out of TX
-    uint32_t blocks;      ///< Blocks handed to the sink in this transmission
-    uint32_t slips;       ///< Blocks that arrived late: cadence lost
-    uint32_t blockTime;   ///< Time of the last block
+    uint8_t phase;          ///< enum txGuardPhase
+    uint8_t reason;         ///< enum txGuardReason, once the transmission ended
+    uint32_t enterTime;     ///< PTT seen
+    uint32_t streamTime;    ///< Streams open
+    uint32_t firstTime;     ///< First block handed to the sink
+    uint32_t finishTime;    ///< PTT released / last block rendered
+    uint32_t exitTime;      ///< Out of TX
+    uint32_t blocks;        ///< Blocks handed to the sink in this transmission
+    uint32_t slips;         ///< Blocks that arrived late: cadence lost
+    uint32_t blockTime;     ///< Time of the last block
     uint32_t transmissions; ///< Transmissions since boot
-    uint32_t aborts;      ///< Aborted transmissions since boot
+    uint32_t aborts;        ///< Aborted transmissions since boot
     uint32_t lastLatencyMs; ///< enterTime to firstTime of the last one
     uint32_t lastTailMs;    ///< finishTime to exitTime of the last one
     struct txGuardEvent trace[TXG_TRACE_EVENTS];
-    uint8_t traceCount;   ///< Entries written, saturating
+    uint8_t traceCount;     ///< Entries written, saturating
 };
 
 /** Trace event codes. */
 enum txGuardEventCode {
-    TXG_EV_ENTER = 0,   ///< PTT seen
-    TXG_EV_OPENED,      ///< Streams open
-    TXG_EV_OPEN_FAIL,   ///< Streams refused to open
-    TXG_EV_FIRST,       ///< First block handed to the sink
-    TXG_EV_FINISH,      ///< Last block rendered, tail in flight
-    TXG_EV_EXIT,        ///< Out of TX
-    TXG_EV_ABORT,       ///< Supervisor forced the end
-    TXG_EV_KEYED,       ///< PA keyed
-    TXG_EV_ENCODER,     ///< Encoder stopped producing
-    TXG_EV_CADENCE      ///< A block arrived later than TXG_BLOCK_MS
+    TXG_EV_ENTER = 0, ///< PTT seen
+    TXG_EV_OPENED,    ///< Streams open
+    TXG_EV_OPEN_FAIL, ///< Streams refused to open
+    TXG_EV_FIRST,     ///< First block handed to the sink
+    TXG_EV_FINISH,    ///< Last block rendered, tail in flight
+    TXG_EV_EXIT,      ///< Out of TX
+    TXG_EV_ABORT,     ///< Supervisor forced the end
+    TXG_EV_KEYED,     ///< PA keyed
+    TXG_EV_ENCODER,   ///< Encoder stopped producing
+    TXG_EV_CADENCE    ///< A block arrived later than TXG_BLOCK_MS
 };
 
 /**

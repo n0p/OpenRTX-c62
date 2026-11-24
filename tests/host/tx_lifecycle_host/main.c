@@ -106,7 +106,7 @@ void audioPath_release(const pathId id)
 
 /* -------------------------------------------------------- stub audio device -- */
 
-#define SLOT_SAMPLES 1440   /* 30 ms at 48 kHz, the DMR slot */
+#define SLOT_SAMPLES 1440 /* 30 ms at 48 kHz, the DMR slot */
 #define SLOT_MS 30
 
 /* What the fake DSP does: consume slots, or stall for ever */
@@ -191,7 +191,9 @@ static const struct audioDriver stubDriver = {
 
 const struct audioDevice outputDevices[] = {
     { .driver = NULL, .config = NULL, .instance = 0, .endpoint = SINK_MCU },
-    { .driver = &stubDriver, .config = NULL, .instance = SINK_RTX,
+    { .driver = &stubDriver,
+      .config = NULL,
+      .instance = SINK_RTX,
       .endpoint = SINK_RTX },
     { .driver = NULL, .config = NULL, .instance = 0, .endpoint = SINK_SPK },
 };
@@ -212,9 +214,9 @@ static stream_sample_t txBuffer[2 * SLOT_SAMPLES];
 static streamId txStream = -1;
 
 struct scenarios {
-    bool supervisor;   ///< Run the transmit supervisor
-    bool consumes;     ///< The fake sink plays slots
-    unsigned holdMs;   ///< How long the PTT stays down
+    bool supervisor; ///< Run the transmit supervisor
+    bool consumes;   ///< The fake sink plays slots
+    unsigned holdMs; ///< How long the PTT stays down
 };
 
 static struct scenarios scenario;
@@ -399,10 +401,8 @@ int main(void)
 {
     int failures = 0;
 
-    printf("transmit lifecycle harness: %s sink\n\n",
-           "stub");
-    printf("%-28s %s\n", "scenario",
-           "numbers (ms, measured from the PTT)");
+    printf("transmit lifecycle harness: %s sink\n\n", "stub");
+    printf("%-28s %s\n", "scenario", "numbers (ms, measured from the PTT)");
 
     /*
      * A. The firmware before this change: no supervisor, a sink that never

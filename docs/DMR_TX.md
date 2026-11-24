@@ -20,7 +20,8 @@ instructions per 20 ms frame (24 – 38 % of the M33).
 | AMBE+2 encoder (`lib/dmr_encoder`, C, `CONFIG_DMR_TX_ENC`) | done, bit-exact with the reference |
 | deviation calibration (`REG_40 = 0x476`) | **pending**: a starting point, not a measurement |
 | adjacent channel power, real air test | **pending**: needs a bench |
-| audio cadence and key-up latency on hardware | **pending**: the loopback checks the frames, not the clock |
+| audio cadence and key-up latency on hardware | host-checked (1 burst per slot pair at 1× speed, first block < 300 ms, receive < 200 ms after the release) and traced on the radio; **the numbers on the air are pending**, see `reports/tx_hang.md` |
+| transmit lifecycle: deadlines, supervisor, watchdog, trace | done, see "The transmit lifecycle" below |
 
 ## Enabling it
 
@@ -619,6 +620,146 @@ Two open items come out of the same measurements and belong to the bench:
   waveform a far-out skirt: against a ±16-symbol RRC of the same data the
   baseband power above 12.5 kHz drops by 28 dB. Widening the span costs
   nothing but table space (10 phases × 2·span+1 taps) and no instructions.
+
+
+## The transmit lifecycle: deadlines, cancellation, watchdog
+
+The stage machines above decide *what* goes out and are bounded. What they
+cannot bound is time spent inside something else: a stream whose consumer never
+starts, a DSP call that never returns, an encoder thread that died. Each of
+those used to leave the RTX thread blocked with the PA keyed and nothing in the
+firmware able to unkey it — the thread that would release the PTT *is* the
+thread that is stuck. `reports/tx_hang.md` has the diagnosis; this section is
+what the code does about it.
+
+### One lifecycle, four deadlines
+
+`openrtx/include/rtx/TxGuard.h` is a pure state machine — the time is passed in,
+it calls nothing — so it is walked on the host by `tests/unit/tx_guard.cpp`:
+
+```
+idle ──enter()──▶ starting ──streamsOpen()──▶ wait_first
+                                                   │ firstBlock()
+                                                   ▼
+                                                running ──finishing()──▶ draining ──exit()
+```
+
+| Phase | Budget | What it means when it is overrun |
+|---|---|---|
+| `starting` | `TXG_START_MS` 250 | PTT seen, the streams did not open: `audioStream_start()` / `radio_enableTx()` are stuck |
+| `wait_first` | `TXG_FIRST_MS` 300 | Streams open, no block reached the sink: the DSP is not consuming, or the mode produces nothing |
+| `draining` | `TXG_DRAIN_MS` 160 | PTT released, the tail (terminator, EOT, DSP drain) did not end — the UI and the operator ask for receive in under 200 ms |
+| `running` | `TXG_MAX_TX_MS` 300000 | A PTT held for five minutes: a stuck key, not a conversation |
+
+Every mode reports into it: `txg_enter()` before it opens anything, then
+`txg_streamsOpen()`, `txg_firstBlock()`, `txg_block()` per slot,
+`txg_finishing()` when the PTT goes up and `txg_exit()` on the way out — from
+`stopTx()` (DMR), `offState()`/`disable()` (M17) and the unkey branch of FM, so
+there is no path out of transmit that forgets to close the guard. FM, which has
+no stream of its own, enters and leaves at once and is covered by the absolute
+cap only.
+
+### The supervisor runs in another thread
+
+`rtx_supervise()` is called from the main thread every 5 ms
+(`openrtx/src/core/threads.c`). It checks the guard and, at the first overrun:
+
+1. `radio_disableRtx()` — the PA, the TX LED and the BK4819 go back to receive;
+2. `currMode->abortTx()` — which only cancels the transmit streams
+   (`audioStream_terminate()`), because cancelling them is what wakes the RTX
+   thread if it is waiting on a buffer boundary. `OpMode_DMR::abortTx()` and
+   `OpMode_M17::abortTx()` do exactly that and nothing else: the audio paths,
+   the modulator and the codec belong to the RTX thread and are released by the
+   mode's own exit path, which runs as soon as it is unblocked;
+3. the abort is repeated every 20 ms until the mode leaves transmit, and the
+   mode sets `txBlocked` so the still-pressed PTT cannot re-key the radio in a
+   loop.
+
+The abort reason survives the mode's own exit (`txg_exit()` keeps it when the
+phase is `abort`), so what the log says is why the transmission was cut, not why
+the mode then chose to leave.
+
+`rtx_task()` also sets `opStatus = OFF` when it sees the abort request: if the
+RTX thread was merely late instead of blocked, it leaves through the mode's
+normal OFF path on its own.
+
+### What made the hang possible, in the audio layer
+
+`platform/drivers/audio/csk6_codec.c` used to run
+
+```c
+k_mutex_lock(&audioMutex, K_FOREVER);
+applyRoutes(...);        /* -> AudioRecord_start() / AudioTrack_start() */
+```
+
+That is the whole failure: `AudioRecord_start()`/`AudioTrack_start()` are calls
+into the DSP, and while one of them is in progress the worker held the lock that
+every other audio caller needs. `audio_connect()` — which the RTX thread runs on
+its way into transmit — waits for the worker to apply a route, so the RTX thread
+ended up behind a DSP call it could not see, with the PA already keyed. The
+worker now computes the desired device state under the lock, **releases it**,
+and only then starts or stops the DSP streams. A DSP call that never returns now
+costs the audio and nothing else, and the supervisor cuts the transmission.
+
+The other waits in the path got a bound as well:
+
+| Wait | Was | Now |
+|---|---|---|
+| Route change applied by the worker | `K_FOREVER` | 250 ms (`CSK6_ROUTE_TIMEOUT_MS`), then the caller goes on and the worker applies it late |
+| Codec thread stopped (`codec_stop`, M17) | `pthread_join()` with no timeout | cancels the stream, waits 300 ms, then leaves the thread detached |
+| Codec worker joined at shutdown | `K_FOREVER` | 500 ms (`CSK6_WORKER_JOIN_MS`) |
+| Stream table access | none | one mutex; never held across a call that waits for data |
+
+`codec_abort()` is new: it sets the stop request and terminates the stream the
+codec thread is blocked on, which is what the supervisor needs for M17.
+
+### The watchdog
+
+The transmitter also has a last line that does not depend on any of the above:
+the AP watchdog. It was disabled in the devicetree and in Kconfig; it is now
+armed for 2 s at the end of `platform_init_csk6()`, **after** the PA enable lines
+have been driven low, and refreshed only by the main thread. A firmware that
+stops reaching the main thread — a wedged lock, a DSP call that never returns,
+anything the supervisor cannot unwind — reboots after about 2.5 s, and the reset
+leaves the PA enable pins low because they come up as inputs.
+
+### Where the trace is
+
+* In the log, one line per transmission, on the way out:
+  `TX exit 0:enter 8:open 31:first ... 94:exit | TX n=3 ab=0 ph=idle rs=ptt
+  blk=47 slip=0 lat=31 tail=94 | pk=12345`
+  (`txg_formatTrace()` and `txg_format()`), plus `TX ABORT <reason>: ...` when the
+  supervisor had to cut it.
+* Over the remote control (`-DC62_REMOTE=ON`), live and without ending the over:
+  `tx` prints the same trace plus `pk=` (peak of the baseband played to the
+  BK4819 since the PTT, peak-hold 100 ms) and `wa=` (milliseconds since the audio
+  worker last ran — a large value is the wedge that used to hang the radio).
+  `ptt 0|1` forces the PTT, so a whole over can be driven from the host; `s`
+  includes `txp=` as well.
+* `pk=0` during a keyed over is the answer to "does not emit": the transmitter is
+  running but the mode is handing it silence.
+
+## Sizes
+
+Two C62 layouts, `-DCONFIG_C62_APRS=y`, measured from the linker report:
+
+| layout | flash | RAM | PSRAM |
+|---|---|---|---|
+| `-DCONFIG_C62_DMR_RX=y` (no TX) | 513 516 B (48.97 %) | 195 936 B (74.74 %) | 379 064 B (20.66 %) |
+| `-DCONFIG_C62_DMR_RX=y -DCONFIG_DMR_TX=y` | 574 424 B (54.78 %) | 208 888 B (79.68 %) | 379 064 B (20.66 %) |
+
+The lifecycle costs 5 392 B of flash and 264 B of RAM in the receive-only
+layout (guard, supervisor, watchdog driver, trace), the rest of the difference
+is the AMBE+2 encoder and the transmit chain.
+
+Stack, measured with `-fstack-usage` on the same build (Cortex-M33, `-O2`):
+the deepest RTX-thread chain is one voice slot, `update()` 32 +
+`txSlot()` 48 + `dmrTx_slot()` 680 + `dmr_encoder_encode()` 16 +
+`dmr_enc_frame()` 112 + `enc_ambe()` 2288 + `dmr_enc_analysis()` 232 +
+`pitch_est()` 2112 ≈ **5.5 KiB** (7.2 KiB if `e_p()` 1696 nests under it), out
+of the 9 KiB `RTX_THREAD_STKSIZE`; the codec worker peaks at 136 +
+56 B, out of 2 KiB; M17's encoder thread is 96 + `codec2_encode_3200()` 1464 =
+1.6 KiB of its 16 KiB. The ISR has its own 2 KiB stack.
 
 ## Limitations
 

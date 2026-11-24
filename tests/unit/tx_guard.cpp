@@ -32,11 +32,10 @@ namespace
 constexpr uint32_t TICK = 5;
 
 /// Run the supervisor until it aborts or the budget runs out.
-struct Supervision
-{
-    uint32_t abortTime = 0;   ///< Time of the first abort request, 0 if none
-    unsigned abortTicks = 0;  ///< How many ticks returned abort
-    uint32_t elapsed = 0;     ///< Simulated time when the loop stopped
+struct Supervision {
+    uint32_t abortTime = 0;  ///< Time of the first abort request, 0 if none
+    unsigned abortTicks = 0; ///< How many ticks returned abort
+    uint32_t elapsed = 0;    ///< Simulated time when the loop stopped
 };
 
 Supervision supervise(txGuard &guard, uint32_t start, uint32_t budgetMs,
@@ -164,8 +163,7 @@ TEST_CASE("The tail cannot outlive the 200 ms the UI asks for", "[txguard]")
     REQUIRE(guard.reason == TXG_REASON_TIMEOUT_DRAIN);
 }
 
-TEST_CASE("Finishing before the first block ends the over at once",
-          "[txguard]")
+TEST_CASE("Finishing before the first block ends the over at once", "[txguard]")
 {
     /* PTT tapped and released while the streams are opening */
     txGuard guard;
