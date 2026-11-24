@@ -119,6 +119,16 @@ TEST_CASE("Mode labels fit the header of the main screens", "[ui][modes][layout]
     /* Unknown modes read as "no mode", never as an empty string */
     REQUIRE(strcmp(ui_mode_label(0x7f), "----") == 0);
 
+    /*
+     * And the label plus the lock symbol still stops before the clock: the
+     * clock is centred and 8 pt, so its left edge is (width - clock)/2.
+     */
+    uint16_t clock = gfx_getTextWidth(FONT_SIZE_8PT, "00:00:00");
+    int16_t clockLeft = (int16_t)((CONFIG_SCREEN_WIDTH - clock) / 2);
+    int16_t labelRight = (int16_t)(UI_TEXT_X + UI_MODE_LABEL_MAX_W);
+
+    REQUIRE(labelRight < clockLeft);
+
     /* The channel store is still the one place a mode is spelled */
     for (uint8_t i = 0; i < ui_mode_count(); i++) {
         const ui_mode_t *m = ui_mode_at(i);

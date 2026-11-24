@@ -10,6 +10,7 @@
 #include "core/graphics.h"
 #include "core/state.h"
 #include "core/contact_store.h"
+#include "core/channel_store.h"
 #include "core/beeps.h"
 #include "core/voicePrompts.h"
 #include "interfaces/delays.h"

@@ -1355,29 +1355,17 @@ bool _ui_drawMacroMenu(ui_state_t* ui_state)
     gfx_print(pos_2, layout.top_font, TEXT_ALIGN_CENTER,
               yellow_fab413, "5");
 
+    /*
+     * Mode cell of the macro grid: the registry's short label, right-padded the
+     * way the other cells are, so a mode added later (NXDN, AM) shows up here
+     * without another switch to forget.
+     */
     char mode_str[12] = "";
-    switch(last_state.channel.mode)
-    {
-        case OPMODE_FM:
-            gfx_print(pos_2, layout.top_font, TEXT_ALIGN_CENTER, color_white, "         FM");
-            break;
-        case OPMODE_DMR:
-            gfx_print(pos_2, layout.top_font, TEXT_ALIGN_CENTER, color_white, "          DMR");
-            break;
-#ifdef CONFIG_M17
-        case OPMODE_M17:
-            gfx_print(pos_2, layout.top_font, TEXT_ALIGN_CENTER, color_white, "          M17");
-            break;
-#endif
-#ifdef CONFIG_TETRA
-        case OPMODE_TETRA:
-            gfx_print(pos_2, layout.top_font, TEXT_ALIGN_CENTER, color_white, "          T");
-            break;
-#endif
-    }
+    snprintf(mode_str, sizeof(mode_str), "%11.5s",
+             ui_mode_label(last_state.channel.mode));
 
     gfx_print(pos_2, layout.top_font, TEXT_ALIGN_CENTER,
-              color_white, mode_str);
+              color_white, "%s", mode_str);
 
 #if defined(CONFIG_UI_NO_KEYBOARD)
         if (ui_state->macro_menu_selected == 5)
