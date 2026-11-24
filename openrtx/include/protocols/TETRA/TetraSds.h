@@ -71,6 +71,24 @@ bool tetraSds_dirty(void);
  */
 void tetraSds_clear(void);
 
+/**
+ * Encode the oldest message queued for TETRA in the shared message store into
+ * an uplink U-SDS-DATA PDU (TetraSdsEnc.h).
+ *
+ * The message stays queued: this build has no TETRA transmit chain, so the PDU
+ * is what a transmitter will send once one exists.  Called from the non
+ * real-time state task; encoding the same message twice is a no-op.
+ *
+ * @return the bits of the PDU, -1 if there is nothing to encode.
+ */
+int tetraSds_prepareQueued(void);
+
+/** @return the bits of the PDU encoded by tetraSds_prepareQueued(), 0 if none. */
+unsigned tetraSds_preparedBits(void);
+
+/** @return the PDU encoded by tetraSds_prepareQueued(). */
+const uint8_t *tetraSds_preparedPdu(void);
+
 #ifdef __cplusplus
 }
 #endif

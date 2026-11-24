@@ -95,6 +95,13 @@ bool aprs_requestBeacon(uint32_t nowMs);
 /** Queue a message for a peer. Returns false if it cannot be queued. */
 bool aprs_sendMessage(const char *to, const char *text, uint32_t nowMs);
 
+/**
+ * Move the APRS messages of the shared message store into the mailbox.
+ *
+ * @param nowMs: uptime in milliseconds.
+ */
+void aprs_pumpMessaging(uint32_t nowMs);
+
 /** Queue an acknowledgement for a message received from `peer`. */
 void aprs_queueAck(const char *peer, const char *msgNo);
 

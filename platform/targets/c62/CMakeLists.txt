@@ -155,6 +155,21 @@ endif()
 # The decoder is off at run time until it is enabled in the menu: this option
 # only decides whether the code is linked in. See docs/APRS.md.
 #
+#
+# CONFIG_MESSAGING: the shared text message store (core/messaging.c): outbox,
+# inbox, states and the flash record, used by APRS, DMR SMS and TETRA SDS.  The
+# messaging screen of the UI talks to this and nothing else.
+#
+option(CONFIG_MESSAGING "Shared text message store (APRS, DMR SMS, TETRA SDS)" ON)
+
+if(CONFIG_MESSAGING)
+  target_sources(app PRIVATE
+    ${OPENRTX_ROOT}/openrtx/src/core/messaging.c
+    ${OPENRTX_ROOT}/openrtx/src/core/messaging_store_zephyr.c)
+  target_compile_definitions(app PRIVATE CONFIG_MESSAGING)
+  message(STATUS "C62: shared message store enabled")
+endif()
+
 if(CONFIG_C62_APRS)
   target_sources(app PRIVATE
     ${OPENRTX_ROOT}/openrtx/src/protocols/APRS/ax25.c
@@ -166,7 +181,21 @@ if(CONFIG_C62_APRS)
     ${OPENRTX_ROOT}/openrtx/src/ui/default/ui_aprs.c)
   target_compile_definitions(app PRIVATE CONFIG_APRS)
   message(STATUS "C62: APRS on the FM path enabled")
+
+  if(CONFIG_MESSAGING)
+    # The APRS leg of the message store: queued messages go into its mailbox.
+    target_sources(app PRIVATE
+      ${OPENRTX_ROOT}/openrtx/src/core/messaging_aprs.c)
+  endif()
 endif()
+
+#
+# CONFIG_DMR_SMS: short messages in the DMR mode (protocols/DMR/DmrSms.c).
+# A data call carries the text, one burst per TDMA frame; the message store
+# (CONFIG_MESSAGING) holds the queue the UI writes to.  Needs CONFIG_DMR_TX to
+# transmit and CONFIG_C62_DMR_RX to receive, but compiles with either alone.
+#
+option(CONFIG_DMR_SMS "DMR short messages (data calls)" ON)
 
 if(CONFIG_C62_DMR_RX)
   target_sources(app PRIVATE
@@ -179,6 +208,17 @@ if(CONFIG_C62_DMR_RX)
     ${OPENRTX_ROOT}/openrtx/src/rtx/OpMode_DMR.cpp)
   target_compile_definitions(app PRIVATE CONFIG_DMR)
   message(STATUS "C62: DMR mode enabled")
+
+  if(CONFIG_DMR_SMS)
+    if(NOT CONFIG_MESSAGING)
+      message(FATAL_ERROR "CONFIG_DMR_SMS needs CONFIG_MESSAGING")
+    endif()
+    target_sources(app PRIVATE
+      ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrSms.c
+      ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrSmsApp.c)
+    target_compile_definitions(app PRIVATE CONFIG_DMR_SMS)
+    message(STATUS "C62: DMR short messages enabled")
+  endif()
 
   if(CONFIG_DMR_TX)
     target_sources(app PRIVATE
@@ -236,6 +276,7 @@ if(C62_TETRA)
   target_sources(app PRIVATE
     ${OPENRTX_ROOT}/openrtx/src/protocols/TETRA/TetraDemod.c
     ${OPENRTX_ROOT}/openrtx/src/protocols/TETRA/TetraSds.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/TETRA/TetraSdsEnc.c
     ${OPENRTX_ROOT}/openrtx/src/protocols/TETRA/SdsMsg.c
     ${OPENRTX_ROOT}/openrtx/src/protocols/TETRA/SdsHist.c
     ${OPENRTX_ROOT}/openrtx/src/protocols/TETRA/TetraStatus.c

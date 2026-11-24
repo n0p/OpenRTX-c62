@@ -25,6 +25,13 @@
 #define DMR_TX_QUEUE_FRAMES 12
 #endif
 
+#ifdef CONFIG_DMR_SMS
+#include "protocols/DMR/DmrSms.h"
+
+/** Delivery responses waiting for the next free slot. */
+#define DMR_SMS_ACK_QUEUE 2
+#endif
+
 /**
  * DMR mode: receives the radio's flat FM discriminator output (4FSK,
  * 4800 symbols/s) and decodes voice bursts with the AMBE+2 vocoder; on PTT it
@@ -34,6 +41,14 @@
  * Transmission needs an AMBE+2 encoder: it arrives through the
  * dmrVocoder_encode() hook (see DmrVocoder.h).  Without one the mode refuses
  * to key the PA instead of sending silence.
+ *
+ * With CONFIG_DMR_SMS the mode also carries short messages (DmrSms.h): data
+ * bursts of a data call are reassembled per timeslot into the shared message
+ * store (core/messaging.h), and a queued message is transmitted burst by
+ * burst in the timeslot of the mode, one burst per TDMA frame, only when the
+ * operator is not on the air.  A message that asks for a delivery response
+ * gets one automatically, as does a TMS message whose sender asked for its
+ * application acknowledgement.
  *
  * The slot layout is DMR_TX_LAYOUT_MS: the 132 symbols of a burst are centred
  * in the 30 ms timeslot and the 2,5 ms of guard around them hold the PA ramps.
@@ -69,11 +84,40 @@ private:
     pathId basebandPath;
     streamId basebandId;
 
+#ifdef CONFIG_DMR_SMS
+    /** A short one to three burst transmission queued by the receiver: a
+     *  delivery response (header only) or a TMS acknowledgement. */
+    struct dmrAck {
+        uint8_t header[12];  ///< 96 bits of the data header
+        uint8_t data[12];    ///< its single rate 1/2 block, if any
+        uint8_t blocks;      ///< 0 for a C_RHEAD, 1 for a TMS record
+        bool used;
+    };
+
+    static void burstTrampoline(const struct dmrBurst *burst, void *user);
+    void onBurst(const struct dmrBurst *burst);
+    void onMessage(const struct dmrSmsMessage *msg, bool wantsResponse);
+    void onResponse(const struct dmrSmsMessage *msg);
+    void queueResponse(uint32_t dst, uint32_t src, uint8_t sap, uint8_t respClass,
+                       uint8_t respType, uint8_t status);
+    void queueTmsAck(uint32_t dst, uint32_t src, uint8_t seq);
+    struct dmrAck *freeAck(void);
+
+    struct dmrSmsRx smsRx[2];        ///< One reassembler per timeslot
+    struct dmrAck ackQueue[DMR_SMS_ACK_QUEUE];
+    uint32_t selfId;      ///< Our radio ID, from the configuration
+    uint32_t smsReceived; ///< Messages stored, for diagnostics
+    uint32_t smsDropped;  ///< Data bursts discarded (bad CRC, no handler)
+#endif
+
     /* Transmit */
 #ifdef CONFIG_DMR_TX
     bool startTx(const rtxStatus_t *status);
+    bool startDataTx(const rtxStatus_t *status);
     void stopTx();
     bool txSlot(const rtxStatus_t *status);
+    bool dataTxSlot(int16_t *out);
+    bool needDataTx(const rtxStatus_t *status) const;
     unsigned dequeueFrames(uint8_t frames[DMR_FRAMES_PER_BURST][DMR_AMBE_BYTES]);
 
     bool txRunning;
@@ -90,13 +134,23 @@ private:
     unsigned frameCount;
     bool burstSlot;      // this slot carries a burst (TDMA: every other one)
 
+#ifdef CONFIG_DMR_SMS
+    struct dmrSmsPacket txPacket; ///< Message being transmitted
+    unsigned txBurst;             ///< Next burst of the packet
+    int txMsgId;                  ///< Message id in the store, 0 if none
+    bool txIsData;                ///< The running transmission is a message
+    bool txAcking;                ///< ... and it is a delivery response
+#endif
+
     enum dmrTxStage
     {
         TX_LEAD,
         TX_LC_HEADER,
         TX_VOICE,
         TX_TERMINATOR,
-        TX_TAIL
+        TX_TAIL,
+        TX_DATA,     ///< A short message, burst by burst
+        TX_DATA_END  ///< Terminator of the data call, then the tail
     } txStage;
 #endif
 };

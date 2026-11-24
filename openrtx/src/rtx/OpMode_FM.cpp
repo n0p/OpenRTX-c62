@@ -164,6 +164,10 @@ void OpMode_FM::update(rtxStatus_t *const status, const bool newCfg)
     if ((status->opStatus == RX) && (!platform_getPttStatus()))
     {
         uint32_t now = (uint32_t)getTick();
+
+        /* Move what the messaging screen queued into the APRS mailbox. */
+        aprs_pumpMessaging(now);
+
         if(aprs_txPending(now))
         {
             char       info[128];

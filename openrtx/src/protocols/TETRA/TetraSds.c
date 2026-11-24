@@ -26,8 +26,12 @@
 #include <zephyr/storage/flash_map.h>
 
 #include "core/crc.h"
+#ifdef CONFIG_MESSAGING
+#include "core/messaging.h"
+#endif
 #include "interfaces/delays.h"
 #include "protocols/TETRA/TetraSds.h"
+#include "protocols/TETRA/TetraSdsEnc.h"
 
 #define SDS_AREA_A 0x2000
 #define SDS_AREA_B 0x3000
@@ -264,3 +268,45 @@ void tetraSds_task(void)
     dirty = !ok; /* a failed write is retried on the next call */
     flash_area_close(area);
 }
+
+/* ---- uplink: the SDS of the shared message store ---- */
+
+#ifdef CONFIG_MESSAGING
+
+/** The last PDU encoded, for the transmitter of a future build and for the
+ *  diagnostics of this one. */
+static struct sds_tx prepared;
+static int preparedId = -1;
+
+int tetraSds_prepareQueued(void)
+{
+    const struct message *msg = messaging_head(MSG_TRANSPORT_TETRA);
+
+    if (msg == NULL) {
+        preparedId = -1;
+        return -1;
+    }
+    if (msg->id == preparedId)
+        return (int)prepared.nbits; /* already encoded, nothing to do */
+
+    /*
+     * Individual call (SSI) with no SDS-TL wrapper: what a radio sends for a
+     * plain text.  A text outside the GSM 7-bit alphabet goes as UCS-2.
+     */
+    if (tetraSds_encodeText(&prepared, msg->dst, msg->text, false) != 0)
+        return -1;
+
+    preparedId = msg->id;
+    return (int)prepared.nbits;
+}
+
+unsigned tetraSds_preparedBits(void)
+{
+    return (preparedId >= 0) ? prepared.nbits : 0;
+}
+
+const uint8_t *tetraSds_preparedPdu(void)
+{
+    return prepared.buf;
+}
+#endif /* CONFIG_MESSAGING */

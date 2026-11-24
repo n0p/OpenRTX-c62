@@ -20,6 +20,9 @@
 #ifdef CONFIG_TETRA
 #include "protocols/TETRA/TetraSds.h"
 #endif
+#ifdef CONFIG_MESSAGING
+#include "core/messaging.h"
+#endif
 
 /*
  * Platforms without a graceful shutdown (the C62 cuts power with the volume
@@ -137,6 +140,11 @@ void state_init()
     /* Received SDS messages, kept across power cycles */
     tetraSds_load();
 #endif
+
+#ifdef CONFIG_MESSAGING
+    /* The message store: outbox and inbox, also kept across power cycles */
+    messaging_init();
+#endif
 }
 
 void state_terminate()
@@ -229,6 +237,14 @@ void state_task()
      * after a message must not wait for it.
      */
     tetraSds_task();
+#ifdef CONFIG_MESSAGING
+    /* Encode what the messaging screen queued for TETRA (no transmit chain) */
+    (void)tetraSds_prepareQueued();
+#endif
+#endif
+
+#ifdef CONFIG_MESSAGING
+    messaging_task((uint32_t)getTick());
 #endif
 
     /* Debounced write-back of the last used channel */
