@@ -12,6 +12,7 @@
 #include <string.h>
 #include "rtx/rtx.h"
 #include "rtx/OpMode_FM.hpp"
+#include "rtx/OpMode_Airband.hpp"
 #include "rtx/OpMode_M17.hpp"
 #if defined(PLATFORM_C62)
 #include "drivers/audio/csk6_codec.h"
@@ -52,6 +53,7 @@ static uint32_t        txAbortTime;
 static OpMode  *currMode;               // Pointer to currently active opMode handler
 static OpMode     noMode;               // Empty opMode handler for opmode::NONE
 static OpMode_FM  fmMode;               // FM mode handler
+static OpMode_Airband airbandMode;      // Airband AM mode handler
 #ifdef CONFIG_M17
 static OpMode_M17 m17Mode;              // M17 mode handler
 #endif
@@ -315,6 +317,7 @@ void rtx_task()
             {
                 case OPMODE_NONE: currMode = &noMode;  break;
                 case OPMODE_FM:   currMode = &fmMode;  break;
+                case OPMODE_AIRBAND: currMode = &airbandMode; break;
                 #ifdef CONFIG_M17
                 case OPMODE_M17:  currMode = &m17Mode; break;
                 #endif
@@ -414,6 +417,9 @@ bool opmode_canTransmit(uint8_t mode)
 #endif
         case OPMODE_TETRA:
             /* Receive only: OpMode_TETRA forces the status back to RX */
+            return false;
+        case OPMODE_AIRBAND:
+            /* Receive only: AM voice, and not a band this radio may key in */
             return false;
         default:
             return false;
