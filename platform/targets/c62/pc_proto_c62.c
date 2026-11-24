@@ -315,23 +315,44 @@ int pc_proto_platformDiag(pcProtoDiag_t *out)
      * CONFIG_INIT_STACKS to know what was never touched; without it the number
      * is the free space at this instant, which is still the field a bench
      * session reads.  Only the two threads this file can name are reported:
-     * enumerating the rest needs CONFIG_THREAD_MONITOR. */
+     * enumerating the rest needs CONFIG_THREAD_MONITOR, and the call itself
+     * only exists when CONFIG_INIT_STACKS fills the stacks at boot (that is
+     * what gives the high-water mark).  Without it the field is absent and the
+     * client shows nothing, which is honest: there is no number to show. */
 #if defined(CONFIG_THREAD_STACK_INFO)
     {
+        /*
+         * Bytes never touched, measured from the top of the stack down to the
+         * last non-zero word.  The stacks live in .bss, which the kernel
+         * zeroes, so this is the same high-water mark
+         * k_thread_stack_space_get() gives -- and it does not need
+         * CONFIG_INIT_STACKS, which this build does not set.  The number is an
+         * estimate: a frame that wrote zeroes over zeroes is invisible, which
+         * is the standard limitation of the technique.
+         */
         extern struct k_thread z_main_thread;
-        const struct k_thread *list[2] = { &z_main_thread, &thread };
+        struct k_thread *list[2] = { &z_main_thread, &thread };
         const char *names[2] = { "main", "pcproto" };
-        uint16_t sizes[2] = { (uint16_t)CONFIG_MAIN_STACK_SIZE,
-                              (uint16_t)K_THREAD_STACK_SIZEOF(thread_stack) };
 
-        for (int i = 0; i < 2; i++) {
-            size_t unused = 0;
-            if (k_thread_stack_space_get(list[i], &unused) != 0)
+        for (int i = 0; i < 2 && out->taskCount < 8; i++) {
+            uintptr_t start = list[i]->stack_info.start;
+            size_t size = list[i]->stack_info.size;
+            const uint8_t *base = (const uint8_t *)start;
+            size_t unused = size;
+
+            if (start == 0 || size == 0 || size > 65535)
                 continue;
+            /* Skip the 8-byte sentinel Zephyr reserves at the very top. */
+            for (size_t n = size; n > 8; n--) {
+                if (base[n - 1] != 0) {
+                    unused = size - n;
+                    break;
+                }
+            }
             pcProtoTaskStack_t *t = &out->tasks[out->taskCount++];
             snprintf(t->name, sizeof(t->name), "%s", names[i]);
             t->unused = (uint16_t)unused;
-            t->size = sizes[i];
+            t->size = (uint16_t)size;
         }
     }
 #endif
