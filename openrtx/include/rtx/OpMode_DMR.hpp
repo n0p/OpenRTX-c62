@@ -20,6 +20,7 @@
  */
 #ifdef CONFIG_DMR_TX
 #include "protocols/DMR/DmrTx.h"
+#include "protocols/DMR/DmrTxFsm.h"
 
 /** AMBE+2 frames queued for transmission: four voice bursts of margin. */
 #define DMR_TX_QUEUE_FRAMES 12
@@ -83,21 +84,20 @@ private:
     streamId txId;
 
     struct dmrTxState tx;
-    stream_sample_t txSamples[DMR_TX_SLOT_SAMPLES];
+
+    /*
+     * Baseband output buffer.  An audio stream started with BUF_CIRC_DOUBLE is
+     * given the whole two-half buffer, and hands out one half at a time: this
+     * has to be 2 * DMR_TX_SLOT_SAMPLES, or every write of a 30 ms slot lands
+     * half of itself in the other half of the buffer and half of it past the
+     * end of this object.
+     */
+    stream_sample_t txSamples[2 * DMR_TX_SLOT_SAMPLES];
 
     uint8_t frameQueue[DMR_TX_QUEUE_FRAMES][DMR_AMBE_BYTES];
     unsigned frameHead;
     unsigned frameCount;
-    bool burstSlot;      // this slot carries a burst (TDMA: every other one)
-
-    enum dmrTxStage
-    {
-        TX_LEAD,
-        TX_LC_HEADER,
-        TX_VOICE,
-        TX_TERMINATOR,
-        TX_TAIL
-    } txStage;
+    struct dmrTxFsm fsm; // transmit stage machine, see DmrTxFsm.h
 #endif
 };
 

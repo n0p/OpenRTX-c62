@@ -246,8 +246,13 @@ bool opmode_canTransmit(uint8_t mode)
         case OPMODE_M17:
             return true;
         case OPMODE_DMR:
-            /* Receive only: radio_enableTx() returns without keying */
+#ifdef CONFIG_DMR_TX
+            /* Transmit chain and AMBE+2 encoder compiled in: duplex mode */
+            return true;
+#else
+            /* Receive only: the PTT branch is compiled out */
             return false;
+#endif
         case OPMODE_TETRA:
             /* Receive only: OpMode_TETRA forces the status back to RX */
             return false;

@@ -37,7 +37,12 @@
 
 static int16_t baseband[2 * HALF_SAMPLES];
 #ifdef CONFIG_DMR_TX
-static int16_t micPcm[VOCODER_PCM_SAMPLES];
+/*
+ * Microphone PCM.  Same rule as the baseband buffer below: the stream is given
+ * the whole double buffer and hands out 160-sample halves, so one half is
+ * exactly the 20 ms frame the vocoder wants.
+ */
+static int16_t micPcm[2 * VOCODER_PCM_SAMPLES];
 #endif
 
 /**
@@ -67,13 +72,12 @@ OpMode_DMR::OpMode_DMR()
     , txId(-1)
     , frameHead(0)
     , frameCount(0)
-    , burstSlot(true)
-    , txStage(TX_LEAD)
 #endif
 {
 #ifdef CONFIG_DMR_TX
     memset(&tx, 0, sizeof(tx));
     memset(frameQueue, 0, sizeof(frameQueue));
+    dmrTxFsm_init(&fsm);
 #endif
 }
 
@@ -184,9 +188,9 @@ bool OpMode_DMR::startTx(const rtxStatus_t *status)
         return false;
     }
 
-    micId = audioStream_start(micPath, micPcm, VOCODER_PCM_SAMPLES, 8000,
+    micId = audioStream_start(micPath, micPcm, 2 * VOCODER_PCM_SAMPLES, 8000,
                               STREAM_INPUT | BUF_CIRC_DOUBLE);
-    txId = audioStream_start(txPath, txSamples, DMR_TX_SLOT_SAMPLES, 48000,
+    txId = audioStream_start(txPath, txSamples, 2 * DMR_TX_SLOT_SAMPLES, 48000,
                              STREAM_OUTPUT | BUF_CIRC_DOUBLE);
     if ((micId < 0) || (txId < 0)) {
         stopTx();
@@ -195,8 +199,7 @@ bool OpMode_DMR::startTx(const rtxStatus_t *status)
 
     frameHead = 0;
     frameCount = 0;
-    burstSlot = true;
-    txStage = TX_LEAD;
+    dmrTxFsm_init(&fsm);
     txRunning = true;
 
     /* Last: the PA, the ramps of the first slot need it settled */
@@ -204,12 +207,24 @@ bool OpMode_DMR::startTx(const rtxStatus_t *status)
     return true;
 }
 
+/**
+ * Leave transmit: stop the streams, release the audio paths and unkey the PA.
+ *
+ * This is the only way out of a transmission, and it is unconditional.  The
+ * two failures this fixes are a stream left half-open when one of the two
+ * audioStream_start() calls above fails, and a state machine that stopped
+ * calling this at all: the stages used to decide on their own when to leave,
+ * so a release of the PTT in the lead time, before the vocoder had produced
+ * the first frame, kept the PA keyed for ever.  The state machine now always
+ * ends within DMR_TX_MAX_SLOTS_AFTER_PTT slots of the release, and whatever
+ * the caller does, the PA, the BK4819 and the LED go back to receive here.
+ */
 void OpMode_DMR::stopTx()
 {
-    if (!txRunning)
-        return;
+    const bool wasRunning = txRunning;
 
     txRunning = false;
+    dmrTxFsm_init(&fsm);
 
     if (txId >= 0)
         audioStream_stop(txId);
@@ -222,6 +237,10 @@ void OpMode_DMR::stopTx()
 
     txId = micId = -1;
     txPath = micPath = -1;
+
+    /* radio_disableRtx() clears the PA, the TX LED and the BK4819 TX path */
+    if (wasRunning)
+        radio_disableRtx();
 }
 
 /**
@@ -233,8 +252,7 @@ void OpMode_DMR::stopTx()
 bool OpMode_DMR::txSlot(const rtxStatus_t *status)
 {
     uint8_t frames[DMR_FRAMES_PER_BURST][DMR_AMBE_BYTES];
-    enum dmrTxBurst kind = DMR_TXB_VOICE;
-    bool finished = false;
+    struct dmrTxStep step;
 
     (void)status;
 
@@ -258,75 +276,28 @@ bool OpMode_DMR::txSlot(const rtxStatus_t *status)
         frameCount++;
     }
 
-    switch (txStage) {
-        case TX_LEAD:
-            kind = DMR_TXB_EMPTY;
-            /*
-             * The PA is up but the call does not start until there is voice to
-             * send: the LC header announces a call and the first voice burst
-             * follows it one slot later, so keying the header with an empty
-             * queue would put a header and then silence on the air.  The
-             * encoder has already produced the samples by the time the
-             * microphone block is read, so this costs one slot at most.
-             */
-            if (platform_getPttStatus() && (frameCount > 0))
-                txStage = TX_LC_HEADER;
-            break;
-
-        case TX_LC_HEADER:
-            kind = DMR_TXB_VOICE_LC;
-            txStage = TX_VOICE;
-            break;
-
-        case TX_VOICE:
-            /*
-             * One burst every other slot.  A DMR call occupies one of the two
-             * timeslots of the carrier and a voice burst carries 60 ms of
-             * speech, which is exactly what the vocoder produces in those
-             * 60 ms; transmitting a burst in every slot would send the speech
-             * at twice its speed.  The slot in between is silence, not a
-             * shorter burst: a handheld that keys the other slot tramples the
-             * station that owns it.
-             */
-            if (burstSlot) {
-                kind = DMR_TXB_VOICE;
-                burstSlot = false;
-            } else {
-                kind = DMR_TXB_EMPTY;
-                burstSlot = true;
-            }
-            if (!platform_getPttStatus())
-                txStage = TX_TERMINATOR;
-            break;
-
-        case TX_TERMINATOR:
-            kind = DMR_TXB_TERMINATOR;
-            txStage = TX_TAIL;
-            break;
-
-        case TX_TAIL:
-            /*
-             * One empty slot after the terminator: it carries the tail of the
-             * last pulse and lets the PA ramp down inside the guard.
-             */
-            kind = DMR_TXB_EMPTY;
-            finished = true;
-            break;
-    }
+    /*
+     * What this slot carries, and whether it is the last one, is decided in one
+     * place (DmrTxFsm.h): the stage machine always ends within a fixed number
+     * of slots after the PTT is released, whatever stage it was in.
+     */
+    step = dmrTxFsm_next(&fsm, platform_getPttStatus(), frameCount > 0);
 
     memset(frames, 0, sizeof(frames));
-    if (kind == DMR_TXB_VOICE)
+    if (step.kind == DMR_TXB_VOICE)
         dequeueFrames(frames);
-    dmrTx_slot(&tx, kind, (const uint8_t (*)[DMR_AMBE_BYTES])frames, txSamples);
+    dmrTx_slot(&tx, step.kind, (const uint8_t (*)[DMR_AMBE_BYTES])frames,
+               txSamples);
 
     stream_sample_t *idle = outputStream_getIdleBuffer(txId);
 
     if (idle != NULL) {
-        memcpy(idle, txSamples, sizeof(txSamples));
+        /* One half of the stream buffer is exactly one slot */
+        memcpy(idle, txSamples, DMR_TX_SLOT_SAMPLES * sizeof(stream_sample_t));
         outputStream_sync(txId, true);
     }
 
-    return finished;
+    return step.finished;
 }
 #endif /* CONFIG_DMR_TX */
 
@@ -335,8 +306,8 @@ void OpMode_DMR::update(rtxStatus_t *const rtx, const bool newCfg)
     switch (rtx->opStatus) {
         case OFF:
 #ifdef CONFIG_DMR_TX
-            if (txRunning)
-                stopTx();
+            /* Unconditional: it is idempotent and it is what unkeys the PA */
+            stopTx();
 #endif
             radio_disableRtx();
             if (startRx) {

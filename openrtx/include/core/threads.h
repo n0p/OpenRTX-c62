@@ -19,6 +19,16 @@
  * KB (Viterbi, MAC, SDS), plus the event callback and newlib's snprintf.
  */
 #define RTX_THREAD_STKSIZE    4096
+#elif defined(PLATFORM_C62) && defined(CONFIG_DMR_TX)
+/*
+ * The DMR transmitter encodes in the rtx thread, and the AMBE+2 encoder is
+ * deep: enc_ambe() 2288 B, e_p() 1696 B, pitch_est() 2112 B and
+ * dmr_enc_analysis() 232 B are nested on top of the 816 B of one modulator
+ * slot, 6.4 KB of frames measured with -fstack-usage.  Without this the first
+ * encoded frame smashes the stack guard (CONFIG_HW_STACK_PROTECTION) and the
+ * radio reboots as soon as the PTT is pressed.
+ */
+#define RTX_THREAD_STKSIZE    9216
 #elif defined(PLATFORM_C62)
 #define RTX_THREAD_STKSIZE    1024
 #else
