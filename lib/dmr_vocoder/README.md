@@ -5,10 +5,10 @@ PCM.  Built for the Retevis C62 (CSK6011B, Cortex-M33) and linked into the
 firmware only when `CONFIG_C62_DMR_VOCODER=y`.
 
 This directory is the **backend**: the DMR receive mode calls the two functions
-below and knows nothing else.  The current implementation wraps the decoder half
-of [OpenDMR](../opendmr) (mbelib-neo, GPL-2.0-or-later); an optimised decoder
-can replace it without touching the callers, as long as it keeps the API and its
-semantics (see "Backend contract").
+below and knows nothing else.  The implementation is a pure C reimplementation of
+the decoder half of [OpenDMR](../opendmr) (mbelib-neo, GPL-2.0-or-later): no
+C++, no heap, no thread-local storage, no libm, every table in flash and the
+whole decoder state in one 8.5 KiB object.
 
 ## API
 
@@ -22,10 +22,10 @@ int  dmr_vocoder_decode(const uint8_t frame[9], int16_t pcm[160]);
 void dmr_vocoder_reset(void);
 ```
 
-`dmr_vocoder_decode()` returns 0 on success, -1 on a NULL argument and -2 if the
-internal arena is exhausted.  Diagnostics: `dmr_vocoder_last_errors()` (Golay
-FEC corrections in the last frame), `dmr_vocoder_state_bytes()` and
-`dmr_vocoder_arena_used()` (RAM accounting).
+`dmr_vocoder_decode()` returns 0 on success and -1 on a NULL argument.
+Diagnostics: `dmr_vocoder_last_errors()` (Golay FEC corrections in the last
+frame), `dmr_vocoder_state_bytes()` and `dmr_vocoder_arena_used()` (always 0:
+this backend allocates nothing).
 
 ## Backend contract
 
@@ -46,44 +46,34 @@ Any replacement must:
 
 | File | Purpose |
 |---|---|
-| `dmr_vocoder.h/.c` | public API, frame unpacking, FEC, static arena, decoder state |
-| `dmr_golay.h/.c` | Golay(24,12)/Golay(23,12) syndrome decoders |
-| `dmr_golay_table.c` | generated syndrome → error-pattern table (`tools/gen_golay_table.py`) |
-| `dmr_math.h/.c` | deterministic cosf/sinf/cos/sin/logf/log2f/expf/exp2f (optional, on by default) |
-| `dmr_math_redirect.h` | force-included in the OpenDMR sources when the above is on |
-| `dmr_alloc.h` | declarations of the arena allocator handed to the OpenDMR sources |
+| `dmr_vocoder.h/.c` | public contract and the firmware's single instance |
+| `dmr_decoder.h/.c` | decoder core: FEC, frame unpacking, MBE parameters, synthesis, PCM |
+| `dmr_fft.h/.c` | fixed 256-point real FFT (2 × 128-point complex + untangling) |
+| `dmr_math.h` | sin/cos/exp2/log2/sqrt in single precision, no libm |
+| `dmr_tables.h` | generated ROM tables (~28 KiB, `tools/gen_tables.py`) |
 | `tests/pcm_dump.c` | decode a file of frames, dump PCM (host and bare metal) |
 | `tests/qemu/` | Cortex-M33 build, QEMU run, instruction count, PCM comparison |
+| `tools/gen_tables.py` | regenerates `dmr_tables.h` from the reference sources |
+| `tools/make_ref.sh`, `ref/` | rebuilds `tests/data/speech_ref.pcm` with the reference decoder |
 
-## What is compiled, and what is not
+Only these three C files are compiled.  Nothing comes from `lib/opendmr`, which
+stays in the tree as the reference this decoder was verified against: no
+encoder, no `opendmr.cpp`, no pffft, no libstdc++.
 
-Compiled from `lib/opendmr/decoder`: `mbelib.c`, `mbe_adaptive.c`,
-`mbe_unvoiced_fft.c`, `ambe3600x2450.c`, `ambe_common.c`, `ecc.c`,
-`ecc_const.c`, `pffft.c`.
+## Build options
 
-Not compiled: the whole `lib/opendmr/encoder` (OP25 IMBE encoder, does not fit in
-the M33: 4.2 M instructions per frame), `decoder/fftpack.c` (dead code, the
-unvoiced synthesis uses pffft) and OpenDMR's C++ wrapper `opendmr.cpp`.
-The C++ wrapper's decode path is reimplemented in `dmr_vocoder.c` /
-`dmr_golay.c`: it is ~200 lines of bit unpacking plus the Golay decoders.
+Each source carries its own options, set per file in `CMakeLists.txt` so that
+they land after the firmware-wide `-Os`:
 
-## Build hooks needed in the submodule
-
-The OpenDMR sources are **not modified or relicensed**.  Three compile-time
-hooks, added as a separate commit in the submodule (branch `c62/static-decode`,
-commit `85bdbb2`), let this layer build them for a bare-metal MCU:
-
-| Hook | Why |
-|---|---|
-| `-DMBE_THREAD_LOCAL=` | `__thread` becomes emutls on ARM, which needs malloc for the 23 KiB DCT cache; plain statics are what a single-instance firmware wants |
-| `-DPFFFT_MALLOC/PFFFT_FREE` | the transform plan is allocated once; routing it to the static arena keeps the decoder off the C heap |
-| `-DMBE_SINCOSF=dmr_sincosf` | avoids `__builtin_sincosf`, i.e. libm's `sincosf`, in favour of `dmr_math.c` |
-
-`-DNDEBUG` silences pffft's asserts (they would pull in `printf`), and
-`decoder/fftpack.c` is simply not compiled.
+* `-O2 -fno-math-errno` for all three;
+* `-ffp-contract=off` on `dmr_decoder.c` (fidelity: the AMBE phase accumulator
+  reaches ~1e6 rad, where FMA fusion changes the reconstructed phase);
+* `-ffp-contract=fast` on `dmr_fft.c`, which accumulates no phase (measured: no
+  effect on the output).
 
 ## Measured on the C62
 
-+41 444 B of flash, +52 104 B of RAM, and 751 394 instructions per frame on the
-emulated Cortex-M33 (3.0–4.0 ms of a 20 ms frame at 300 MHz).  See
-`docs/DMR_VOCODER.md` for the breakdown and the verification procedure.
++39.5 KiB of code and tables, 8.5 KiB of static RAM, and ~114 000 instructions
+per frame on the emulated Cortex-M33 (0.46–0.61 ms of a 20 ms frame at 300 MHz,
+2.2–3.0 % of one core).  See `docs/DMR_VOCODER.md` for the breakdown and for the
+verification procedure (`tests/qemu/run_qemu.sh`).

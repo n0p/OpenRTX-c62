@@ -31,11 +31,11 @@ endmenu
 # This file is sourced inside the "Board Selection" choice, so the options
 # below live in a menu of their own (same shape as "DSP Manipulation" above).
 #
-# DMR receive vocoder: AMBE+2 decode (OpenDMR's decoder, lib/dmr_vocoder).
-# platform/targets/c62/CMakeLists.txt builds the library and links it into the
-# application when this is set. Enable it with
+# DMR receive vocoder: AMBE+2 decode (lib/dmr_vocoder, pure C, tables in flash,
+# no heap, no libm). platform/targets/c62/CMakeLists.txt builds the library and
+# links it into the application when this is set. Enable it with
 #   west build -b c62 ... -- -DCONFIG_C62_DMR_VOCODER=y
-# OFF by default: it costs 41 KiB of flash and 52 KiB of RAM (measured), and the
+# OFF by default: it costs 38 KiB of flash and 8.5 KiB of RAM (measured), and the
 # DMR receive mode that calls it is not merged yet.
 #
 menu "DMR"

@@ -108,10 +108,14 @@ if(C62_BASEBAND_DUMP)
 endif()
 #
 # C62_DMR_VOCODER: AMBE+2 voice decoder for the DMR receive mode.
-# Builds lib/dmr_vocoder (the decoder half of OpenDMR, C only, static state, no
-# heap) and links it into the application. OFF by default: it costs 41 KiB of
-# flash and 52 KiB of RAM (measured, see docs/DMR_VOCODER.md), and nothing calls
+# Builds lib/dmr_vocoder (pure C, tables in flash, one static instance, no heap,
+# no libm) and links it into the application. OFF by default: it costs 38 KiB of
+# flash and 8.5 KiB of RAM (measured, see docs/DMR_VOCODER.md), and nothing calls
 # it until the DMR receive path lands.
+#
+# lib/dmr_vocoder sets its own per-source options (-O2, -ffp-contract), so
+# nothing here overrides the firmware-wide -Os: the flags copied from
+# zephyr_interface are appended after the target's own, and would win.
 #
 if(CONFIG_C62_DMR_VOCODER)
   add_subdirectory(${OPENRTX_ROOT}/lib/dmr_vocoder ${CMAKE_BINARY_DIR}/dmr_vocoder)
@@ -124,14 +128,6 @@ if(CONFIG_C62_DMR_VOCODER)
     $<TARGET_PROPERTY:zephyr_interface,INTERFACE_INCLUDE_DIRECTORIES>)
   target_include_directories(dmr_vocoder SYSTEM PRIVATE
     $<TARGET_PROPERTY:zephyr_interface,INTERFACE_SYSTEM_INCLUDE_DIRECTORIES>)
-  # The vocoder is the hot path of DMR RX: -O2, and no FP contraction so the
-  # float pipeline stays bit-identical to the host reference build. The math
-  # constants are pinned here, after the firmware-wide -DM_PI=...f copied above,
-  # because the vocoder's reference build uses the double-precision values.
-  target_compile_options(dmr_vocoder PRIVATE -O2 -ffp-contract=off)
-  target_compile_definitions(dmr_vocoder PRIVATE
-    M_PI=3.14159265358979323846 M_SQRT1_2=0.70710678118654752440
-    M_SQRT2=1.41421356237309504880)
   # Nothing calls the vocoder until the DMR receive mode is merged, and the
   # linker drops an unreferenced static library.  This forces the symbol in
   # anyway so its flash/RAM cost can be measured on the real firmware image;
