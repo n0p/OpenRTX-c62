@@ -1,99 +1,166 @@
-# OpenRTX
-## Modular Open Source Radio Firmware
+# OpenRTX para la Retevis C62
 
-OpenRTX is a free and open source firmware for digital amateur radio devices, top-down designed
-with modularity, flexibility and performance in mind.
+Firmware libre para la **Retevis C62** (también vendida como Chierda UV58N), basado en
+[OpenRTX](https://openrtx.org). Sustituye al firmware de fábrica, se flashea por el
+conector de accesorios y **no hace falta abrir la radio**.
 
-This firmware is *highly experimental* and currently under development, this means
-that it may not have all the expected functionalities. Anyway, contributions and testing will be warmly welcomed and accepted!
+Hardware: SoC **ListenAI CSK6011B** (Cortex-M33 a 300 MHz + HiFi4 + NPU), transceptor
+**BK4819**, receptor de broadcast **BK1080**, flash QSPI de 4 MiB, pantalla ST7735R de
+160x128 y códec de audio de 48 kHz servido por el DSP.
 
-For hardware and software documentation visit [openrtx.org](https://openrtx.org). For currently supported devices and their features, see the [Development Status](https://openrtx.org/#/dev_status?id=current-support) page.
+```
+Estado: uso diario en FM y M17; TETRA y DMR en recepción; APRS en pruebas
+Licencia: GPLv3 (ver LICENSE)
+```
 
-## Obtaining the firmware
+## Funciones
 
-**Warning: Read the disclaimer section first!**
+| Modo | RX | TX | Notas |
+|---|---|---|---|
+| FM analógica | si | si | 12,5 / 25 / 6,25 kHz, CTCSS y DCS, squelch, VOX, compander |
+| M17 | si | si | Codec2, indicativo y destino configurables |
+| TETRA TMO | si | no | voz ACELP, AFC, MCC/MNC y celda en pantalla, SDS con historial |
+| TETRA DMO | en pruebas | no | llamadas directas entre radios |
+| DMR Tier II/III | si | en pruebas | vocoder AMBE+2 propio, CC/slot/tipo de ráfaga en pantalla |
+| APRS sobre FM | si | si | mensajería (SMS con ACK) como función principal |
 
-Pre-built binary images of the OpenRTX firmware for each one of the supported devices are available on [the releases page](https://github.com/OpenRTX/OpenRTX/releases): to flash them to your radio, you can use the OEM firmware upgrade tool or — alternatively and for TYT MD-3x0 and MD-UV3x0 radios only — you can also use the [radio_tool](https://github.com/v0l/radio_tool) program or tarxvf's web based flashing tool [dmr.tools](https://dmr.tools).
+**Canales y manejo**
 
-Between releases, pre-built binary images containing the latest firmware updates are available through nightly builds from the master branch.
-The nightly builds are available here:
-- on [Lilly DF5PMF's page](https://openrtx.schinken-radio.de/nightly/)
-- on the [OpenRTX nightly builds page](https://files.openrtx.org/nightly/)
+- 128 canales guardados en la radio, sin ordenador: crear, duplicar, editar y borrar.
+- Por canal: nombre, RX y TX, modo, ancho de banda, potencia, tono y CC/TS de DMR.
+- Entrada directa de frecuencia por teclado, resolución de 10 Hz.
+- Vuelve al último canal usado al encender; los ajustes se conservan al apagar.
+- Rango completo del BK4819: **18-660 MHz y 840-1300 MHz**, sin límites de bandas de
+  aficionado. Transmitir fuera de las bandas permitidas es responsabilidad del operador.
 
-Finally, the instructions on how to compile the OpenRTX firmware for hardware as well as emulation on Linux, are available on the [compilation instructions](https://openrtx.org/#/compiling) page on our website.
+**Pantalla**
 
-Have a look at the the [dedicated page](https://openrtx.org/#/user_guide) for detailed instructions on flashing the firmware to your radio, look at the OpenRTX website or reach out to us on our channels!
+- Menús Audio, Radio, FM, Display y TETRA, con fuente de 5/6 pt y filas compactas.
+- Menú emergente contextual con la pulsación corta de P2: squelch, tono, potencia,
+  ancho de banda y los ajustes propios del modo en curso.
+- Línea inferior de ayuda que indica qué hace cada botón: verde, P1, P2 y rojo.
 
-## M17 support
+**APRS**
 
-From the release version 0.3.3 onwards the OpenRTX firmware provides experimental support for the M17 digital voice mode.
+Va sobre FM, sin modo aparte. Tres interruptores independientes, todos apagados de
+fábrica: *decoding* (escuchar y mostrar paquetes), *beacon* (balizas periódicas) y el
+envío de mensajes, que sale de una cola explícita y **nunca del PTT**. La función
+principal es la mensajería: recibir, responder y confirmar con ACK, con bandeja
+persistente. P2 largo en la pantalla principal abre APRS; en el resto de pantallas
+mantiene su función habitual.
 
-For information on the radios that currently support M17, see the [Development Status](https://openrtx.org/#/dev_status?id=modes) page on our website.
+## Instalación
 
-To make the digital mode work, some modding is required: Refer to the [dedicated page](https://openrtx.org/#/M17/m17?id=hardware-modifications) on our website for the details on that.
+1. Apaga la radio.
+2. Mantén pulsada la **PTT secundaria** y enciende: entra en modo *burn* (pantalla en
+   blanco).
+3. Conecta el cable USB-serie y flashea:
+
+```sh
+cskburn -s /dev/ttyUSB0 -C 6 -b 115200 0x000000 zephyr.bin
+cskburn -s /dev/ttyUSB0 -C 6 -b 115200 0x100000 dsp_firmware.bin
+```
+
+4. Apaga y enciende normalmente.
+
+`dsp_firmware.bin` es la imagen del DSP: mientras no haya una libre se usa la de
+fábrica, que es la que funciona con el resto del sistema.
+
+**Volver al firmware de fábrica**
+
+```sh
+cskburn -s /dev/ttyUSB0 -C 6 -b 115200 0x000000 factory-c62.bin
+```
+
+El dump completo de la radio (4 MiB) restaura aplicación, recursos, calibración y
+canales. Guárdalo antes de flashear: contiene la calibración de **tu** unidad.
+
+**Aviso sobre los ajustes**: la estructura de ajustes ha cambiado respecto a versiones
+anteriores. Si tras flashear algo se comporta de forma extraña, haz un reset de ajustes
+desde el menú.
+
+## Compilación
+
+Lo más simple es usar la imagen de Docker que trae Zephyr y el SDK del CSK6:
+
+```sh
+docker build -t openrtx-c62 .
+docker run --rm -v "$PWD":/work openrtx-c62 c62-build \
+    -DCONFIG_C62_DMR_RX=y -DCONFIG_C62_APRS=y
+```
+
+Los binarios quedan en `build_c62/zephyr/`:
+
+| Fichero | Destino | Tamaño actual |
+|---|---|---|
+| `zephyr.bin` | `0x000000` | 488.712 B (46,6 % de la partición de 1 MiB) |
+| `dsp_firmware.bin` | `0x100000` | 466.832 B |
+
+Opciones de compilación relevantes:
+
+- `CONFIG_C62_DMR_RX` — receptor DMR con vocoder AMBE+2 propio.
+- `CONFIG_C62_APRS` — APRS sobre FM (mensajería, baliza y decoding).
+- `CONFIG_DMR_TX` — cadena de transmisión DMR. **Apagada por defecto**: sin encoder
+  AMBE+2 el PTT se niega a transmitir.
+- `CONFIG_C62_UNLOCKED_TUNING` — rango completo del BK4819 (activa por defecto).
+
+## Repositorio
+
+- `master` — lo que se flashea.
+- `c62/dmr-tx` — cadena TX de DMR y encoder, en desarrollo.
+- `Retevis-c62` — base del port.
+- `docs/` — notas de integración: `UI.md`, `CHANNELS.md`, `APRS.md`, `DMR_TX.md`,
+  `DMR_VOCODER.md`, `DMR_RX.md`, `openrtx_integration.md`.
+
+## Qué falta
+
+- Encoder AMBE+2 para DMR TX (en curso) y calibración de desviación en banco.
+- TX de TETRA: no es viable con este transmisor, la señal se sale de la máscara.
+- Imagen de DSP libre: la de fábrica funciona, pero no es sustituible todavía.
+- APRS: digipeater, igate y SmartBeaconing.
+
+## Sobre OpenRTX
+
+Este repositorio es un fork de [OpenRTX](https://github.com/OpenRTX/OpenRTX), el firmware
+libre y modular para radioaficionados, y del port de la C62 de **OE3ANC** y **sp5wwp**.
+La documentación general del proyecto, el estado de soporte de cada equipo y las
+instrucciones de compilación están en [openrtx.org](https://openrtx.org).
+
+Créditos adicionales: **libtetra/OpenACELP** para TETRA, **OpenDMR/mbelib-neo** como
+referencia del vocoder AMBE+2 (reescrito en C para este SoC) y **direwolf** como
+referencia de validación del módem APRS.
 
 ## Disclaimer
 
-This project was created for research and amateur radio use only, we are not
-responsible for improper use of this code which might lead to unauthorized
-transmission, reception or any patent infringments.
+Proyecto creado para investigación y uso radioaficionado. No nos hacemos responsables
+del uso indebido de este código que pueda dar lugar a transmisiones no autorizadas.
 
-The OpenRTX firmware is released WITHOUT ANY WARRANTY: Anyone flashing a binary
-image obtained from the sources made available through this repository does so at
-their own risk. We always test all the code on our devices before publishing it
-on the repository, however we cannot guarantee the absolute absence of bugs nor of
-potential side effects.
+El firmware se distribuye SIN NINGUNA GARANTÍA: quien flashee una imagen construida a
+partir de estas fuentes lo hace bajo su propio riesgo.
 
-## Contact
+## Créditos del proyecto original
 
-To reach out, visit our [M17 Reflector](https://m17.openrtx.org) or join our Matrix room for general discussion [#openrtx_general:matrix.org
-](https://matrix.to/#/#openrtx_general:matrix.org) or the Matrix space [#openrtx:matrix.org](https://matrix.to/#/#openrtx:matrix.org) which contains many additional rooms or our [Discord Server](https://discord.gg/TbR2FVtMya).
+OpenRTX está hecho por Niccolò Izzo IU2KIN, Silvano Seva IU2KWO, Federico Amedeo Izzo
+IU2NUO y Frederik Saraci IU2NRO, con contribuciones de la comunidad (entre ellas los
+avisos de voz de Joseph Stephen VK7JS). Todo esto es posible gracias al enorme trabajo
+de ingeniería inversa de Travis Goodspeed y los contribuyentes de
+[md380tools](https://github.com/travisgoodspeed/md380tools), y a la inspiración y el
+código de ejemplo de Roger Clark y su OpenGD77. Gracias también a Wojciech Kaczmarski
+SP5WWP y a la comunidad [M17](https://m17project.org) por traer su protocolo libre a
+este hardware.
 
-## Donate
+Licencias de terceros del proyecto original: minmea (WTFPL v2),
+[QRCode](https://github.com/ricmoo/QRCode) (MIT), driver USB del STM32F405 (MCD-ST
+Liberty SW License Agreement V2) y `uf2conf.py` (MIT, Microsoft).
 
-To support the development of OpenRTX you can donate using [Liberapay](https://liberapay.com/OpenRTX/donate). \
-If you want to donate hardware to facilitate porting and development of OpenRTX, please [contact us](https://github.com/OpenRTX/OpenRTX#contact).
+## Contacto y donaciones
 
-## License
+- OpenRTX: [M17 Reflector](https://m17.openrtx.org), Matrix
+  [#openrtx_general:matrix.org](https://matrix.to/#/#openrtx_general:matrix.org) y
+  [Discord](https://discord.gg/TbR2FVtMya).
+- Traducciones: [Weblate](https://hosted.weblate.org/projects/openrtx/).
+- Donaciones al proyecto original: [Liberapay](https://liberapay.com/OpenRTX/donate).
 
-This software is released under the GNU GPL v3.
+## Licencia
 
-minmea is released under the DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE v2.
-
-[QRCode](https://github.com/ricmoo/QRCode) is released under the MIT License.
-
-Code for STM32F405 USB driver is released under the MCD-ST Liberty SW License Agreement V2.
-
-uf2conf.py and related files are released by Microsoft Corporation under MIT license.
-
-## Credits
-
-OpenRTX is being made by:
-
-- Niccolò Izzo IU2KIN <n@izzo.sh>
-- Silvano Seva IU2KWO <silseva@fastwebnet.it>
-- Federico Amedeo Izzo IU2NUO <federico@izzo.pro>
-- Frederik Saraci IU2NRO <frederik.saraci@gmail.com>
-
-Our wholehearted thanks go to the following contributors from the community:
-
-- Joseph Stephen VK7JS, who implemented voice prompts
-
-All this is possible by the huge reverse engineering effort of Travis Goodspeed and all the contributors of the [md380tools](https://github.com/travisgoodspeed/md380tools).
-
-A huge thanks goes to Roger Clark, and his [OpenGD77](https://github.com/rogerclarkmelbourne/OpenGD77) (repo no longer available) which not only inspired this project, but as a precursor, provided a working code example for the GD77 radio family.
-
-A warm thank you goes to Wojciech Kaczmarski SP5WWP and the [M17](https://m17project.org) community for bringing their libre protocol into our obscure undocumented hardware.
-
-Also, a thank you for donating hardware to this project goes to:
-* M17 Project
-* laurivosandi
-* smeegle5000
-
-And thanks to everyone who donated via [LiberaPay](https://liberapay.com/OpenRTX/donate).
-
-## Translation
-
-Contribute to the crowdsourced effort to make OpenRTX more accessible by helping [translate it](https://hosted.weblate.org/projects/openrtx/). Weblate proudly supports libre projects like OpenRTX with their tools to help this.
-
-[![Translation status](https://hosted.weblate.org/widget/openrtx/287x66-grey.png)](https://hosted.weblate.org/engage/openrtx/)
+GNU GPL v3. Ver `LICENSE`.
