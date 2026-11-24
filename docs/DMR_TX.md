@@ -5,9 +5,9 @@ FEC, burst framing, the 4FSK modulator and the PTT state machine, on the same
 flat discriminator path the receiver of `docs/DMR_RX.md` uses.
 
 The chain is complete and verified against the firmware's own receiver, symbol
-for symbol. **What is missing is the AMBE+2 encoder**, and everything here is
-built around that hole: the vocoder is a link-time hook, and without an
-encoder the mode refuses to key the PA instead of transmitting silence.
+for symbol, and it now has its AMBE+2 encoder: a pure C port of the OpenDMR
+encoder in `lib/dmr_encoder`, bit-exact with the reference and 1.43 M
+instructions per 20 ms frame (24 – 38 % of the M33).
 
 ## Status at a glance
 
@@ -17,7 +17,7 @@ encoder the mode refuses to key the PA instead of transmitting silence.
 | polyphase RRC 4FSK, TDMA slot grid, PA ramps, pulse tail carried between slots | done |
 | PTT state machine in `OpMode_DMR` (lead → LC → voice → terminator → tail) | done |
 | `CONFIG_DMR_TX`, off by default | done |
-| AMBE+2 encoder | **missing**: `dmrVocoder_encode()` is weak and returns −1 |
+| AMBE+2 encoder (`lib/dmr_encoder`, C, `CONFIG_DMR_TX_ENC`) | done, bit-exact with the reference |
 | deviation calibration (`REG_40 = 0x476`) | **pending**: a starting point, not a measurement |
 | adjacent channel power, real air test | **pending**: needs a bench |
 
@@ -33,6 +33,11 @@ compiled, the PTT branch of `OpMode_DMR::update()` is not compiled either, and
 PTT in DMR mode does nothing. Without it the image is
 `c62/full-aprs` plus 32 bytes (the vocoder hook).
 
+`CONFIG_DMR_TX_ENC` (default **y**, depends on `DMR_TX`) builds the encoder and
+overrides `dmrVocoder_encode()`, which is what makes PTT transmit. With it off
+the chain is built but the encoder is not: PTT refuses to key, which is the
+configuration a build that takes its frames from the DSP wants.
+
 Key 5 cycles FM → M17 → TETRA → DMR, as before.
 
 ## Where the code lives
@@ -46,13 +51,25 @@ openrtx/src/protocols/DMR/
     DmrTx.c        link control, CACH, burst build, polyphase RRC, ramps
     DmrTxTables.c  RRC polyphase and PA ramp tables, GENERATED
     DmrVocoder.c   weak default of the hook
+    DmrVocoderEncoder.c  the override: dmrVocoder_encode() -> dmr_encoder_encode()
     DmrFec.c       + the encode halves of BPTC and RS(12,9)
 openrtx/src/rtx/OpMode_DMR.cpp        the state machine
+lib/dmr_encoder/                      the AMBE+2 encoder (C, see below)
+    dmr_encoder.{c,h}     firmware-facing contract, one static instance
+    dmr_enc_core.c        fixed-point analysis (pitch, FFT, V/UV, spectrum)
+    dmr_enc_frame.c       quantiser, predictor model, Golay, frame packing
+    dmr_enc_basic.h       the ETSI fixed-point operators, static inline
+    dmr_enc_int.h         parameters and the two halves' interface
+    dmr_enc_ambe_tables.{c,h}  quantiser tables from mbelib, GENERATED
+    dmr_enc_trig.{c,h}    cosines and logarithms, GENERATED
 work/dmr-tx/                          host tools, harnesses and measurements
+work/dmr-tx/enc-c/                    encoder build, bit-exactness and cost
 ```
 
-`scripts/gen_dmr_tx_rrc.py` in `work/dmr-tx` regenerates `DmrTxTables.c`;
-nothing in the firmware generates tables at run time.
+`scripts/gen_dmr_tx_rrc.py` in `work/dmr-tx` regenerates `DmrTxTables.c`; the
+encoder's tables come from `work/dmr-tx/enc-c/gen_ambe_tables.py` and
+`gen_trig.c` (which prints the reference's own expressions as hex floats).
+Nothing in the firmware generates tables at run time.
 
 ## The chain, bit by bit
 
@@ -132,6 +149,11 @@ RX ─────────────────────────�
   keyed: the BK4819 is half duplex and both directions share the audio path.
 * One empty slot of lead lets the PA settle before the LC header, one empty slot
   of tail carries the last pulse and ramps the PA down inside the guard.
+* The lead slot only **ends** when the PTT is down *and* the vocoder queue has a
+  frame: the LC header announces a call and the first voice burst follows it,
+  so keying the header with an empty queue would put a header and then silence
+  on the air. The cost is one slot of extra lead at most, since the encoder has
+  already produced the first frame when the lead slot runs.
 * **One burst every other slot.** A call occupies one of the two timeslots of
   the carrier, and a voice burst carries 60 ms of speech — exactly what the
   vocoder produces in the 60 ms between two bursts of the same timeslot. The
@@ -146,40 +168,94 @@ RX ─────────────────────────�
 * The slot cadence is the blocking write to the 48 kHz output stream: 1440
   samples are exactly 30 ms and the stream is double buffered.
 
-## The encoder the transmitter needs
+## The encoder: lib/dmr_encoder
 
 `DmrVocoder.h` is the contract: 160 samples of 8 kHz PCM in, one 72-bit AMBE+2
 frame out in the canonical A|B|C order. `dmrVocoder_encode()` is weak and
 aliased to a function that returns −1; `dmrVocoder_available()` compares the
 addresses to tell "nobody overrode me" from "an encoder is linked in".
+`DmrVocoderEncoder.c` overrides it with `dmr_encoder_encode()` when
+`CONFIG_DMR_TX_ENC` is set.
 
-The only complete encoder available (OpenDMR's, derived from OP25) does not fit:
+### What was wrong with the reference
 
-| build | instructions per 20 ms frame | share of the M33 (300 MHz, CPI 1.2–1.6) |
+The only complete encoder available is OpenDMR's (OP25's MBE encoder on top of
+Pavel Yazev's fixed-point IMBE analysis). Built as it comes, it does not fit:
+
+| build | instructions per 20 ms frame | share of the M33 (300 MHz, CPI 1.2–1.6) | flash |
+|---|---|---|---|
+| `-O2` | 4.19 M | 84 – 112 % | — |
+| `-O3 -flto` | 2.08 M | 42 – 55 % | 253 KiB |
+
+That measurement also said where the time went: **51 % of it was calls to the
+ETSI basic operators of `basicop2.cc`**, each with its own stack frame and its
+own copy of the sticky `Overflow`/`Carry` flags, and only 108 k real
+multiplications per frame. `-flto` was buying part of the inlining back. And
+the Xtensa toolchain available for the HiFi4 is **C only, there is no g++**, so
+the port had to be C anyway.
+
+### The port
+
+`lib/dmr_encoder`, five translation units, target-agnostic C99:
+
+| file | what | lines |
 |---|---|---|
-| `-O2` | 4.19 M | 84 – 112 % |
-| `-O3 -flto` | 2.08 M | 42 – 55 % |
-| flash with `-O3 -flto` | 253 KiB | — |
+| `dmr_encoder.c` | firmware-facing contract (one static instance) | 50 |
+| `dmr_enc_core.c` | fixed-point analysis: pitch, windows, FFT, V/UV, spectrum | 2 300 |
+| `dmr_enc_frame.c` | quantiser, predictor model, Golay, frame packing | 700 |
+| `dmr_enc_ambe_tables.c` | the mbelib quantiser tables (generated) | 700 |
+| `dmr_enc_trig.c` | cosines and logarithms (generated) | 700 |
 
-The second row is what cross-unit inlining of `basicop2.cc` buys; it still
-leaves a radio that receives nothing while it talks, and 253 KiB does not fit
-next to the 430 KiB image. So the encoder has to move, and the weakest
-assumption of this whole port is that it can:
+What changed with respect to the reference, and why each change is safe:
 
-* **HiFi4 DSP.** The natural home: it already runs the stock denoiser, it has
-  SIMD and it is idle during transmit. The Xtensa toolchain that is available
-  is **C only, there is no g++**, so the encoder has to be turned into C first
-  (it is C++ with classes and templates over the top of `basicop2.cc`), or
-  built with a different toolchain. Frames would arrive over LSF/URPC and
-  `dmrVocoder_encode()` would just hand them back.
-* **An optimised M33 port.** Fixed point throughout, the pitch search pruned,
-  the basic ops inlined. The decoder port in `docs/DMR_VOCODER.md` reached
-  113 k instructions per frame from 751 k by doing exactly that, a factor of
-  6.6; the encoder would have to reach ~150 k to be comfortable, a factor of
-  28. It is unlikely in one step and plausible in two (fixed point first,
-  prune second).
-* **Nothing.** The weak default, which is where this branch is: TX compiles,
-  links, is tested on the host and refuses to key.
+* **The whole analysis is one translation unit and the ETSI operators are
+  `static inline`** (`dmr_enc_basic.h`) instead of 36 external functions. This
+  is what `-flto` was doing, without needing `-flto`: 4.19 M → 2.34 M
+  instructions before touching the algorithm.
+* **The autocorrelation is a 64-bit accumulator** instead of a chain of four
+  saturating operators per sample. It is bit-exact: every term is a square, so
+  the reference's saturating `L_add` can only clamp at `MAX_32` and stay there
+  (the comparison at the end reproduces it); `L_mult` saturates only on
+  (−32768)·(−32768) and the signal is the input times a positive Q15 window, so
+  it cannot reach −32768; and for a positive value `(2p)>>s == p>>(s-1)`, which
+  removes the doubling. 2.34 M → **1.43 M**. The pitch search is three
+  `e_p()` calls per frame over ~130 lags each: that loop is 36 % of the frame.
+* **No C++**: class members became file scope again (they were file `static`
+  before the class existed), `<cstdio>`/`<cstdlib>`/`<cmath>`/WMOPS/`printf`/
+  `assert` are gone, `div_s()` clamps instead of calling `abort()`.
+* **The Golay codewords are computed** (`golay_code23()`, twelve XOR steps)
+  instead of looked up in `ENCODING_TABLE_23127/24128`: 32 KiB of flash fewer,
+  checked against both tables for all 4096 codewords.
+* **The cosines and the per-`b0` logarithms are const tables**
+  (`dmr_enc_trig.c`) generated by evaluating the reference's own expressions
+  with the host libm and printing them as hex floats. mbelib builds its cosine
+  cache at run time in a thread-local struct; here it is flash. The prediction
+  model (`mbe_decodeAmbe2450Parms`) is ported without the amplitudes, the
+  phases and the synthesis state, which the encoder never reads.
+* **The only libm call left is `log2f`**, once per harmonic per frame. Newlib's
+  `log2f` does not return the same bits as glibc's for every input (their
+  fingerprints differ), which is why the frame comparison is also run *on the
+  target* and not only on the host.
+* `-ffp-contract=off` is set for the library: the quantiser is single precision
+  and the reference was measured without FMAs.
+
+### Verified
+
+* **Bit-exact against the reference, 1000 frames**, on the host
+  (`work/dmr-tx/enc-c/enc_cmp`, the same PCM through `libopendmr` and through
+  `lib/dmr_encoder`): 0 frames differ, 0 bit errors. The corpus is 8 kHz speech
+  (codec2's `hts1a`, Spanish TTS, Mandarin speech), a 1 kHz tone, digital
+  silence and white noise, which exercises the silence path, the unvoiced path
+  and the pitch-quantiser clamp.
+* **The same 1000 frames on the target** (`enc_arm_cmp`, QEMU mps2-an505,
+  arm-none-eabi-gcc `-O2 -ffp-contract=off`, newlib): 0 frames differ, 0 bit
+  errors. This is the test that covers newlib's `log2f`.
+* **End to end through the transmit chain and the receiver of this same
+  firmware** (`dmr_loop` with `-DENCODER_C`): 150/150 voice frames, 52/52 CACH,
+  and the decoded PCM is **byte-identical** to the loop that used the reference
+  encoder, in both the MS and the BS layouts. SNR and PESQ against the previous
+  loop are therefore ∞ / identical by construction: the frames are the same
+  frames.
 
 ## Deviation calibration (pending)
 
@@ -226,20 +302,63 @@ Measured on QEMU `mps2-an505` (Cortex M33, no DSP extension) with
 | voice burst, `-O3` | 99 813 | 0.40 – 0.53 ms |
 | voice burst, `-Os` | 116 600 | 0.47 – 0.62 ms |
 
-So the transmit chain is **1.6 – 2.1 % of one core**, an order of magnitude
-cheaper than the encoder it is waiting for, and the empty-slot path (half of
-what a handheld transmits) is 70 times cheaper than a voice slot because it
-does not run the interpolator at all.
+So the transmit chain is **1.6 – 2.1 % of one core**, and the empty-slot path
+(half of what a handheld transmits) is 70 times cheaper than a voice slot
+because it does not run the interpolator at all.
+
+The encoder, same harness (`work/dmr-tx/enc-c/measure.sh`, Cortex-M33, 100
+frames of speech, frame marker between frames):
+
+| build | instructions per 20 ms frame | time at 300 MHz, CPI 1.2 – 1.6 | text of the library |
+|---|---|---|---|
+| reference `-O2` | 4.19 M | 16.8 – 22.4 ms (84 – 112 %) | 253 KiB |
+| reference `-O3 -flto` | 2.08 M | 8.3 – 11.1 ms (42 – 55 %) | 253 KiB |
+| **C port `-O2`** | **1 427 272** | **5.7 – 7.6 ms (28 – 38 %)** | **54 808 B** |
+| C port `-O3` | 1 352 600 | 5.4 – 7.2 ms (27 – 36 %) | 68 450 B |
+| C port `-O3 -flto` | 1 442 043 | 5.8 – 7.7 ms (29 – 38 %) | 68 450 B |
+| C port `-Os` | 2 206 867 | 8.8 – 11.8 ms (44 – 59 %) | 45 252 B |
+
+`-O3` gains 5 % of the instructions and costs 13 KiB of flash (it unrolls the
+pitch and DCT loops); `-flto` gains nothing now that the analysis is one
+translation unit, which is the point of the port. The library is built `-O2`
+for that reason.
+
+So: **1.43 M instructions per frame, 2.9× cheaper than the reference at the same
+-O2 and 1.5× cheaper than the reference's best `-O3 -flto`**. It fits: a frame
+is 5.7 – 7.6 ms of a 20 ms budget on the M33, 28 – 38 % of the core while the
+radio also receives (the DMR receiver is 113 k instructions per frame, 0.6 ms).
+It is not free — half of one core while talking — but it is a mode and not a
+prototype.
+
+Where the remaining 1.43 M goes (per-frame profile, `-O2`, attributed with
+addr2line): 36 % the autocorrelation of the pitch search, 11 % the rest of
+`pitch_est`, 5 % `div_s` in the 203-candidate normalised-error loop, ~15 %
+`cos_fxp` inside the DCTs/IDCTs of the spectrum and the V/UV detector, 3 %
+`pitch_ref`, 2 % `memmove` of the 621-sample pitch buffers, 1.4 % the quantiser
+(`enc_ambe`).
+
+### And the HiFi4
+
+The sources are target-agnostic C99 and **compile for the `venus_hifi4` core**
+with the self-built GNU Xtensa overlay of the `xtensa-hifi4-csk6` skill
+(`xtensa-elf-gcc -O2`, vendor newlib headers, no SIMD, no intrinsics): 59 447 B
+of code and 5 780 B of state. They were not measured there: with the encoder
+inside the M33 budget the DSP is not needed, and the only instruction counter
+available for that core is a QEMU build that would have to be taught the
+encoder's harness. The estimate is in the same ballpark as the M33 (same C, no
+SIMD used), i.e. what the HiFi4 would buy is releasing 30 % of the M33, not
+making the encoder possible.
 
 ## Memory
 
-Zephyr build of `c62/dmr-tx`, `-DCONFIG_C62_DMR_RX=y -DCONFIG_C62_APRS=y`:
+Zephyr build of this branch, `-DCONFIG_C62_DMR_RX=y -DCONFIG_C62_APRS=y`:
 
 | build | FLASH | RAM |
 |---|---|---|
 | `c62/full-aprs` | 488 056 B (46.54 %) | 182 912 B (69.78 %) |
 | + DMR mode, `CONFIG_DMR_TX` **off** | 488 088 B (46.55 %) | 182 920 B (69.78 %) |
-| + `CONFIG_DMR_TX=y` | **491 236 B (46.85 %)** | **186 440 B (71.12 %)** |
+| + `CONFIG_DMR_TX=y`, `CONFIG_DMR_TX_ENC=n` | 491 236 B (46.85 %) | 186 440 B (71.12 %) |
+| + `CONFIG_DMR_TX=y`, `CONFIG_DMR_TX_ENC=y` | **546 892 B (52.16 %)** | **192 224 B (73.33 %)** |
 | plain build, no DMR, after the patch | 439 564 B (41.92 %) | 161 384 B (61.56 %) |
 | plain build, no DMR, `c62/full-aprs` | 439 532 B (41.92 %) | 161 368 B (61.56 %) |
 
@@ -250,12 +369,24 @@ receive mode. The RAM is the slot buffer handed to the output stream
 The flash is the modulator and its tables (180 B of RRC, 96 B of ramp) and the
 encode halves of the FEC.
 
+The encoder adds **+55 656 B of flash and +5 784 B of RAM** over that: 54 808 B
+of code and read-only tables (13 268 B the mbelib quantiser tables, 16 160 B the
+cosines and logarithms, the rest the analysis and its windows/quantisers) and
+5 770 B of state on the RAM side (the two 621-sample pitch buffers, the FFT
+scratch, the predictor history and one frame of parameters). Against the
+reference's 253 KiB, the 32 KiB of Golay tables that are now twelve XOR steps
+and the C++ the linker no longer has to carry explain the difference.
+
 `CONFIG_DMR_TX=n` — the default — leaves the image at the receive-mode size
 plus the 32 bytes of the vocoder hook. Without the DMR mode at all the build
 grows by **32 B of flash and 16 B of RAM**: the four `rtxStatus_t` fields
 (`dmrColourCode`, `dmrTimeslot`, `dmrSourceId`, `dmrTalkgroup`) and their
 initialisation, which the settings and the mode share, and which no build can
-avoid. No DMR code, no TX chain, no slots buffer.
+avoid. No DMR code, no TX chain, no slots buffer, no encoder.
+
+The 37 warnings of the DMR build are the same set as the base image: the
+encoder compiles clean (`-Wall -Wextra`) and none of the new files appears in
+the warning list.
 
 ## Verification
 
@@ -285,6 +416,39 @@ the repeater one (the receiver searches all four, so the loopback passes either
 way — a real repeater only answers the MS word). 150 voice frames,
 52 CACH decodes, no bit error anywhere: the transmit chain and the receive
 chain of this tree agree bit for bit.
+
+The same loop with **the C encoder in place of the reference**
+(`make -f` `work/dmr-tx/Makefile` with `-DENCODER_C`, see
+`enc-c/`): the statistics are identical and the two 16-bit WAV files it writes
+(`out/loop_bs.wav`, `out/loop_ms.wav`) are **byte-identical** to the ones the
+reference encoder produces. Bit-exact AMBE frames in, bit-identical PCM out.
+
+### The encoder against the reference
+
+`work/dmr-tx/enc-c/enc_cmp` encodes the same 1000 frames (20 s: speech, a tone,
+silence and noise) with `libopendmr` and with `lib/dmr_encoder` and compares
+the 72 bits frame by frame:
+
+```
+$ ./enc_cmp --ref speech1000.pcm r.ref
+$ ./enc_cmp --c   speech1000.pcm r.c
+$ ./enc_cmp --cmp r.ref r.c
+frames 1000, differing 0, bit errors 0
+```
+
+and the same test **on the Cortex-M33** (`enc_arm_cmp`, newlib, VFP, `-O2`,
+`-ffp-contract=off`), which is the one that also covers the target's `log2f`:
+
+```
+arm: frames 1000, differing 0, bit errors 0
+```
+
+The three bugs that the port had and the comparison found, in case anybody
+touches it again: the gain quantiser subtracts a constant 1.0 (the reference's
+`d_gain_adjust`), the B block is `(golay23 << 1) ^ prng` and not `golay23 ^
+prng`, and mbelib's PRBA cosine table is indexed 1-based while the encoder's DCT
+one is 0-based. All three change the bits and none of them changes the sound,
+which is why only a frame comparison catches them.
 
 ### BER against noise
 
@@ -377,8 +541,6 @@ Two open items come out of the same measurements and belong to the bench:
 
 ## Limitations
 
-* **No encoder**, so no transmission. Everything above the encoder is done and
-  tested; the PTT does nothing until `dmrVocoder_encode()` is overridden.
 * **No deviation calibration.** `REG_40 = 0x476` is arithmetic from the M17
   value, and the resulting peak deviation (3306 Hz) exceeds the 2.5 kHz the
   standard allows.
@@ -386,6 +548,10 @@ Two open items come out of the same measurements and belong to the bench:
 * **TX only, no talkaround.** The mode transmits in the selected timeslot and
   does not listen to the other one: a handheld cannot hear itself or another
   station while it is keyed (the BK4819 is half duplex anyway).
+* **The encoder is half of the core while it runs.** 1.43 M instructions per
+  20 ms frame is 28 – 38 % of the M33; it fits, and the receiver keeps up, but
+  it is the largest single load in the firmware. Moving it to the HiFi4 is now
+  an optimisation, not a prerequisite.
 * **No call setup beyond "group call to a talkgroup"**: FLCO 0x00 only, no
   unit-to-unit (0x03) selection in the UI, no late entry, no emergency.
 * **No hang time.** The terminator goes out on the slot after the PTT opens;
@@ -400,19 +566,16 @@ Two open items come out of the same measurements and belong to the bench:
 
 1. **Bench: deviation and spectrum.** Calibrate `REG_40` against 1944 Hz, look
    at the skirt with the analyser, decide whether the RRC span and/or the
-   BK4819 TX filter has to change. This decides whether the modulator is
-   finished, and it needs no encoder: `work/dmr-tx/build/dmr_tx` writes the
-   exact baseband the firmware writes, and it can be played into the radio's
-   audio path.
-2. **Encoder, fixed point, on the M33.** Port `basicop2.cc` and the pitch
-   search to C with int32 arithmetic, measure with the same QEMU harness, aim
-   for 150 k instructions per frame. Until it is under ~250 k, transmit is a
-   prototype, not a mode.
-3. **Or the encoder in the HiFi4.** Turn the C++ into C, build it for Xtensa
-   (the toolchain is C only today), ship it as a DSP service next to the
-   denoiser, and make `dmrVocoder_encode()` the LSF call.
-4. **UI and settings**: DMR screen with CC/TG/ID/timeslot, call state, and hang
-   time on the PTT.
-5. **On-air test** against a repeater, and the receive-side RS(12,9) decode
+   BK4819 TX filter has to change. `work/dmr-tx/build/dmr_tx` writes the exact
+   baseband the firmware writes and can be played into the radio's audio path.
+2. **Bench: the encoder in the loop.** With the encoder linked, a PTT in DMR
+   mode now really transmits. The deviation measurement is the same one, done
+   with speech instead of a test pattern.
+3. **On-air test** against a repeater, and the receive-side RS(12,9) decode
    that `docs/DMR_RX.md` still lists as missing — with the encoder in, the two
    halves can be tested against each other and against real traffic.
+4. **UI and settings**: DMR screen with CC/TG/ID/timeslot, call state, and hang
+   time on the PTT.
+5. **Optional: the encoder in the HiFi4**, to give the M33 back its 30 % while
+   transmitting. The C sources already compile for `venus_hifi4`; what is
+   missing is the LSF service and the packaging, not the codec.

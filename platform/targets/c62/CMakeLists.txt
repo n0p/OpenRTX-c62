@@ -186,6 +186,31 @@ if(CONFIG_C62_DMR_RX)
       ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrTxTables.c)
     target_compile_definitions(app PRIVATE CONFIG_DMR_TX)
     message(STATUS "C62: DMR transmit chain enabled")
+
+    #
+    # DMR_TX_ENC: the AMBE+2 encoder (lib/dmr_encoder, pure C: the fixed-point
+    # analysis of the IMBE encoder plus the OP25 quantiser and Golay).  It
+    # overrides the weak dmrVocoder_encode() hook, so with this on the PTT of
+    # the DMR mode really transmits.  1.43 M instructions per 20 ms frame,
+    # 63 KiB of flash, 5.5 KiB of .bss; see docs/DMR_TX.md.
+    #
+    if(CONFIG_DMR_TX_ENC)
+      add_subdirectory(${OPENRTX_ROOT}/lib/dmr_encoder
+                       ${CMAKE_BINARY_DIR}/dmr_encoder)
+      target_compile_options(dmr_encoder PRIVATE
+        $<TARGET_PROPERTY:zephyr_interface,INTERFACE_COMPILE_OPTIONS>)
+      target_compile_definitions(dmr_encoder PRIVATE
+        $<TARGET_PROPERTY:zephyr_interface,INTERFACE_COMPILE_DEFINITIONS>)
+      target_include_directories(dmr_encoder PRIVATE
+        $<TARGET_PROPERTY:zephyr_interface,INTERFACE_INCLUDE_DIRECTORIES>)
+      target_include_directories(dmr_encoder SYSTEM PRIVATE
+        $<TARGET_PROPERTY:zephyr_interface,INTERFACE_SYSTEM_INCLUDE_DIRECTORIES>)
+      target_link_libraries(app PRIVATE dmr_encoder)
+      target_sources(app PRIVATE
+        ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrVocoderEncoder.c)
+      target_compile_definitions(app PRIVATE CONFIG_DMR_TX_ENC)
+      message(STATUS "C62: DMR AMBE+2 encoder enabled (transmit)")
+    endif()
   endif()
 endif()
 

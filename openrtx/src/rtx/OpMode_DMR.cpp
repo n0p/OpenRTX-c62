@@ -261,7 +261,15 @@ bool OpMode_DMR::txSlot(const rtxStatus_t *status)
     switch (txStage) {
         case TX_LEAD:
             kind = DMR_TXB_EMPTY;
-            if (platform_getPttStatus())
+            /*
+             * The PA is up but the call does not start until there is voice to
+             * send: the LC header announces a call and the first voice burst
+             * follows it one slot later, so keying the header with an empty
+             * queue would put a header and then silence on the air.  The
+             * encoder has already produced the samples by the time the
+             * microphone block is read, so this costs one slot at most.
+             */
+            if (platform_getPttStatus() && (frameCount > 0))
                 txStage = TX_LC_HEADER;
             break;
 

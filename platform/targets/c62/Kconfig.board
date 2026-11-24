@@ -99,10 +99,25 @@ config DMR_TX
 	  Transmit chain of the DMR mode: voice LC header, voice bursts,
 	  terminator, CACH, BPTC/RS, 4FSK with a polyphase RRC and the PA
 	  envelope. 117 k instructions per 30 ms timeslot, 4.5 k more for an
-	  LC burst. It is only useful with an AMBE+2 encoder
-	  (dmrVocoder_encode()), see docs/DMR_TX.md. OFF by default: without
-	  an encoder PTT refuses to key, so the option only costs flash.
+	  LC burst. It needs an AMBE+2 encoder, which DMR_TX_ENC below
+	  provides; without one PTT refuses to key. OFF by default until the
+	  deviation and the adjacent channel power have been measured on the
+	  bench (docs/DMR_TX.md).
 	  Enable it with west build -b c62 ... -- -DCONFIG_C62_DMR_RX=y -DCONFIG_DMR_TX=y
+
+config DMR_TX_ENC
+	bool "DMR transmitter: AMBE+2 encoder (lib/dmr_encoder)"
+	depends on DMR_TX
+	default y
+	help
+	  Build the AMBE+2 encoder that feeds the DMR transmitter: 160 samples
+	  of 8 kHz PCM in, one 72-bit frame out, 1.43 M instructions per 20 ms
+	  frame (24-32 % of the M33 at 300 MHz) and 63 KiB of flash, in C.
+	  Bit-exact with the OpenDMR reference encoder.
+
+	  Turn it off to keep the transmit chain without an encoder: PTT then
+	  refuses to key, which is what a build that gets its frames from the
+	  HiFi4 DSP wants (docs/DMR_TX.md, phase 3).
 
 endmenu
 
