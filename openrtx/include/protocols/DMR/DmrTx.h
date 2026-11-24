@@ -94,7 +94,8 @@ enum dmrTxBurst {
     DMR_TXB_IDLE,      ///< Idle data burst (BPTC payload, DT=idle)
     DMR_TXB_VOICE_LC,  ///< Voice LC header data burst (RS + BPTC)
     DMR_TXB_VOICE,     ///< Voice burst: three AMBE+2 frames
-    DMR_TXB_TERMINATOR ///< Terminator with LC data burst
+    DMR_TXB_TERMINATOR,///< Terminator with LC data burst
+    DMR_TXB_DATA       ///< Data burst of our own, see dmrTx_dataSlot()
 };
 
 struct dmrTxConfig {
@@ -143,6 +144,36 @@ void dmrTx_setCall(struct dmrTxState *state, uint8_t colourCode,
 size_t dmrTx_slot(struct dmrTxState *state, enum dmrTxBurst kind,
                   const uint8_t frames[DMR_FRAMES_PER_BURST][DMR_AMBE_BYTES],
                   int16_t out[DMR_TX_SLOT_SAMPLES]);
+
+/**
+ * Render one data burst of our own: a data header or a rate 1/2 block of a
+ * short message.  Same chain and same slot cadence as dmrTx_slot(), which
+ * this does not replace: it takes the 96 information bits and the burst data
+ * type instead of the call frames.
+ *
+ * @param state: transmitter state, configured by dmrTx_init().
+ * @param dataType: burst data type, DMR_DT_DATA_HEADER or DMR_DT_RATE_12.
+ * @param info: 96 information bits, one per element, as dmrSms_packetBurst()
+ *              hands them out.
+ * @param out: DMR_TX_SLOT_SAMPLES samples.
+ * @return DMR_TX_SLOT_SAMPLES.
+ */
+size_t dmrTx_dataSlot(struct dmrTxState *state, uint8_t dataType,
+                      const uint8_t info[96],
+                      int16_t out[DMR_TX_SLOT_SAMPLES]);
+
+/**
+ * Build the 12-byte Terminator Data Link Control of a data call (FLCO
+ * 110000, G/I, FMF set) with its RS(12,9) parity, ready for the BPTC encoder.
+ * Send it in a DMR_DT_TERMINATOR_LC burst after the last data block.
+ *
+ * @param lc: destination, 12 bytes.
+ * @param srcId: source radio ID.
+ * @param dstId: destination unit or talkgroup.
+ * @param group: the call was addressed to a talkgroup.
+ */
+void dmrTx_dataTerminator(uint8_t lc[12], uint32_t srcId, uint32_t dstId,
+                          bool group);
 
 /**
  * Build the 12-byte link control of a group or unit voice call (FLCO 0x00,

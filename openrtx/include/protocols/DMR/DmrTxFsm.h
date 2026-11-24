@@ -84,8 +84,9 @@ struct dmrTxFsm {
 
 /** What the caller has to render, and whether the transmission ends here. */
 struct dmrTxStep {
-    enum dmrTxBurst kind; ///< Burst to render into this slot.
-    bool finished;        ///< This is the last slot: unkey after rendering it.
+    enum dmrTxBurst kind;  ///< Burst to render into this slot.
+    uint8_t data;          ///< DMR_TXB_DATA only: enum dmrTxDataBurst.
+    bool finished;         ///< This is the last slot: unkey after rendering it.
 };
 
 /**
@@ -112,7 +113,7 @@ static inline void dmrTxFsm_init(struct dmrTxFsm *fsm)
 static inline struct dmrTxStep dmrTxFsm_next(struct dmrTxFsm *fsm, bool ptt,
                                              bool haveFrames)
 {
-    struct dmrTxStep step = { DMR_TXB_EMPTY, false };
+    struct dmrTxStep step = { DMR_TXB_EMPTY, 0, false };
 
     if (ptt)
         fsm->slotsAfterPtt = 0;
@@ -186,6 +187,119 @@ static inline struct dmrTxStep dmrTxFsm_next(struct dmrTxFsm *fsm, bool ptt,
             /* Not reachable; treat it as the end rather than as a new call. */
             fsm->stage = DMR_TX_STAGE_TAIL;
             step.finished = true;
+            break;
+    }
+
+    return step;
+}
+
+/* ------------------------------------------------------------ data call --- */
+
+/**
+ * Which burst a DMR_TXB_DATA slot of a short message carries.  The caller maps
+ * this to the packet: the header announces the blocks, each block is one
+ * burst, and the TD_LC closes the call.
+ */
+enum dmrTxDataBurst {
+    DMR_TXDATA_HEADER = 0, ///< Data header of the packet
+    DMR_TXDATA_BLOCK,      ///< Next rate 1/2 block of the packet
+    DMR_TXDATA_LC          ///< Terminator of the data call (TD_LC)
+};
+
+/** Phases of a short message transmission. */
+enum dmrTxDataStage {
+    DMR_TXD_HEADER = 0, ///< Data header, announces the payload
+    DMR_TXD_BLOCKS,     ///< Rate 1/2 blocks, one per burst slot
+    DMR_TXD_END,        ///< TD_LC that closes the data call
+    DMR_TXD_TAIL,       ///< One empty slot, then unkey
+    DMR_TXD_DONE        ///< Nothing left to send
+};
+
+/**
+ * Slots a data call may take before it is cut: a header, up to
+ * DMR_SMS_BLOCKS_MAX (30) blocks, the TD_LC and the tail slot are 33 bursts
+ * and as many empty slots between them, 66 slots.  Two more are the margin.
+ */
+#define DMR_TX_DATA_MAX_SLOTS 68
+
+/** State of one short message transmission. */
+struct dmrTxData {
+    enum dmrTxDataStage stage; ///< Current phase.
+    unsigned blocks;           ///< Blocks still to send.
+    unsigned slots;            ///< Slots rendered, the safety counter.
+    bool burstSlot;            ///< This slot carries a burst (TDMA phase).
+};
+
+/**
+ * Reset the data machine for a new message.
+ *
+ * @param data: state machine to initialise.
+ * @param blocks: rate 1/2 blocks the packet carries, header excluded.
+ */
+static inline void dmrTxData_init(struct dmrTxData *data, unsigned blocks)
+{
+    data->stage = DMR_TXD_HEADER;
+    data->blocks = blocks;
+    data->slots = 0;
+    data->burstSlot = true;
+}
+
+/**
+ * Advance the data machine by one timeslot.  There is no PTT here: a short
+ * message runs to its end, one burst per TDMA frame, and the slot counter cuts
+ * it even if a phase were to repeat (the same reason the voice machine has
+ * one: a transmission that cannot end is a keyed PA).
+ *
+ * @param data: state machine.
+ * @return burst to render and whether the transmission ends with this slot.
+ */
+static inline struct dmrTxStep dmrTxData_next(struct dmrTxData *data)
+{
+    struct dmrTxStep step = { DMR_TXB_EMPTY, 0, false };
+
+    if ((data->stage == DMR_TXD_DONE) || (data->slots >= DMR_TX_DATA_MAX_SLOTS)) {
+        data->stage = DMR_TXD_DONE;
+        step.finished = true;
+        return step;
+    }
+    data->slots++;
+
+    /* One burst every other slot: the TDMA phase of the call */
+    if (data->burstSlot == false) {
+        data->burstSlot = true;
+        return step;
+    }
+    data->burstSlot = false;
+
+    switch (data->stage) {
+        case DMR_TXD_HEADER:
+            step.kind = DMR_TXB_DATA;
+            step.data = DMR_TXDATA_HEADER;
+            data->stage = (data->blocks > 0) ? DMR_TXD_BLOCKS : DMR_TXD_END;
+            break;
+
+        case DMR_TXD_BLOCKS:
+            step.kind = DMR_TXB_DATA;
+            step.data = DMR_TXDATA_BLOCK;
+            data->blocks--;
+            if (data->blocks == 0)
+                data->stage = DMR_TXD_END;
+            break;
+
+        case DMR_TXD_END:
+            step.kind = DMR_TXB_DATA;
+            step.data = DMR_TXDATA_LC;
+            data->stage = DMR_TXD_TAIL;
+            break;
+
+        case DMR_TXD_TAIL:
+            step.finished = true;
+            data->stage = DMR_TXD_DONE;
+            break;
+
+        default:
+            step.finished = true;
+            data->stage = DMR_TXD_DONE;
             break;
     }
 

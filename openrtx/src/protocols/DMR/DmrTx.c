@@ -170,6 +170,96 @@ static enum dmrSync syncWord(const struct dmrTxConfig *cfg, bool voice)
     return voice ? DMR_SYNC_MS_VOICE : DMR_SYNC_MS_DATA;
 }
 
+/** Render a slot worth of symbols, defined after dmrTx_dataSlot(). */
+static size_t renderSlot(struct dmrTxState *state, const int8_t sym[144],
+                         bool active, int16_t out[DMR_TX_SLOT_SAMPLES]);
+
+void dmrTx_dataTerminator(uint8_t lc[12], uint32_t srcId, uint32_t dstId,
+                          bool group)
+{
+    uint8_t bits[72];
+
+    /*
+     * Terminator Data Link Control (TS 102 361-3 table 7.1): PF, reserved,
+     * FLCO 110000, FID 0, destination, source, then G/I, A, FMF, reserved,
+     * S and N(S) 0.  It is what closes a data call, so the receivers in the
+     * talkgroup stop waiting for more blocks.
+     */
+    putBits(bits, 1, 0);         /* PF */
+    putBits(bits + 1, 1, 0);     /* reserved */
+    putBits(bits + 2, 6, 0x30);  /* FLCO: terminator with LC */
+    putBits(bits + 8, 8, 0x00);  /* FID */
+    putBits(bits + 16, 24, dstId);
+    putBits(bits + 40, 24, srcId);
+    putBits(bits + 64, 1, group ? 1 : 0); /* G/I */
+    putBits(bits + 65, 1, 0);            /* A: no response requested */
+    putBits(bits + 66, 1, 1);            /* FMF: last (and only) fragment */
+    putBits(bits + 67, 1, 0);            /* reserved */
+    putBits(bits + 68, 1, 0);            /* S: no resynchronisation */
+    putBits(bits + 69, 3, 0);            /* N(S) */
+
+    memset(lc, 0, 12);
+    for (int i = 0; i < 72; i++)
+        lc[i >> 3] |= (uint8_t)(bits[i] << (7 - (i & 7)));
+
+    dmr_fec_rs129_encode(lc, (uint8_t)DMR_DT_TERMINATOR_LC);
+}
+
+/**
+ * Fill the 264 bits of a data burst: the slot type and sync around the
+ * BPTC(196,96) codeword of 96 information bits.
+ *
+ * @param burst: destination, already zeroed.
+ * @param cfg: colour code, layout and call of the transmission.
+ * @param dataType: burst data type, TS 102 361-1 table 6.6.
+ * @param data: 96 information bits, one per element.
+ */
+static void dataBurstBits(struct burstBits *burst, const struct dmrTxConfig *cfg,
+                          uint8_t dataType, const uint8_t data[96])
+{
+    uint8_t enc[DMR_INFO_BITS];
+    int8_t s[DMR_SYNC_SYMBOLS];
+
+    dmr_fec_bptc_encode(data, enc);
+    for (int i = 0; i < 98; i++)
+        burst->b[i] = enc[i];
+    for (int i = 0; i < 98; i++)
+        burst->b[166 + i] = enc[98 + i];
+
+    putSlotType(burst, (uint8_t)((cfg->colourCode << 4) | (dataType & 0x0F)));
+
+    dmr_sync_symbols(syncWord(cfg, false), s);
+    for (int i = 0; i < DMR_SYNC_SYMBOLS; i++)
+        putSymbol(burst->b, 54 + i, s[i]);
+}
+
+/**
+ * The 264 bits of a burst to the 144 symbols of the slot: CACH then burst in
+ * the base station layout, guard then burst in the handheld one.
+ */
+static void layoutSymbols(const struct dmrTxConfig *cfg,
+                          const struct burstBits *burst, bool audio,
+                          int8_t sym[144])
+{
+    int8_t bs[DMR_BURST_SYMBOLS];
+
+    for (int i = 0; i < DMR_BURST_SYMBOLS; i++) {
+        int dibit = ((burst->b[2 * i] & 1u) << 1) | (burst->b[2 * i + 1] & 1u);
+
+        bs[i] = dibitLevel[dibit];
+    }
+
+    if (cfg->layout == DMR_TX_LAYOUT_BS) {
+        uint8_t cach[24];
+
+        buildCach(cach, cfg, audio);
+        cachSymbols(cach, sym);
+        memcpy(sym + DMR_CACH_SYMBOLS, bs, DMR_BURST_SYMBOLS);
+    } else {
+        memcpy(sym + MS_GUARD_SYMBOLS, bs, DMR_BURST_SYMBOLS);
+    }
+}
+
 /**
  * Fill sym[144] with the symbols of the slot, and return true if the slot
  * carries energy.
@@ -182,7 +272,6 @@ slotSymbols(struct dmrTxState *state, enum dmrTxBurst kind,
     const struct dmrTxConfig *cfg = &state->cfg;
     struct burstBits burst;
     bool audio = false;
-    int8_t bs[132];
 
     memset(sym, 0, 144);
     memset(&burst, 0, sizeof(burst));
@@ -228,58 +317,42 @@ slotSymbols(struct dmrTxState *state, enum dmrTxBurst kind,
 
             if (kind == DMR_TXB_IDLE) {
                 memset(data, 0, sizeof(data));
-                /* Idle carries a CSBK: opcode 0x00, "null message" */
-                putSlotType(&burst,
-                            (uint8_t)((cfg->colourCode << 4) | DMR_DT_IDLE));
+                dataBurstBits(&burst, cfg, (uint8_t)DMR_DT_IDLE, data);
             } else {
+                uint8_t dt = (uint8_t)(kind == DMR_TXB_VOICE_LC
+                                           ? DMR_DT_VOICE_LC_HEADER
+                                           : DMR_DT_TERMINATOR_LC);
+
                 dmrTx_linkControl(lc, cfg->sourceId, cfg->destId, cfg->group,
-                                  (uint8_t)(kind == DMR_TXB_VOICE_LC ?
-                                                DMR_DT_VOICE_LC_HEADER :
-                                                DMR_DT_TERMINATOR_LC));
+                                  dt);
                 for (int i = 0; i < 96; i++)
                     data[i] = (uint8_t)((lc[i >> 3] >> (7 - (i & 7))) & 1u);
-                putSlotType(&burst,
-                            (uint8_t)((cfg->colourCode << 4)
-                                      | (uint8_t)(kind == DMR_TXB_VOICE_LC ?
-                                                      DMR_DT_VOICE_LC_HEADER :
-                                                      DMR_DT_TERMINATOR_LC)));
+                dataBurstBits(&burst, cfg, dt, data);
             }
-
-            uint8_t enc[DMR_INFO_BITS];
-
-            dmr_fec_bptc_encode(data, enc);
-            for (int i = 0; i < 98; i++)
-                burst.b[i] = enc[i];
-            for (int i = 0; i < 98; i++)
-                burst.b[166 + i] = enc[98 + i];
-
-            int8_t s[DMR_SYNC_SYMBOLS];
-
-            dmr_sync_symbols(syncWord(cfg, false), s);
-            for (int i = 0; i < DMR_SYNC_SYMBOLS; i++)
-                putSymbol(burst.b, 54 + i, s[i]);
             break;
         }
+
+        case DMR_TXB_DATA:
+            /* only reachable through dmrTx_dataSlot() */
+            return false;
     }
 
-    /* 264 bits to 132 symbols */
-    for (int i = 0; i < DMR_BURST_SYMBOLS; i++) {
-        int dibit = ((burst.b[2 * i] & 1u) << 1) | (burst.b[2 * i + 1] & 1u);
-
-        bs[i] = dibitLevel[dibit];
-    }
-
-    if (cfg->layout == DMR_TX_LAYOUT_BS) {
-        uint8_t cach[24];
-
-        buildCach(cach, cfg, audio);
-        cachSymbols(cach, sym);
-        memcpy(sym + DMR_CACH_SYMBOLS, bs, DMR_BURST_SYMBOLS);
-    } else {
-        memcpy(sym + MS_GUARD_SYMBOLS, bs, DMR_BURST_SYMBOLS);
-    }
-
+    layoutSymbols(cfg, &burst, audio, sym);
     return true;
+}
+
+size_t dmrTx_dataSlot(struct dmrTxState *state, uint8_t dataType,
+                      const uint8_t info[96], int16_t out[DMR_TX_SLOT_SAMPLES])
+{
+    struct burstBits burst;
+    int8_t sym[144];
+
+    memset(&burst, 0, sizeof(burst));
+    memset(sym, 0, sizeof(sym));
+
+    dataBurstBits(&burst, &state->cfg, dataType, info);
+    layoutSymbols(&state->cfg, &burst, false, sym);
+    return renderSlot(state, sym, true, out);
 }
 
 #ifdef DMR_TX_DEBUG_SYMS
@@ -291,14 +364,15 @@ const int8_t *dmrTx_debugSymbols(void)
 }
 #endif
 
-size_t dmrTx_slot(struct dmrTxState *state, enum dmrTxBurst kind,
-                  const uint8_t frames[DMR_FRAMES_PER_BURST][DMR_AMBE_BYTES],
-                  int16_t out[DMR_TX_SLOT_SAMPLES])
+/**
+ * Render the symbols of a slot into the baseband, carrying the pulse tail
+ * from the previous slot.  Returns 0 when the slot has no energy.
+ */
+static size_t renderSlot(struct dmrTxState *state, const int8_t sym[144],
+                         bool active, int16_t out[DMR_TX_SLOT_SAMPLES])
 {
-    int8_t sym[144];
-    bool active = slotSymbols(state, kind, frames, sym);
 #ifdef DMR_TX_DEBUG_SYMS
-    memcpy(dbgSyms, sym, sizeof(sym));
+    memcpy(dbgSyms, sym, sizeof(dbgSyms));
 #endif
 
     if (!active) {
@@ -404,4 +478,14 @@ size_t dmrTx_slot(struct dmrTxState *state, enum dmrTxBurst kind,
     }
 
     return active ? DMR_TX_SLOT_SAMPLES : 0;
+}
+
+size_t dmrTx_slot(struct dmrTxState *state, enum dmrTxBurst kind,
+                  const uint8_t frames[DMR_FRAMES_PER_BURST][DMR_AMBE_BYTES],
+                  int16_t out[DMR_TX_SLOT_SAMPLES])
+{
+    int8_t sym[144];
+    bool active = slotSymbols(state, kind, frames, sym);
+
+    return renderSlot(state, sym, active, out);
 }

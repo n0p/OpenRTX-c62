@@ -15,6 +15,10 @@
 #include "protocols/DMR/DmrStatus.h"
 #include "rtx/OpMode_DMR.hpp"
 
+#ifdef CONFIG_DMR_SMS
+#include "core/messaging.h"
+#endif
+
 #ifdef CONFIG_DMR_TX
 #include "protocols/DMR/DmrTx.h"
 #include "protocols/DMR/DmrVocoder.h"
@@ -46,17 +50,149 @@ static int16_t micPcm[2 * VOCODER_PCM_SAMPLES];
 #endif
 
 /**
- * Hand a decoded burst to the status block and, for voice, to the playback
- * thread.  Runs in the rtx thread: it must not decode anything here.
+ * Hand a decoded burst to the status block, to the speech queue and, when it
+ * is a data burst of a short message, to the reassembler of its timeslot.
+ * Runs in the rtx thread: it must not decode audio here.
  */
-static void onBurst(const struct dmrBurst *burst, void *user)
+void OpMode_DMR::burstTrampoline(const struct dmrBurst *burst, void *user)
 {
-    (void)user;
-
-    dmrStatus_burst(burst);
-    if (burst->voice && (burst->frameCount > 0))
-        dmrSpeech_push(burst->frame, burst->frameCount);
+    static_cast<OpMode_DMR *>(user)->onBurst(burst);
 }
+
+void OpMode_DMR::onBurst(const struct dmrBurst *burst)
+{
+    dmrStatus_burst(burst);
+
+    if (burst->voice) {
+        if (burst->frameCount > 0)
+            dmrSpeech_push(burst->frame, burst->frameCount);
+        return;
+    }
+
+#ifdef CONFIG_DMR_SMS
+    /*
+     * Short messages ride in data calls: a data header announces how many
+     * rate 1/2 blocks follow.  Voice LC headers, terminators, CSBK, idle and
+     * the trunking UDT are not ours.
+     */
+    if ((!burst->slotTypeValid) || ((burst->dataType != DMR_DT_DATA_HEADER)
+                                    && (burst->dataType != DMR_DT_RATE_12)))
+        return;
+
+    const unsigned slot = burst->timeslot2 ? 1u : 0u;
+    struct dmrSmsRxResult res;
+
+    if (dmrSmsRx_feed(&smsRx[slot], burst->dataType, burst->lc, &res) == 0)
+        return;
+
+    if (res.response) {
+        onResponse(&res.msg);
+        return;
+    }
+    if (res.message)
+        onMessage(&res.msg, res.headerWantsResponse);
+#endif
+}
+
+#ifdef CONFIG_DMR_SMS
+void OpMode_DMR::onMessage(const struct dmrSmsMessage *msg, bool wantsResponse)
+{
+    uint32_t now = (uint32_t)getTick();
+
+    /*
+     * A packet whose CRC-32 does not close is not a message: it is what a
+     * burst lost on the air looks like.  Never show it, never acknowledge it
+     * as delivered; the sender retries.
+     */
+    if (!msg->crcOk) {
+        smsDropped++;
+        return;
+    }
+
+    /*
+     * A TMS acknowledgement (record type 0x1F) confirms a message we sent; it
+     * carries no text and is not shown.
+     */
+    if (msg->tmsAck) {
+        messaging_confirmed(0, msg->src, now);
+        return;
+    }
+
+    if (msg->app == DMR_SMS_APP_RAW) {
+        smsDropped++;
+        return;
+    }
+
+    messaging_received(MSG_TRANSPORT_DMR, msg->src, msg->dst, msg->text,
+                       wantsResponse, now);
+    smsReceived++;
+
+    if (wantsResponse) {
+        /* A delivery response is a C_RHEAD sent back to the peer. */
+        queueResponse(msg->src, selfId, (uint8_t)msg->sap,
+                      DMR_SMS_RESP_ACK_CLASS, DMR_SMS_RESP_TYPE_ACK, 0);
+    }
+
+    /* A TMS sender that asked for its application acknowledgement gets it. */
+    if ((msg->app == DMR_SMS_APP_TMS) && msg->tmsAckReq && (msg->tmsSeq >= 0))
+        queueTmsAck(msg->src, selfId, (uint8_t)msg->tmsSeq);
+}
+
+void OpMode_DMR::onResponse(const struct dmrSmsMessage *msg)
+{
+    /* Class 00 is the ACK: the peer has the message. */
+    if ((msg->crcOk) && (msg->dpf == DMR_SMS_DPF_RESPONSE))
+        messaging_confirmed(0, msg->src, (uint32_t)getTick());
+}
+
+struct OpMode_DMR::dmrAck *OpMode_DMR::freeAck(void)
+{
+    for (unsigned i = 0; i < DMR_SMS_ACK_QUEUE; i++) {
+        if (!ackQueue[i].used) {
+            ackQueue[i].used = true;
+            ackQueue[i].blocks = 0;
+            return &ackQueue[i];
+        }
+    }
+    return NULL; /* no room: the peer asks again */
+}
+
+void OpMode_DMR::queueResponse(uint32_t dst, uint32_t src, uint8_t sap,
+                               uint8_t respClass, uint8_t respType,
+                               uint8_t status)
+{
+    struct dmrAck *ack = freeAck();
+
+    if (ack == NULL)
+        return;
+    dmrSms_buildResponse(ack->header, dst, src, sap, respClass, respType,
+                         status);
+}
+
+void OpMode_DMR::queueTmsAck(uint32_t dst, uint32_t src, uint8_t seq)
+{
+    struct dmrSmsEncode req;
+    struct dmrSmsPacket pkt;
+    struct dmrAck *ack = freeAck();
+
+    if (ack == NULL)
+        return;
+
+    memset(&req, 0, sizeof(req));
+    memset(&pkt, 0, sizeof(pkt));
+    req.app = DMR_SMS_APP_TMS;
+    req.src = src;
+    req.dst = dst;
+    req.tmsSeq = seq;
+    if ((dmrSms_encodeTmsAck(&req, &pkt) != 0) || (pkt.blockCount < 1)) {
+        ack->used = false;
+        return;
+    }
+    memcpy(ack->header, pkt.header, sizeof(ack->header));
+    memcpy(ack->data, pkt.blocks[0], sizeof(ack->data));
+    ack->blocks = 1;
+}
+#endif /* CONFIG_DMR_SMS */
 
 OpMode_DMR::OpMode_DMR()
     : startRx(false)
@@ -64,6 +200,11 @@ OpMode_DMR::OpMode_DMR()
     , settle(SETTLE_SAMPLES)
     , basebandPath(-1)
     , basebandId(-1)
+#ifdef CONFIG_DMR_SMS
+    , selfId(0)
+    , smsReceived(0)
+    , smsDropped(0)
+#endif
 #ifdef CONFIG_DMR_TX
     , txRunning(false)
     , micPath(-1)
@@ -72,11 +213,25 @@ OpMode_DMR::OpMode_DMR()
     , txId(-1)
     , frameHead(0)
     , frameCount(0)
+#ifdef CONFIG_DMR_SMS
+    , txBurst(0)
+    , txMsgId(0)
+    , txIsData(false)
+    , txAcking(false)
+#endif
 #endif
 {
+#ifdef CONFIG_DMR_SMS
+    memset(&smsRx, 0, sizeof(smsRx));
+    memset(&ackQueue, 0, sizeof(ackQueue));
+#endif
 #ifdef CONFIG_DMR_TX
     memset(&tx, 0, sizeof(tx));
     memset(frameQueue, 0, sizeof(frameQueue));
+#ifdef CONFIG_DMR_SMS
+    memset(&txPacket, 0, sizeof(txPacket));
+    dmrTxData_init(&dataFsm, 0);
+#endif
     dmrTxFsm_init(&fsm);
 #endif
 }
@@ -159,11 +314,13 @@ unsigned OpMode_DMR::dequeueFrames(uint8_t frames[DMR_FRAMES_PER_BURST][DMR_AMBE
     return taken;
 }
 
-bool OpMode_DMR::startTx(const rtxStatus_t *status)
+/**
+ * The part both transmitters share: configure the chain for this channel and
+ * open the baseband output stream.  The caller adds its own input, or none for
+ * a short message, and unkeys through stopTx() on any failure.
+ */
+bool OpMode_DMR::startBaseband(const rtxStatus_t *status)
 {
-    if (!dmrVocoder_available())
-        return false;
-
     struct dmrTxConfig cfg;
 
     memset(&cfg, 0, sizeof(cfg));
@@ -177,22 +334,38 @@ bool OpMode_DMR::startTx(const rtxStatus_t *status)
     cfg.innerLevel = DMR_TX_INNER_LEVEL;
     dmrTx_init(&tx, &cfg);
 
-    micPath = audioPath_request(SOURCE_MIC, SINK_MCU, PRIO_TX);
-    if (micPath < 0)
+    txPath = audioPath_request(SOURCE_MCU, SINK_RTX, PRIO_TX);
+    if (txPath < 0)
         return false;
 
-    txPath = audioPath_request(SOURCE_MCU, SINK_RTX, PRIO_TX);
-    if (txPath < 0) {
-        audioPath_release(micPath);
-        micPath = -1;
+    /*
+     * The stream gets the whole double buffer: 2 * DMR_TX_SLOT_SAMPLES is what
+     * BUF_CIRC_DOUBLE expects, and half of it is exactly one 30 ms slot.
+     */
+    txId = audioStream_start(txPath, txSamples, 2 * DMR_TX_SLOT_SAMPLES, 48000,
+                             STREAM_OUTPUT | BUF_CIRC_DOUBLE);
+    return (txId >= 0);
+}
+
+bool OpMode_DMR::startTx(const rtxStatus_t *status)
+{
+    if (!dmrVocoder_available())
+        return false;
+
+    if (!startBaseband(status)) {
+        stopTx();
+        return false;
+    }
+
+    micPath = audioPath_request(SOURCE_MIC, SINK_MCU, PRIO_TX);
+    if (micPath < 0) {
+        stopTx();
         return false;
     }
 
     micId = audioStream_start(micPath, micPcm, 2 * VOCODER_PCM_SAMPLES, 8000,
                               STREAM_INPUT | BUF_CIRC_DOUBLE);
-    txId = audioStream_start(txPath, txSamples, 2 * DMR_TX_SLOT_SAMPLES, 48000,
-                             STREAM_OUTPUT | BUF_CIRC_DOUBLE);
-    if ((micId < 0) || (txId < 0)) {
+    if (micId < 0) {
         stopTx();
         return false;
     }
@@ -200,6 +373,9 @@ bool OpMode_DMR::startTx(const rtxStatus_t *status)
     frameHead = 0;
     frameCount = 0;
     dmrTxFsm_init(&fsm);
+    txIsData = false;
+    txAcking = false;
+    txMsgId = 0;
     txRunning = true;
 
     /* Last: the PA, the ramps of the first slot need it settled */
@@ -215,9 +391,9 @@ bool OpMode_DMR::startTx(const rtxStatus_t *status)
  * audioStream_start() calls above fails, and a state machine that stopped
  * calling this at all: the stages used to decide on their own when to leave,
  * so a release of the PTT in the lead time, before the vocoder had produced
- * the first frame, kept the PA keyed for ever.  The state machine now always
- * ends within DMR_TX_MAX_SLOTS_AFTER_PTT slots of the release, and whatever
- * the caller does, the PA, the BK4819 and the LED go back to receive here.
+ * the first frame, kept the PA keyed for ever.  The stage machines now always
+ * end within a bounded number of slots, and whatever the caller does, the PA,
+ * the BK4819 and the LED go back to receive here.
  */
 void OpMode_DMR::stopTx()
 {
@@ -225,6 +401,12 @@ void OpMode_DMR::stopTx()
 
     txRunning = false;
     dmrTxFsm_init(&fsm);
+#ifdef CONFIG_DMR_SMS
+    dmrTxData_init(&dataFsm, 0);
+    txIsData = false;
+    txAcking = false;
+    txMsgId = 0;
+#endif
 
     if (txId >= 0)
         audioStream_stop(txId);
@@ -256,7 +438,8 @@ bool OpMode_DMR::txSlot(const rtxStatus_t *status)
 
     (void)status;
 
-    /* Keep the queue topped up: the microphone delivers a block every 20 ms and
+    /*
+     * Keep the queue topped up: the microphone delivers a block every 20 ms and
      * the slot clock runs at 30 ms, so a slot has to take one frame or two.
      * Two at most, so the modulator still has time inside the slot; the queue
      * absorbs the jitter and a starved burst carries zero frames instead of
@@ -299,6 +482,162 @@ bool OpMode_DMR::txSlot(const rtxStatus_t *status)
 
     return step.finished;
 }
+
+#ifdef CONFIG_DMR_SMS
+/**
+ * Is a queued short message worth a transmission now?
+ *
+ * The answer is no while the operator is on the air: a voice call owns the
+ * timeslot, and the message waits for it to end -- it stays queued, so it goes
+ * out as soon as the channel is free.
+ */
+bool OpMode_DMR::needDataTx(const rtxStatus_t *status) const
+{
+    if (status->txDisable != 0)
+        return false;
+    if (platform_getPttStatus())
+        return false;
+    if ((status->opStatus != RX) && (status->opStatus != OFF))
+        return false;
+
+    for (unsigned i = 0; i < DMR_SMS_ACK_QUEUE; i++)
+        if (ackQueue[i].used)
+            return true;
+
+    return messaging_pending(MSG_TRANSPORT_DMR) > 0;
+}
+
+/**
+ * Key the transmitter for a short message: no microphone, only the baseband
+ * stream.  The first thing that goes out is a pending response, then the
+ * oldest queued message.
+ */
+bool OpMode_DMR::startDataTx(const rtxStatus_t *status)
+{
+    unsigned blocks = 0;
+
+    if (!startBaseband(status)) {
+        stopTx();
+        return false;
+    }
+
+    micPath = -1;
+    micId = -1;
+    txBurst = 0;
+    txAcking = false;
+    txMsgId = 0;
+
+    struct dmrAck *ack = NULL;
+
+    for (unsigned i = 0; i < DMR_SMS_ACK_QUEUE; i++) {
+        if (ackQueue[i].used) {
+            ack = &ackQueue[i];
+            break;
+        }
+    }
+
+    if (ack != NULL) {
+        /* A response is a header plus, for TMS, one data block. */
+        memset(&txPacket, 0, sizeof(txPacket));
+        memcpy(txPacket.header, ack->header, sizeof(txPacket.header));
+        txPacket.blockCount = ack->blocks;
+        if (ack->blocks > 0)
+            memcpy(txPacket.blocks[0], ack->data, sizeof(ack->data));
+        ack->used = false;
+        txAcking = true;
+        blocks = txPacket.blockCount;
+    } else {
+        int id = messaging_begin(MSG_TRANSPORT_DMR);
+
+        if (id < 0) {
+            stopTx();
+            return false;
+        }
+        const struct message *msg = messaging_find(id);
+
+        if (msg == NULL) {
+            messaging_done(id, false, 0, (uint32_t)getTick());
+            stopTx();
+            return false;
+        }
+
+        struct dmrSmsEncode req;
+
+        memset(&req, 0, sizeof(req));
+        req.app = DMR_SMS_APP_IP_HC; /* the shortest header: more text fits */
+        req.src = status->dmrSourceId;
+        req.dst = msg->dst;
+        req.group = (msg->dst == status->dmrTalkgroup);
+        req.confirmed = (msg->flags & MSG_FLAG_CONFIRM) != 0;
+        req.tmsSeq = 0;
+        req.text = msg->text;
+
+        if (dmrSms_encode(&req, &txPacket) != 0) {
+            messaging_done(id, false, 0, (uint32_t)getTick());
+            stopTx();
+            return false;
+        }
+        txMsgId = id;
+        blocks = txPacket.blockCount;
+    }
+
+    txIsData = true;
+    dmrTxData_init(&dataFsm, blocks);
+    txRunning = true;
+
+    radio_enableTx();
+    return true;
+}
+
+/**
+ * One timeslot of a short message transmission: the header, the data blocks,
+ * the TD_LC that closes the call and a tail slot, one burst per TDMA frame in
+ * the timeslot of the mode -- the same cadence as voice.  The sequence and its
+ * bound live in dmrTxData_next() (DmrTxFsm.h).
+ */
+bool OpMode_DMR::dataTxSlot(int16_t *out)
+{
+    struct dmrTxStep step = dmrTxData_next(&dataFsm);
+
+    if (step.kind == DMR_TXB_DATA) {
+        uint8_t dataType = DMR_DT_RATE_12;
+        uint8_t info[96];
+
+        memset(info, 0, sizeof(info));
+
+        switch (step.data) {
+            case DMR_TXDATA_HEADER:
+                (void)dmrSms_packetBurst(&txPacket, 0, &dataType, info);
+                txBurst = 1;
+                break;
+
+            case DMR_TXDATA_BLOCK:
+                (void)dmrSms_packetBurst(&txPacket, txBurst, &dataType, info);
+                txBurst++;
+                break;
+
+            case DMR_TXDATA_LC:
+            default: {
+                /* The last block went out: close the call with the TD_LC */
+                uint8_t lc[12];
+
+                dmrTx_dataTerminator(lc, tx.cfg.sourceId, txPacket.dst,
+                                     txPacket.group);
+                for (int i = 0; i < 96; i++)
+                    info[i] = (uint8_t)((lc[i >> 3] >> (7 - (i & 7))) & 1u);
+                dataType = DMR_DT_TERMINATOR_LC;
+                break;
+            }
+        }
+
+        dmrTx_dataSlot(&tx, dataType, info, out);
+    } else {
+        dmrTx_slot(&tx, DMR_TXB_EMPTY, NULL, out);
+    }
+
+    return step.finished;
+}
+#endif /* CONFIG_DMR_SMS */
 #endif /* CONFIG_DMR_TX */
 
 void OpMode_DMR::update(rtxStatus_t *const rtx, const bool newCfg)
@@ -318,20 +657,69 @@ void OpMode_DMR::update(rtxStatus_t *const rtx, const bool newCfg)
             return;
 
 #ifdef CONFIG_DMR_TX
-        case TX:
+        case TX: {
             /*
-             * The stage machine sends the terminator and one tail slot after
-             * the PTT is released; when those are done the radio goes off.
+             * A short message owns the transmitter while it lasts: no
+             * microphone, its own stage machine.
              */
-            if (txSlot(rtx)) {
+            bool finished;
+
+#ifdef CONFIG_DMR_SMS
+            if (txIsData) {
+                finished = dataTxSlot(txSamples);
+
+                stream_sample_t *idle = outputStream_getIdleBuffer(txId);
+
+                if (idle != NULL) {
+                    memcpy(idle, txSamples,
+                           DMR_TX_SLOT_SAMPLES * sizeof(stream_sample_t));
+                    outputStream_sync(txId, true);
+                }
+            } else
+#endif
+                finished = txSlot(rtx);
+
+            /*
+             * The stage machines send the terminator and one tail slot after
+             * the last burst; when those are done the radio goes off.
+             */
+            if (finished) {
+#ifdef CONFIG_DMR_SMS
+                const bool wasData = txIsData;
+                const bool ackOnly = txAcking;
+                const int msgId = txMsgId;
+                bool delivered = false;
+
+                if ((msgId != 0) && !ackOnly) {
+                    const struct message *msg = messaging_find(msgId);
+
+                    /*
+                     * A message is "sent" once its last burst is on the air.
+                     * When it asked for a confirmation, the delivery response
+                     * moves it to "delivered" later; if none arrives the
+                     * store's timeout gives up on it.
+                     */
+                    delivered = (msg == NULL)
+                                || ((msg->flags & MSG_FLAG_CONFIRM) == 0);
+                }
+#endif
                 stopTx();
+#ifdef CONFIG_DMR_SMS
+                if (wasData && (msgId != 0) && !ackOnly)
+                    messaging_done(msgId, delivered, 0, (uint32_t)getTick());
+#endif
                 rtx->opStatus = OFF;
                 startRx = true;
             }
             return;
+        }
 #endif
 
         case RX:
+#ifdef CONFIG_DMR_SMS
+            /* The address our answers go out from, whatever the TX options */
+            selfId = rtx->dmrSourceId;
+#endif
             break;
 
         default:
@@ -360,6 +748,24 @@ void OpMode_DMR::update(rtxStatus_t *const rtx, const bool newCfg)
         }
         startRx = true;
     }
+
+#ifdef CONFIG_DMR_SMS
+    /*
+     * No voice on the air: a queued message or a delivery response goes out
+     * now, one burst per frame, and the receiver comes back afterwards.  The
+     * check comes after the PTT branch, so a message never delays the
+     * operator.
+     */
+    if (needDataTx(rtx)) {
+        stopSampling();
+        radio_disableRtx();
+        if (startDataTx(rtx)) {
+            rtx->opStatus = TX;
+            return;
+        }
+        startRx = true;
+    }
+#endif
 #endif
 
     if (startRx) {
@@ -403,7 +809,7 @@ void OpMode_DMR::update(rtxStatus_t *const rtx, const bool newCfg)
         return;
     }
 
-    dmrPhy_push(block.data, block.len, onBurst, NULL);
+    dmrPhy_push(block.data, block.len, burstTrampoline, this);
 
     if (dmrPhy_synced())
         platform_ledOn(GREEN);
