@@ -75,7 +75,6 @@ static struct k_thread thread;
 static K_THREAD_STACK_DEFINE(thread_stack, THREAD_STACK);
 static bool started;
 static uint32_t lastFrameMs;
-static uint32_t framesSeen;
 
 /* Log capture: the hook appends characters here, the transport thread turns
  * complete lines into pc_proto_logPush() calls.  Guarded by irq_lock() because
@@ -531,10 +530,10 @@ static void pcProtoMain(void *a, void *b, void *c)
         }
         if (n > 0) {
             uint32_t frames = pc_proto_rx(&proto, chunk, n);
-            if (frames > 0) {
-                framesSeen += frames;
+            /* Anything valid keeps the link alive; the protocol instance
+             * counts the frames itself. */
+            if (frames > 0)
                 lastFrameMs = k_uptime_get_32();
-            }
             /* A client that stops talking gives the console back. */
             if (pc_proto_linked(&proto) &&
                 (k_uptime_get_32() - lastFrameMs) > PC_PROTO_IDLE_MS) {

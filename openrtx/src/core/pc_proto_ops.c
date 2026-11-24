@@ -197,7 +197,10 @@ int pc_ops_chanAdd(struct pcReq *r)
         r->err = (idx == -EINVAL) ? PC_ERR_INVALID_VALUE : PC_ERR_IO;
         return -1;
     }
-    if (chstore_get((uint16_t)idx, &ch) != 0 || chstore_get((uint16_t)idx, &ch) != 0) {
+    /* Read back what the bank kept, not the copy that was sent. */
+    chstore_channel_t back;
+    if (chstore_get((uint16_t)idx, &back) != 0 ||
+        memcmp(&back, &ch, sizeof(back)) != 0) {
         r->err = PC_ERR_IO;
         return -1;
     }
