@@ -48,6 +48,12 @@ puede cerrarse cuando ya ha decodificado un superframe: durante los primeros
 en el chip es el filtro de FI (3,3 ≈ 2,9 kHz para 6,25; 7,7 = 4,5 kHz, que es
 con el que se tomaron todas las medidas de este documento, para 12,5).
 
+Dos cosas de este apartado **no se han medido en el aire**: el ajuste de 6,25
+kHz (solo recorta el filtro de FI, la selección de canal sigue siendo el filtro
+adaptado del demodulador) y el filtro RAN (que por defecto está en «cualquiera»,
+así que el camino medido es el de siempre). Las dos son de quitar y poner en el
+menú, y el resto del modo no depende de ellas.
+
 ## 1. Air interface
 
 ### Symbol rate, modulation, pulse shape
