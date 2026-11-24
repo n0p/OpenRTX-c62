@@ -501,17 +501,77 @@ static void _ui_drawAirbandInfo(void)
 static void _ui_drawAirbandLine1(void)
 {
     const uint16_t pad = layout.horizontal_pad;
-    char a[32], b[24], c[16];
+    char a[40], b[28], c[20];
     const char *agc = last_state.settings.am_agc ? "AGC" : "AGC-";
 
+#ifdef CONFIG_C62_AIR_TX
+    /*
+     * The transmit state of the band is not a menu away: it is on the main
+     * screen, next to the squelch, for as long as the mode is selected. LOCK
+     * means the first PTT raises the warning; ARM means PTT transmits.
+     */
+    const char *tx = (airband_txState() == AIRBAND_TX_ARMED) ? "TX-ARM" : "TX-LOCK";
+
+    snprintf(a, sizeof(a), "%s %s sql%u", tx, agc,
+             (unsigned)last_state.settings.sqlLevel);
+    snprintf(b, sizeof(b), "%s %s", tx, agc);
+    snprintf(c, sizeof(c), "%s", tx);
+#else
     snprintf(a, sizeof(a), "%s sql%u", agc,
              (unsigned)last_state.settings.sqlLevel);
     snprintf(b, sizeof(b), "%s", agc);
     snprintf(c, sizeof(c), "sql%u", (unsigned)last_state.settings.sqlLevel);
+#endif
 
     const char *texts[] = { a, b, c };
     _ui_printFit(layout.line1_pos, layout.line1_font, pad, texts, 3);
 }
+
+#ifdef CONFIG_C62_AIR_TX
+/**
+ * The warning that stands between the operator and a transmission in the
+ * aeronautical band.
+ *
+ * It covers the main screen while the mode waits for the confirmation: the
+ * first press of the PTT opened it and keyed nothing, a second press keys, and
+ * if nobody presses anything the mode locks itself again when the prompt
+ * expires. The text says what the band is and who answers for a transmission in
+ * it, because that is the whole point of the gate.
+ */
+static void _ui_drawAirbandTxPrompt(void)
+{
+    const color_t warn = { 0xFF, 0x30, 0x30, 0xFF };
+    const uint16_t boxX = 6;
+    const uint16_t boxY = (uint16_t)(layout.line1_pos.y - 26);
+    const uint16_t boxW = (uint16_t)(CONFIG_SCREEN_WIDTH - 2 * boxX);
+    const uint16_t boxH = 84;
+    const point_t box = { boxX, boxY };
+    point_t p = { (uint16_t)(CONFIG_SCREEN_WIDTH / 2), (uint16_t)(boxY + 4) };
+
+    if (airband_txState() != AIRBAND_TX_PROMPT)
+        return;
+
+    gfx_drawRect(box, boxW, boxH, color_black, true);
+    gfx_drawRect(box, boxW, boxH, warn, false);
+
+    gfx_print(p, FONT_SIZE_8PT, TEXT_ALIGN_CENTER, warn, "AIRBAND TX");
+    p.y += 14;
+    gfx_print(p, FONT_SIZE_8PT, TEXT_ALIGN_CENTER, color_white,
+              "118-137 MHz: licensed");
+    p.y += 12;
+    gfx_print(p, FONT_SIZE_8PT, TEXT_ALIGN_CENTER, color_white,
+              "band, you are the one");
+    p.y += 12;
+    gfx_print(p, FONT_SIZE_8PT, TEXT_ALIGN_CENTER, color_white,
+              "in command");
+    p.y += 16;
+    gfx_print(p, FONT_SIZE_8PT, TEXT_ALIGN_CENTER, yellow_fab413,
+              "PTT again = transmit");
+    p.y += 12;
+    gfx_print(p, FONT_SIZE_8PT, TEXT_ALIGN_CENTER, color_white,
+              "wait = locked");
+}
+#endif /* CONFIG_C62_AIR_TX */
 #endif
 
 #ifdef UI_MODE_DPMR
@@ -1189,6 +1249,11 @@ void _ui_drawMainVFO(ui_state_t* ui_state)
     #endif
 
     _ui_drawMainBottom();
+
+    #ifdef CONFIG_C62_AIR_TX
+    if(last_state.channel.mode == OPMODE_AIRBAND)
+        _ui_drawAirbandTxPrompt();
+    #endif
 }
 
 void _ui_drawMainVFOInput(ui_state_t* ui_state)

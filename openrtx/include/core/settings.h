@@ -41,7 +41,7 @@ extern "C" {
  *       renumber and never a re-interpretation: nothing here reorders or reuses
  *       a field.
  */
-#define SETTINGS_VERSION 5
+#define SETTINGS_VERSION 6
 
 typedef enum
 {
@@ -144,6 +144,15 @@ typedef struct
     bool     am_agc;              // Audio AGC of the AM receive path
     bool     am_step;             // Airband raster: false 25 kHz, true 8.33 kHz
     bool     am_snap;             // Snap tuning to the 8.33 kHz raster
+    /*
+     * Modulation depth of the airband transmitter, percent. 30 to 90: below
+     * that an amplitude modulated carrier is hard to hear over the noise of a
+     * receiver with its AGC on, and above it the troughs of the envelope come
+     * too close to zero for any PA to follow without distortion. The modulator
+     * caps it further if the calibrated window of the PA cannot take it, and
+     * am_tx_getDepth() is what the menu shows.
+     */
+    uint8_t  am_depth;            // Airband TX modulation depth, percent
     /*
      * Scan and vigilance (core/scanner.h, docs/SCAN.md).
      *
@@ -260,6 +269,7 @@ static const settings_t default_settings =
     true,                         // AM: audio AGC on
     false,                        // AM: 25 kHz raster
     false,                        // AM: do not snap (25 kHz needs no snapping)
+    60,                           // AM: 60 % modulation depth on transmit
     0,                            // Scan resumes when the carrier drops
     0,                            // No priority channel
     4,                            // Scan step index 4: 12.5 kHz

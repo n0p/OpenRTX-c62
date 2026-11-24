@@ -141,6 +141,53 @@ const char *airband_channelName(freq_t freq, char *buf, size_t cap);
  */
 int32_t airband_nameToFreq(const char *name);
 
+/**
+ * State of the airband transmitter's confirmation, the gate that keeps a
+ * transmitter out of a band whose use needs a licence of its own.
+ *
+ * The band is not an amateur band: transmitting in 118-137 MHz needs an
+ * aeronautical station licence, and a handheld keyed on a tower frequency is
+ * not a victimless mistake.  The firmware therefore refuses to key on the first
+ * press of the PTT, says why on the screen, and arms only when the operator
+ * presses the PTT again with the warning in front of him.  It is a gate against
+ * accidents, not a lock: the operator can arm the mode, and what he does with
+ * it is his responsibility.
+ *
+ * The state is runtime only: nothing here is stored in the settings, so every
+ * power-on starts locked.
+ */
+enum airbandTxState
+{
+    AIRBAND_TX_LOCKED = 0, ///< Every transmission is refused.
+    AIRBAND_TX_PROMPT,     ///< The warning is on screen, waiting for a PTT.
+    AIRBAND_TX_ARMED,      ///< The operator has confirmed, PTT transmits.
+};
+
+/**
+ * Current state of the airband transmit confirmation.
+ *
+ * @return the state.
+ */
+enum airbandTxState airband_txState(void);
+
+/**
+ * Set the state of the airband transmit confirmation. Leaving the armed state
+ * for any other one stops a transmission that is in progress at the next update
+ * of the mode.
+ *
+ * @param state: the new state.
+ */
+void airband_txSetState(enum airbandTxState state);
+
+/**
+ * Whether a frequency may be transmitted on, in this mode: inside the band and
+ * armed. Outside the band the mode has no business keying at all, ARMED or not.
+ *
+ * @param freq: transmit frequency, in Hz.
+ * @return true when the mode may key.
+ */
+bool airband_txAllowed(freq_t freq);
+
 #ifdef __cplusplus
 }
 #endif

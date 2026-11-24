@@ -153,6 +153,8 @@ static int outputSource[CODEC_CHANNELS] = { NO_SOURCE, NO_SOURCE };
 static bool routesDirty;
 /* Radio audio towards the speaker, see csk6codec_setRxProcessor() */
 static csk6codec_rxProcessor rxProcessor;
+/* Microphone audio towards the BK4819, see csk6codec_setTxProcessor() */
+static csk6codec_rxProcessor txProcessor;
 /* Only openDsp(), from csk6codec_init(), and then the worker access vendor
  * objects and actual device state. */
 static AudioRecord record;
@@ -855,13 +857,26 @@ static void playChannel(size_t channel, int16_t *dst, size_t stride,
     /*
      * Level of the transmit baseband as it goes to the BK4819. A keyed radio
      * that transmits nothing and one that transmits silence look identical from
-     * the outside; this tells them apart in one number.
+     * the outside; this tells them apart in one number. It is measured before
+     * the transmit processor, which for the airband mode is what removes the
+     * microphone from this path: the mode still carries a voice, it just does
+     * not go through the frequency modulator.
      */
     if ((channel == SINK_RTX) && (outputSource[channel] != NO_SOURCE)) {
         uint16_t peak = peakMagnitude(dst, stride, count);
         uint16_t held = txPeak - (txPeak >> 4);
         txPeak = (peak > held) ? peak : held;
     }
+
+    /*
+     * The microphone on its way to the transmitter is where a mode that
+     * modulates the PA instead of the VFO takes its audio: it processes the
+     * block and leaves silence for the BK4819, so that the carrier the PA
+     * amplifies is unmodulated.
+     */
+    if ((channel == SINK_RTX) && (outputSource[channel] == SOURCE_MIC)
+        && (txProcessor != NULL) && (done > 0))
+        txProcessor(dst, done, stride);
 }
 
 /**
@@ -1113,6 +1128,11 @@ int32_t csk6codec_getWorkerAge(void)
     if (beat == 0)
         return -1;
     return (int32_t)(k_uptime_get() - beat);
+}
+
+void csk6codec_setTxProcessor(csk6codec_rxProcessor processor)
+{
+    txProcessor = processor;
 }
 
 void csk6codec_setRxProcessor(csk6codec_rxProcessor processor)

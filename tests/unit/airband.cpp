@@ -191,3 +191,29 @@ TEST_CASE("Airband snapping", "[airband]")
         REQUIRE(snapped == airband_channelFreq((uint16_t)(i + 1)));
     }
 }
+
+TEST_CASE("The transmitter is locked until the operator confirms", "[airband]")
+{
+    /*
+     * The band needs a licence of its own, so the gate is checked as one: the
+     * radio starts locked, a frequency of the band is refused in every state
+     * but ARMED, and the state is runtime only - a fresh boot is LOCKED, which
+     * is what airband_txState() returns before anything sets it.
+     */
+    REQUIRE(airband_txState() == AIRBAND_TX_LOCKED);
+    REQUIRE(!airband_txAllowed(118000000));
+
+    airband_txSetState(AIRBAND_TX_PROMPT);
+    REQUIRE(!airband_txAllowed(118000000));
+
+    airband_txSetState(AIRBAND_TX_ARMED);
+    REQUIRE(airband_txAllowed(118000000));
+    REQUIRE(airband_txAllowed(136975000));
+
+    /* Outside the band even an armed mode does not key */
+    REQUIRE(!airband_txAllowed(145500000));
+    REQUIRE(!airband_txAllowed(100000000));
+
+    airband_txSetState(AIRBAND_TX_LOCKED);
+    REQUIRE(!airband_txAllowed(118000000));
+}

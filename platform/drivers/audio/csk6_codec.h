@@ -87,6 +87,23 @@ void csk6codec_setRoute(enum AudioSource source, enum AudioSink sink,
 void csk6codec_setRxProcessor(csk6codec_rxProcessor processor);
 
 /**
+ * Install or remove the processing of the microphone audio on its way to the
+ * radio, in place.
+ *
+ * The callback runs in the audio worker on every playback frame, on the
+ * SOURCE_MIC to SINK_RTX path only, and it receives the block that is about to
+ * be played to the BK4819: a mode that modulates the power amplifier instead of
+ * the frequency modulator takes the voice from here and leaves silence behind,
+ * so that what the chip is asked to transmit is a bare carrier. Like the
+ * receive processor it must be cheap and must not block, and its owner has to
+ * remove it after closing the path.
+ *
+ * @param processor: the callback, NULL to remove it.
+ */
+void csk6codec_setTxProcessor(csk6codec_rxProcessor processor);
+
+
+/**
  * Peak microphone magnitude of the last captured DSP frame.
  *
  * @return peak from 0 to 32768, 0 while the microphone is not captured.

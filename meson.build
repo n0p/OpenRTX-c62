@@ -66,6 +66,7 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/core/settings_record.c',
                'openrtx/src/core/zones.c',
                'openrtx/src/core/agc.c',
+               'openrtx/src/core/am_tx.c',
                'openrtx/src/core/airband.c',
                'openrtx/src/core/wfm.c',
                # NXDN status and FEC: the UI reads the receive status (RAN,
@@ -1390,6 +1391,11 @@ agc_test = executable('agc_test',
                       sources : unit_test_src + ['tests/unit/agc.cpp'],
                       kwargs  : unit_test_opts)
 
+# Modulador AM de la banda aerea: banda de audio, profundidad, portadora y rampas
+am_tx_test = executable('am_tx_test',
+                        sources : unit_test_src + ['tests/unit/am_tx.cpp'],
+                        kwargs  : unit_test_opts)
+
 # FM de radiodifusion: la banda, su rejilla de 100/50 kHz y el nombre de canal
 wfm_test = executable('wfm_test',
                       sources : unit_test_src + ['tests/unit/wfm.cpp'],
@@ -1581,6 +1587,7 @@ test('C62 Calibration Test', c62_calib_test)
 test('Channel Store Test',   channel_store_test)
 test('Zones Test',           zones_test)
 test('AGC Test',             agc_test)
+test('AM TX Test',           am_tx_test)
 test('Airband Test',         airband_test)
 test('Broadcast FM Test',    wfm_test)
 test('Settings Record Test', settings_record_test)

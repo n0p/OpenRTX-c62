@@ -34,6 +34,7 @@ target_sources(app
     ${OPENRTX_ROOT}/platform/drivers/audio/audio_c62.c
     ${OPENRTX_ROOT}/platform/drivers/audio/csk6_codec.c
 
+    ${OPENRTX_ROOT}/platform/targets/c62/air_tx.c
     ${OPENRTX_ROOT}/platform/targets/c62/platform.c
     ${OPENRTX_ROOT}/platform/targets/c62/hwconfig.c
     ${OPENRTX_ROOT}/platform/targets/c62/dsp.c
@@ -92,6 +93,14 @@ option(C62_MODE_STATS "Per-mode RX/TX counters, quality and demodulation cost"
 option(C62_DMR_12K5 "DMR in the BK4819 12.5 kHz channel mode" OFF)
 # C62_TETRA: TETRA TMO downlink receive mode ("T" under key 5), decoded with
 #   libtetra, which west fetches to modules/lib/libtetra.
+# C62_AIR_TX: amplitude modulation of the transmitter in the airband mode, by
+#   driving the PA bias (the APC PWM) with the voice envelope. The BK4819 has no
+#   AM modulator, so this is the only way to produce the DSB-with-carrier the
+#   band uses; docs/TX_AIRBAND.md has the signal path, the registers and the
+#   calibration. OFF by default: it turns a receive-only band into a
+#   transmitting one, the operator has to confirm it on the screen, and the
+#   carrier calibration below 136 MHz is not measured yet.
+option(C62_AIR_TX "Airband AM transmit through the APC line" OFF)
 option(C62_TETRA "TETRA receive mode" ON)
 # C62_TETRA_IF_DC_FILTER: keep the BK4819 RX IF DC filter on in T mode (the
 #   flat audio mode bypasses it). OFF to compare.
@@ -101,6 +110,10 @@ option(C62_TETRA_IF_DC_FILTER "BK4819 RX IF DC filter in TETRA mode" ON)
 option(C62_TETRA_SPEECH "TETRA speech with OpenACELP" ON)
 set(C62_REG43_SWEEP_MS 1400 CACHE STRING "REG_43 sweep dwell time, ms")
 
+if(C62_AIR_TX)
+  target_compile_definitions(app PRIVATE CONFIG_C62_AIR_TX)
+  message(STATUS "C62: airband AM transmit enabled (licensed band)")
+endif()
 if(C62_WIDE_RX)
   target_compile_definitions(app PRIVATE C62_WIDE_RX)
 endif()

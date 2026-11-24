@@ -13,10 +13,17 @@
 /**
  * Operating mode for the aeronautical band, 118.000-136.975 MHz, AM voice.
  *
- * Receive only: the band is not one this radio may transmit in, and the
- * amplitude modulation the aircraft use cannot be produced by a
- * frequency-modulating transmitter anyway. The class therefore manages a
- * receiver and nothing else:
+ * The band is receive only by default. Built with CONFIG_C62_AIR_TX the mode
+ * can also transmit, by modulating the PA supply with the voice envelope (see
+ * docs/TX_AIRBAND.md) -- the BK4819 has no amplitude modulator of its own --
+ * and then it manages a transmitter as well:
+ *
+ *  - the confirmation gate of core/airband.h: the first PTT on a frequency of
+ *    the band raises a warning instead of keying, and only a second press, with
+ *    the warning on screen, arms the mode for the rest of the power cycle.
+ *    Nothing about that is stored: a radio switched off is locked again;
+ *
+ * The rest of the class manages a receiver:
  *
  *  - the signal path, which the radio driver configures (AM detector, IF
  *    filter, AGC, and the audio processing that holds the level);
@@ -83,11 +90,38 @@ public:
 
 private:
 
+#ifdef CONFIG_C62_AIR_TX
+    /**
+     * Stop a transmission: close the microphone path and turn the radio
+     * around, letting the driver ramp the carrier down first.
+     *
+     * @param status: RTX status, set back to RX.
+     */
+    void stopTx(rtxStatus_t *const status);
+
+    /**
+     * Ask for the operator's confirmation, or key the transmitter if he has
+     * already given it.
+     *
+     * @param status: RTX status.
+     */
+    void requestTx(rtxStatus_t *const status);
+
+    /**
+     * The transmit supervisor unkeyed the radio: close the microphone path and
+     * leave the mode ready to receive again.
+     */
+    virtual void abortTx() override;
+#endif
+
     bool   carrierOpen; ///< Carrier above the squelch threshold.
     bool   sqlOpen;     ///< Audio path open.
     bool   enterRx;     ///< Still has to start the receiver.
     pathId rxAudioPath; ///< Audio path ID for RX.
     uint32_t hangUntil; ///< Tick at which an open squelch may close again.
+    bool   pttLatch;    ///< PTT already acted on, for the edge detection.
+    uint32_t promptSince; ///< Tick at which the warning went on screen.
+    pathId txAudioPath; ///< Audio path ID for TX.
 };
 
 #endif /* OPMODE_AIRBAND_H */
