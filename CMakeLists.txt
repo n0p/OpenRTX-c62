@@ -132,6 +132,9 @@ target_sources(app
     openrtx/src/core/settings.c
     openrtx/src/core/settings_record.c
     openrtx/src/core/zones.c
+    openrtx/src/core/agc.c
+    openrtx/src/core/airband.c
+    openrtx/src/core/airband.c
     openrtx/src/core/slot_store.c
     openrtx/src/core/contact_store.c
     openrtx/src/core/msg_service.c
@@ -140,6 +143,7 @@ target_sources(app
     openrtx/src/rtx/rtx.cpp
     openrtx/src/rtx/TxGuard.c
     openrtx/src/rtx/OpMode_FM.cpp
+    openrtx/src/rtx/OpMode_Airband.cpp
     openrtx/src/rtx/OpMode_M17.cpp
     openrtx/src/protocols/M17/DSP.cpp
     openrtx/src/protocols/M17/Golay.cpp

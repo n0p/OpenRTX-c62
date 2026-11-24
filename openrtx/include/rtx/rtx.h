@@ -83,6 +83,10 @@ enum bandwidth
 
 /**
  * \enum opmode Enumeration type defining the current rtx operating mode.
+ *
+ * The values are stored in channels and in the settings journal: only append
+ * new ones. They are fixed explicitly rather than left to the compiler so that
+ * a value never moves when a mode is inserted above it.
  */
 enum opmode
 {
@@ -91,7 +95,17 @@ enum opmode
     OPMODE_DMR  = 2,        /**< DMR                */
     OPMODE_M17  = 3,        /**< M17                */
     OPMODE_TETRA = 4,       /**< TETRA (receive)    */
-    OPMODE_NXDN = 5         /**< NXDN (receive)     */
+    /*
+     * Receiving-only modes, numbered in the order they were added. Every new
+     * mode takes the next free value, never a gap: two branches that both took
+     * 5 is exactly what this table exists to prevent.
+     */
+    OPMODE_NXDN     = 5,    /**< NXDN (receive)                    */
+    OPMODE_DPMR     = 6,    /**< dPMR (receive)                    */
+    OPMODE_P25      = 7,    /**< P25 Phase 1 (receive)             */
+    OPMODE_YSF      = 8,    /**< Yaesu System Fusion (receive)     */
+    OPMODE_DSTAR    = 9,    /**< D-STAR (receive)                  */
+    OPMODE_AIRBAND  = 10    /**< Airband AM, 118-137 MHz (receive) */
 };
 
 /**

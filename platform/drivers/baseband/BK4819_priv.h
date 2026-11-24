@@ -50,10 +50,26 @@ enum {
     BK4819_REG0C_VOX = BIT(2),
 };
 
+/* REG_13: RX AGC gain table[3], the top gain step (LNA, mixer and PGA) */
+enum {
+    /* 0 dB on every stage: the AM value of the stock C62 firmware */
+    BK4819_REG13_AGC_TOP_AM = 0x03ff,
+    /* -4 dB LNA, -3 dB PGA: the FM value of bk4819_init() and of stock */
+    BK4819_REG13_AGC_TOP_FM = 0x03be,
+};
+
+/* REG_28: AF RX expander */
+enum {
+    BK4819_REG28_EXPANDER_MASK = 0xc000,
+    BK4819_REG28_EXPANDER_1_2 = 0x4000, ///< 1:2, the value of bk4819_init()
+    BK4819_REG28_EXPANDER_OFF = 0x0000,
+};
+
 /* REG_2B: AF filters */
 enum {
     /* RX HPF, LPF and de-emphasis, TX HPF, LPF1 and pre-emphasis */
     BK4819_REG2B_AF_FILTERS_DISABLE = 0x0707,
+    BK4819_REG2B_RX_DEEMPHASIS_DISABLE = BIT(8),
 };
 
 /* REG_30: power and signal path enables */
@@ -130,6 +146,17 @@ enum {
 #define BK4819_REG48_AF_RX_GAIN1(x) \
     (((x) << 10) & BK4819_REG48_AF_RX_GAIN1_MASK)
 #define BK4819_REG48_AF_RX_GAIN2(x) (((x) << 4) & BK4819_REG48_AF_RX_GAIN2_MASK)
+
+/*
+ * REG_4A: not in the V3 register list. The stock C62 firmware's
+ * radio_rx_tune() (@0x18019648) writes 0x5450 for FM and 0x5448 for AM, which
+ * differ in bit 3, so the whole register is handled as the opaque value the
+ * vendor firmware uses for each demodulator.
+ */
+enum {
+    BK4819_REG4A_RX_FM = 0x5450,
+    BK4819_REG4A_RX_AM = 0x5448,
+};
 
 /* REG_4B: ALC */
 enum {

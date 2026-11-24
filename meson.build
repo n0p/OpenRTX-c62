@@ -60,6 +60,8 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/core/settings.c',
                'openrtx/src/core/settings_record.c',
                'openrtx/src/core/zones.c',
+               'openrtx/src/core/agc.c',
+               'openrtx/src/core/airband.c',
                'openrtx/src/core/slot_store.c',
                'openrtx/src/core/contact_store.c',
                'openrtx/src/core/msg_service.c',
@@ -68,6 +70,7 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/rtx/rtx.cpp',
                'openrtx/src/rtx/TxGuard.c',
                'openrtx/src/rtx/OpMode_FM.cpp',
+               'openrtx/src/rtx/OpMode_Airband.cpp',
                'openrtx/src/rtx/OpMode_M17.cpp',
                'openrtx/src/protocols/M17/DSP.cpp',
                'openrtx/src/protocols/M17/Golay.cpp',
@@ -1318,6 +1321,16 @@ zones_test = executable('zones_test',
                         sources : unit_test_src + ['tests/unit/zones.cpp'],
                         kwargs  : unit_test_opts)
 
+# Airband: los dos rasters de canales y los designadores de 8,33 kHz
+airband_test = executable('airband_test',
+                          sources : unit_test_src + ['tests/unit/airband.cpp'],
+                          kwargs  : unit_test_opts)
+
+# AGC de la banda aerea: ataque, liberacion y limitador
+agc_test = executable('agc_test',
+                      sources : unit_test_src + ['tests/unit/agc.cpp'],
+                      kwargs  : unit_test_opts)
+
 # Registro de ajustes: version, CRC y descarte limpio de un registro viejo
 settings_record_test = executable('settings_record_test',
                                   sources : unit_test_src + ['tests/unit/settings_record.cpp'],
@@ -1436,6 +1449,8 @@ test('M17 Frame Decoder Test', m17_decoder_test)
 test('C62 Calibration Test', c62_calib_test)
 test('Channel Store Test',   channel_store_test)
 test('Zones Test',           zones_test)
+test('AGC Test',             agc_test)
+test('Airband Test',         airband_test)
 test('Settings Record Test', settings_record_test)
 test('APRS Config Test',     aprs_config_test)
 test('DMR SMS Format Test',  dmr_sms_format_test)

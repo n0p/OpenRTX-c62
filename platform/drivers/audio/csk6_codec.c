@@ -151,6 +151,8 @@ static bool running;
 static bool inputEnabled[CODEC_CHANNELS];
 static int outputSource[CODEC_CHANNELS] = { NO_SOURCE, NO_SOURCE };
 static bool routesDirty;
+/* Radio audio towards the speaker, see csk6codec_setRxProcessor() */
+static csk6codec_rxProcessor rxProcessor;
 /* Only openDsp(), from csk6codec_init(), and then the worker access vendor
  * objects and actual device state. */
 static AudioRecord record;
@@ -838,6 +840,15 @@ static void playChannel(size_t channel, int16_t *dst, size_t stride,
     else if (outputSource[channel] != NO_SOURCE)
         done = queueRead(&out->fmQueue, dst, stride, count);
 
+    /*
+     * The radio audio played to the speaker is where a mode that needs it
+     * processes the signal: AM holds the level here, because the level of a
+     * detected carrier is the signal level.
+     */
+    if ((channel == SINK_SPK) && (outputSource[channel] == SOURCE_RTX)
+        && (rxProcessor != NULL) && (done > 0))
+        rxProcessor(dst, done, stride);
+
     for (; done < count; done++)
         dst[done * stride] = 0;
 
@@ -1102,6 +1113,11 @@ int32_t csk6codec_getWorkerAge(void)
     if (beat == 0)
         return -1;
     return (int32_t)(k_uptime_get() - beat);
+}
+
+void csk6codec_setRxProcessor(csk6codec_rxProcessor processor)
+{
+    rxProcessor = processor;
 }
 
 void csk6codec_setRoute(enum AudioSource source, enum AudioSink sink,

@@ -69,9 +69,11 @@ state_t state;
 pthread_mutex_t state_mutex;
 static long long int lastUpdate = 0;
 
-// Commonly used frequency steps, expressed in Hz
+// Commonly used frequency steps, expressed in Hz. Only appended to: the index
+// of the chosen step is stored in the settings.
 const uint32_t freq_steps[] = { 1000,  5000,  6250,  10000, 12500,
-                                15000, 20000, 25000, 50000, 100000 };
+                                15000, 20000, 25000, 50000, 100000,
+                                8333 /* 8.33 kHz, the airband raster */ };
 const size_t n_freq_steps = sizeof(freq_steps) / sizeof(freq_steps[0]);
 
 void state_init()
