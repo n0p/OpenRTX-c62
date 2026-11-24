@@ -1,0 +1,71 @@
+/*
+ * SPDX-FileCopyrightText: 2026 OpenRTX Contributors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+#include <stdbool.h>
+#include <stddef.h>
+
+#include "protocols/NXDN/NxdnDefs.h"
+
+/**
+ * Frame sync word: 10 symbols, hex CDF59 (TS 1-A Table 4.4-2).  Read two bits
+ * per symbol, 11 00 11 01 11 11 01 01 10 01, with 01 = +3, 00 = +1, 10 = -1
+ * and 11 = -3.
+ */
+const int8_t nxdnFsw[NXDN_FSW_SYMBOLS] = {
+    -3, +1, -3, +3, -3, -3, +3, +3, -1, +3,
+};
+
+/**
+ * Default data scrambler of TS 1-A 4.6: a 9-bit LFSR (X^9 + X^4 + 1) seeded
+ * with 0b011100100, one output bit per symbol, inverting the sign of the dibit
+ * when it is 1.  This is the mask for the 182 payload dibits of a frame, from
+ * the first LICH dibit to the last VCH4 dibit.
+ */
+const uint8_t nxdnScramble[23] = {
+    0xE4, 0x54, 0xC3, 0x5E, 0x76, 0xA2, 0x50, 0xCB, 0x6F, 0x92, 0xF6, 0x93,
+    0x95, 0x19, 0x30, 0xA6, 0x58, 0xFA, 0x8B, 0xC6, 0x35, 0xCD, 0x23,
+};
+
+void nxdnLichParse(uint8_t raw, struct nxdnLich *lich)
+{
+    lich->raw = (uint8_t)(raw & 0x7F);
+    lich->rfType = (uint8_t)((raw >> 5) & 0x03);
+    lich->usc = (uint8_t)((raw >> 3) & 0x03);
+    lich->steal = (uint8_t)((raw >> 1) & 0x03);
+    lich->outbound = (raw & 1) != 0;
+}
+
+void nxdnLichVoice(const struct nxdnLich *lich, int *first, int *count)
+{
+    *first = 0;
+    *count = 0;
+
+    if ((lich->rfType != NXDN_RF_RTCH) && (lich->rfType != NXDN_RF_RDCH))
+        return;
+
+    /* Voice rides with the SACCH superframe; the non-superframe structure is
+     * the call's first and last frame, which carry voice too. */
+    if ((lich->usc == NXDN_USC_UDCH) || (lich->usc == NXDN_USC_SACCH_IDLE))
+        return;
+
+    switch (lich->steal) {
+    case NXDN_STEAL_NONE:
+        *first = 0;
+        *count = 4;
+        break;
+    case NXDN_STEAL_SECOND:
+        /* VCH1/VCH2 are FACCH1, the second half is voice */
+        *first = 2;
+        *count = 2;
+        break;
+    case NXDN_STEAL_FIRST:
+        *first = 0;
+        *count = 2;
+        break;
+    default:
+        break;
+    }
+}
