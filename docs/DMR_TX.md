@@ -1,5 +1,11 @@
 # DMR transmit mode
 
+> **Superseded in the firmware.** The transmit chain this document describes
+> (DmrTx/DmrTxTables/DmrVocoderEncoder) was replaced by the protocol package in
+> `protocols/DMR/`; `lib/dmr_encoder` is still the encoder. See
+> `docs/DMR_PKG.md` for the current chain, the air delay and the interleave
+> that `dmr_enc.c` applies to the canonical frames.
+
 DMR (ETSI TS 102 361-1) transmitter for the Retevis C62: link control, CACH,
 FEC, burst framing, the 4FSK modulator and the PTT state machine, on the same
 flat discriminator path the receiver of `docs/DMR_RX.md` uses.

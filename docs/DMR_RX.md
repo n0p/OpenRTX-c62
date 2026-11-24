@@ -1,5 +1,10 @@
 # DMR receive mode
 
+> **Superseded in the firmware.** The receive chain this document describes
+> (DmrPhy/DmrFec/DmrSpeech) was replaced by the protocol package in
+> `protocols/DMR/`; see `docs/DMR_PKG.md`. The measurements and the reasoning
+> here remain valid for the vocoder and for what the package had to reproduce.
+
 DMR (ETSI TS 102 361-1) receiver for the Retevis C62: 4FSK demodulation of the
 radio's discriminator output, slot synchronisation, CACH, colour code and
 timeslot, and voice through the AMBE+2 decoder. This document covers the
