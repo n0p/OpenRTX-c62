@@ -2,7 +2,7 @@
 # FLASH/RAM of the C62 firmware with and without the TETRA receive mode.
 # Builds into one west workspace, one build dir per configuration.
 set -u
-WS=/home/n0p/src/c62/build/c62-ws-next3
+WS=${WS:-/home/n0p/src/c62/build/c62-ws-elk}
 LOG=/home/n0p/src/c62/build/tetra_sizes
 mkdir -p "$LOG"
 cd "$WS" || exit 1

@@ -132,13 +132,19 @@ radio ya tiene probado contra hardware (AFC, ecualizador, `CONFIG_TETRA_EQ_INIT`
 así que se queda el nuestro y el de la librería se usa solo como referencia en
 el banco de host.
 
+En una captura de aire real no hay bits de referencia, así que el BER solo se
+puede medir sobre el corpus sintético (tabla BER/Es-N0 de
+`reports/tetra_dmo.md`, BER 0 desde 13 dB); lo que la captura mide es lo de la
+tabla: bloques con CRC correcto, FER de voz (2/910 = 0,22 %) y error de fase
+RMS del demodulador (10,8 % de π/4, media de la segunda mitad de la captura).
+
 ## 4. API usada y mapeo a nuestras estructuras
 
 ### Recepción (TMO downlink)
 
 | libtetra | dónde | para qué |
 | --- | --- | --- |
-| `struct tetra_tmo_rx` | `OpMode_TETRA.cpp` (estático) | contexto del receptor, ~2,6 KB |
+| `struct tetra_tmo_rx` | `OpMode_TETRA.cpp` (estático) | contexto del receptor, 6968 B |
 | `tetra_tmo_init()` | `OpMode_TETRA::resync()` | arranque y re-sincronización |
 | `tetra_tmo_push_soft()` | `OpMode_TETRA::update()` | una llamada por bloque de 30 ms |
 | `tetra_tmo_locked()` | `update()`, AFC, LED | hay rejilla TDMA |
@@ -203,7 +209,7 @@ librería:
 | `tmo_l3` | 5, 82 | 7, 96 |
 | `tmo_ul` | 8, 332 | igual |
 
-57 casos, 22 013 aserciones, todas en verde con el commit que usa el firmware.
+60 casos, 22 027 aserciones, todas en verde con el commit que usa el firmware.
 `crypto` no se compila (AGPL, ver §2); se construyó aparte con
 `-DTETRA_ENABLE_CRYPTO=ON` para medir su coste (§6).
 
@@ -264,6 +270,12 @@ que aporta TMO uplink, SDS-TL, LIP, MM y MLE viene prácticamente gratis.
 Antes del lock el bloque cuesta 770 k instrucciones (búsqueda de
 sincronismo); la inicialización completa 14 843.
 
+El firmware compila la librería con el `-Os` de `zephyr_interface` (que se
+añade **después** de los flags del target y por tanto gana): medido, el mismo
+bloque cuesta 1 870 933 instrucciones = **20,8 %** (demodulador 1 675 357,
+`push_soft` 195 576). Con `-O2` se ahorran unas 310 k instrucciones por bloque
+(3,5 puntos de CPU) si algún día se fijan las opciones por fichero.
+
 Con `TETRA_ENABLE_CRYPTO=ON` (solo para medir): +8 897 B de código en M33 y
 **+146 instrucciones en 120 bloques**, porque sin proveedor de claves no se
 entra en el descifrado. Es "gratis" en tiempo pero no en tamaño ni en licencia,
@@ -276,11 +288,21 @@ en el mismo workspace (`-DCONFIG_C62_DMR_RX=y -DCONFIG_C62_APRS=y`):
 
 | configuración | FLASH | RAM |
 | --- | --- | --- |
-| `-DC62_TETRA=OFF` | ver §7 (medido en esta rama) | |
-| `-DC62_TETRA=ON` (por defecto, incluye libtetra + OpenACELP + SDS) | 518 104 B | 196 688 B |
+| `master` (`44ece688`), `-DC62_TETRA=ON` | 518 104 B | 196 688 B |
+| esta rama, `-DC62_TETRA=ON` (por defecto) | 518 836 B | 196 720 B |
+| esta rama, `-DC62_TETRA=OFF` | 470 976 B | 170 448 B |
 
 Las cifras de referencia del árbol (518 104 B / 196 688 B) **ya incluyen
-libtetra**: es el motor que llevaba el firmware antes de este trabajo.
+libtetra**: es el motor que llevaba el firmware antes de este trabajo. El modo
+TETRA completo (libtetra + OpenACELP + demodulador + SDS + capa de estado)
+cuesta por tanto **47 860 B de flash y 26 272 B de RAM**; las tres filas nuevas
+del menú rápido y los campos de MM/red/uplink añaden **732 B de flash y 32 B de
+RAM** sobre `master`.
+
+De paso: hasta esta rama `-DC62_TETRA=OFF` **no enlazaba**
+(`undefined reference to _ui_printFit`, porque los ayudantes de dibujo de la UI
+estaban dentro del bloque `CONFIG_TETRA` y los usan también DMR y APRS). Ahora
+sí, que es lo que permite medir el coste del motor apagándolo.
 
 ## 7. Lo que se gana, lo que no se usa
 
