@@ -46,13 +46,15 @@ typedef struct
             vpPhoneticSpell : 1,  // Phonetic spell enabled
             macroMenuLatch  : 1,  // Automatic latch of macro menu
             tetraAfcOff     : 1,  // TETRA frequency correction off
-            _reserved       : 2;
+            keyBacklight    : 1,  // Keypad backlight on
+            _reserved       : 1;
     bool    m17_can_rx;           // Check M17 CAN on RX
     char    m17_dest[10];         // M17 destination
     bool    showBatteryIcon;      // Battery display true: icon, false: percentage
     bool    gpsSetTime;           // Use GPS to ajust RTC time
     char    M17_meta_text[53];    // M17 Meta Text to send
     int16_t tetraAfcOffset;       // TETRA frequency correction learned, Hz
+    int16_t rxFineHz;             // Manual fine RX tuning, Hz (10 Hz steps)
 }
 __attribute__((packed)) settings_t;
 
@@ -76,6 +78,7 @@ static const settings_t default_settings =
     0,                            // Phonetic spell off
     1,                            // Automatic latch of macro menu enabled
     0,                            // TETRA frequency correction on
+    1,                            // Keypad backlight on
     0,                            // not used
     false,                        // Check M17 CAN on RX
     "",                           // Empty M17 destination
@@ -83,6 +86,7 @@ static const settings_t default_settings =
     false,                        // Update RTC with GPS
     "OpenRTX",                    // Default M17 meta text
     0,                            // No TETRA frequency correction learned
+    0,                            // No manual fine RX tuning
 };
 
 #endif /* SETTINGS_H */
