@@ -1316,6 +1316,7 @@ settings_record_test = executable('settings_record_test',
 aprs_config_test = executable('aprs_config_test',
                               sources : unit_test_src + [
                                   'openrtx/src/protocols/APRS/ax25.c',
+                                  'openrtx/src/protocols/APRS/aprs.c',
                                   'tests/unit/aprs_config.cpp'],
                               kwargs  : unit_test_opts)
 

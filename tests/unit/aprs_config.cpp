@@ -12,10 +12,13 @@
  */
 
 #include <catch2/catch_test_macros.hpp>
+#include <cstring>
+#include <cstdio>
 #include <string>
 
 extern "C" {
 #include "protocols/APRS/ax25.h"
+#include "protocols/APRS/aprs.h"
 }
 
 TEST_CASE("Callsigns are checked as AX.25 addresses", "[aprs]")
@@ -120,4 +123,71 @@ TEST_CASE("A validated path is what the frame builder puts on the wire",
     REQUIRE(digis[0].ssid == 1);
     REQUIRE(std::string(digis[1].call, AX25_CALL_LEN) == "WIDE2 ");
     REQUIRE(digis[1].ssid == 1);
+}
+
+/* ------------------------------------------------------------------ packets --- */
+
+/*
+ * The information field of a packet, built from the settings the operator
+ * entered: a hand-entered position (there is no GPS on the C62), the symbol and
+ * the comment.  The APRS screen calls these with state.settings.aprs_*.
+ */
+static aprs_pos_t testPosition()
+{
+    aprs_pos_t p;
+    memset(&p, 0, sizeof(p));
+    p.lat = 38.0;
+    p.lon = -1.0;
+    p.table = '/';
+    p.symbol = '>';
+    snprintf(p.comment, sizeof(p.comment), "%s", "OpenRTX C62");
+    return p;
+}
+
+TEST_CASE("A position packet carries the hand-entered coordinates", "[aprs]")
+{
+    aprs_pos_t p = testPosition();
+    char info[128];
+
+    size_t n = aprs_build_position(info, sizeof(info), &p, false);
+    REQUIRE(n > 0);
+
+    /* !DDMM.mmN/DDDMM.mmW>comment */
+    REQUIRE(info[0] == '!');
+    REQUIRE(std::string(info).rfind("!3800.00N/00100.00W>", 0) == 0);
+    REQUIRE(std::string(info).find("OpenRTX C62") != std::string::npos);
+
+    /* The compressed form is there for the shorter frame */
+    char comp[64];
+    REQUIRE(aprs_build_position_compressed(comp, sizeof(comp), &p, false) > 0);
+
+    /* Messaging-capable stations announce with '=' instead of '!' */
+    n = aprs_build_position(info, sizeof(info), &p, true);
+    REQUIRE(n > 0);
+    REQUIRE(info[0] == '=');
+
+    /* Southern/western hemisphere and a full minute value */
+    p.lat = -33.95;
+    p.lon = -70.6667;
+    REQUIRE(aprs_build_position(info, sizeof(info), &p, false) > 0);
+    REQUIRE(std::string(info).find("3357.00S/07040.00W") != std::string::npos);
+}
+
+TEST_CASE("Status and message fields are built for the configured station",
+          "[aprs]")
+{
+    char info[128];
+
+    REQUIRE(aprs_build_status(info, sizeof(info), "OpenRTX C62") > 0);
+    REQUIRE(std::string(info) == ">OpenRTX C62");
+
+    /* :ADDRESSEE:text{nn  (APRS101 chapter 12), addressee space padded to 9 */
+    REQUIRE(aprs_build_message(info, sizeof(info), "EA5ABC-9", "Hola", "01") > 0);
+    REQUIRE(std::string(info) == ":EA5ABC-9 :Hola{01");
+
+    REQUIRE(aprs_build_ack(info, sizeof(info), "EA5ABC-9", "01") > 0);
+    REQUIRE(std::string(info) == ":EA5ABC-9 :ack01");
+
+    /* A buffer that cannot hold the packet is a failure, not a cut frame */
+    REQUIRE(aprs_build_message(info, 8, "EA5ABC-9", "Hola", "01") == 0);
 }
