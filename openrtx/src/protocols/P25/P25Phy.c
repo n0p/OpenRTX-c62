@@ -825,10 +825,9 @@ void p25Phy_push(const int16_t *samples, size_t count, p25FrameHandler handler,
 
     for (size_t i = 0; i < count; i++)
     {
-        /* Matched filter at 48 kHz: symmetric taps over the history ring. */
+        /* Matched filter at 48 kHz, over the history ring. */
         /*
-        /*
-         * The history is written twice, TK95 style: inHist[pos] and
+         * The history is written twice (Tk95 style): inHist[pos] and
          * inHist[pos + TAPS] get the same sample, so the taps are read forward
          * from pos with no wrap-around test in the loop.  With the wrap tests
          * the kernel cost 20 instructions per tap pair and 33 M instructions
