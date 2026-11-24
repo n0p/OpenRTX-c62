@@ -489,8 +489,8 @@ A new mode (dPMR, P25, YSF, D-STAR, WFM, DMR packet…) is wired in with **one
 table entry plus its rows**. The steps, in order, and nothing outside them:
 
 1. **`OPMODE_*` value.** Append it to `enum opmode` in
-   `openrtx/include/rtx/rtx.h`. Values are stored in channel records and in the
-   settings journal: append, never insert, and never reuse a gap.
+   `openrtx/include/rtx/rtx.h`. The value is stored in every channel record that
+   carries the mode: append, never insert, and never reuse a gap.
 2. **Name.** One line in `chstore_modeName()`
    (`openrtx/src/core/channel_store.c`): two to five characters, because that is
    what the header has room for (`UI_MODE_LABEL_MAX_W`).
