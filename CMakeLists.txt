@@ -133,7 +133,7 @@ target_sources(app
     openrtx/src/core/contact_store.c
     openrtx/src/core/msg_service.c
     openrtx/src/core/messaging.c
-    openrtx/src/core/messaging_store_ram.c
+    openrtx/src/core/messaging_store_none.c
     openrtx/src/rtx/rtx.cpp
     openrtx/src/rtx/OpMode_FM.cpp
     openrtx/src/rtx/OpMode_M17.cpp

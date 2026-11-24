@@ -46,8 +46,12 @@ struct storeHeader {
     uint32_t sequence;
 };
 
-/** Static: the record is up to 3 kB and must not sit on a thread stack. */
-static uint8_t record[MSG_STORE_MAX];
+/*
+ * There is no buffer of the record here: reading goes straight into the
+ * caller's, which is messaging.c's own recordBuf.  The two 3,4 kB copies this
+ * file used to keep -- one per sector plus one in messaging.c -- were 6,8 kB of
+ * the 256 kB of SRAM for the same bytes.
+ */
 
 static bool readHeader(const struct flash_area *area, uint32_t off,
                        struct storeHeader *hdr)
@@ -61,55 +65,82 @@ static bool readHeader(const struct flash_area *area, uint32_t off,
     return true;
 }
 
-static size_t trySector(const struct flash_area *area, uint32_t off,
-                        const struct storeHeader *hdr)
+/**
+ * Where the newest valid record starts and how long it is.
+ *
+ * @return false when neither sector holds a header that checks out.
+ */
+static bool newestRecord(const struct flash_area *area, uint32_t *off,
+                         size_t *len)
 {
-    if (hdr->length > sizeof(record))
-        return 0;
-    if (flash_area_read(area, off + sizeof(*hdr), record, hdr->length) < 0)
-        return 0;
-    return hdr->length;
+    struct storeHeader a;
+    struct storeHeader b;
+    bool haveA = readHeader(area, MSG_AREA_A, &a);
+    bool haveB = readHeader(area, MSG_AREA_B, &b);
+    bool aNewer = haveA && (!haveB || ((int32_t)(a.sequence - b.sequence) > 0));
+
+    if (aNewer) {
+        *off = MSG_AREA_A;
+        *len = a.length;
+    } else if (haveB) {
+        *off = MSG_AREA_B;
+        *len = b.length;
+    } else {
+        return false;
+    }
+    return true;
 }
 
 size_t messaging_store_size(void)
 {
     const struct flash_area *area;
-    struct storeHeader a;
-    struct storeHeader b;
-    bool haveA;
-    bool haveB;
-    bool aNewer;
+    uint32_t off;
+    size_t len;
 
     if (flash_area_open(FIXED_PARTITION_ID(storage_partition), &area) < 0)
         return 0;
 
-    haveA = readHeader(area, MSG_AREA_A, &a);
-    haveB = readHeader(area, MSG_AREA_B, &b);
-    aNewer = haveA && (!haveB || ((int32_t)(a.sequence - b.sequence) > 0));
+    bool ok = newestRecord(area, &off, &len);
 
-    size_t len = 0;
-
-    if (aNewer) {
-        len = trySector(area, MSG_AREA_A, &a);
-        if ((len == 0) && haveB)
-            len = trySector(area, MSG_AREA_B, &b);
-    } else if (haveB) {
-        len = trySector(area, MSG_AREA_B, &b);
-        if ((len == 0) && haveA)
-            len = trySector(area, MSG_AREA_A, &a);
-    }
     flash_area_close(area);
-    return len;
+    (void)off;
+    return ok ? len : 0;
 }
 
 size_t messaging_store_read(uint8_t *buf, size_t cap)
 {
-    size_t len = messaging_store_size();
+    const struct flash_area *area;
+    uint32_t off = 0;
+    size_t len = 0;
 
-    if ((len == 0) || (len > cap))
+    if ((buf == NULL) || (cap == 0))
         return 0;
-    memcpy(buf, record, len);
-    return len;
+    if (flash_area_open(FIXED_PARTITION_ID(storage_partition), &area) < 0)
+        return 0;
+
+    /*
+     * The payload goes straight into the caller's buffer: the record carries
+     * its own CRC, so a torn sector is rejected there, not here.  A read error
+     * on the newest sector falls back to the other one, which is what the
+     * alternation is for.
+     */
+    size_t got = 0;
+
+    if (newestRecord(area, &off, &len) && (len <= cap)) {
+        uint32_t other = (off == MSG_AREA_A) ? MSG_AREA_B : MSG_AREA_A;
+        struct storeHeader hdr;
+
+        if (flash_area_read(area, off + sizeof(hdr), buf, len) == 0) {
+            got = len;
+        } else if (readHeader(area, other, &hdr) && (hdr.length <= cap)
+                   && (flash_area_read(area, other + sizeof(hdr), buf,
+                                       hdr.length) == 0)) {
+            got = hdr.length;
+        }
+    }
+
+    flash_area_close(area);
+    return got;
 }
 
 bool messaging_store_write(const uint8_t *buf, size_t len)
