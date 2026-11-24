@@ -449,15 +449,17 @@ TEST_CASE("A mode page never leaves the screen or the popup in a bad state",
     REQUIRE(qm_page_isOpen());
     REQUIRE(qm_state.open == false);
 
-    /* Green on a QM_GOTO row leaves the page for its screen */
+    /* Green on a QM_GOTO row leaves the page for its screen, and coming back
+       still finds the page loaded (an empty page would look like lost data) */
     int msg = rowOf(qm_page_state.qm, "MSG");
 
     if (msg >= 0) {
         qm_page_state.selected = (uint8_t)msg;
         state.ui_screen = SETTINGS_MODE;
         qm_page_enter();
-        REQUIRE(qm_page_isOpen() == false);
         REQUIRE(state.ui_screen == MSG_COMPOSE);
+        REQUIRE(qm_page_isOpen());
+        REQUIRE(qm_page_state.qm == qm_findMenu(OPMODE_FM));
     }
 
     /* Back to a clean state for the rest of the suite */

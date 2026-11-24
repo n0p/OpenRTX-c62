@@ -1632,8 +1632,14 @@ void qm_page_adjust(int delta, bool coarse)
 
 void qm_page_enter(void)
 {
-    qm_row_enter(qm_rowOf(qm_page_state.qm, qm_page_state.selected),
-                 qm_page_close);
+    /*
+     * A QM_GOTO row (MSG, MSGS) leaves the page loaded on purpose: coming back
+     * from the composer lands on Settings again, and an empty page there would
+     * look like the mode lost its settings. The popup closes because it is an
+     * overlay that would otherwise be drawn on top of the new screen; the page
+     * is a screen, so the screen switch is what hides it.
+     */
+    qm_row_enter(qm_rowOf(qm_page_state.qm, qm_page_state.selected), NULL);
 }
 
 void qm_page_draw(void)
