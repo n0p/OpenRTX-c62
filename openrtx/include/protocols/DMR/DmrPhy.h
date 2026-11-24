@@ -16,10 +16,14 @@
  * TETRA mode takes: a 4FSK baseband whose carrier offset appears as DC.  The
  * chain is the one validated by the host prototype (work/dmr-rx):
  *
- *   RRC a=0.2 matched filter, decimated to 2 samples/symbol
- *     -> sync search on the 4 slot words (24 symbols, outer levels)
- *     -> per-burst fractional timing from the data eye
- *     -> levels and DC from the 24 sync symbols
+ *   RRC a=0.2 matched filter, decimated to 24 kHz (5 samples/symbol)
+ *     -> cheap spectral-aperture pre-gate, then sync search on the 4 slot
+ *        words (24 symbols, outer levels)
+ *     -> per-burst fractional timing (16 phases, 4-point Lagrange) from the
+ *        sync correlation with the payload eye as a tie-break
+ *     -> per-burst levels: median DC, 4-means outer/inner with a drift term
+ *     -> polarity from the Golay(20,8) codeword flanking the sync
+ *     -> quality gate on EVM, CACH corrections and aperture
  *     -> CACH (Hamming 7,4), slot type (Golay 20,8), BPTC(196,96)
  *     -> voice: three 72-bit AMBE+2 frames, de-interleaved
  *
@@ -44,7 +48,11 @@ struct dmrBurst {
     enum dmrSync sync;  ///< Sync word found
     bool voice;         ///< Voice burst (BS/MS voice sync)
     int syncErrors;     ///< Sign errors in the 24 sync symbols
+    float score;        ///< Normalised sync correlation, 0..1
+    float aperture;     ///< Fraction of the sync window at the outer levels
     float evm;          ///< RMS error to the symbol levels, 0..1
+    bool relaxed;       ///< Recovered at the slot the 60 ms grid predicted
+    bool coasted;       ///< ... and with no sync word to confirm it
     bool cachValid;     ///< CACH decoded with at most one error
     uint8_t accessType; ///< CACH AT
     bool timeslot2;     ///< CACH TC: false = TS1, true = TS2

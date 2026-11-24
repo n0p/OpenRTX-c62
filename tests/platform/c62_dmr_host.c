@@ -151,13 +151,16 @@ static void onBurst(const struct dmrBurst *burst, void *user)
     bursts++;
 
     if (csvFile != NULL) {
-        fprintf(csvFile, "%u,%ld,%s,%s,%d,%.4f,%d,%u,%d,%d,%d,%d,%d,%d,%d,%d\n",
+        fprintf(csvFile,
+                "%u,%ld,%s,%s,%d,%.4f,%.3f,%.3f,%d,%d,%d,%u,%d,%d,%d,%d,%d,%d,"
+                "%d,%d\n",
                 bursts, burst->symbol, dmr_sync_name(burst->sync),
                 burst->voice ? "V" : "D", burst->syncErrors, burst->evm,
-                burst->cachValid, burst->accessType, burst->timeslot2,
-                burst->lateEntry, burst->slotTypeValid, burst->colourCode,
-                burst->dataType, burst->crcChecked, burst->crcOk,
-                burst->frameCount);
+                burst->score, burst->aperture, burst->relaxed ? 1 : 0,
+                burst->coasted ? 1 : 0, burst->cachValid, burst->accessType,
+                burst->timeslot2, burst->lateEntry, burst->slotTypeValid,
+                burst->colourCode, burst->dataType, burst->crcChecked,
+                burst->crcOk, burst->frameCount);
     }
 
     if (dumpFile != NULL) {
@@ -434,9 +437,9 @@ int main(int argc, char **argv)
             perror(csvPath);
             return -1;
         }
-        fputs("burst,symbol,sync,voice,errors,evm,cach,at,ts2,late,"
-              "slotType,cc,type,crcChecked,crcOk,frames\n",
-              csvFile);
+        fputs("burst,symbol,sync,voice,errors,evm,score,aperture,filled,"
+              "coasted,cach,at,ts2,late,slotType,cc,type,crcChecked,crcOk,"
+              "frames\n", csvFile);
     }
     if (dumpPath != NULL) {
         dumpFile = fopen(dumpPath, "w");
