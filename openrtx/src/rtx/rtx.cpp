@@ -23,8 +23,13 @@
 #ifdef CONFIG_TETRA
 #include "rtx/OpMode_TETRA.hpp"
 #endif
+<<<<<<< HEAD
 #ifdef CONFIG_NXDN
 #include "rtx/OpMode_NXDN.hpp"
+=======
+#ifdef CONFIG_P25
+#include "rtx/OpMode_P25.hpp"
+>>>>>>> c62/rx-p25
 #endif
 
 static pthread_mutex_t   *cfgMutex;     // Mutex for incoming config messages
@@ -66,8 +71,13 @@ static OpMode_TETRA tetraMode;          // TETRA mode handler
 #ifdef CONFIG_DMR
 static OpMode_DMR dmrMode;              // DMR mode handler
 #endif
+<<<<<<< HEAD
 #ifdef CONFIG_NXDN
 static OpMode_NXDN nxdnMode;            // NXDN mode handler
+=======
+#ifdef CONFIG_P25
+static OpMode_P25 p25Mode;              // P25 Phase 1 mode handler
+>>>>>>> c62/rx-p25
 #endif
 
 
@@ -336,6 +346,9 @@ void rtx_task()
                 case OPMODE_NXDN:  currMode = &nxdnMode;  break;
 #endif
                 #endif
+                #ifdef CONFIG_P25
+                case OPMODE_P25:  currMode = &p25Mode;  break;
+                #endif
                 default:   currMode = &noMode;
             }
 
@@ -427,6 +440,7 @@ bool opmode_canTransmit(uint8_t mode)
         case OPMODE_TETRA:
             /* Receive only: OpMode_TETRA forces the status back to RX */
             return false;
+<<<<<<< HEAD
         case OPMODE_NXDN:
         case OPMODE_DPMR:
         case OPMODE_P25:
@@ -436,6 +450,10 @@ bool opmode_canTransmit(uint8_t mode)
             /* fall through */
         case OPMODE_AIRBAND:
             /* Receive only: AM voice, and not a band this radio may key in */
+=======
+        case OPMODE_P25:
+            /* Receive only: OpMode_P25 forces the status back to RX */
+>>>>>>> c62/rx-p25
             return false;
         default:
             return false;
