@@ -90,6 +90,13 @@ private:
     void startSampling();
     void stopSampling();
 
+    /*
+     * Set by abortTx(): no new call until the PTT has been released. Also used
+     * by the data calls of the SMS path, which have no PTT, so it lives outside
+     * the CONFIG_DMR_TX block.
+     */
+    volatile bool txBlocked;
+
     /* Receive */
     bool startRx;
     unsigned dataErrors; // Consecutive failed reads of the sample stream
@@ -140,8 +147,6 @@ private:
     unsigned dequeueFrames(uint8_t frames[DMR_FRAMES_PER_BURST][DMR_AMBE_BYTES]);
 
     bool txRunning;
-    /// Set by abortTx(): no new call until the PTT has been released
-    volatile bool txBlocked;
     /// Set once the first slot of the call has been handed to the sink
     bool txFirstBlock;
     pathId micPath;      // MIC -> MCU, raw 8 kHz PCM

@@ -208,7 +208,6 @@ OpMode_DMR::OpMode_DMR()
 #endif
 #ifdef CONFIG_DMR_TX
     , txRunning(false)
-    , txBlocked(false)
     , txFirstBlock(false)
     , micPath(-1)
     , micId(-1)
@@ -224,6 +223,8 @@ OpMode_DMR::OpMode_DMR()
 #endif
 #endif
 {
+    txBlocked = false;
+
 #ifdef CONFIG_DMR_SMS
     memset(&smsRx, 0, sizeof(smsRx));
     memset(&ackQueue, 0, sizeof(ackQueue));
