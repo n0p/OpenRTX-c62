@@ -382,6 +382,11 @@ tests/host/dmr_phy_host/build/dmr_phy_host dmr_air_burst000.wav   # the firmware
 * **Audio quality is mbelib-neo's**, a reimplementation of AMBE+2. It is
   intelligible on the real capture, but nothing here has been compared against
   a DVSI reference decode.
+* **Not yet verified on the radio.** Every number above comes from files decoded
+  on the host with the same C code the firmware runs. What the BK4819 of a real
+  C62 hands over (level, bandwidth, continuity) is exactly what the baseband
+  dump captures — see *Capturing what the radio hears* — and DMR RX on hardware
+  is what `reports/dmr_rx_hw.md` is about.
 
 ## Next step: transmit
 

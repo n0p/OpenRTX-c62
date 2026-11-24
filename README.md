@@ -103,6 +103,12 @@ Opciones de compilación relevantes:
 - `CONFIG_DMR_TX` — cadena de transmisión DMR. **Apagada por defecto**: sin encoder
   AMBE+2 el PTT se niega a transmitir.
 - `CONFIG_C62_UNLOCKED_TUNING` — rango completo del BK4819 (activa por defecto).
+- `C62_BASEBAND_DUMP` — volcado del audio del discriminador por el puerto serie
+  (activa por defecto, pero **solo se arma encendiendo con la tecla A/B pulsada**).
+  Es la herramienta para diagnosticar un modo digital que no decodifica; ver
+  `docs/DMR_RX.md`.
+- `C62_DMR_12K5` — DMR en el modo de canal de 12,5 kHz del BK4819 (filtros de FI de
+  4,5 kHz, `REG_43 = 0x7e48`) en vez del de 25 kHz (`0x7e28`). Apagada por defecto.
 
 ## Repositorio
 
