@@ -153,18 +153,29 @@ struct txGuard *rtx_getTxGuard()
  * and the streams go second: cancelling them is what wakes the RTX thread if it
  * is blocked waiting for one of their buffer boundaries.
  */
-static void abortTransmission(const char *why)
+static void abortTransmission(uint32_t now, const char *why)
 {
     radio_disableRtx();
     currMode->abortTx();
 
     #if defined(PLATFORM_C62)
+    /*
+     * Throttled: an abort is retried every 20 ms until the mode leaves
+     * transmit, and a 115200 baud line cannot take that many lines without
+     * becoming the reason the abort does not complete.
+     */
+    static uint32_t lastPrint = 0;
+    if ((uint32_t)(now - lastPrint) < 500)
+        return;
+    lastPrint = now;
+
     char summary[96];
     char trace[96];
     txg_format(&txGuard, summary, sizeof(summary));
     txg_formatTrace(&txGuard, trace, sizeof(trace));
     printf("TX ABORT %s: %s | %s\r\n", why, trace, summary);
     #else
+    (void)now;
     (void)why;
     #endif
 }
@@ -181,25 +192,21 @@ static void abortTransmission(const char *why)
 static void logTxExit(void)
 {
     #if defined(PLATFORM_C62)
-    static uint8_t lastPhase = TXG_PHASE_IDLE;
-    uint8_t phase;
+    /*
+     * Keyed on the transmission counter, not on the phase: an over that starts
+     * and fails inside a single rtx_task() never shows STARTING here, and the
+     * one that matters most is exactly that one.
+     */
+    static uint32_t lastSeen = 0;
+    uint32_t seen;
 
     pthread_mutex_lock(&txMutex);
-    phase = txGuard.phase;
+    seen = txGuard.transmissions;
     pthread_mutex_unlock(&txMutex);
 
-    if (phase == lastPhase)
+    if (seen == lastSeen)
         return;
-    lastPhase = phase;
-
-    if (phase == TXG_PHASE_STARTING) {
-        /* A new over: its baseband level starts from zero */
-        csk6codec_clearTxPeak();
-        return;
-    }
-
-    if (phase != TXG_PHASE_IDLE)
-        return;
+    lastSeen = seen;
 
     char trace[110];
     char summary[130];
@@ -207,6 +214,8 @@ static void logTxExit(void)
     txg_format(&txGuard, summary, sizeof(summary));
     printf("TX exit %s | %s | pk=%u\r\n", trace, summary,
            (unsigned int)csk6codec_getTxPeak());
+    /* The next over starts its baseband peak from zero */
+    csk6codec_clearTxPeak();
     #endif
 }
 
@@ -235,7 +244,7 @@ void rtx_supervise()
     pthread_mutex_unlock(&txMutex);
 
     if (abort)
-        abortTransmission(txg_reasonName(txGuard.reason));
+        abortTransmission(now, txg_reasonName(txGuard.reason));
 }
 
 void rtx_task()
