@@ -8,7 +8,22 @@
 #define SETTINGS_H
 
 #include "hwconfig.h"
+#include "core/datatypes.h"
 #include <stdbool.h>
+
+/**
+ * Version of the settings payload, kept in the record header by the NVM
+ * driver (see core/settings_record.h).
+ *
+ * This header changes often: every field added or moved bumps the version and
+ * an old record is then discarded as a whole, with the defaults coming back,
+ * instead of being reinterpreted with fields landing at the wrong offset.  The
+ * radio tells the operator through state.settings_reset (docs/SETTINGS.md).
+ *
+ *  - 1: the original record (no version in the header, 156 B with APRS).
+ *  - 2: DMR destination, own DMR ID and SMS format appended.
+ */
+#define SETTINGS_VERSION 2
 
 typedef enum
 {
@@ -64,6 +79,10 @@ typedef struct
      *
      * The block is compiled in only when APRS is: other targets keep their
      * settings_t layout, and with it their NVM record size, unchanged.
+     *
+     * The station identity is the callsign above plus aprs_ssid, so the
+     * operator types it once; the path, symbol and comment are separate
+     * because APRS uses them per packet.
      */
     bool    aprs_decode;          // Decode APRS on the FM receive path
     bool    aprs_beaconEn;        // Beacon transmission enabled
@@ -78,6 +97,20 @@ typedef struct
     uint16_t aprs_interval_s;     // Beacon interval, seconds (>= 30)
     uint16_t aprs_txdelay_ms;     // TXDELAY, ms (300 is the APRS default)
 #endif
+    /*
+     * DMR identity and call destination.
+     *
+     * dmr_id is the radio's own subscriber ID: it goes in the source field of
+     * every link control, data header and SMS header this radio transmits
+     * (TS 102 361-1 clause 9.3.1, 24 bits), so a wrong value means nobody can
+     * reply.  dmr_dest_type/dmr_dest_id are the default destination of a call
+     * (a talkgroup or a single subscriber), which the per-channel destination
+     * of the channel store can override.
+     */
+    uint32_t dmr_id;              // Own DMR ID, 1..16777215
+    uint32_t dmr_dest_id;         // Default call destination, 1..16777215
+    uint8_t  dmr_dest_type;       // enum dmrDestType
+    uint8_t  sms_format;          // enum dmrSmsFormat
 }
 __attribute__((packed)) settings_t;
 
@@ -124,6 +157,55 @@ static const settings_t default_settings =
     600,                          // Beacon every 10 minutes
     300,                          // 300 ms TXDELAY, APRS101 recommendation
 #endif
+    0,                            // No DMR ID yet: the operator sets it
+    9,                            // Default talkgroup, as the RTX starts with
+    DMR_DEST_GROUP,               // Group call by default
+    DMR_SMS_FMT_AUTO,             // The format this firmware always sent
+};
+
+/**
+ * True if id is a usable DMR identifier: 24 bits, 1 to 16777215.  0 is
+ * reserved for "no address" and is rejected on purpose, a call to ID 0 cannot
+ * be answered.
+ */
+static inline bool settings_dmrIdValid(uint32_t id)
+{
+    return (id >= DMR_ID_MIN) && (id <= DMR_ID_MAX);
+}
+
+/**
+ * True if the pair describes a destination a DMR call can use: a known type
+ * and, unless the type is NONE, a valid identifier.
+ */
+static inline bool settings_dmrDestValid(uint8_t type, uint32_t id)
+{
+    if (type == DMR_DEST_NONE)
+        return true;
+
+    if ((type != DMR_DEST_GROUP) && (type != DMR_DEST_USER))
+        return false;
+
+    return settings_dmrIdValid(id);
+}
+
+/** True if f names one of the SMS payload formats. */
+static inline bool settings_smsFormatValid(uint8_t f)
+{
+    return f < (uint8_t)DMR_SMS_FMT_COUNT;
+}
+
+/** "none", "group", "user": short name of a destination type, for menus. */
+const char *settings_dmrDestName(uint8_t type);
+
+/** "auto", "DD UTF-16BE", ...: short name of an SMS format, for menus. */
+const char *settings_smsFormatName(uint8_t format);
+
+/** Value of the settings reset cause, as reported by state.settings_reset. */
+enum settingsReset {
+    SETTINGS_NO_RESET = 0,   /**< Loaded from flash, nothing lost          */
+    SETTINGS_RESET_BLANK,    /**< Nothing valid in flash: first power on    */
+    SETTINGS_RESET_VERSION,  /**< Written by an older firmware: discarded   */
+    SETTINGS_RESET_CORRUPT,  /**< Bad CRC: discarded                        */
 };
 
 #endif /* SETTINGS_H */

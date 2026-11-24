@@ -176,8 +176,16 @@ int nvm_readVfoChannelData(channel_t *channel);
 /**
  * Read OpenRTX settings from storage.
  *
+ * The record carries the version of the settings payload (see
+ * core/settings_record.h): a record written by a build with a different
+ * settings_t is discarded instead of being reinterpreted, and the caller falls
+ * back to the defaults.
+ *
  * @param settings: pointer to the settings_t data structure to be populated.
- * @return 0 on success, -1 on failure
+ * @return 0 on success, a negative value on failure.  Drivers that can tell
+ *         the reason return -(enum settingsReset): -SETTINGS_RESET_BLANK for
+ *         an empty partition, -SETTINGS_RESET_VERSION for a record written by
+ *         another firmware, -SETTINGS_RESET_CORRUPT for a damaged one.
  */
 int nvm_readSettings(settings_t *settings);
 

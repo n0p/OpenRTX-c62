@@ -51,8 +51,19 @@ extern "C" {
 /** Magic value of the record header: "CRTS". */
 #define CHSTORE_MAGIC 0x53545243U
 
-/** Version of the record format described in this header. */
-#define CHSTORE_VERSION 1
+/**
+ * Version of the record format described in this header.
+ *
+ *  - 1: 32-byte records, FM M17 and DMR with colour code and timeslot, no DMR
+ *       destination, no per-channel mode beyond what channel_t already had.
+ *  - 2: 37-byte records: the DMR call destination (type + 24-bit ID) is stored
+ *       per channel.  A version 1 bank is migrated on load, see
+ *       chstore_channel_v1_t.
+ */
+#define CHSTORE_VERSION 2
+
+/** Version of the record format this build migrates from. */
+#define CHSTORE_VERSION_LEGACY 1
 
 /**
  * Delay before an updated "last used" index is written back to flash, ms.
@@ -75,8 +86,9 @@ enum chstoreFlags
 };
 
 /**
- * A channel as stored on the radio. 32 bytes, chosen so that a full bank of
- * CHSTORE_MAX_CHANNELS channels fits in a single 4 KiB sector.
+ * A channel as stored on the radio. 37 bytes, chosen so that a full bank of
+ * CHSTORE_MAX_CHANNELS channels still fits in one ping-pong slot (128 * 37 +
+ * 32 = 4768 of the 8192 bytes of a slot).
  *
  * This is deliberately not channel_t: that structure carries a 32 byte
  * description, a geolocation and scan/group indices, which no in-radio editor
@@ -97,8 +109,36 @@ typedef struct
     uint8_t  dmr_cc : 4,             /**< DMR colour code, 0..15            */
              dmr_ts : 4;             /**< DMR timeslot: 0 = TS1, 1 = TS2    */
     uint8_t  flags;                  /**< enum chstoreFlags                 */
+    uint8_t  dmr_dest_type;          /**< enum dmrDestType (DMR mode)       */
+    uint32_t dmr_dest_id;            /**< TG or subscriber, 24 bit used     */
 }
 __attribute__((packed)) chstore_channel_t;
+
+/**
+ * The version 1 record, exactly as it was written by the first firmware that
+ * had an on-radio bank.  Kept only so that chstore_init() can migrate a bank
+ * written by that build: the record grew by the DMR destination and a bank
+ * that is refused on upgrade would cost the operator every channel.
+ *
+ * Do not use it for anything else, and do not add fields to it.
+ */
+typedef struct
+{
+    char     name[CHSTORE_NAME_LEN];
+    uint32_t rx_freq;
+    uint32_t tx_freq;
+    uint16_t power;
+    uint8_t  mode;
+    uint8_t  bandwidth;
+    uint8_t  rx_tone_en : 1,
+             rx_tone    : 7;
+    uint8_t  tx_tone_en : 1,
+             tx_tone    : 7;
+    uint8_t  dmr_cc : 4,
+             dmr_ts : 4;
+    uint8_t  flags;
+}
+__attribute__((packed)) chstore_channel_v1_t;
 
 /**
  * Record header, 32 bytes, followed by count channel records.
@@ -165,10 +205,22 @@ int chstore_get(uint16_t idx, chstore_channel_t *out);
 
 /**
  * Validate a channel: name not empty, RX and TX frequencies inside the
- * supported range, mode known, power non zero. A channel that fails this is
- * never written.
+ * supported range, mode known, power non zero, tones and DMR fields in range.
+ * A channel that fails this is never written.
+ *
+ * The mode decides what the rest means: FM uses the CTCSS pair, M17 the
+ * frequencies and power, DMR adds colour code, timeslot and the call
+ * destination (a talkgroup or a subscriber), TETRA is receive only.  Fields
+ * that the mode does not use are kept as they are, so switching a channel from
+ * DMR to FM and back does not lose the talkgroup.
  */
 bool chstore_valid(const chstore_channel_t *ch);
+
+/**
+ * True if the DMR call destination of a channel can be used: a known type and,
+ * unless the type is NONE, an identifier in 1..16777215.
+ */
+bool chstore_dmrDestValid(const chstore_channel_t *ch);
 
 /** True if f is inside 18-660 MHz or 840-1300 MHz. */
 bool chstore_freqValid(freq_t f);
@@ -240,8 +292,24 @@ int chstore_toChannel(uint16_t idx, channel_t *out);
 
 /**
  * Build a stored record from a channel_t, as the VFO or the codeplug keeps it.
+ * channel_t has no room for a DMR destination, so the caller that has one (the
+ * channel editor, a zone) sets dmr_dest_type/dmr_dest_id afterwards.
  */
 void chstore_fromChannel(const channel_t *in, chstore_channel_t *out);
+
+/**
+ * Fill an RTX configuration from a stored channel: mode, frequencies (TX
+ * follows RX on a simplex channel), power, bandwidth, CTCSS tones and the DMR
+ * colour code, timeslot and call destination.  The squelch level and the
+ * disable-TX bits belong to the caller, they are not per channel.
+ *
+ * This is the one place that translates a stored channel into what the
+ * transmitter sees, so a channel with a talkgroup arrives at the DMR mode with
+ * that talkgroup and not with whatever the last VFO left behind.
+ *
+ * @return 0 on success, negative on a bad index.
+ */
+int chstore_applyRtx(uint16_t idx, rtxStatus_t *rtx);
 
 /**
  * Short mode name for the display ("FM", "M17", "DMR", "TETRA").

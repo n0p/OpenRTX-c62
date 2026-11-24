@@ -67,8 +67,9 @@ void rtx_init(pthread_mutex_t *m)
     rtxStatus.M17_meta_text[0] = '\0';
     rtxStatus.dmrColourCode = 1;
     rtxStatus.dmrTimeslot   = 1;
-    rtxStatus.dmrSourceId   = 1234567;
-    rtxStatus.dmrTalkgroup  = 9;
+    rtxStatus.dmrSourceId   = 0;   /* set from settings.dmr_id on the first sync */
+    rtxStatus.dmrDestId     = 9;   /* matches default_settings */
+    rtxStatus.dmrDestType   = DMR_DEST_GROUP;
     currMode = &noMode;
 
     /*

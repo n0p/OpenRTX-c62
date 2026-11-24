@@ -98,6 +98,25 @@ void *ui_threadFunc(void *arg)
             strncpy(rtx_cfg.source_address,      state.settings.callsign, 10);
             strncpy(rtx_cfg.destination_address, state.settings.m17_dest, 10);
 
+            /*
+             * DMR identity and call destination.  The radio ID goes in the
+             * source field of every link control and data header, so it comes
+             * from the settings and not from the channel; the destination is
+             * the settings' default, which a stored channel overrides through
+             * chstore_applyRtx().  Colour code and timeslot are per channel and
+             * live in the same union as the FM tones, so they are only read
+             * when the channel really is a DMR one.
+             */
+            rtx_cfg.dmrSourceId = settings_dmrIdValid(state.settings.dmr_id)
+                                ? state.settings.dmr_id : 0;
+            rtx_cfg.dmrDestType = state.settings.dmr_dest_type;
+            rtx_cfg.dmrDestId = state.settings.dmr_dest_id;
+
+            if (state.channel.mode == OPMODE_DMR) {
+                rtx_cfg.dmrColourCode = state.channel.dmr.rxColorCode;
+                rtx_cfg.dmrTimeslot = state.channel.dmr.dmr_timeslot;
+            }
+
             pthread_mutex_unlock(&rtx_mutex);
 
             rtx_configure(&rtx_cfg);

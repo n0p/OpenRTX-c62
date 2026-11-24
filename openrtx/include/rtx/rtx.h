@@ -57,7 +57,8 @@ typedef struct
     uint8_t  dmrColourCode;            /**< DMR colour code, 0..15     */
     uint8_t  dmrTimeslot;              /**< DMR timeslot, 1 or 2       */
     uint32_t dmrSourceId;              /**< DMR radio ID, 24 bit       */
-    uint32_t dmrTalkgroup;             /**< DMR talkgroup / unit, 24 b */
+    uint32_t dmrDestId;                /**< Call destination, 24 bit   */
+    uint8_t  dmrDestType;              /**< enum dmrDestType: NONE, GROUP or USER */
 }
 rtxStatus_t;
 

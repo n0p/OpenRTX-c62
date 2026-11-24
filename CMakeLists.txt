@@ -129,6 +129,9 @@ target_sources(app
     openrtx/src/core/voicePromptData.S
     openrtx/src/core/nvmem_access.c
     openrtx/src/core/channel_store.c
+    openrtx/src/core/settings.c
+    openrtx/src/core/settings_record.c
+    openrtx/src/core/zones.c
     openrtx/src/core/slot_store.c
     openrtx/src/core/contact_store.c
     openrtx/src/core/msg_service.c

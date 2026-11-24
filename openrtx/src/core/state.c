@@ -80,10 +80,22 @@ void state_init()
 
     /*
      * Try loading settings from nonvolatile memory and default to sane values
-     * in case of failure.
+     * in case of failure.  A record written by another version of the firmware
+     * is dropped as a whole (core/settings_record.h) and the reason is kept so
+     * that the screen can say the settings were reset instead of leaving the
+     * operator wondering why his callsign is gone.
      */
-    if (nvm_readSettings(&state.settings) < 0) {
+    int settingsRet = nvm_readSettings(&state.settings);
+
+    if (settingsRet < 0) {
+        int cause = -settingsRet;
+
         state.settings = default_settings;
+        state.settings_reset = (cause >= SETTINGS_RESET_BLANK &&
+                                cause <= SETTINGS_RESET_CORRUPT)
+                             ? (uint8_t)cause : (uint8_t)SETTINGS_RESET_BLANK;
+    } else {
+        state.settings_reset = SETTINGS_NO_RESET;
     }
 
     /*
@@ -257,4 +269,14 @@ void state_resetSettingsAndVfo()
 {
     state.settings = default_settings;
     state.channel = cps_getDefaultChannel();
+}
+
+uint8_t state_settingsResetCause(void)
+{
+    return state.settings_reset;
+}
+
+void state_settingsResetAck(void)
+{
+    state.settings_reset = SETTINGS_NO_RESET;
 }

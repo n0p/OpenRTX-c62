@@ -6,6 +6,7 @@
 
 #include "core/channel_store.h"
 #include "core/crc.h"
+#include "core/settings.h"
 #include "interfaces/delays.h"
 #include <string.h>
 #include <errno.h>
@@ -68,7 +69,12 @@ static int slotHeader(uint8_t slot, chstore_hdr_t *hdr)
     if (port->read(port->ctx, off, hdr, sizeof(*hdr)) != 0)
         return -EIO;
 
-    if (hdr->magic != CHSTORE_MAGIC || hdr->version != CHSTORE_VERSION)
+    if (hdr->magic != CHSTORE_MAGIC)
+        return -EINVAL;
+
+    /* A bank written by a newer firmware is not touched, not misread */
+    if (hdr->version != CHSTORE_VERSION &&
+        hdr->version != CHSTORE_VERSION_LEGACY)
         return -EINVAL;
 
     if (hdr->count > CHSTORE_MAX_CHANNELS)
@@ -86,16 +92,69 @@ static int slotHeader(uint8_t slot, chstore_hdr_t *hdr)
     return 0;
 }
 
+/* Copy the fields a version 1 record has into a version 2 record. */
+static void migrateV1(const chstore_channel_v1_t *old, chstore_channel_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    memcpy(out->name, old->name, CHSTORE_NAME_LEN);
+    out->rx_freq = old->rx_freq;
+    out->tx_freq = old->tx_freq;
+    out->power = old->power;
+    out->mode = old->mode;
+    out->bandwidth = old->bandwidth;
+    out->rx_tone_en = old->rx_tone_en;
+    out->rx_tone = old->rx_tone;
+    out->tx_tone_en = old->tx_tone_en;
+    out->tx_tone = old->tx_tone;
+    out->dmr_cc = old->dmr_cc;
+    out->dmr_ts = old->dmr_ts;
+    out->flags = old->flags;
+
+    /*
+     * The version 1 build transmitted every DMR call to the talkgroup held in
+     * the RTX status, so a migrated channel keeps that behaviour: "group, no
+     * identifier of its own" means "use the destination of the moment".  NONE
+     * would refuse to transmit, which is not what the operator had.
+     */
+    out->dmr_dest_type = DMR_DEST_NONE;
+    out->dmr_dest_id = 0;
+}
+
 /* Read a slot payload into the bank and check its CRC. */
 static int slotPayload(uint8_t slot, const chstore_hdr_t *hdr)
 {
     uint32_t off = (uint32_t)slot * CHSTORE_SLOT_SIZE + sizeof(chstore_hdr_t);
-    size_t len = (size_t)hdr->count * sizeof(chstore_channel_t);
+    uint16_t crc = 0;
 
-    if (port->read(port->ctx, off, bank, len) != 0)
-        return -EIO;
+    if (hdr->version == CHSTORE_VERSION) {
+        size_t len = (size_t)hdr->count * sizeof(chstore_channel_t);
 
-    if (crc_ccitt(bank, len) != hdr->pcrc)
+        if (port->read(port->ctx, off, bank, len) != 0)
+            return -EIO;
+
+        if (crc_ccitt(bank, len) != hdr->pcrc)
+            return -EINVAL;
+
+        return 0;
+    }
+
+    /*
+     * Legacy bank: read one 32-byte record at a time and convert it in place,
+     * so the migration costs 32 bytes of stack and not a second copy of the
+     * whole bank.  The CRC covers the bytes as they are on flash.
+     */
+    for (uint16_t i = 0; i < hdr->count; i++) {
+        chstore_channel_v1_t old;
+
+        if (port->read(port->ctx, off + (uint32_t)i * sizeof(old), &old,
+                       sizeof(old)) != 0)
+            return -EIO;
+
+        crc = crc_ccitt_update(crc, &old, sizeof(old));
+        migrateV1(&old, &bank[i]);
+    }
+
+    if (crc != hdr->pcrc)
         return -EINVAL;
 
     return 0;
@@ -247,6 +306,14 @@ bool chstore_freqValid(freq_t f)
            (f >= CHSTORE_FREQ_MIN_HI && f <= CHSTORE_FREQ_MAX);
 }
 
+bool chstore_dmrDestValid(const chstore_channel_t *ch)
+{
+    if (ch == NULL)
+        return false;
+
+    return settings_dmrDestValid(ch->dmr_dest_type, ch->dmr_dest_id);
+}
+
 bool chstore_valid(const chstore_channel_t *ch)
 {
     if (ch == NULL)
@@ -273,6 +340,13 @@ bool chstore_valid(const chstore_channel_t *ch)
         return false;
 
     if (ch->tx_tone_en && ch->tx_tone >= CTCSS_FREQ_NUM)
+        return false;
+
+    /* Colour code is a nibble: anything above 15 would be truncated on air */
+    if (ch->dmr_cc > 15)
+        return false;
+
+    if (!chstore_dmrDestValid(ch))
         return false;
 
     return true;
@@ -429,6 +503,10 @@ int chstore_toChannel(uint16_t idx, channel_t *out)
     /*
      * fm, dmr and m17 share a union in channel_t: only the block of the mode
      * the channel is on can be filled, the others would overwrite it.
+     *
+     * The DMR call destination has no field in channel_t: it travels to the
+     * radio through chstore_applyRtx(), which is what the UI uses when it
+     * selects a stored channel.
      */
     if (out->mode == OPMODE_DMR) {
         out->dmr.rxColorCode = ch->dmr_cc;
@@ -440,6 +518,36 @@ int chstore_toChannel(uint16_t idx, channel_t *out)
         out->fm.rxTone = ch->rx_tone;
         out->fm.txToneEn = ch->tx_tone_en;
         out->fm.txTone = ch->tx_tone;
+    }
+
+    return 0;
+}
+
+int chstore_applyRtx(uint16_t idx, rtxStatus_t *rtx)
+{
+    if (rtx == NULL || idx >= nbChannels)
+        return -EINVAL;
+
+    const chstore_channel_t *ch = &bank[idx];
+
+    rtx->opMode = ch->mode;
+    rtx->rxFrequency = ch->rx_freq;
+    rtx->txFrequency = (ch->flags & CHSTORE_FLAG_SIMPLEX) ? ch->rx_freq
+                                                          : ch->tx_freq;
+    rtx->txPower = ch->power;
+    rtx->bandwidth = ch->bandwidth;
+    rtx->txDisable = (ch->flags & CHSTORE_FLAG_RX_ONLY) ? 1 : 0;
+
+    rtx->rxToneEn = ch->rx_tone_en;
+    rtx->rxTone = ch->rx_tone_en ? ctcss_tone[ch->rx_tone % CTCSS_FREQ_NUM] : 0;
+    rtx->txToneEn = ch->tx_tone_en;
+    rtx->txTone = ch->tx_tone_en ? ctcss_tone[ch->tx_tone % CTCSS_FREQ_NUM] : 0;
+
+    if (ch->mode == OPMODE_DMR) {
+        rtx->dmrColourCode = ch->dmr_cc;
+        rtx->dmrTimeslot = (ch->dmr_ts == 0) ? 1 : 2;
+        rtx->dmrDestType = ch->dmr_dest_type;
+        rtx->dmrDestId = ch->dmr_dest_id;
     }
 
     return 0;
