@@ -80,3 +80,8 @@ scripts/get_demod_log
 
 # OpenRTX Codeplugs
 *.rtxc
+
+# Host builds of the TETRA engine's harnesses and of libtetra itself
+/build-host/
+/build-qemu/
+/build-lt-*/
