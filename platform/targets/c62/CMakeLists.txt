@@ -124,14 +124,6 @@ if(CONFIG_C62_DMR_VOCODER)
     $<TARGET_PROPERTY:zephyr_interface,INTERFACE_INCLUDE_DIRECTORIES>)
   target_include_directories(dmr_vocoder SYSTEM PRIVATE
     $<TARGET_PROPERTY:zephyr_interface,INTERFACE_SYSTEM_INCLUDE_DIRECTORIES>)
-  # The vocoder is the hot path of DMR RX: -O2, and no FP contraction so the
-  # float pipeline stays bit-identical to the host reference build. The math
-  # constants are pinned here, after the firmware-wide -DM_PI=...f copied above,
-  # because the vocoder's reference build uses the double-precision values.
-  target_compile_options(dmr_vocoder PRIVATE -O2 -ffp-contract=off)
-  target_compile_definitions(dmr_vocoder PRIVATE
-    M_PI=3.14159265358979323846 M_SQRT1_2=0.70710678118654752440
-    M_SQRT2=1.41421356237309504880)
   # Nothing calls the vocoder until the DMR receive mode is merged, and the
   # linker drops an unreferenced static library.  This forces the symbol in
   # anyway so its flash/RAM cost can be measured on the real firmware image;

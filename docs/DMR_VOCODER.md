@@ -6,16 +6,23 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # DMR vocoder on the C62: AMBE+2 decode
 
-The C62 can now decode DMR voice: `lib/dmr_vocoder` turns the 9-byte AMBE+2
-frame of a burst into 160 samples of 8 kHz PCM (20 ms).  **Decode only** – the
-encoder does not fit in the CSK6011B's Cortex-M33 – and the DMR receive mode
-that will call it is not part of this branch yet: what lands here is the
-vocoder, its integration in the firmware build, and the measurements that show
-it fits.
+The C62 can decode DMR voice: `lib/dmr_vocoder` turns the 9-byte AMBE+2 frame
+of a burst into 160 samples of 8 kHz PCM (20 ms).  **Decode only** – the encoder
+does not fit in the CSK6011B's Cortex-M33 – and the DMR receive mode that will
+call it is not part of this branch yet: what lands here is the vocoder, its
+integration in the firmware build, and the measurements that show it fits.
 
-Measured (details in the sections below): **751 394 instructions per frame**,
-i.e. **3.0–4.0 ms per 20 ms frame (15–20 % of one M33 at 300 MHz)**, **+41 KiB
-of flash** and **+52 KiB of static RAM** in the firmware image.
+The backend is a pure C reimplementation of the decoder half of OpenDMR
+(mbelib-neo): no C++, no heap, no thread-local storage, no libm, every table in
+flash and the whole decoder state in one 8.5 KiB object.  Nothing from
+`lib/opendmr` is compiled; the submodule stays in the tree as the reference this
+decoder was verified against.
+
+Measured (details in the sections below): **113 370 instructions per frame**,
+i.e. **0.45–0.60 ms per 20 ms frame (2.3–3.0 % of one M33 at 300 MHz)**,
+**+38 680 B of flash** and **+8 552 B of static RAM** in the firmware image,
+against **+41 444 B / +52 104 B** and **751 394 instructions per frame** for the
+previous backend, which compiled the OpenDMR decoder sources.
 
 ## API
 
@@ -30,20 +37,19 @@ int  dmr_vocoder_decode(const uint8_t frame[DMR_VOCODER_FRAME_BYTES],
 void dmr_vocoder_reset(void);
 ```
 
-`dmr_vocoder_decode()` returns 0 on success, -1 for a NULL argument and -2 if the
-internal arena is exhausted.  Frames must be decoded in order: the synthesis
-window overlaps two frames, so the first frame after a reset fades in from
-silence (same behaviour as the reference implementation).  Diagnostics:
-`dmr_vocoder_last_errors()` (Golay corrections in the last frame),
-`dmr_vocoder_state_bytes()`, `dmr_vocoder_arena_used()`.
+`dmr_vocoder_decode()` returns 0 on success and -1 for a NULL argument; the state
+is initialised on the first call, so an explicit reset before the first frame is
+optional.  Frames must be decoded in order: the synthesis window overlaps two
+frames, so the first frame after a reset fades in from silence (same behaviour
+as the reference implementation).  Diagnostics: `dmr_vocoder_last_errors()`
+(Golay corrections in the last frame), `dmr_vocoder_state_bytes()` (8 540 B) and
+`dmr_vocoder_arena_used()` (always 0: nothing is allocated).
 
 ### The backend is replaceable
 
-`lib/dmr_vocoder` is a *backend*: the DMR mode only sees `dmr_vocoder.h`.  The
-current implementation wraps the decoder half of OpenDMR (mbelib-neo).  An
-optimised decoder – fixed-point FFT, DSP intrinsics, tables in flash – can
-replace everything inside `lib/dmr_vocoder` without touching the DMR mode,
-provided it keeps this contract:
+`lib/dmr_vocoder` is a *backend*: the DMR mode only sees `dmr_vocoder.h`, which
+owns the single instance of the decoder core declared in `dmr_decoder.h`.  A
+replacement must keep this contract:
 
 1. the same header and the two functions, same return codes, no allocation per
    frame;
@@ -54,10 +60,9 @@ provided it keeps this contract:
 5. no C++, no `__thread`, no libc heap, and flash/RAM in the same order of
    magnitude as the numbers below.
 
-Power-on initialisation is the one thing a replacement should improve: building
-the DCT tables and the FFT plan costs 4.22 M instructions (~14 ms at 300 MHz)
-the first time a frame is decoded.  A backend with the tables in flash would
-start decoding in microseconds.
+Start-up is no longer a concern for a replacement: the tables are constants in
+flash, and the first frame costs 162 420 instructions in total (init plus the
+fade-in frame), not the 4.22 M of the previous backend.
 
 ## Integration
 
@@ -78,9 +83,11 @@ west build -b c62 -d build_c62 . -- -DCONFIG_C62_DMR_VOCODER=y
   the library needs because it is built with `-mfloat-abi=hard`.  The QEMU test
   harness in `lib/dmr_vocoder/tests/qemu` does the same by hand, and faults with
   `NOCP` without it;
-* the vocoder is compiled with `-O2 -ffp-contract=off -fno-math-errno` instead of
-  the firmware-wide `-Os`: it is the hot path of DMR RX, and FP contraction would
-  make the results depend on the target's FMA support.
+* the library sets its own per-source compile options, because the flags
+  inherited from `zephyr_interface` (including the firmware-wide `-Os`) are
+  appended after a target's options and would win:
+  `-O2 -fno-math-errno` on all three sources, `-ffp-contract=off` on the model
+  path and `-ffp-contract=fast` on the FFT.
 
 ### What the DMR receive mode still has to do
 
@@ -93,6 +100,15 @@ frames), so a one-frame jitter buffer keeps the 20 ms cadence.  Demodulation,
 sync, CACH and the embedded LC are still missing: they are the next step, and
 they are independent of this library.
 
+### Stack
+
+`-fstack-usage` with the firmware's flags puts the peak frame at **1 592 B**, all
+in `dmr_vocoder_decode_frame()` (`dmr_vocoder_decode()` adds 24 B and the FFT
+helpers are inlined; there is no recursion).  The DMR receive branch decodes on
+its own playback thread (`DmrSpeech.c`, `THREAD_STACK` = 8 192 B), so the 2 KiB
+of the audio worker and of the main thread are not in the path — with 2 KiB it
+would also fit, but with only ~430 B to spare.
+
 ## Size in the firmware
 
 Build with `-DCONFIG_C62_DMR_VOCODER=y -DC62_DMR_VOCODER_FORCE_LINK=ON`,
@@ -100,136 +116,143 @@ compared with the same branch without the symbol:
 
 | Region | Baseline | With vocoder | Delta |
 |---|---|---|---|
-| FLASH | 395 000 B (37.67 % of 1 MiB) | **436 444 B (41.62 %)** | **+41 444 B (+40.5 KiB)** |
-| RAM | 143 144 B (54.61 % of 256 KiB) | **195 248 B (74.48 %)** | **+52 104 B (+50.9 KiB)** |
-| `zephyr.bin` | 395 000 B | 436 444 B | +41 444 B |
+| FLASH | 395 000 B (37.67 % of 1 MiB) | **433 680 B (41.36 %)** | **+38 680 B (+37.8 KiB)** |
+| RAM | 143 144 B (54.61 % of 256 KiB) | **151 696 B (57.87 %)** | **+8 552 B (+8.4 KiB)** |
+| `zephyr.bin` | 395 000 B | 433 680 B | +38 680 B |
 
-Section by section (from `arm-none-eabi-size -A`): `text` +18 528 B, `rodata`
-+22 912 B (the two tables: Golay syndromes 8 192 B, mbelib ECC 8 272 B, plus the
-float constants), `bss` +52 097 B, `datas` +4 B.  The library archive holds
-~52 KiB of objects; `--gc-sections` drops the ~10 KiB no caller reaches (tone
-synthesis, dump helpers), so 41.4 KiB is what the DMR mode will really add.
-RAM is at 74 % of SRAM with the vocoder in, which still leaves ~60 KiB for the
-demodulator and the DMR mode.
+Against the previous backend:
 
-Per object (Zephyr flags, `arm-none-eabi-size`):
-
-| Object | text/rodata | .bss | Notes |
+| | Previous backend | This backend | Delta |
 |---|---|---|---|
-| `ambe3600x2450.c` | 15 263 | 23 656 | AMBE 2450 parameter decode + the DCT cosine cache |
-| `pffft.c` | 9 072 | | 256-point transform (scalar path, no NEON on the M33) |
-| `ecc_const.c` | 8 272 | | Golay tables of the mbelib ECC |
-| `dmr_golay_table.c` | 8 192 | | syndrome → error pattern, generated from g(x) |
-| `mbelib.c` | 4 092 | 4 | synthesis, spectral enhancement |
-| `dmr_math.c` | 2 360 | | deterministic transcendentals |
-| `mbe_unvoiced_fft.c` | 2 276 | | unvoiced synthesis |
-| `dmr_vocoder.c` | 580 | 28 433 | API, FEC unpacking, state (7 824) + arena (20 480) |
-| `mbe_adaptive.c` | 898 | | comfort noise, adaptive smoothing |
-| `ecc.c`, `ambe_common.c` | 876 | | |
-| `dmr_golay.c` | 82 | 4 | |
-| **Total** | **~52 KiB** | **~52 KiB** | linked, after `--gc-sections`: +41.4 KiB flash |
+| FLASH | 436 444 B (41.62 %) | **433 680 B (41.36 %)** | −2 764 B |
+| RAM | 195 248 B (74.48 %) | **151 696 B (57.87 %)** | −43 552 B (−42.5 KiB) |
+| instructions/frame | 751 394 | **113 370** | −84.9 % |
 
-The RAM is three quarters of one frame of history (3 × `mbe_parms`, 7 824 B), the
-23 656 B DCT cosine cache and the 12 288 B arena that replaces the heap (the FFT
-plan lives there).  The arena was sized to the measured 11 200 B high-water mark
-plus 1 KiB of margin, which is 8 KiB less than the first measurement in this
-document.  One way to trim it further is not done here: the DCT cache is a
-constant table (23 656 B) that could be generated at build time into flash, and
-only 1 785 of its 5 832 floats are ever read.
+Section by section (from `arm-none-eabi-size -A`): `text` +10 688 B, `rodata`
++27 992 B (all tables, `const`, in flash), `bss` +8 548 B, `datas` +0; the extra
+4 B of the RAM region is section alignment.
+
+Per object (`arm-none-eabi-size`, text includes rodata):
+
+| Object | text | .bss | Notes |
+|---|---|---|---|
+| `dmr_decoder.c` | 35 642 | 0 | FEC, parameters, synthesis, tables |
+| `dmr_fft.c` | 2 968 | 0 | 256-point real FFT, twiddles in flash |
+| `dmr_vocoder.c` | 132 | 8 548 | API + the one instance (8 540 B) |
+| **Total** | **38 742** | **8 548** | linked: +38 680 B, −62 B dropped by `--gc-sections` |
+
+The largest tables are the pre-computed DCT/HOC cosines (7 140 B), the AMBE
+quantisers (6 144 + 2 048 B), the Golay(23,12) syndromes (4 096 B), the
+synthesis/WOLA windows (2 944 B) and the FFT twiddles with the bit-reversal
+permutation (1 536 B).  The reference computed the DCT cache at run time into
+23.6 KiB of thread-local `.bss`; here it is flash, and the first frame no longer
+pays 5 832 `cosf`.
+
+RAM is at 58 % of SRAM with the vocoder in, which leaves ~104 KiB for the
+demodulator and the DMR mode (with the previous backend it was 74 %, 60 KiB).
 
 ## Cost on the Cortex-M33
 
-Measured by decoding 100 frames in QEMU (`mps2-an505`, Cortex-M33, no cache
-model, single-precision FPU) and counting executed instructions with a TCG
-plugin.  Init and steady state are separated by differential runs (0, 1 and 101
-frames):
+Measured by decoding the 1000 lab frames in QEMU (`mps2-an505`, Cortex-M33, no
+cache model, single-precision FPU) and counting executed instructions with a TCG
+plugin.  Init and steady state are separated by differential runs (0, 1 and 1000
+frames).  Two builds are measured: the objects the Zephyr firmware produced
+(`FIRMWARE_BUILD=...`, the number quoted everywhere in this document) and a
+fresh `-O2` rebuild with the same per-file flags:
 
-| | Instructions | At 300 MHz |
+| | Firmware objects | Rebuild |
 |---|---|---|
-| start-up, no frame | 15 611 | |
-| first frame: DCT tables + FFT plan + decode | 4 219 606 | 14–22 ms once |
-| steady state, per frame | **751 394** | **3.01 ms (CPI 1.2) … 4.01 ms (CPI 1.6)** |
-| share of a 20 ms frame | | **15.0 % … 20.0 %** |
+| start-up, no frame | 14 446 | 14 449 |
+| first frame (init + decode) | 162 420 | 162 542 |
+| steady state, per frame | **113 370** | 114 134 |
+| at 300 MHz, CPI 1.2 … 1.6 | **0.45 … 0.60 ms** | 0.46 … 0.61 ms |
+| share of a 20 ms frame | **2.3 … 3.0 %** | 2.3 … 3.0 % |
 
-For DMR, with 1.5 voice frames per 30 ms slot on average (21–28 % when two
-frames land in the same slot), the vocoder fits with room for the demodulator.
-CPI 1.2–1.6 is the published range for an in-order M33 with zero-wait-state
-SRAM; if code runs XIP from PSRAM, add 30–80 %.
+The one-off init inside the first frame is about 49 000 instructions (~0.16 ms
+at 300 MHz).  The previous backend needed **4.22 M** (~14 ms) there, because it
+built the DCT tables and the FFT plan at run time.
 
-`dmr_math.c` (the deterministic transcendentals) is why this is 751 k and not
-the 784 k instructions per frame measured for the plain libm build in
-`reports/opendmr_port.md` §4: it removes 423 `cosf` and one `sincos` per frame
-from newlib.
+For DMR, with 1.5 voice frames per 30 ms slot on average (2.3–4.5 % when two
+frames land in the same slot), the vocoder is no longer the constraint: it
+leaves the M33 free for the demodulator.  CPI 1.2–1.6 is the published range for
+an in-order M33 with zero-wait-state SRAM; if code runs XIP from PSRAM, add
+30–80 %.
 
 ## Verification
 
-Reproduce everything with:
+Everything below is reproduced by
 
 ```sh
 cd lib/dmr_vocoder/tests/qemu
-./run_qemu.sh /path/to/frames.ambe 100
+./run_qemu.sh                                      # sources rebuilt here
+FIRMWARE_BUILD=../../../build_c62 ./run_qemu.sh     # objects from the firmware build
 ```
 
-* **FEC layer**: `dmr_golay_table.c` is generated from the generator polynomial
-  `g(x) = 0xC75` by `tools/gen_golay_table.py` and is byte-for-byte identical to
-  `CGolay24128`'s decoding table (2048/2048 entries); all 2048 syndromes are
-  covered by weight ≤ 3 patterns, as Golay(23,12) being perfect requires;
-* **the C layer against OpenDMR's own wrapper**: decoding 100 frames with
-  `opendmr.cpp` + `cgolay24128.cpp` and with `dmr_vocoder.c` + `dmr_golay.c`,
-  same sources and flags, gives **byte-identical PCM**;
-* **host against target**: the same 100 frames decoded on x86-64 and on the
-  emulated Cortex-M33 give PCM that differs in **4 samples out of 16 160, by
-  1 LSB** (`max |Δ| = 1`).  The difference is not in `dmr_vocoder.c` or
-  `dmr_math.c` (those are bit-identical on both targets, checked value by value),
-  it comes from the rounding of the remaining float code; the firmware must be
-  compared against a reference built with the same compiler anyway.  Without
-  `dmr_math.c` (`-DDMR_VOCODER_DETERMINISTIC_MATH=OFF`) the same comparison
-  differs in 25 samples, because newlib's and glibc's `cosf` do not round alike;
-* **against the reference decoder tool**: the pre-built `dmr_codec` of
-  `work/opendmr-port` (same sources, different compiler) produces PCM that
-  differs from this build in 2 samples out of 16 160, by 1 LSB.
+The script decodes `tests/data/speech.ambe` (1000 frames, 20 s of speech from
+this repository's encoder) on x86-64 and on the emulated Cortex-M33, compares
+both with `tests/data/speech_ref.pcm` — the same frames decoded by OpenDMR's own
+decoder, `tools/make_ref.sh` — and counts instructions with QEMU's TCG counter.
+
+* **fidelity against the reference**, 1000 frames: **803/1000 frames bit-exact
+  from the host build and 811/1000 from the firmware objects, the rest differing
+  by 1 LSB; SNR 106.39 dB (host) and 106.48 dB (ARM)**, max |Δ| = 1.  That is
+  the envelope the reference has against itself under a different compiler, and
+  it matches what the delivered decoder measured;
+* **host against target**: 970/1000 frames bit-exact, the rest 1 LSB, SNR
+  115.95 dB.  The difference comes from the FFT, where `-ffp-contract=fast` lets
+  GCC fuse multiplications into VFMA on the M33 (x86-64 baseline has no FMA).
+  The FFT accumulates no phase, so the effect is 1 LSB and slightly *closer* to
+  the reference (811 vs 803 exact frames).  Building `dmr_fft.c` with
+  `-ffp-contract=off` makes host and target **bit-identical** (1000/1000) at
+  +2.8 % instructions (116 588/frame): one line in `CMakeLists.txt` if that
+  invariant is preferred;
+* **FEC layer**: the Golay(23,12) syndrome table in `dmr_tables.h` is generated
+  from the generator polynomial `g(x) = 0xC75` by `tools/gen_tables.py`, and the
+  decoder is complete for the perfect code (2048 syndromes ↔ 2048 patterns of
+  weight ≤ 3), as the reference's table-driven decoder is;
+* **robustness**: the decoder was fuzzed with 21 000 frames (real, bit-flipped
+  and random) under ASan/UBSan with no findings and no NaN; frame unpacking and
+  FEC are reached here through `dmr_vocoder_decode()`.
 
 Nothing here validates the decoder against over-the-air DMR, and the frames
 available are the ones produced by the encoder in this repository.  Those decode
 an octave high and about 4× louder than the input (`reports/opendmr_port.md` §2
 already measured a pitch correlation of 0.085 for that encoder, i.e. it is the
-weak half of the pair).  Since the decoder sources are used unmodified, this is
-not something this integration changes, but it is the open question for the DMR
+weak half of the pair).  The decoder reproduces the reference, so this is not
+something this integration changes, but it is the open question for the DMR
 receive mode: real burst frames are needed to judge the decoder, and the
 demodulator that would produce them does not exist yet.  The plumbing — frame
 layout, FEC, parameter bits, PCM length — is verified; the voice quality is not.
 
-## What changed with respect to OpenDMR, and why
+## What changed with respect to the previous backend
 
-The OpenDMR sources are used unmodified; the work is in what is *not* built and
-in three compile-time hooks:
+The previous backend compiled the decoder half of OpenDMR (mbelib-neo, pffft)
+for the M33 through three compile-time hooks in the submodule.  This one is a
+reimplementation, so nothing from the submodule is compiled at all:
 
-| Removed | Reason |
+| Removed | Why |
 |---|---|
-| `lib/opendmr/encoder/**` (18 C++ files) | OP25-derived encoder: 4.21 M instructions per frame, 84–112 % of the M33. Not viable; TX is a separate project (HiFi4 DSP or a fixed-point encoder) |
-| `opendmr.cpp` (C++ wrapper) | pulls `libstdc++` (`operator new`, `__gxx_personality_v0`) and links the encoder. Its decode path is ~200 lines, reimplemented in C |
-| `encoder/cgolay24128.cpp` | C++ and a GPL-2.0-only file; replaced by `dmr_golay.c` with a table generated from the standard's generator polynomial |
-| `decoder/fftpack.c` | dead code: `mbe_unvoiced_fft.c` uses pffft. Would add 10 KiB and double-precision transcendentals |
-| `__thread` / emutls | the 23 KiB DCT cache became plain `.bss`; emutls would need malloc |
-| heap | the FFT plan allocation (11 KiB) goes to a static arena |
-| `assert()`/`printf` | `-DNDEBUG`; pffft's asserts would pull stdio into the image |
-| libm | `dmr_math.c` (optional, see `DMR_VOCODER_DETERMINISTIC_MATH`) and `-fno-math-errno` turn `sqrtf` into a `VSQRT` instruction |
+| `lib/opendmr/decoder/**` from the build | replaced by `dmr_decoder.c` + `dmr_fft.c`, which keep the model and the arithmetic of the reference |
+| pffft | runtime-planned generic transform, 11 KiB of heap; replaced by a fixed 256-point real FFT with its twiddles in flash |
+| libm (`cosf`, `exp2f`, …) | newlib's `cosf` reduces the phase in double: 79 % of the reference decode on the M33.  `dmr_math.h` does it in float |
+| the 23.6 KiB thread-local DCT cache | pre-computed at build time into `dmr_tables.h` |
+| `dmr_math.c` and its redirect header, `dmr_alloc.h`, the arena | no libm and no allocation left to redirect |
+| `dmr_golay.c` and its 8 KiB table | the Golay(23,12) syndromes are part of `dmr_tables.h` |
+| the C++ wrapper and the encoder | already out; the submodule is now reference material only |
 
-Hooks added in the submodule (branch `c62/static-decode`, commit `85bdbb2`, not
-pushed): `MBE_THREAD_LOCAL` can be defined away, `PFFFT_MALLOC`/`PFFFT_FREE` can
-be redirected, and `MBE_SINCOSF` can replace `__builtin_sincosf`.  All three are
-no-ops for existing users of the library.
+The three fidelity-critical details are documented in the sources: the phase
+reduction is a correct Cody-Waite reduction (not a wrap), `-ffp-contract=off`
+protects the phase accumulator, and FMA is used explicitly only where it cannot
+change a decision (`__builtin_fmaf` in the polynomials).
 
 ## Limitations
 
-* **No encoder.**  TX DMR needs a different engine (see above); the API has no
-  `encode()` and the firmware has no path to it.
+* **No encoder.**  TX DMR needs a different engine; the API has no `encode()`.
 * **One instance, not reentrant**: one decoder state per device, no locking.
 * **Decoder quality** is mbelib-neo's: intelligible, but it is a
   reimplementation of AMBE+2, and nothing was validated against live repeaters.
-* **RAM**: 52 KiB of `.bss`, of which 23.6 KiB is a table that belongs in flash.
-* **Init** costs 4.2 M instructions the first time a frame is decoded; do it when
-  entering the mode, not in the audio callback.
+* **RAM**: 8.5 KiB of `.bss` (the three parameter sets, the WOLA history and the
+  per-instance FFT/PCM scratch).
 * **PSRAM XIP** would slow everything down; the numbers above assume code and
   data in SRAM.
 
@@ -237,26 +260,22 @@ no-ops for existing users of the library.
 
 | Part | Licence |
 |---|---|
-| `lib/opendmr/decoder/**` (mbelib-neo, pffft) | **GPL-2.0-or-later** (pffft/FFTPACK-derived parts are BSD-like, GPL-compatible) |
-| `lib/dmr_vocoder/**` (this layer) | **GPL-3.0-or-later** |
+| `lib/dmr_vocoder/dmr_vocoder.[ch]` (this layer) | **GPL-3.0-or-later** |
+| `lib/dmr_vocoder/dmr_decoder.*`, `dmr_fft.*`, `dmr_math.h`, `dmr_tables.h` | **GPL-2.0-or-later** |
 | OpenRTX / this firmware | GPL-3.0-or-later |
 
-The decoder is GPL-2.0-**or-later**, so it can be taken under GPLv3 and linked
-with the rest of the firmware: the combination is distributed as
-**GPL-3.0-or-later**.  Unlike the plan sketched in `reports/opendmr_port.md` §5,
-this integration does **not** compile `opendmr.cpp` or `encoder/cgolay24128.cpp`,
-the two files without an SPDX header that inherited the repository's
-GPL-2.0-only `LICENSE`.  The C++ wrapper is replaced by `dmr_vocoder.c`/
-`dmr_golay.c` (GPL-3.0-or-later), and the Golay table is generated from the
-generator polynomial by `tools/gen_golay_table.py`, so no GPL-2.0-only code is
-linked in.  The encoder, which is GPL-3.0-or-later upstream, is not built either.
+The decoder core is derived from mbelib-neo (GPL-2.0-or-later), so it can be
+taken under GPLv3 and linked with the rest of the firmware: the combination is
+distributed as **GPL-3.0-or-later**.  The OpenDMR submodule is no longer linked,
+which also removes the two files of its C++ wrapper that had no SPDX header and
+inherited the repository's GPL-2.0-only `LICENSE`.  `dmr_tables.h` is generated
+from the AMBE+2 model equations by `tools/gen_tables.py`, not copied.
 
 Distributing a C62 with this firmware means: publish the complete corresponding
-source (OpenRTX, OpenDMR, the `c62/static-decode` submodule commit), keep the
-copyright notices of mbelib (Pavel Yazev, ISC/GPL-2.0-or-later), OP25 (Max H.
-Parke KA1RBI) and PFFFT/FFTPACK (J. Pommier, P. Swarztrauber/UCAR), and — GPLv3
-§6 — keep the device flashable (`cskburn` over the programming pads, which this
-firmware does not block).
+source (OpenRTX and the derived decoder), keep the copyright notices of mbelib
+(Pavel Yazev, ISC/GPL-2.0-or-later) and of OP25 (Max H. Parke KA1RBI), whose
+model the tables encode, and — GPLv3 §6 — keep the device flashable (`cskburn`
+over the programming pads, which this firmware does not block).
 
 **Patents are a separate risk.** AMBE/AMBE+2 is a DVSI proprietary vocoder and no
 free licence grants patent rights over it.  GPL compliance does not cover that;

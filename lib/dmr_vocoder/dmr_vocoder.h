@@ -8,17 +8,19 @@
  * @file dmr_vocoder.h
  * @brief DMR AMBE+2 vocoder, decode only, for the C62 target.
  *
- * Thin C layer around the decoder half of OpenDMR (lib/opendmr, GPL-2.0-or-later
- * mbelib-neo sources), built for a small ARM MCU:
+ * Public contract of lib/dmr_vocoder: one 72-bit AMBE+2 voice frame in, 160
+ * samples of 8 kHz PCM out.  The backend (dmr_decoder.c, GPL-2.0-or-later) is
+ * a pure C reimplementation of the decoder half of OpenDMR (mbelib-neo),
+ * restructured for a small ARM MCU:
  *
- *  - decode path only: the OP25-derived encoder is not compiled (it does not fit
- *    in the CSK6011B's Cortex-M33, see docs/DMR_VOCODER.md);
- *  - single static instance: no heap, no thread-local storage, no libc printf;
- *  - no per-frame allocation: the FFT plan and the DCT tables are built once, in
- *    a static arena, on the first decode;
- *  - no C++: the Golay decoders and the frame unpacking are reimplemented in C
- *    (dmr_golay.c);
- *  - FPU single precision only.
+ *  - decode path only: the OP25-derived encoder is not part of the library and
+ *    does not fit in the CSK6011B's Cortex-M33 anyway;
+ *  - single static instance: no heap, no thread-local storage, no libc stdio;
+ *  - no per-frame allocation and no start-up computation: every table (DCT
+ *    cosines, windows, FFT twiddles, Golay syndromes, quantisers) is in flash;
+ *  - no C++, no libm: sin/cos/exp2/log2 come from dmr_math.h and sqrt is the
+ *    FPv5 VSQRT instruction, so the object only references memcpy/memset;
+ *  - FPU single precision only, no double-precision arithmetic anywhere.
  *
  * One DMR voice frame is 72 bits (9 bytes) in the canonical, de-interleaved
  * order A(24) | B(23) | C(25) used by OpenDMR, and synthesises 160 samples of
@@ -60,12 +62,13 @@ extern "C" {
  * The decoder keeps state between calls, so consecutive frames of the same
  * transmission must be decoded in order.  The first frame after
  * dmr_vocoder_reset() produces a fade-in from silence (the synthesis window
- * overlaps two frames); this matches the reference implementation.
+ * overlaps two frames); this matches the reference implementation.  The state
+ * is initialised on the first call, so an explicit reset before the first
+ * frame is optional.
  *
  * @param frame AMBE+2 frame, 9 bytes, canonical order A|B|C.
  * @param pcm   Output buffer, 160 samples of signed 16-bit PCM at 8 kHz.
- * @return 0 on success, -1 on invalid arguments, -2 if the internal arena is
- *         exhausted (cannot happen with the sizes in this build).
+ * @return 0 on success, -1 on invalid arguments.
  */
 int dmr_vocoder_decode(const uint8_t frame[DMR_VOCODER_FRAME_BYTES],
                        int16_t pcm[DMR_VOCODER_PCM_SAMPLES]);
@@ -88,22 +91,18 @@ void dmr_vocoder_reset(void);
 unsigned int dmr_vocoder_last_errors(void);
 
 /**
- * @brief Static RAM used by the vocoder state (decoder parameters, DCT tables).
+ * @brief Static RAM used by the vocoder state (.bss, no initialisers).
  */
 size_t dmr_vocoder_state_bytes(void);
 
 /**
- * @brief Static arena high-water mark, valid after the first decode.
+ * @brief Bytes taken from the internal allocation arena: always 0.
+ *
+ * Kept for API compatibility with the first backend, which needed a static
+ * arena for the decoder's one-off allocations.  This decoder allocates
+ * nothing: its state is one object and its tables are in flash.
  */
 size_t dmr_vocoder_arena_used(void);
-
-/*
- * Internal: allocator handed to the OpenDMR sources (MBE_MALLOC/PFFFT_MALLOC)
- * to keep every allocation inside this library's static arena.  Not for use by
- * application code.
- */
-void *dmr_vocoder_alloc(size_t size);
-void dmr_vocoder_free(void *ptr);
 
 #ifdef __cplusplus
 }
