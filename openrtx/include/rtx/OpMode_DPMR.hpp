@@ -13,6 +13,20 @@
 #include "protocols/DPMR/DpmrData.h"
 #include "protocols/DPMR/DpmrDefs.h"
 
+#ifdef CONFIG_DPMR_TX
+#include "protocols/DPMR/DpmrTx.h"
+#include "protocols/Fsk4Tx.h"
+
+/** AMBE+2 frames queued for transmission: two frames of margin. */
+#define DPMR_TX_QUEUE_FRAMES 8
+
+/** One 20 ms half of the baseband stream: 48 symbols at 48 kHz. */
+#define DPMR_TX_HALF_SAMPLES 960
+
+/** Halves per frame: the END frame is one of them, it is 48 symbols long. */
+#define DPMR_TX_FRAME_HALVES 4
+#endif
+
 /**
  * dPMR mode (ETSI TS 102 490): receive only.
  *
@@ -37,9 +51,13 @@
  *    reassembled.  Handing it to core/messaging needs a transport id for dPMR,
  *    see docs/RX_DPMR.md.
  *
- * Transmission is not implemented: the dPMR transmit chain (LBT, header, CCH,
- * end frame) is a separate piece of work and the C62's PA is not calibrated for
- * a 6,25 kHz 4FSK emission.
+ * Transmit (CONFIG_DPMR_TX): protocols/DPMR/DpmrTx.c builds the header frame,
+ * the superframes and the END frame, the AMBE+2 encoder fills the TCH and the
+ * 4FSK modulator the DMR chain uses shapes it, half a frame at a time.  The
+ * channel code of the frequency and the frame numbers are the standard's, so
+ * this receiver and a reference decoder read the call back whole.  There is no
+ * listen-before-talk: the mode keys when the operator does.  See
+ * docs/TX_DPMR.md.
  */
 class OpMode_DPMR : public OpMode
 {
@@ -98,6 +116,31 @@ private:
     void reset();
     void startSampling();
     void stopSampling();
+
+#ifdef CONFIG_DPMR_TX
+    bool startBaseband(const rtxStatus_t *status);
+    bool startTx(const rtxStatus_t *status);
+    void stopTx();
+    bool fillMic(unsigned frames);
+    bool putHalf();
+    bool txSlot(const rtxStatus_t *status);
+
+    dpmr_tx_t tx;
+    fsk4_mod_t txMod;
+    int8_t levelsBuf[DPMR_FRAME_SYMBOLS];
+    uint8_t frameQueue[DPMR_TX_QUEUE_FRAMES][DPMR_AMBE_BYTES];
+    unsigned frameHead;
+    unsigned frameCount;
+    int txStage;      ///< 0 preamble, 1 header, 2 payload, 3 END, 4 tail
+    int txHalf;       ///< 0..3, quarter of the frame being sent
+    int txTail;       ///< Halves of tail sent
+    int txFrames;     ///< Preamble frames sent
+    bool txRunning;
+    bool txFirstBlock;
+    int txPath, txId, micPath, micId;
+    stream_sample_t txSamples[2 * DPMR_TX_HALF_SAMPLES];
+    int16_t micPcm[2 * 160];
+#endif
 
     pathId basebandPath = -1;
     streamId basebandId = -1;

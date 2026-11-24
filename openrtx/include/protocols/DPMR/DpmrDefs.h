@@ -194,7 +194,7 @@ struct dpmrFrame
     struct dpmrEnd end;         /**< End frame field                  */
     bool     voice;             /**< TCH decoded as 4 AMBE+2 frames   */
     uint8_t  ambe[DPMR_AMBE_FRAMES][DPMR_AMBE_BYTES];
-    uint8_t  channelCode;       /**< 12 bit channel code (frames 2 and 4) */
+    uint16_t channelCode;       /**< 12 bit channel code (frames 2 and 4) */
     float    evm;               /**< Normalised level error, 0 is ideal */
     uint8_t  fixes;             /**< Total corrected blocks in the frame */
 };
@@ -288,6 +288,58 @@ uint16_t dpmrDefs_channelCode(const uint8_t dibits[DPMR_SYNC_SYMBOLS]);
 uint16_t dpmrFec_scramblerReset(void);
 /** Next scrambling bit. */
 uint8_t dpmrFec_scramblerNext(uint16_t *state);
+
+/**
+ * @brief Encode the 36 dibits of a CCH field (clause 7.6), transmitting half
+ * of dpmrFec_cchDecode().
+ *
+ * @param fn frame number 0..3 within the superframe
+ * @param id12 the 12-bit address slice of this frame
+ * @param mode enum dpmrMode
+ * @param version 0 standard, 3 manufacturer
+ * @param format enum dpmrFormat
+ * @param sld the 18-bit slow data field
+ * @param out 36 dibits, most significant bit first
+ */
+void dpmrFec_cchEncode(uint8_t fn, uint16_t id12, uint8_t mode,
+                       uint8_t version, uint8_t format, uint32_t sld,
+                       uint8_t out[DPMR_CCH_SYMBOLS]);
+
+/**
+ * @brief Encode the 60 dibits of an HI0 or HI1 field (clause 7.7).
+ *
+ * @param ht header type, clause 5.11
+ * @param calledId 24-bit called address
+ * @param ownId 24-bit own address
+ * @param mode enum dpmrMode
+ * @param version 0 standard, 3 manufacturer
+ * @param format enum dpmrFormat
+ * @param ci 11-bit call information
+ * @param out 60 dibits
+ */
+void dpmrFec_hiEncode(uint8_t ht, uint32_t calledId, uint32_t ownId,
+                      uint8_t mode, uint8_t version, uint8_t format,
+                      uint16_t ci, uint8_t out[DPMR_HI_SYMBOLS]);
+
+/**
+ * @brief Encode the 36 dibits (72 bits) of an END field (clause 7.8 and 9.6):
+ * the same 36-bit block twice, each copy scrambled from the reset state.
+ *
+ * @param et end type (0 normal, 1 with status)
+ * @param arq acknowledge request
+ * @param wait transmit wait
+ * @param status 5-bit status message
+ * @param out 36 dibits
+ */
+void dpmrFec_endEncode(uint8_t et, uint8_t arq, uint8_t wait, uint8_t status,
+                       uint8_t out[DPMR_END_FIELD_SYMBOLS]);
+
+/**
+ * @brief Pack one canonical AMBE+2 frame into the 36 dibits of the TCH
+ * (clause 9.1): the inverse of dpmrFec_voiceFrame().
+ */
+void dpmrFec_voiceFrameEncode(const uint8_t frame[DPMR_AMBE_BYTES],
+                              uint8_t dibits[36]);
 
 /** CRC-7 of clause 7.2 (X^7+X^3+1) over nbits, MSB first. */
 uint8_t dpmrFec_crc7(const uint8_t *bits, size_t nbits);

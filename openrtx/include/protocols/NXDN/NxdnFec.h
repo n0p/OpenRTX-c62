@@ -54,6 +54,46 @@ void nxdnFecDescramble(uint8_t dibits[NXDN_LICH_DIBITS + NXDN_SACCH_DIBITS
                        bool inverted);
 
 /**
+ * @brief Apply the data scrambler of TS 1-A 4.6 (the transmitting half).
+ *
+ * The scrambler is an XOR of the sign bit at the positions nxdnScramble[]
+ * marks, so it is its own inverse and this is nxdnFecDescramble() by another
+ * name; the separate entry point is what the transmitter calls, and the
+ * `inverted` argument means the same thing (an inverted discriminator).
+ */
+void nxdnFecScramble(uint8_t dibits[NXDN_LICH_DIBITS + NXDN_SACCH_DIBITS
+                                     + NXDN_VCH_PER_FRAME * NXDN_VCH_DIBITS],
+                     bool inverted);
+
+/**
+ * @brief Build the 8 coding bits of a LICH from its 7 control bits.
+ *
+ * @param control the 7 control bits, bit 6 first, as nxdnLichParse() takes
+ *                them.
+ * @param dibits the 8 dibits of the field: the data bit in the sign, the
+ *               magnitude bit set (every LICH symbol is an outer one).
+ */
+void nxdnFecLichEncode(uint8_t control, uint8_t dibits[NXDN_LICH_DIBITS]);
+
+/**
+ * @brief Encode one 60-bit SACCH block (the transmitting half of
+ * nxdnFecSacch()).
+ *
+ * @param info 26 information bits, one per byte: 8 of SR, then 18 of L3.
+ * @param bits 60 bits, one per byte, in transmission order.
+ */
+void nxdnFecSacchEncode(const uint8_t info[26], uint8_t bits[NXDN_SACCH_BITS]);
+
+/**
+ * @brief Pack one canonical AMBE+2 frame into the 36 dibits of a VCH.
+ *
+ * The inverse of nxdnFecVchToAmbe(): the DMR dibit schedule that turns
+ * mbelib's ambe_fr[4][24] planes into 36 symbols, run backwards.
+ */
+void nxdnFecVchFromAmbe(const uint8_t frame[NXDN_AMBE_BYTES],
+                        uint8_t dibits[NXDN_VCH_DIBITS]);
+
+/**
  * @brief Read the LICH out of its 8 dibits (already descrambled).
  *
  * @return false if the even parity over the 4 MSBs does not match.

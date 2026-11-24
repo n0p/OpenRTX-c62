@@ -1448,6 +1448,40 @@ dmr_glue_test = executable('dmr_glue_test',
 # dPMR (TS 102 490): capa de codificacion, reparto AMBE+2 contra el camino DMR,
 # datos cortos y una captura real por el demodulador completo.  El vocoder es
 # el mismo lib/dmr_vocoder que usa el modo DMR.
+# NXDN transmit: las mitades de codificacion (LICH, SACCH, VCH) cerradas
+# contra sus decodificadores, y la cadena entera -- NxdnTx.c, el modulador 4FSK
+# y nxdnPhy_push() -- exigiendo los 182 dibits, los cuatro cuadros AMBE+2 y el
+# mensaje de la SACCH bit a bit, en tres configuraciones y dos niveles.
+nxdn_tx_test = executable('nxdn_tx_test',
+                          sources : ['tests/unit/nxdn_tx.cpp',
+                                     'openrtx/src/protocols/Fsk4Tx.c',
+                                     'openrtx/src/protocols/NXDN/NxdnDefs.c',
+                                     'openrtx/src/protocols/NXDN/NxdnFec.c',
+                                     'openrtx/src/protocols/NXDN/NxdnPhy.c',
+                                     'openrtx/src/protocols/NXDN/NxdnTx.c'],
+                          kwargs : {'include_directories' : linux_inc,
+                                    'cpp_args' : linux_cpp_args + ['-O2'],
+                                    'c_args' : linux_c_args + ['-O2',
+                                                               '-ffp-contract=off'],
+                                    'dependencies' : [catch2_dep],
+                                    'link_args' : linux_l_args})
+
+# dPMR transmit: las mitades de codificacion (CCH, HI, END, TCH) cerradas
+# contra sus decodificadores y la cadena completa -- cabecera, supertramas y
+# trama END -- bit a bit por dpmrPhy_push(), en dos llamadas y dos niveles.
+dpmr_tx_test = executable('dpmr_tx_test',
+                          sources : ['tests/unit/dpmr_tx.cpp',
+                                     'openrtx/src/protocols/Fsk4Tx.c',
+                                     'openrtx/src/protocols/DPMR/DpmrDefs.c',
+                                     'openrtx/src/protocols/DPMR/DpmrPhy.c',
+                                     'openrtx/src/protocols/DPMR/DpmrTx.c'],
+                          kwargs : {'include_directories' : linux_inc,
+                                    'cpp_args' : linux_cpp_args + ['-O2'],
+                                    'c_args' : linux_c_args + ['-O2',
+                                                               '-ffp-contract=off'],
+                                    'dependencies' : [catch2_dep],
+                                    'link_args' : linux_l_args})
+
 dpmr_rx_test = executable('dpmr_rx_test',
                           sources : unit_test_src + [
                               'openrtx/src/protocols/DPMR/DpmrDefs.c',
@@ -1587,6 +1621,8 @@ test('Settings Record Test', settings_record_test)
 test('APRS Config Test',     aprs_config_test)
 test('DMR SMS Format Test',  dmr_sms_format_test)
 test('DMR LC Destination Test', dmr_lc_dest_test)
+test('NXDN TX Test',          nxdn_tx_test)
+test('dPMR TX Test',          dpmr_tx_test)
 test('dPMR RX Test',          dpmr_rx_test)
 test('dPMR Host Harness',     dpmr_host_exe, args : [dpmr_capture])
 test('dPMR PHY Cost',         dpmr_phy_cost_run, args : [dpmr_capture])

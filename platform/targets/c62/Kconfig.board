@@ -250,9 +250,29 @@ config C62_DPMR_RX
 	  lib/dmr_vocoder the DMR mode uses: dPMR carries the frame with a
 	  4-way interleave, not a different vocoder.
 
-	  Receive only: there is no dPMR transmitter, and PTT in this mode does
-	  nothing. ALSA-like flat discriminator input, one carrier per channel:
-	  dPMR is FDMA, there are no timeslots.
+	  Receive, and transmit with CONFIG_DPMR_TX. ALSA-like flat
+	  discriminator input, one carrier per channel: dPMR is FDMA, there
+	  are no timeslots.
+
+	  Enable it with west build -b c62 ... -- -DCONFIG_C62_DPMR_RX=y
+
+config DPMR_TX
+	bool "dPMR transmit (header, CCH, TCH, END frame, PTT)"
+	depends on C62_DPMR_RX && DMR_TX
+	default n
+	help
+	  dPMR transmit (ETSI TS 102 490): the preamble, the header frame
+	  with its two header information fields and the channel code of the
+	  frequency, superframes of four payload frames (CCH with the frame
+	  number and the address slices, four AMBE+2 3600x2450 frames in the
+	  TCH) and the END frame. Same 4FSK modulator and PA chain as DMR,
+	  and its AMBE+2 encoder, which is why the option depends on
+	  CONFIG_DMR_TX.
+
+	  There is no listen-before-talk: the mode keys when the operator
+	  does. The channel code comes from clause 6.1.5 for the frequency
+	  (group A), so this receiver and a reference decoder read the call
+	  back.
 
 endmenu
 

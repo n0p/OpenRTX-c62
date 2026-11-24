@@ -275,6 +275,120 @@ void nxdnFecVchToAmbe(const uint8_t dibits[NXDN_VCH_DIBITS],
 }
 
 /* ------------------------------------------------------------------ */
+/* Transmitting halves                                                */
+/* ------------------------------------------------------------------ */
+
+void nxdnFecScramble(uint8_t dibits[182], bool inverted)
+{
+    /* The sign bit XOR is its own inverse */
+    nxdnFecDescramble(dibits, inverted);
+}
+
+void nxdnFecLichEncode(uint8_t control, uint8_t dibits[NXDN_LICH_DIBITS])
+{
+    /*
+     * Figure 4.5-7: eight coding bits, the seven control bits MSB first and
+     * an even parity bit over the four MSBs; each goes out as one dibit whose
+     * sign bit is the data bit.  Every LICH symbol is an outer one, so the
+     * magnitude bit stays set.
+     */
+    uint8_t bit[8];
+
+    for (int i = 0; i < 7; i++)
+        bit[i] = (uint8_t)((control >> (6 - i)) & 1u);
+
+    bit[7] = (uint8_t)(bit[0] ^ bit[1] ^ bit[2] ^ bit[3]);
+
+    for (int i = 0; i < NXDN_LICH_DIBITS; i++)
+        dibits[i] = (uint8_t)((bit[i] << 1) | 1u);
+}
+
+void nxdnFecSacchEncode(const uint8_t info[26], uint8_t bits[NXDN_SACCH_BITS])
+{
+    uint8_t in[36];
+    uint8_t pair[36][2];   /* the 72 coded bits, G1 then G2 per step */
+    uint8_t coded[60];
+    int state = 0;
+
+    /*
+     * The CRC-6 is the register of sacch_crc_ok() read out after the 26
+     * information bits: the decoder compares exactly that with the six bits
+     * that follow them, so the transmitter appends the register contents.
+     */
+    uint8_t s[6] = { 1, 1, 1, 1, 1, 1 };
+
+    for (int i = 0; i < 26; i++) {
+        uint8_t a = (uint8_t)((info[i] & 1u) ^ s[0]);
+
+        s[0] = (uint8_t)(a ^ s[1]);
+        s[1] = s[2];
+        s[2] = s[3];
+        s[3] = (uint8_t)(a ^ s[4]);
+        s[4] = (uint8_t)(a ^ s[5]);
+        s[5] = a;
+    }
+
+    memcpy(in, info, 26);
+    memcpy(&in[26], s, 6);
+
+    /* Four zero tail bits close the trellis in state 0 */
+    memset(&in[32], 0, 4);
+
+    for (int t = 0; t < SACCH_STEPS; t++) {
+        int g1, g2;
+
+        conv_encode_step(state, in[t] & 1u, &g1, &g2);
+        pair[t][0] = (uint8_t)g1;
+        pair[t][1] = (uint8_t)g2;
+        state = ((state << 1) | (in[t] & 1u)) & (SACCH_STATES - 1);
+    }
+
+    /*
+     * Puncture to 60 bits in the inverse order of the decoder's
+     * un-puncturing: per group of six pairs, ten bits leave as
+     * g1_0 g2_0 g1_1 g2_1 g1_2 g1_3 g2_3 g1_4 g2_4 g1_5.
+     */
+    static const int8_t group_pair[10] = { 0, 0, 1, 1, 2, 3, 3, 4, 4, 5 };
+    static const int8_t group_is_g2[10] = { 0, 1, 0, 1, 0, 0, 1, 0, 1, 0 };
+
+    for (int p = 0; p < 6; p++)
+        for (int b = 0; b < 10; b++)
+            coded[p * 10 + b] = pair[p * 6 + group_pair[b]][group_is_g2[b]];
+
+    /*
+     * Interleave: the decoder writes transmitted bit t into
+     * deint[(t % 5) * 12 + t / 5], so the encoder sends the n-th bit of its
+     * 60-bit block at t = (n % 12) * 5 + n / 12.
+     */
+    for (int n = 0; n < NXDN_SACCH_BITS; n++)
+        bits[(n % 12) * 5 + n / 12] = coded[n];
+}
+
+void nxdnFecVchFromAmbe(const uint8_t frame[NXDN_AMBE_BYTES],
+                        uint8_t dibits[NXDN_VCH_DIBITS])
+{
+    int8_t planes[4][24];
+
+    memset(planes, 0, sizeof(planes));
+
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 24; c++) {
+            int t = ambe_layout[r][c];
+
+            if (t >= 0)
+                planes[r][c] = (int8_t)((frame[t >> 3] >> (7 - (t & 7))) & 1u);
+        }
+    }
+
+    for (int i = 0; i < NXDN_VCH_DIBITS; i++) {
+        const uint8_t sign = (uint8_t)planes[ambe_rw[i]][ambe_rx[i]];
+        const uint8_t mag = (uint8_t)planes[ambe_ry[i]][ambe_rz[i]];
+
+        dibits[i] = (uint8_t)((sign << 1) | mag);
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* SACCH layer 3                                                      */
 /* ------------------------------------------------------------------ */
 

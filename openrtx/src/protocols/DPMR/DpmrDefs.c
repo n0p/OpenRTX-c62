@@ -454,6 +454,147 @@ bool dpmrFec_endDecode(const uint8_t dibits[DPMR_END_FIELD_SYMBOLS],
     return out->crcOk[0] || out->crcOk[1];
 }
 
+/* ------------------------------------------------------- transmitting --- */
+
+/*
+ * The three field encoders below are the exact inverse of the decoders above:
+ * the information bits are framed with their CRC, cut into (12,8) Hamming
+ * blocks, written into the de-interleaver's index map backwards, scrambled
+ * from the reset state and packed two bits per dibit, MSB first.
+ */
+
+/** Write n bits of v, MSB first, at bits[first..]. */
+static void putBits(uint8_t *bits, size_t first, size_t count, uint32_t v)
+{
+    for (size_t i = 0; i < count; i++)
+        bits[first + i] = (uint8_t)((v >> (count - 1 - i)) & 1u);
+}
+
+/**
+ * Turn nmap bits of a coded-and-hamming'd field into scrambled dibits:
+ * air[i] = bits[map[i]] XOR scrambler bit i, dibit s = air[2s], air[2s+1].
+ */
+static void interleaveAndScramble(const uint8_t *bits, size_t nbits,
+                                  const uint8_t *map, uint8_t *dibits)
+{
+    uint16_t scr = dpmrFec_scramblerReset();
+    uint8_t air[144];
+
+    for (size_t i = 0; i < nbits; i++)
+        air[i] = (uint8_t)(bits[map[i]] ^ dpmrFec_scramblerNext(&scr));
+
+    for (size_t s = 0; s < nbits / 2; s++)
+        dibits[s] = (uint8_t)((air[2 * s] << 1) | air[2 * s + 1]);
+}
+
+/** Hamming-encode nblocks octets, packed from the bit array, into 12*n bits. */
+static void hammingEncodeBlocks(const uint8_t *bits, size_t nblocks,
+                                uint8_t *out)
+{
+    for (size_t b = 0; b < nblocks; b++) {
+        uint8_t byte = 0;
+
+        for (size_t i = 0; i < 8; i++)
+            byte = (uint8_t)((byte << 1) | (bits[8 * b + i] & 1u));
+
+        dpmrFec_hammingEncode(byte, out + 12 * b);
+    }
+}
+
+void dpmrFec_cchEncode(uint8_t fn, uint16_t id12, uint8_t mode,
+                       uint8_t version, uint8_t format, uint32_t sld,
+                       uint8_t out[DPMR_CCH_SYMBOLS])
+{
+    uint8_t data[48];
+    uint8_t ham[72];
+
+    memset(data, 0, sizeof(data));
+    putBits(data, 0, 2, (uint32_t)(fn & 3u));
+    putBits(data, 2, 12, (uint32_t)(id12 & 0xFFFu));
+    putBits(data, 14, 3, mode);
+    putBits(data, 17, 2, version);
+    putBits(data, 19, 2, format);
+    putBits(data, 23, 18, sld & 0x3FFFFu);
+
+    putBits(data, 41, 7, dpmrFec_crc7(data, 41));
+
+    hammingEncodeBlocks(data, 6, ham);
+    interleaveAndScramble(ham, 72, dI72, out);
+}
+
+void dpmrFec_hiEncode(uint8_t ht, uint32_t calledId, uint32_t ownId,
+                      uint8_t mode, uint8_t version, uint8_t format,
+                      uint16_t ci, uint8_t out[DPMR_HI_SYMBOLS])
+{
+    uint8_t data[80];
+    uint8_t ham[120];
+
+    memset(data, 0, sizeof(data));
+    putBits(data, 0, 4, ht);
+    putBits(data, 4, 24, calledId);
+    putBits(data, 28, 24, ownId);
+    putBits(data, 52, 3, mode);
+    putBits(data, 55, 2, version);
+    putBits(data, 57, 2, format);
+    /* Table 5.4: two reserved bits between F and CI */
+    putBits(data, 61, 11, (uint32_t)(ci & 0x7FFu));
+
+    putBits(data, 72, 8, dpmrFec_crc8(data, 72));
+
+    hammingEncodeBlocks(data, 10, ham);
+    interleaveAndScramble(ham, 120, dI120, out);
+}
+
+void dpmrFec_endEncode(uint8_t et, uint8_t arq, uint8_t wait, uint8_t status,
+                       uint8_t out[DPMR_END_FIELD_SYMBOLS])
+{
+    uint8_t data[24];
+    uint8_t ham[36];
+    uint8_t air[36];
+    uint8_t block[18];
+
+    memset(data, 0, sizeof(data));
+    putBits(data, 0, 2, (uint32_t)(et & 3u));
+    putBits(data, 2, 2, (uint32_t)(arq & 3u));
+    putBits(data, 4, 4, (uint32_t)(wait & 0xFu));
+    putBits(data, 8, 5, (uint32_t)(status & 0x1Fu));
+
+    putBits(data, 17, 7, dpmrFec_crc7(data, 17));
+
+    hammingEncodeBlocks(data, 3, ham);
+
+    /*
+     * Clause 9.6: each 36-bit block is scrambled on its own from the reset
+     * state, and the same block is sent twice.
+     */
+    uint16_t scr = dpmrFec_scramblerReset();
+
+    for (int i = 0; i < 36; i++)
+        air[i] = (uint8_t)(ham[i] ^ dpmrFec_scramblerNext(&scr));
+
+    for (int s = 0; s < 18; s++)
+        block[s] = (uint8_t)((air[2 * s] << 1) | air[2 * s + 1]);
+
+    for (int rep = 0; rep < 2; rep++)
+        memcpy(&out[18 * rep], block, 18);
+}
+
+void dpmrFec_voiceFrameEncode(const uint8_t frame[DPMR_AMBE_BYTES],
+                              uint8_t dibits[36])
+{
+    uint8_t air[72];
+
+    for (int m = 0; m < 72; m++) {
+        /* canonical bit t = 18*(m%4) + m/4 leaves as air bit m */
+        const int t = 18 * (m & 3) + m / 4;
+
+        air[m] = (uint8_t)((frame[t >> 3] >> (7 - (t & 7))) & 1u);
+    }
+
+    for (int s = 0; s < 36; s++)
+        dibits[s] = (uint8_t)((air[2 * s] << 1) | air[2 * s + 1]);
+}
+
 void dpmrFec_voiceFrame(const uint8_t dibits[36], uint8_t frame[DPMR_AMBE_BYTES])
 {
     /*

@@ -78,7 +78,7 @@ static void onFrame(const struct dpmrFrame *f, void *user)
     }
 
     if (f->sync == DPMR_SYNC_CC) {
-        code = (unsigned char)f->channelCode;
+        code = (unsigned)f->channelCode;
         codeSeen++;
     }
 
