@@ -5,6 +5,7 @@
  */
 
 #include "ui/ui_aprs.h"
+#include "ui/ui_layout.h"
 #include "ui/ui_default.h"
 #include "core/aprs_service.h"
 #include "core/state.h"
@@ -28,7 +29,8 @@
 
 #define ROW_H     12
 #define TOP_Y      2
-#define LIST_ROWS 9
+/* Rows of every APRS list: the shared 12 px row, 8 of them (docs/UI.md) */
+#define LIST_ROWS  (ui_rows_fit(ui_row_height()))
 
 /* Screen-local state: which station or message is selected, and the editor */
 static struct
@@ -75,29 +77,15 @@ void ui_aprs_config(void)
 
 static void header(const char *title, const char *right)
 {
-    gfx_clearScreen();
-    gfx_print((point_t){2, TOP_Y}, FONT_SIZE_6PT, TEXT_ALIGN_LEFT,
-              yellow_fab413, "%s", title);
-    if (right != NULL)
-        gfx_print((point_t){SCR_W - 2, TOP_Y}, FONT_SIZE_6PT, TEXT_ALIGN_RIGHT,
-                  color_white, "%s", right);
+    ui_list_header(title, right);
 }
 
 static void hints(const char *green, const char *p1, const char *p2,
                   const char *red)
 {
-    const int y = SCR_H - 9;
-    gfx_print((point_t){2, y}, FONT_SIZE_5PT, TEXT_ALIGN_LEFT, color_white,
-              "%s", green != NULL ? green : "");
-    if (p1 != NULL)
-        gfx_print((point_t){44, y}, FONT_SIZE_5PT, TEXT_ALIGN_LEFT,
-                  color_white, "P1:%s", p1);
-    if (p2 != NULL)
-        gfx_print((point_t){86, y}, FONT_SIZE_5PT, TEXT_ALIGN_LEFT,
-                  color_white, "P2:%s", p2);
-    if (red != NULL)
-        gfx_print((point_t){SCR_W - 2, y}, FONT_SIZE_5PT, TEXT_ALIGN_RIGHT,
-                  color_white, "%s", red);
+    /* The same bar as every other screen: ui_hints_draw() centres the group
+       and draws the key names itself. */
+    ui_hints_draw(&(ui_hints_t){ green, p1, p2, red });
 }
 
 /* Age of a packet in the "12s / 5m / 3h" form the list uses. */
@@ -140,9 +128,10 @@ static void drawStationList(void)
         uia.station = (uint8_t)(list->count - 1u);
 
     /* Scroll so that the selection is always visible */
-    uint8_t first = 0;
-    if (uia.station >= LIST_ROWS)
-        first = (uint8_t)(uia.station - LIST_ROWS + 1u);
+    uint16_t sel = uia.station;
+    uint16_t first = 0;
+
+    ui_list_clamp(&sel, &first, list->count, (uint8_t)LIST_ROWS);
 
     for (uint8_t i = 0; i < LIST_ROWS; i++)
     {
@@ -152,7 +141,12 @@ static void drawStationList(void)
 
         const aprs_station_t *s = &list->st[idx];
         const bool sel = (idx == uia.station);
-        const color_t col = sel ? yellow_fab413 : color_white;
+        const color_t col = sel ? color_black : color_white;
+        int16_t ry = ui_row_top(i);
+        int16_t baseline = (int16_t)(ry + ui_row_baseline());
+
+        if (sel)
+            ui_row_selection(ry, ui_row_height(), true);
 
         char age[8];
         ageText(age, sizeof(age), s->lastMs);
@@ -169,9 +163,8 @@ static void drawStationList(void)
                 snprintf(dist, sizeof(dist), "%4um", (unsigned)s->distM);
         }
 
-        gfx_print((point_t){2, (int16_t)(TOP_Y + 12 + i * ROW_H)},
-                  FONT_SIZE_6PT, TEXT_ALIGN_LEFT, col, "%c %-9s %s %s",
-                  sel ? '>' : ' ', s->call, age, dist);
+        gfx_print((point_t){ UI_TEXT_X, baseline }, FONT_SIZE_6PT,
+                  TEXT_ALIGN_LEFT, col, "%-9s %s %s", s->call, age, dist);
     }
 
     hints("MENU", "MSG", "SETUP", "EXIT");
@@ -189,7 +182,7 @@ static void drawStationDetail(void)
     const aprs_station_t *s = &list->st[uia.station];
     header(s->call, NULL);
 
-    int16_t y = TOP_Y + 14;
+    int16_t y = UI_LIST_TOP + 2;
 
     if (s->hasPos)
     {
@@ -249,10 +242,15 @@ static void drawMessageList(void)
         idx = i;
         const aprs_in_msg_t *e = &m->in[i];
         const bool sel = (uia.message == i);
-        gfx_print((point_t){2, (int16_t)(TOP_Y + 12 + shown * ROW_H)},
-                  FONT_SIZE_6PT, TEXT_ALIGN_LEFT,
-                  sel ? yellow_fab413 : color_white, "%c%-9s %.11s",
-                  sel ? '>' : ' ', e->from, e->text);
+        int16_t ry = ui_row_top(shown);
+        int16_t baseline = (int16_t)(ry + ui_row_baseline());
+
+        if (sel)
+            ui_row_selection(ry, ui_row_height(), true);
+
+        gfx_print((point_t){ UI_TEXT_X, baseline }, FONT_SIZE_6PT,
+                  TEXT_ALIGN_LEFT, sel ? color_black : color_white,
+                  "%-9s %.11s", e->from, e->text);
         shown++;
     }
 
@@ -284,7 +282,7 @@ static void drawMessageView(void)
         if (off >= strlen(e->text))
             break;
         snprintf(line, sizeof(line), "%.11s", &e->text[off]);
-        gfx_print((point_t){2, (int16_t)(TOP_Y + 14 + r * 11)},
+        gfx_print((point_t){2, (int16_t)(UI_LIST_TOP + 2 + r * 11)},
                   FONT_SIZE_6PT, TEXT_ALIGN_LEFT, color_white, "%s", line);
     }
 
@@ -309,18 +307,18 @@ static void drawMessageEdit(void)
         char line[24];
         size_t off = (size_t)r * 22u;
         snprintf(line, sizeof(line), "%.22s", &uia.editText[off]);
-        gfx_print((point_t){2, (int16_t)(TOP_Y + 20 + r * 14)},
+        gfx_print((point_t){ UI_TEXT_X, (int16_t)(UI_LIST_TOP + 8 + r * 14)},
                   FONT_SIZE_8PT, TEXT_ALIGN_LEFT, color_white, "%s", line);
     }
 
     /* Caret: the character being chosen, under the text */
     const size_t n = strlen(EDIT_CHARS);
-    gfx_print((point_t){2, 70}, FONT_SIZE_6PT, TEXT_ALIGN_LEFT, yellow_fab413,
+    gfx_print((point_t){ UI_TEXT_X, 70}, FONT_SIZE_6PT, TEXT_ALIGN_LEFT, yellow_fab413,
               "char '%c'  pos %u/%u",
               EDIT_CHARS[uia.editChar % n], (unsigned)uia.editPos,
               (unsigned)strlen(uia.editText));
 
-    gfx_print((point_t){2, 84}, FONT_SIZE_5PT, TEXT_ALIGN_LEFT, color_white,
+    gfx_print((point_t){ UI_TEXT_X, 84}, FONT_SIZE_5PT, TEXT_ALIGN_LEFT, color_white,
               "up/down char, left/right move");
 
     hints("SEND", "<>", "DEL", "EXIT");
@@ -351,10 +349,15 @@ static void drawConfig(void)
     for (uint8_t i = 0; i < 9; i++)
     {
         const bool sel = (i == uia.field);
-        gfx_print((point_t){2, (int16_t)(TOP_Y + 12 + i * 10)},
-                  FONT_SIZE_5PT, TEXT_ALIGN_LEFT,
-                  sel ? yellow_fab413 : color_white, "%c%-9s %s",
-                  sel ? '>' : ' ', names[i], values[i]);
+        int16_t ry = (int16_t)(UI_LIST_TOP + i * ui_row_height());
+        int16_t baseline = (int16_t)(ry + ui_row_baseline());
+
+        if (sel)
+            ui_row_selection(ry, ui_row_height(), false);
+
+        gfx_print((point_t){ UI_TEXT_X, baseline }, FONT_SIZE_5PT,
+                  TEXT_ALIGN_LEFT, sel ? yellow_fab413 : color_white,
+                  "%-9s %s", names[i], values[i]);
     }
 
     hints("NEXT", "+/-", "SAVE", "EXIT");

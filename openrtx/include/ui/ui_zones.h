@@ -13,14 +13,17 @@
  *
  * The browser owns no frequency of its own. The tables - which repeaters exist
  * in R0..R7, U0..U100 and PMR1..PMR16, their split and their power - come from
- * the data model (`core/zone_store.h`, the zone tables of the model branch),
- * which registers itself here with ui_zones_setSource(). The UI only decides
+ * the data model (`core/zones.h`: zones_at(), zones_channels(),
+ * zones_channel()). When that header is in the tree the browser uses it
+ * directly; when it is not (this branch merged alone, or a target without the
+ * zone plan) the list is empty and says so ("NO ZONES"). The UI only decides
  * how a row is named, laid out and scrolled, and it draws whatever power the
- * model reports: the PMR entries read "500mW" because the table says 500 mW,
+ * model reports: the PMR entries read "500mW" because the plan says 500 mW,
  * not because the browser assumes it.
  *
- * Until a source is registered the list is empty and says so ("NO ZONES"); the
- * screen never invents a frequency.
+ * `ui_zones_setSource()` is the seam for a target that gets its tables from
+ * somewhere else, and for the tests. It takes precedence over the model; NULL
+ * falls back to the model when it is compiled in.
  *
  * Keys, the same as every other list of this UI (docs/UI.md):
  *   UP/DOWN  previous / next entry

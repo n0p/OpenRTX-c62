@@ -196,6 +196,8 @@ TEST_CASE("Zone browser walks zones, scrolls and tunes", "[ui][zones]")
     press(KEY_ESC, &sync);
     REQUIRE_FALSE(ui_zones_isOpen());
     REQUIRE(sync == false);
+
+    ui_zones_setSource(NULL);
 }
 
 TEST_CASE("Zone browser marks the PMR zone and returns to the zones",
@@ -229,7 +231,10 @@ TEST_CASE("Zone browser marks the PMR zone and returns to the zones",
 TEST_CASE("Zone browser without tables says so and stays harmless",
           "[ui][zones]")
 {
-    ui_zones_setSource(NULL);
+    /* An empty source: what the browser sees when the zone plan is not built
+       into the firmware (no core/zones.h in the tree). */
+    static const ui_zones_source_t emptySource = { 0, NULL, NULL, NULL };
+    ui_zones_setSource(&emptySource);
 
     state.ui_screen = MENU_ZONES;
     ui_zones_open();
@@ -247,4 +252,6 @@ TEST_CASE("Zone browser without tables says so and stays harmless",
     press(KEY_ESC, &sync);
     REQUIRE_FALSE(ui_zones_isOpen());
     REQUIRE(sync == false);
+
+    ui_zones_setSource(NULL);
 }

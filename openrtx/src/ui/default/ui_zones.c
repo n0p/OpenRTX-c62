@@ -32,6 +32,21 @@
 #include "ui/ui_layout.h"
 #include "ui/ui_zones.h"
 
+/*
+ * The zone tables are the data model's (`core/zones.h`, the model branch):
+ * a zone is a base frequency, a step, a shift and a count, and a channel is
+ * computed from it. When that header is not in the tree - this branch is
+ * merged before the model one, or a target builds without the zone plan - the
+ * browser compiles with no data at all and says "NO ZONES". It never carries a
+ * frequency of its own.
+ */
+#if defined(__has_include)
+#  if __has_include("core/zones.h")
+#    include "core/zones.h"
+#    define UI_ZONES_MODEL 1
+#  endif
+#endif
+
 enum zScreen
 {
     ZS_CLOSED = 0,
@@ -59,6 +74,52 @@ static const char *const defaultTitles[] = { "R", "U", "PMR" };
 /* Data access                                                                */
 /******************************************************************************/
 
+#ifdef UI_ZONES_MODEL
+/* One resolved channel at a time: the browser asks for the rows it draws */
+static ui_zone_entry_t modelEntry;
+
+static const char *modelName(uint8_t zone)
+{
+    const zone_t *z = zones_at((int)zone);
+    return (z != NULL) ? z->prefix : NULL;
+}
+
+static uint16_t modelSize(uint8_t zone)
+{
+    const zone_t *z = zones_at((int)zone);
+
+    if (z == NULL)
+        return 0;
+
+    int n = zones_channels(z);
+    return (n > 0) ? (uint16_t)n : 0;
+}
+
+static const ui_zone_entry_t *modelAt(uint8_t zone, uint16_t index)
+{
+    const zone_t *z = zones_at((int)zone);
+    zone_channel_t zc;
+
+    if ((z == NULL) || (index >= modelSize(zone)))
+        return NULL;
+
+    if (zones_channel(z->id, index, &zc) != 0)
+        return NULL;
+
+    memset(&modelEntry, 0, sizeof(modelEntry));
+    snprintf(modelEntry.label, sizeof(modelEntry.label), "%s", zc.name);
+    modelEntry.rx_hz = zc.rx;
+    modelEntry.tx_hz = zc.tx;
+    modelEntry.power_mw = zc.power;
+    modelEntry.mode = zc.mode;
+    return &modelEntry;
+}
+
+static const ui_zones_source_t modelSource = {
+    (uint8_t)ZONE_COUNT, modelName, modelSize, modelAt
+};
+#endif /* UI_ZONES_MODEL */
+
 void ui_zones_setSource(const ui_zones_source_t *src)
 {
     source = src;
@@ -66,20 +127,26 @@ void ui_zones_setSource(const ui_zones_source_t *src)
 
 const ui_zones_source_t *ui_zones_source(void)
 {
+#ifdef UI_ZONES_MODEL
+    return (source != NULL) ? source : &modelSource;
+#else
     return source;
+#endif
 }
 
 static uint8_t zoneCount(void)
 {
-    return (source != NULL) ? source->zones : 0;
+    const ui_zones_source_t *src = ui_zones_source();
+    return (src != NULL) ? src->zones : 0;
 }
 
 static const char *zoneTitle(uint8_t zone)
 {
+    const ui_zones_source_t *src = ui_zones_source();
     const char *t = NULL;
 
-    if ((source != NULL) && (source->name != NULL))
-        t = source->name(zone);
+    if ((src != NULL) && (src->name != NULL))
+        t = src->name(zone);
 
     if (t != NULL && t[0] != '\0')
         return t;
@@ -90,16 +157,20 @@ static const char *zoneTitle(uint8_t zone)
 
 static uint16_t zoneSize(uint8_t zone)
 {
-    if ((source == NULL) || (source->size == NULL))
+    const ui_zones_source_t *src = ui_zones_source();
+
+    if ((src == NULL) || (src->size == NULL))
         return 0;
-    return source->size(zone);
+    return src->size(zone);
 }
 
 static const ui_zone_entry_t *zoneAt(uint8_t zone, uint16_t index)
 {
-    if ((source == NULL) || (source->at == NULL))
+    const ui_zones_source_t *src = ui_zones_source();
+
+    if ((src == NULL) || (src->at == NULL))
         return NULL;
-    return source->at(zone, index);
+    return src->at(zone, index);
 }
 
 /******************************************************************************/
@@ -188,6 +259,17 @@ static bool tuneEntry(uint16_t index)
         return false;
 
     ui_zones_label(zoneTitle(zs.zone), index, label, sizeof(label));
+
+#ifdef UI_ZONES_MODEL
+    /* With the zone plan in the tree, let it build the channel: it knows the
+       bandwidth, the shift and the flags of each zone. */
+    if ((source == NULL) && (index < zoneSize(zs.zone))) {
+        if (zones_toChannel(zs.zone, index, &state.channel) == 0) {
+            state.channel_index = 0;
+            return true;
+        }
+    }
+#endif
 
     memset(&state.channel, 0, sizeof(state.channel));
     state.channel.mode = (e->mode != OPMODE_NONE) ? e->mode : OPMODE_FM;
