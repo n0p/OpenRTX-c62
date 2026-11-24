@@ -233,6 +233,28 @@ if(CONFIG_C62_DSTAR)
     ${OPENRTX_ROOT}/lib/dmr_vocoder/dmr_golay_table.c)
   target_include_directories(app PRIVATE ${OPENRTX_ROOT}/lib/dmr_vocoder)
 
+  #
+  # C62_DSTAR_VOCODER: the AMBE 3600x2400 voice decoder itself
+  # (lib/dstar_vocoder, a port of mbelib-neo v2.6.2's D-STAR path).
+  #
+  # It is compiled into the application rather than into an archive so that it
+  # overrides the weak dstarVocoder_decode()/dstarVocoder_available() hooks of
+  # the protocol layer, and its state is placed in PSRAM: 14 KiB of it, which
+  # the radio's 256 KB of internal RAM cannot spare.  The library needs the
+  # DMR vocoder's math and FFT (dmr_math.h is header-only, dmr_fft.c is not).
+  #
+  if(CONFIG_C62_DSTAR_VOCODER)
+    target_sources(app PRIVATE
+      ${OPENRTX_ROOT}/lib/dstar_vocoder/dstar_vocoder.c
+      ${OPENRTX_ROOT}/lib/dstar_vocoder/dstar_decoder.c
+      ${OPENRTX_ROOT}/lib/dmr_vocoder/dmr_fft.c)
+    target_include_directories(app PRIVATE ${OPENRTX_ROOT}/lib/dstar_vocoder)
+    target_compile_definitions(app PRIVATE CONFIG_DSTAR_VOCODER
+      "DSTAR_VOCODER_STATE_ATTR=__attribute__((section(\".psram_section\")))")
+    message(STATUS "C62: D-STAR AMBE 3600x2400 voice decoder enabled"
+                   " (state in PSRAM)")
+  endif()
+
   if(CONFIG_DSTAR_TX)
     target_sources(app PRIVATE
       ${OPENRTX_ROOT}/openrtx/src/protocols/DSTAR/DStarTx.c)

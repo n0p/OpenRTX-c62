@@ -108,18 +108,35 @@ config DMR_TX
 config C62_DSTAR
 	bool "D-STAR DV mode (receive, slow data, transmitter)"
 	select MESSAGING
+	select C62_DSTAR_VOCODER
 	default n
 	help
 	  D-STAR DV: GMSK 4800 bit/s in a 6.25 kHz channel -- the radio header
 	  (callsigns, flags, CRC), the voice frames and the slow-data channel
 	  (20-character message, NMEA and D-PRS positions).  See docs/RX_DSTAR.md.
 
+	  Voice goes through the AMBE 3600x2400 decoder (C62_DSTAR_VOCODER).
+
 	  CONFIG_DSTAR_TX (default y with this option) builds the transmit
-	  chain and keys the PA on PTT.  Voice needs an AMBE 3600x2400 codec;
-	  without one the chain sends the D-STAR null frame, which is what an
-	  Icom radio transmits with no microphone input.
+	  chain and keys the PA on PTT.  The transmit voice payload is the
+	  D-STAR null frame unless a 3600x2400 encoder is linked in, which is
+	  what an Icom radio transmits with no microphone input.
 
 	  Enable it with west build -b c62 ... -- -DCONFIG_C62_DSTAR=y
+
+config C62_DSTAR_VOCODER
+	bool "D-STAR voice decoder (AMBE 3600x2400, decode only)"
+	default y
+	help
+	  Build the AMBE 3600x2400 voice decoder used by the D-STAR receive
+	  mode: the 72 voice bits of a DV frame in, 160 samples of 8 kHz PCM
+	  out.  A port of mbelib-neo v2.6.2's D-STAR path, 121 000
+	  instructions per 20 ms frame (2.4-3.2 % of the M33 at 300 MHz), with
+	  its 14 KiB of state in PSRAM.  See docs/RX_DSTAR.md.
+
+	  Turn it off to build the mode without voice: callsigns, messages,
+	  positions and the whole receive chain keep working, and the frames
+	  play as silence.
 
 config DSTAR_TX
 	bool "D-STAR transmitter"

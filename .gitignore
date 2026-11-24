@@ -80,3 +80,8 @@ scripts/get_demod_log
 
 # OpenRTX Codeplugs
 *.rtxc
+
+# D-STAR vocoder: the reference PCM of the test bank is regenerated with
+# lib/dstar_vocoder/tests/ref/ref_dstar.c against mbelib-neo (see
+# docs/RX_DSTAR.md); the frame bank itself is committed, like the DMR one.
+lib/dstar_vocoder/tests/data/*_ref.pcm

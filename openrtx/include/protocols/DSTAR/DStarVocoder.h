@@ -72,6 +72,26 @@ int dstarVocoder_params(const uint8_t air[DSTAR_VOICE_BYTES],
                         uint8_t params[DSTAR_AMBE_BITS], int *errors);
 
 /**
+ * @brief The same, with the two error counts the voice decoder needs.
+ *
+ * AMBE 3600x2400's repeat, erasure and mute decisions are driven by the error
+ * counts of the two FEC words separately (mbelib's process path repeats a
+ * frame whose c0_errors + protected_errors exceed three), so the front end
+ * reports them the way mbelib's mbe_decodeAmbe3600x2400Frame() does: the
+ * number of data bits the Golay decoder had to change in each word, plus the
+ * c0 parity bit when only it was wrong.
+ *
+ * @param air: the frame, air order.
+ * @param params: 49 parameter bits, MSB first.
+ * @param c0Errors: optional, receives the errors of the c0 word (0..13).
+ * @param protectedErrors: optional, receives those of the c1 word (0..12).
+ * @return 0 on success.
+ */
+int dstarVocoder_frame(const uint8_t air[DSTAR_VOICE_BYTES],
+                       uint8_t params[DSTAR_AMBE_BITS], int *c0Errors,
+                       int *protectedErrors);
+
+/**
  * @brief Decode one voice frame to PCM.
  *
  * Weak hook, like dmrVocoder_encode(): a platform that has the AMBE 2400 core

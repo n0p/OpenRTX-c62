@@ -43,6 +43,18 @@ static const uint8_t airMap[72] = {
 };
 
 /**
+ * @brief Number of set bits in a 12-bit value (the corrected data bits). */
+static int popcount12(uint32_t x)
+{
+    int n = 0;
+    while (x != 0) {
+        x &= x - 1;
+        n++;
+    }
+    return n;
+}
+
+/**
  * @brief Codeword value of a bit plane slice, ready for the Golay decoder.
  *
  * mbelib keeps the codeword of a plane with the first bit of the slice as the
@@ -63,6 +75,19 @@ static uint32_t planeWord(const uint8_t fr[4][24], int row, int first, int last)
 int dstarVocoder_params(const uint8_t air[DSTAR_VOICE_BYTES],
                         uint8_t params[DSTAR_AMBE_BITS], int *errors)
 {
+    int c0Errors = 0, protectedErrors = 0;
+
+    if (dstarVocoder_frame(air, params, &c0Errors, &protectedErrors) != 0)
+        return -1;
+    if (errors != NULL)
+        *errors = c0Errors + protectedErrors;
+    return 0;
+}
+
+int dstarVocoder_frame(const uint8_t air[DSTAR_VOICE_BYTES],
+                       uint8_t params[DSTAR_AMBE_BITS], int *c0Errors,
+                       int *protectedErrors)
+{
     uint8_t fr[4][24];
     int errs = 0;
 
@@ -75,7 +100,7 @@ int dstarVocoder_params(const uint8_t air[DSTAR_VOICE_BYTES],
     /* c0: the parity bit is fr[0][0], the codeword fr[0][1..23]. */
     uint32_t c0code = planeWord(fr, 0, 1, 23);
     uint16_t c0 = dmr_golay23127_decode(c0code);
-    errs += (int)dmr_golay_last_errors;
+    errs = popcount12(((c0code >> 11) & 0xFFFu) ^ c0);
 
     /* Overall (24,12) parity: when the Golay word needed no correction, the
      * extra parity bit must make the 24 bits even, and if it does not it is the
@@ -89,6 +114,7 @@ int dstarVocoder_params(const uint8_t air[DSTAR_VOICE_BYTES],
             errs++;
         }
     }
+    const int c0Total = errs;
 
     /* c1: XOR the LCG sequence seeded with 16 * c0, bit 23 down to 1. */
     {
@@ -105,7 +131,7 @@ int dstarVocoder_params(const uint8_t air[DSTAR_VOICE_BYTES],
 
     uint32_t c1code = planeWord(fr, 1, 0, 22);
     uint16_t c1 = dmr_golay23127_decode(c1code);
-    errs += (int)dmr_golay_last_errors;
+    const int c1Total = popcount12(((c1code >> 11) & 0xFFFu) ^ c1);
 
     /* Pack the 49 parameter bits exactly as mbelib does: c0 and c1 as 12 bits
      * MSB first, then 11 bits of plane 2 and 14 bits of plane 3. */
@@ -118,8 +144,10 @@ int dstarVocoder_params(const uint8_t air[DSTAR_VOICE_BYTES],
     for (int i = 0; i < 14; i++)
         params[35 + i] = (uint8_t)(fr[3][13 - i] & 1u);
 
-    if (errors != NULL)
-        *errors = errs;
+    if (c0Errors != NULL)
+        *c0Errors = c0Total;
+    if (protectedErrors != NULL)
+        *protectedErrors = c1Total;
     return 0;
 }
 
