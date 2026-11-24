@@ -211,6 +211,24 @@ endif()
 #
 option(CONFIG_DMR_SMS "DMR short messages (data calls)" ON)
 
+#
+# C62_YSF: Yaesu System Fusion receive mode.  The frame layer reuses the Golay
+# decoder and the AMBE+2 vocoder of lib/dmr_vocoder, so the option selects
+# C62_DMR_VOCODER.  See docs/RX_FUSION.md.
+#
+if(CONFIG_C62_YSF)
+  if(NOT CONFIG_C62_DMR_VOCODER)
+    message(FATAL_ERROR "CONFIG_C62_YSF needs CONFIG_C62_DMR_VOCODER")
+  endif()
+  target_sources(app PRIVATE
+    ${OPENRTX_ROOT}/openrtx/src/protocols/YSF/YsfPhy.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/YSF/YsfFrame.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/YSF/YsfSpeech.c
+    ${OPENRTX_ROOT}/openrtx/src/rtx/OpMode_YSF.cpp)
+  target_compile_definitions(app PRIVATE CONFIG_YSF)
+  message(STATUS "C62: System Fusion (C4FM) receive mode enabled")
+endif()
+
 if(CONFIG_C62_DMR_RX)
   target_sources(app PRIVATE
     ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrDefs.c

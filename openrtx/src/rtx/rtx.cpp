@@ -18,6 +18,7 @@
 #endif
 #ifdef CONFIG_DMR
 #include "rtx/OpMode_DMR.hpp"
+#include "rtx/OpMode_YSF.hpp"
 #endif
 #ifdef CONFIG_TETRA
 #include "rtx/OpMode_TETRA.hpp"
@@ -60,6 +61,7 @@ static OpMode_TETRA tetraMode;          // TETRA mode handler
 #endif
 #ifdef CONFIG_DMR
 static OpMode_DMR dmrMode;              // DMR mode handler
+static OpMode_YSF ysfMode;              // System Fusion mode handler
 #endif
 
 
@@ -324,6 +326,9 @@ void rtx_task()
                 #ifdef CONFIG_TETRA
                 case OPMODE_TETRA: currMode = &tetraMode; break;
                 #endif
+                #ifdef CONFIG_YSF
+                case OPMODE_YSF:   currMode = &ysfMode;   break;
+                #endif
                 default:   currMode = &noMode;
             }
 
@@ -414,6 +419,9 @@ bool opmode_canTransmit(uint8_t mode)
 #endif
         case OPMODE_TETRA:
             /* Receive only: OpMode_TETRA forces the status back to RX */
+            return false;
+        case OPMODE_YSF:
+            /* Receive only: OpMode_YSF forces the status back to RX */
             return false;
         default:
             return false;

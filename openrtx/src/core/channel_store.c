@@ -605,6 +605,7 @@ const char *chstore_modeName(uint8_t mode)
         case OPMODE_M17:   return "M17";
         case OPMODE_DMR:   return "DMR";
         case OPMODE_TETRA: return "TETRA";
+        case OPMODE_YSF:   return "YSF";
         default:           return "----";
     }
 }

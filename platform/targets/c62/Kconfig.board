@@ -91,6 +91,23 @@ config C62_DMR_RX
 
 	  Enable it with west build -b c62 ... -- -DCONFIG_C62_DMR_RX=y
 
+config C62_YSF
+	bool "Yaesu System Fusion mode (C4FM receive)"
+	select C62_DMR_VOCODER
+	default n
+	help
+	  System Fusion receive mode: C4FM at 4800 symbols/s, the 100 ms frame
+	  (sync, FICH, data channel, five voice slots), the callsigns, the DG-ID
+	  and the text message reassembler, and voice through the shared AMBE+2
+	  decoder. Selects the vocoder; there is no transmitter.
+
+	  Voice is decoded in V/D mode 1 and V/D mode 2, which carry AMBE+2 at
+	  2450 bit/s. Voice FR (the full-rate "wide" mode) is counted and skipped:
+	  it carries a 7200 bit/s IMBE frame this build has no decoder for.
+
+	  Enable it with west build -b c62 ... -- -DCONFIG_C62_YSF=y
+	  See docs/RX_FUSION.md.
+
 config DMR_TX
 	bool "DMR transmitter (framing, FEC, 4FSK modulator, PTT)"
 	depends on C62_DMR_RX

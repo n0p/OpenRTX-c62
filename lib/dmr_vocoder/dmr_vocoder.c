@@ -58,6 +58,25 @@ unsigned int dmr_vocoder_last_errors(void)
     return dmr_last_errors;
 }
 
+int dmr_vocoder_decode_ambe(const uint8_t d[49], int16_t pcm[DMR_VOCODER_PCM_SAMPLES])
+{
+    int errs = 0;
+    int rc;
+
+    if (d == NULL || pcm == NULL)
+        return -1;
+
+    if (dmr_ready == 0) {
+        dmr_vocoder_init(&dmr_instance);
+        dmr_ready = 1;
+    }
+
+    /* The caller's channel already carried out the FEC: no bits corrected
+     * here, and the counter keeps what the last protected frame reported. */
+    rc = dmr_vocoder_decode_ambe_params(&dmr_instance, d, pcm, &errs);
+    return rc;
+}
+
 size_t dmr_vocoder_state_bytes(void)
 {
     return dmr_vocoder_state_size();

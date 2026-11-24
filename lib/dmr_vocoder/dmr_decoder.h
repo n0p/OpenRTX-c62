@@ -87,6 +87,34 @@ void dmr_vocoder_init(dmr_vocoder_t *v);
 int dmr_vocoder_decode_frame(dmr_vocoder_t *v, const uint8_t frame[DMR_FRAME_BYTES],
                              int16_t pcm[DMR_PCM_SAMPLES], int *errs);
 
+/**
+ * Decode one 49-bit AMBE parameter frame to 160 PCM samples.
+ *
+ * System Fusion's V/D mode 2 hands the vocoder the 49 parameter bits
+ * directly -- it protects them with its own repetition and whitening -- so
+ * this entry takes what dmr_vocoder_decode_frame() recovers internally.
+ * Same state, same bit-exactness, no FEC in this path.
+ *
+ * @param d: 49 parameter bits, one per byte, MSB first, in the order
+ *           dmr_vocoder_decode_frame() produces.
+ */
+int dmr_vocoder_decode_ambe_params(dmr_vocoder_t *v, const uint8_t d[49],
+                            int16_t pcm[DMR_PCM_SAMPLES], int *errs);
+
+/**
+ * Correct one extended Golay(24,12) codeword: 12 information bits, 11 parity
+ * bits and one overall parity bit, most significant first.
+ *
+ * Shared with the System Fusion FICH, which uses the same code, so that only
+ * one syndrome table lives in flash.
+ *
+ * @param w24: the received 24-bit word.
+ * @param info12: receives the 12 information bits.
+ * @return the number of corrected bits (0 to 3), or -1 if the word is too
+ *         far from any codeword.
+ */
+int dmr_golay24_correct(uint32_t w24, uint32_t *info12);
+
 /* Size of one instance in bytes (for .bss placement decisions). */
 size_t dmr_vocoder_state_size(void);
 
