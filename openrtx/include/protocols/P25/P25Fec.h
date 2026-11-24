@@ -122,6 +122,79 @@ int p25Fec_trellisDecode(const uint8_t *bits, uint8_t out[12]);
  */
 uint16_t p25Fec_crc16(const uint8_t *data, int bytes);
 
+/* ------------------------------------------------------------------------- */
+/* Encoders.  Each one is the exact inverse of the decoder above it, and the  */
+/* host test tests/host/p25_tx encodes, transmits, receives and compares, so  */
+/* an encoder and its decoder cannot drift apart.                            */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Encode 16 information bits as a BCH(63,16) codeword: the NAC and the DUID of
+ * the NID.
+ *
+ * The generator polynomial is the product of the minimal polynomials of
+ * alpha^1..alpha^22 over GF(64) (x^6 + x + 1), degree 47, which is the code
+ * p25Fec_bchDecode() corrects: every codeword it produces has zero syndromes
+ * for those 22 roots.
+ *
+ * @param info: (NAC << 4) | DUID.
+ * @return the 63-bit codeword, bit i = coefficient of x^i, so the first
+ *         transmitted bit is bit 62.
+ */
+uint64_t p25Fec_bchEncode(uint16_t info);
+
+/**
+ * Systematic Reed-Solomon encoder over GF(64).
+ *
+ * @param info: k information symbols, the first one is the highest power.
+ * @param k: information symbols (12 or 20).
+ * @param cw: destination, n symbols; the first k are the information.
+ * @param n: block length (24 or 36).
+ */
+void p25Fec_rsEncode(const uint8_t *info, int k, uint8_t *cw, int n);
+
+/**
+ * Encode one 196-bit TSBK or PDU block: the rate-1/2 four-state trellis, then
+ * the block interleaver, exactly what p25Fec_trellisDecode() inverts.
+ *
+ * @param in: the 12 bytes (the last two are the CRC).
+ * @param bits: the 196 transmitted bits, in order.
+ */
+void p25Fec_trellisEncode(const uint8_t in[12], uint8_t bits[196]);
+
+/**
+ * Encode six information bits as a Hamming(10,6) word.
+ *
+ * @param data: the six bits.
+ * @return the word: data in bits 9..4, parity in bits 3..0.
+ */
+uint16_t p25Fec_ham10Encode(uint32_t data);
+
+/**
+ * Encode one header-data-unit word: the 18 bits on the air that carry a
+ * six-bit Reed-Solomon symbol.
+ *
+ * TIA-102.BAAC protects each HDU symbol with the extended Golay(24,12) code
+ * used as a (18,6) code: six information bits on the air followed by twelve
+ * parity bits (the eleven check bits of the (23,12) code with the six implicit
+ * zero data bits, plus the overall parity bit).  The receiver decodes it by
+ * nearest codeword, which is exact for a code of minimum distance 8.
+ *
+ * @param hex: the six-bit symbol, bit 5 is the first transmitted.
+ * @param air: destination, 18 bits, one per byte.
+ */
+void p25Fec_golay18Encode(uint32_t hex, uint8_t air[18]);
+
+/**
+ * Decode one 18-bit header-data-unit word.
+ *
+ * @param air: the 18 bits, one per byte.
+ * @param hex: receives the six information bits (bit 5 is the first).
+ * @return the number of bits corrected (0..3), or -1 if the word is not within
+ *         the correction radius.
+ */
+int p25Fec_golay18Decode(const uint8_t air[18], uint32_t *hex);
+
 #ifdef __cplusplus
 }
 #endif

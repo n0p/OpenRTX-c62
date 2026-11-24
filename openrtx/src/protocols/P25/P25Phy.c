@@ -497,18 +497,29 @@ static bool decodeFrame(struct p25Frame *f, p25FrameHandler handler, void *user)
 
         case P25_DUID_HDU:
         {
-            /* 36 Golay(24,12) words carry MI, algorithm, key and talkgroup. */
+            /* 36 words of the (18,6) Golay code carry the RS(36,20) symbols
+             * of the header: MI, algorithm, key and talkgroup. */
             uint8_t hb[36];
             int bad = 0;
             for (int i = 0; i < 36; i++)
             {
-                uint32_t c = p25_gather(bits, &p25_hdu_bits[18 * i], 18) << 6;
-                uint32_t cw23 = c >> 1;
-                if (p25Fec_golayDecode(&cw23) < 0)
+                uint8_t air[18];
+                uint32_t hex = 0;
+
+                for (int b = 0; b < 18; b++)
+                    air[b] = bits[p25_hdu_bits[18 * i + b]] & 1u;
+
+                if (p25Fec_golay18Decode(air, &hex) < 0)
                     bad++;
-                hb[i] = (uint8_t)((c >> 12) & 0x3F);
+                hb[i] = (uint8_t)(hex & 0x3Fu);
             }
             f->hdu = true;
+#ifdef P25_PHY_TRACE
+            fprintf(stderr, "[hdu] words");
+            for (int i = 0; i < 36; i++)
+                fprintf(stderr, " %02X", hb[i]);
+            fprintf(stderr, "\n");
+#endif
             if (bad == 0 && p25Fec_rsDecode(hb, 36, 20) >= 0)
             {
                 int j = 0;
