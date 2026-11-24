@@ -14,6 +14,7 @@
  */
 
 #include "protocols/YSF/YsfSpeech.h"
+#include "protocols/YSF/YsfMem.h"
 
 #ifdef CONFIG_YSF
 
@@ -36,11 +37,14 @@
 #define THREAD_STACK 8192
 
 static pthread_mutex_t queueMutex = PTHREAD_MUTEX_INITIALIZER;
-static struct ysfVoiceSlot queue[QUEUE_SLOTS];
+/* Queue and PCM scratch: 2.1 KB touched once per 20 ms slot, so PSRAM.  Both
+ * are written before they are read (the queue only pops what it pushed, pcm is
+ * cleared before the stream starts). */
+static struct ysfVoiceSlot queue[QUEUE_SLOTS] YSF_EXT_RAM;
 static unsigned queueHead;
 static unsigned queueCount;
 
-static int16_t pcm[2 * DMR_VOCODER_PCM_SAMPLES];
+static int16_t pcm[2 * DMR_VOCODER_PCM_SAMPLES] YSF_EXT_RAM;
 
 static pthread_t thread;
 static pthread_attr_t attr;

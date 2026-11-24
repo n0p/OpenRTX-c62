@@ -264,6 +264,7 @@ openrtx/src/rtx/OpMode_YSF.cpp          the mode: RX only
 openrtx/src/protocols/YSF/YsfPhy.c      4-level slicer, sync, frame clock
 openrtx/src/protocols/YSF/YsfFrame.c    FICH, data channel, text, voice slots
 openrtx/src/protocols/YSF/YsfSpeech.c   voice queue and playback thread
+openrtx/include/protocols/YSF/YsfMem.h  where the buffers live (SRAM or PSRAM)
 lib/dmr_vocoder                         + dmr_vocoder_decode_ambe() (49 bits)
                                         + dmr_golay24_correct() (shared table)
 tests/host/ysf_host/                    host harness on a capture
@@ -276,7 +277,8 @@ tools/ysf/ysf_proto.py                  Python model of the chain
 48 kHz in, 10 samples per symbol exactly. No matched filter: the radio's IF
 filter already shapes the eye, and DmrPhy takes the same shortcut.
 
-* Ring of 8192 raw samples (one frame plus a sync of margin).
+* Ring of 7360 raw samples (one frame, plus one block of the audio
+  stream, plus a sync of margin), in PSRAM — §4.5.
 * **Acquisition** correlates the signs of the 20 sync symbols (cheap, level
   independent), then verifies the full 40 bits against levels taken from the
   sync symbols themselves: median of the 20 values is the DC, median of the
@@ -324,17 +326,18 @@ justify the risk.
 
 Measured on the C62 firmware, `west build -b c62`, same tree:
 
-| Build | FLASH | RAM |
-|---|---|---|
-| DMR RX + vocoder (baseline, `-DCONFIG_C62_DMR_RX=y`) | 518 104 B | 196 688 B |
-| **System Fusion + vocoder** (`-DCONFIG_C62_YSF=y`) | **509 096 B** | **223 232 B** |
-| DMR RX + System Fusion + vocoder | 524 380 B | 237 088 B |
+| Build | FLASH | SRAM | SRAM used | PSRAM |
+|---|---|---|---|---|
+| DMR RX + vocoder (baseline, `-DCONFIG_C62_DMR_RX=y`) | 518 104 B | 196 688 B | 75.0 % | 379 064 B |
+| **System Fusion** (`-DCONFIG_C62_YSF=y`) | **509 096 B** | **183 424 B** | **70.0 %** | 418 870 B |
+| DMR RX + System Fusion (`…-DCONFIG_C62_DMR_RX=y -DCONFIG_C62_YSF=y -DCONFIG_C62_APRS=y`) | **524 380 B** | **197 280 B** | **75.3 %** | 418 870 B |
 
-Against the DMR-RX baseline, System Fusion costs **+6 276 B of flash and
-+40 400 B of RAM**.  The combined build sits at 90.4 % of RAM with 25 KB free,
-which is inside the region but is the tightest build in the tree: the two big
-residents are the 19.2 KB baseband stream buffer (one 100 ms frame per half,
-against DMR's 5.8 KB) and the 14.7 KB sample ring.
+Against the DMR-RX baseline, System Fusion costs **+6.3 KB of flash and +592 B
+of SRAM**: its 39.8 KB of working memory lives in PSRAM, which the combined
+build leaves at 22.8 % of its 1.75 MB. The first version of the mode kept all
+of it in SRAM — 60 % of it in two buffers — and the combined build then sat at
+237 088 B, **90.4 %** of the 256 KB region with 25 KB free: inside, but not
+something to add a mode or a table to. §4.5 is what moved.
 
 ### 4.4 Where the bytes go
 
@@ -342,12 +345,56 @@ against DMR's 5.8 KB) and the 14.7 KB sample ring.
   calls `dmr_golay24_correct()`, which lives next to the table in
   `lib/dmr_vocoder`. The FICH uses the P25 code the vocoder already carried, so
   the shared corrector costs 200 B of code and no table.
-* Flash, measured per object: PHY 2 336 B, frame layer 2 170 B, speech 878 B,
-  mode 550 B — 5.8 KB of the +6.3 KB; the rest is the extra `enum opmode` case,
-  the Kconfig string and alignment.
-* RAM: 19.2 KB baseband stream buffer, 14.7 KB sample ring, 3.2 KB of Viterbi
-  history (200 steps × 16 states), 1.5 KB voice queue, 0.6 KB PCM, 0.5 KB
-  decoded frame, plus the RTX-side bookkeeping.
+* Per object, `arm-zephyr-eabi-size` on the combined build:
+
+| Object | FLASH | SRAM | PSRAM | What the PSRAM holds |
+|---|---|---|---|---|
+| `YsfPhy.c` | 2 248 B | 508 B | 14 720 B | the raw-sample ring, 7360 samples |
+| `YsfFrame.c` | 2 246 B | 1 B | 3 786 B | Viterbi history + `out`/`call`/`text` |
+| `YsfSpeech.c` | 878 B | 58 B | 2 104 B | voice queue (20 slots) + PCM scratch |
+| `OpMode_YSF.cpp` | 550 B | — | 19 200 B | baseband stream buffer (2 × 4800) |
+| **total** | **5 922 B** | **567 B** | **39 810 B** | |
+
+  The rest of the +6.3 KB of flash is the extra `enum opmode` case, the Kconfig
+  string and alignment.
+
+### 4.5 What went to PSRAM, and how much it freed
+
+`.psram_section` on the C62 (see `openrtx/include/protocols/YSF/YsfMem.h`) is
+the section `lib/dmr_vocoder`'s port shim, the codec endpoints and the
+display's shadow buffer already use. `west build` reports the effect directly:
+
+| Moved out of `.bss` | Bytes | Why it can live there |
+|---|---|---|
+| `OpMode_YSF::baseband[2 × 4800]` | 19 200 | the codec worker fills it with a software copy from the DSP buffer, sample by sample (`captureToStream`), so it is not a DMA target; `ysfPhy_push` reads it once per block |
+| PHY sample ring `ring[7360]` | 14 720 | written once per sample at 48 kHz and read at symbol rate (480 reads per frame, ×4 taps), never inside a per-sample DSP loop; the scalars of the demodulator (`ringIndex`, `pos`, `hunt`) stay in SRAM because they are touched per sample |
+| Viterbi survivor history `trellisHist[200][16]` | 3 200 | written before it is read inside one call, no state across frames |
+| `out`, `call`, `text` snapshots | 586 | what the UI reads, updated once per 100 ms frame |
+| voice queue + PCM scratch (`YsfSpeech.c`) | 2 104 | written before read (the queue only pops what it pushed, `pcm` is cleared before the stream starts) |
+| **total** | **39 810** | SRAM 237 088 → **197 280 B (75.3 %)** |
+
+Two things make this safe rather than lucky:
+
+* The section is **NOLOAD** — the linker neither zeroes it nor copies it at
+  boot, so anything placed there must be cleared by its own init. `ysfPhy_init()`
+  and `ysfPhy_reset()` zero the ring, `ysfSpeech_start()` resets the queue and
+  `playCall()` clears `pcm`; the frame layer keeps a `stateReady` flag in SRAM
+  and resets itself on the first `ysfFrame_call()`, `ysfFrame_text()` or
+  `ysfFrame_decode()`, because the UI may draw the call info before the mode
+  has ever been enabled.
+* The D-cache is on (`CONFIG_CSK6_DCACHE=y`), so the ring and the stream buffer
+  are read through the cache and the extra traffic is 96 KB/s of writes plus
+  ~20 k reads/s, not worth measuring. The measured instruction cost of §4.2
+  does not change: it is a count of executed instructions, and there are no new
+  ones.
+
+The ring was **reviewed and left at 7360 samples**. It must hold one frame
+(4800) plus the largest block the audio stream hands out (4800 in this mode,
+2400 in the general case) plus the two samples the 4-point interpolator reads
+ahead, so the real floor is about 4800 + 2400 + 4; 7360 keeps 2.4 KB of margin.
+Now that the ring is not in SRAM, shrinking it to 5120 would free 4.5 KB of
+PSRAM — of which there are 1.3 MB free — and gain nothing, so the margin stays.
+The remaining SRAM cost of the mode is 592 B over the DMR baseline.
 
 ## 5. UI hooks
 
@@ -365,10 +412,16 @@ comes from.
 | Counters, for a diagnostics line | `->frames`, `->badFich`, `->voices`, `->unsupported`, `->dataBlocks` |
 | Voice FR notice | `->unsupported` growing is "this call is a mode we cannot decode" |
 
-Mode selection: the mode is `OPMODE_YSF` in `enum opmode`, and a channel can
-carry it (`chstore_modeName()` returns `"YSF"`). What is missing is the UI's
-side-key cycle: `openrtx/src/ui/default/ui.c` has a `modes[]` array (around
-line 1101) guarded by
+Mode selection: the mode is `OPMODE_YSF = 8` in `enum opmode`, a channel can
+carry it (`chstore_modeName()` returns `"YSF"`, and `chstore_valid()` /
+`zones_valid()` accept it), and a zone can hold such a channel. The value is
+fixed: `enum opmode` lays out the whole fleet's numbering — `NONE 0, FM 1,
+DMR 2, M17 3, TETRA 4, NXDN 5, dPMR 6, P25 7, YSF 8, D-STAR 9, AIRBAND 10` —
+including modes this tree does not implement, because the number is what the
+channel store persists and what the other protocol branches must agree on when
+they merge. A new mode takes 11 or more; it must not take the next free slot.
+What is missing is the UI's side-key cycle: `openrtx/src/ui/default/ui.c` has a
+`modes[]` array (around line 1101) guarded by
 
 ```c
 #if defined(CONFIG_M17) || defined(CONFIG_TETRA) || defined(CONFIG_DMR)
@@ -437,3 +490,29 @@ Ranked by what would bite first.
   same chains; **explicitly not verified on air by its author**, and its
   whitening order is wrong (§1.5). Useful for the numbers, not as proof.
 * sigidwiki, "Yaesu System Fusion" — the capture of §3.
+
+## 9. Building it
+
+```
+# the mode alone
+west build -b c62 -d build_ysf . -- -DCONFIG_C62_YSF=y
+
+# with DMR, APRS and the shared message store
+west build -b c62 -d build_both . -- -DCONFIG_C62_DMR_RX=y -DCONFIG_C62_YSF=y -DCONFIG_C62_APRS=y
+```
+
+`CONFIG_C62_YSF` is declared in `platform/targets/c62/Kconfig.board` (menu
+"DMR", next to `CONFIG_C62_DMR_RX`), selects `C62_DMR_VOCODER`, and the
+platform `CMakeLists.txt` adds the four sources and defines `CONFIG_YSF` for
+them. Two failure modes worth recognising:
+
+* `error: Aborting due to Kconfig warnings` followed by `warning: attempt to
+  assign the value 'y' to the undefined symbol X` means the flag named a symbol
+  that the tree being built does not declare — the checkout and the flags are
+  out of step, not a fault in the option. The one that gets typed by accident
+  is `-DCONFIG_YSF=y`: `YSF` is the *compile definition* the platform sets,
+  `C62_YSF` is the Kconfig symbol. Check that the board Kconfig in the built
+  tree has the `config C62_YSF` stanza before chasing the compiler.
+* `CMake Error … Cannot find source file: subprojects/codec2/src/dump.c` is the
+  meson subproject not being fetched: `(cd OpenRTX && meson subprojects
+  download codec2)` once per west workspace.

@@ -327,7 +327,8 @@ bool chstore_valid(const chstore_channel_t *ch)
         return false;
 
     if (ch->mode != OPMODE_FM && ch->mode != OPMODE_M17 &&
-        ch->mode != OPMODE_DMR && ch->mode != OPMODE_TETRA)
+        ch->mode != OPMODE_DMR && ch->mode != OPMODE_TETRA &&
+        ch->mode != OPMODE_YSF)
         return false;
 
     if (ch->bandwidth != BW_12_5 && ch->bandwidth != BW_25)

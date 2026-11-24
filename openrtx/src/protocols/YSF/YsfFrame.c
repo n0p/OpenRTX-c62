@@ -10,6 +10,7 @@
  */
 
 #include "protocols/YSF/YsfFrame.h"
+#include "protocols/YSF/YsfMem.h"
 
 #ifdef CONFIG_YSF
 
@@ -35,9 +36,36 @@
 
 #define PN95_SEED 0x1C9
 
-static struct ysfDecoded out;
-static struct ysfCallInfo call;
-static struct ysfText text;
+/*
+ * The three snapshots below are what the UI reads (ysfFrame_call(),
+ * ysfFrame_text()), and they are only touched once per 100 ms frame: together
+ * with the Viterbi history below they are the 3.8 KB of this file that move to
+ * PSRAM -- state at 10 Hz has no business in the 256 KB the DSP wants.
+ */
+static struct ysfDecoded out YSF_EXT_RAM;
+static struct ysfCallInfo call YSF_EXT_RAM;
+static struct ysfText text YSF_EXT_RAM;
+
+/** Has the state below been cleared since power-on?  In SRAM, zeroed at boot */
+static bool stateReady;
+
+static void text_reset(void);
+
+/**
+ * Clear the frame layer state on first use.  Everything in .psram_section holds
+ * whatever the previous power cycle left there, and the UI may read the call
+ * info before the mode has ever been enabled.
+ */
+static void ensure_ready(void)
+{
+    if (stateReady)
+        return;
+
+    memset(&out, 0, sizeof(out));
+    memset(&call, 0, sizeof(call));
+    text_reset();
+    stateReady = true;
+}
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                            */
@@ -124,7 +152,8 @@ static const uint8_t parity32[32] = {
 #define TRELLIS_STATES 16
 #define TRELLIS_MAX_STEPS 200
 
-static uint8_t trellisHist[TRELLIS_MAX_STEPS][TRELLIS_STATES];
+/* Viterbi survivor history, 3.2 KB, written before it is read: PSRAM */
+static uint8_t trellisHist[TRELLIS_MAX_STEPS][TRELLIS_STATES] YSF_EXT_RAM;
 
 /**
  * Hard-decision Viterbi.  Returns the number of differing bits along the
@@ -459,21 +488,28 @@ void ysfFrame_reset(void)
     memset(&out, 0, sizeof(out));
     memset(&call, 0, sizeof(call));
     text_reset();
+    stateReady = true;
 }
 
 const struct ysfCallInfo *ysfFrame_call(void)
 {
+    ensure_ready();
+
     return &call;
 }
 
 const struct ysfText *ysfFrame_text(void)
 {
+    ensure_ready();
+
     return &text;
 }
 
 const struct ysfDecoded *ysfFrame_decode(const struct ysfFrame *frame)
 {
     struct ysfFich fich;
+
+    ensure_ready();
 
     out.voiceCount = 0;
     out.textChanged = false;

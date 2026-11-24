@@ -11,6 +11,7 @@
 #include "interfaces/platform.h"
 #include "interfaces/radio.h"
 #include "protocols/YSF/YsfFrame.h"
+#include "protocols/YSF/YsfMem.h"
 #include "protocols/YSF/YsfPhy.h"
 #include "protocols/YSF/YsfSpeech.h"
 #include "rtx/OpMode_YSF.hpp"
@@ -21,13 +22,17 @@
  * takes any block size, but the stream half is one frame on purpose: the frame
  * clock then lands on a buffer boundary and the decoder never has to catch up
  * with a burst of frames read from a ring that has already wrapped.
+ *
+ * The buffer is 19.2 KB (double buffered, so two 100 ms halves) and lives in
+ * PSRAM: the codec worker copies into it in software, sample by sample, like
+ * the DSP endpoints it already keeps there, so nothing here is a DMA target.
  */
 #define BLOCK_SAMPLES 4800
 
 /* Samples dropped after starting or retuning: 100 ms */
 #define SETTLE_SAMPLES 4800
 
-static int16_t baseband[2 * BLOCK_SAMPLES];
+static int16_t baseband[2 * BLOCK_SAMPLES] YSF_EXT_RAM;
 
 void OpMode_YSF::frameTrampoline(const struct ysfFrame *frame, void *user)
 {

@@ -10,6 +10,7 @@
  */
 
 #include "protocols/YSF/YsfPhy.h"
+#include "protocols/YSF/YsfMem.h"
 
 #ifdef CONFIG_YSF
 
@@ -25,6 +26,11 @@
  * Raw-sample ring: one frame (4800) plus the largest block the audio stream
  * hands out (2400), so a frame is always complete inside it.  Not a power of
  * two -- that would cost 3 KB more for a mask -- so the wrap is a compare.
+ *
+ * The ring is 14.4 KB, the largest single buffer of the mode, and it goes to
+ * PSRAM (YsfMem.h).  It is touched at 48 kHz when it is filled and at symbol
+ * rate when it is read, not inside a per-sample loop, and the codec already
+ * hands the samples over through PSRAM buffers.
  */
 #define RING_LEN 7360
 
@@ -54,7 +60,6 @@ static const int8_t syncSign[YSF_SYNC_SYMBOLS] = {
 
 static struct
 {
-    int16_t ring[RING_LEN];
     long ringIndex;   ///< Total samples written; the last one is ringIndex-1
     float pos;        ///< Next frame's first sync symbol, in samples
     float timing;     ///< Fractional offset applied to the symbol grid
@@ -64,6 +69,13 @@ static struct
     uint8_t errors;   ///< Sync errors of the last accepted frame
     struct ysfFrame frame;
 } phy;
+
+/**
+ * The raw samples themselves, in PSRAM: the only part of the demodulator's
+ * state big enough to matter.  The scalars above stay in SRAM because they are
+ * touched once per sample.
+ */
+static int16_t ring[RING_LEN] YSF_EXT_RAM;
 
 /* ------------------------------------------------------------------ */
 /* Reading the ring                                                    */
@@ -86,10 +98,10 @@ static float sample_at(float at)
     if ((i < phy.ringIndex - RING_LEN + 3) || (i > phy.ringIndex - 3))
         return 0.0f;
 
-    float xm1 = phy.ring[ring_slot(i - 1)];
-    float x0 = phy.ring[ring_slot(i)];
-    float x1 = phy.ring[ring_slot(i + 1)];
-    float x2 = phy.ring[ring_slot(i + 2)];
+    float xm1 = ring[ring_slot(i - 1)];
+    float x0 = ring[ring_slot(i)];
+    float x1 = ring[ring_slot(i + 1)];
+    float x2 = ring[ring_slot(i + 2)];
 
     if (f == 0.0f)
         return x0;
@@ -481,12 +493,13 @@ static void track(ysfFrameHandler handler, void *user)
 void ysfPhy_init(void)
 {
     memset(&phy, 0, sizeof(phy));
+    memset(ring, 0, sizeof(ring));
     phy.hunt = 1;
 }
 
 void ysfPhy_reset(void)
 {
-    memset(phy.ring, 0, sizeof(phy.ring));
+    memset(ring, 0, sizeof(ring));
     phy.ringIndex = 0;
     phy.pos = 0.0f;
     phy.timing = 0.0f;
@@ -506,7 +519,7 @@ static void append(const int16_t *samples, size_t n)
 {
     for (size_t i = 0; i < n; i++)
     {
-        phy.ring[ring_slot(phy.ringIndex)] = samples[i];
+        ring[ring_slot(phy.ringIndex)] = samples[i];
         phy.ringIndex++;
     }
 }
