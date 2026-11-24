@@ -27,6 +27,7 @@
  */
 
 #include "protocols/DPMR/DpmrPhy.h"
+#include "protocols/DPMR/DpmrPort.h"
 
 #include <math.h>
 #include <string.h>
@@ -97,6 +98,16 @@ static int8_t syncFs1[24];
 static int8_t syncFs2[12];
 static int8_t syncFs3[12];
 
+/** Demodulated samples at 4 sps: written once per symbol, read by the framer
+ *  a frame at a time, so PSRAM is enough (DpmrPort.h). */
+static EXT_RAM_BSS_ATTR float ring[DPMR_RING];
+
+/*
+ * The rest of the demodulator state, all of it small and hot: it stays in
+ * SRAM.  The matched filter's history is here rather than with the ring
+ * because it is read mfTaps times per output symbol, 2400 times a second,
+ * and PSRAM wait states would land in the innermost loop of the receiver.
+ */
 static struct
 {
     /* Matched filter history, newest at histIdx */
@@ -108,7 +119,6 @@ static struct
 
     /* Demodulated samples at 4 sps, absolute index of ring[ringHead] is
      * headSample - DPMR_RING */
-    float ring[DPMR_RING];
     unsigned ringHead;
     uint32_t produced;          /* samples pushed at 4 sps */
 
@@ -162,7 +172,7 @@ static float ringSample(int32_t age)
     while (idx < 0)
         idx += (int)DPMR_RING;
 
-    return phy.ring[(unsigned)idx];
+    return ring[(unsigned)idx];
 }
 
 /** 4-point Lagrange interpolation of the ring at absolute position p. */
@@ -705,7 +715,8 @@ void dpmrPhy_init(void)
 void dpmrPhy_reset(void)
 {
     memset(phy.hist, 0, sizeof(phy.hist));
-    memset(phy.ring, 0, sizeof(phy.ring));
+    /* The ring is NOLOAD memory on the C62, not zeroed by the loader */
+    memset(ring, 0, sizeof(ring));
     phy.histIdx = 0;
     phy.decim = 0;
     phy.ringHead = 0;
@@ -754,7 +765,7 @@ void dpmrPhy_push(const int16_t *samples, size_t count,
             acc += mfTaps[j] * phy.hist[idx];
         }
 
-        phy.ring[phy.ringHead] = acc;
+        ring[phy.ringHead] = acc;
         if (++phy.ringHead == DPMR_RING)
             phy.ringHead = 0;
         phy.produced++;

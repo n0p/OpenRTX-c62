@@ -15,6 +15,7 @@
  */
 
 #include "protocols/DPMR/DpmrSpeech.h"
+#include "protocols/DPMR/DpmrPort.h"
 
 #ifdef CONFIG_DPMR
 
@@ -36,11 +37,17 @@
 #define THREAD_STACK 8192
 
 static pthread_mutex_t queueMutex = PTHREAD_MUTEX_INITIALIZER;
-static uint8_t queue[QUEUE_FRAMES][DPMR_AMBE_BYTES];
+
+/*
+ * The queue and the playback block are touched once per 20 ms frame at most,
+ * so on the C62 they live in PSRAM (DpmrPort.h), which is NOLOAD: both are
+ * cleared in dpmrSpeech_start() before the playback thread exists.
+ */
+static EXT_RAM_BSS_ATTR uint8_t queue[QUEUE_FRAMES][DPMR_AMBE_BYTES];
 static unsigned queueHead;
 static unsigned queueCount;
 
-static int16_t pcm[2 * DPMR_PCM_SAMPLES];
+static EXT_RAM_BSS_ATTR int16_t pcm[2 * DPMR_PCM_SAMPLES];
 
 static pthread_t thread;
 static pthread_attr_t attr;
@@ -153,6 +160,8 @@ void dpmrSpeech_start(void)
         return;
 
     pthread_mutex_lock(&queueMutex);
+    memset(queue, 0, sizeof(queue));
+    memset(pcm, 0, sizeof(pcm));
     queueHead = 0;
     queueCount = 0;
     pthread_mutex_unlock(&queueMutex);

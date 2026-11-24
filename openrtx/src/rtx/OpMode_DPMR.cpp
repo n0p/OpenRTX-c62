@@ -17,6 +17,7 @@
 #include "interfaces/radio.h"
 #include "protocols/DPMR/DpmrData.h"
 #include "protocols/DPMR/DpmrPhy.h"
+#include "protocols/DPMR/DpmrPort.h"
 #include "protocols/DPMR/DpmrSpeech.h"
 #include "rtx/OpMode_DPMR.hpp"
 #include "core/utils.h"
@@ -28,7 +29,13 @@
 /* Samples dropped after starting or retuning: 100 ms */
 #define SETTLE_SAMPLES 4800
 
-static int16_t baseband[2 * HALF_SAMPLES];
+/*
+ * The baseband block the audio stream fills, 30 ms of discriminator.  It is
+ * written by the codec worker and handed over whole to the rtx thread, so on
+ * the C62 it goes to PSRAM (DpmrPort.h) with the rest of the cold buffers.
+ * The section is NOLOAD: startSampling() clears it before the stream exists.
+ */
+static EXT_RAM_BSS_ATTR int16_t baseband[2 * HALF_SAMPLES];
 
 void OpMode_DPMR::frameTrampoline(const struct dpmrFrame *frame, void *user)
 {
@@ -159,6 +166,7 @@ void OpMode_DPMR::disable()
 
 void OpMode_DPMR::startSampling()
 {
+    memset(baseband, 0, sizeof(baseband));
     basebandPath = audioPath_request(SOURCE_RTX, SINK_MCU, PRIO_RX);
     basebandId = audioStream_start(basebandPath, baseband, 2 * HALF_SAMPLES,
                                    48000, STREAM_INPUT | BUF_CIRC_DOUBLE);
