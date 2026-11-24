@@ -906,8 +906,9 @@ static const qm_item_t qm_items_dmr[] =
  */
 static const qm_item_t qm_items_nxdn[] =
 {
-    QM_ITEM_INT_F("RAN", 0, QM_NXDN_RAN_ANY, 1, qm_nxdn_get_ran,
-                  qm_nxdn_set_ran, qm_nxdn_fmt_ran),
+    /* 65 positions: a long press walks RAN eight at a time */
+    QM_ITEM_INT_FF("RAN", 0, QM_NXDN_RAN_ANY, 1, 8, qm_nxdn_get_ran,
+                   qm_nxdn_set_ran, qm_nxdn_fmt_ran),
     QM_ITEM_ENUM("BW", 0, 1, qm_nxdn_get_bw, qm_nxdn_set_bw,
                  qm_names_nxdn_bw, NULL),
     QM_ITEM_INFO("SYNC", qm_nxdn_fmt_sync),
