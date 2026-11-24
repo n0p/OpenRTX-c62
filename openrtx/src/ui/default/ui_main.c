@@ -24,6 +24,7 @@
 #ifdef CONFIG_TETRA
 #include "protocols/TETRA/TetraSds.h"
 #include "protocols/TETRA/TetraStatus.h"
+#endif
 
 /* An SDS text stays on the main screen this long */
 #define TETRA_SDS_SHOW_MS 30000
@@ -84,6 +85,7 @@ static void _ui_formatSsi(char *buf, size_t size, const char *prefix,
         snprintf(buf, size, "%s-", prefix);
 }
 
+#ifdef CONFIG_TETRA
 /**
  * Check whether a TETRA call takes over the main screen.
  */
