@@ -128,6 +128,12 @@ void Modulator::sendFrame(const frame_t& frame)
     sendBaseband();
 }
 
+void Modulator::abort()
+{
+    if(txRunning)
+        audioStream_terminate(outStream);
+}
+
 void Modulator::stop()
 {
     if(txRunning == false)

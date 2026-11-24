@@ -364,8 +364,14 @@ zephyr_udc0: &usbotg {
 	status = "disabled";
 };
 
+/*
+ * Application watchdog, armed by platform_wdtStart() at the end of
+ * platform_init_csk6() and refreshed from the main thread. The transmit
+ * supervisor relies on it as its last line of defence: the reset leaves the PA
+ * enable lines low, so a firmware that cannot unkey itself reboots into receive.
+ */
 &ap_wdt {
-	status = "disabled";
+	status = "okay";
 };
 
 &uart0 {

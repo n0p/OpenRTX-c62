@@ -53,10 +53,26 @@ bool codec_startDecode(const pathId path);
 /**
  * Stop an ongoing encoding or decoding operation.
  *
+ * The call is bounded: it asks the codec thread to exit, cancels the audio
+ * stream it is reading or writing -- which is what releases it if it is blocked
+ * there -- and waits a bounded time for it. A thread that does not come back is
+ * left to exit on its own, because the alternative is a caller -- the RTX thread
+ * with the PA keyed -- waiting for ever.
+ *
  * @param path: audio path on which the encoding or decoding operation was
  * started.
  */
 void codec_stop(const pathId path);
+
+/**
+ * Cancel the running operation from another thread, without waiting.
+ *
+ * Sets the stop request and terminates the stream the codec thread is blocked
+ * on. Safe from any thread; the thread then unwinds and marks itself stopped.
+ * Used by the transmit supervisor, whose job is to release a blocked RTX
+ * thread.
+ */
+void codec_abort();
 
 /**
  * Get current oprational status of the codec thread.

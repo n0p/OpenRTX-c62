@@ -63,6 +63,14 @@ public:
     virtual void update(rtxStatus_t *const status, const bool newCfg) override;
 
     /**
+     * Force the end of the over from the transmit supervisor: cancel the
+     * baseband output stream, so a thread blocked in it returns, and stop the
+     * encoder. The PA is already off; the RTX thread releases the audio paths
+     * as it leaves transmit.
+     */
+    virtual void abortTx() override;
+
+    /**
      * Get the mode identifier corresponding to the OpMode class.
      *
      * @return the corresponding flag from the opmode enum.
@@ -143,6 +151,8 @@ private:
 
     bool startRx;                      ///< Flag for RX management.
     bool startTx;                      ///< Flag for TX management.
+    /// Set by abortTx(): no new over until the PTT has been released
+    volatile bool txBlocked;
     bool locked;                       ///< Demodulator locked on data stream.
     bool dataValid;                    ///< Demodulated data is valid
     bool extendedCall;                 ///< Extended callsign data received

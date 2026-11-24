@@ -64,6 +64,10 @@ BUILD_ASSERT(((int)SOURCE_MIC == (int)SINK_SPK)
 #define IO_TIMEOUT_MS 1000
 /* Added to the drain estimate, which cannot see the DAC */
 #define DRAIN_MARGIN_MS 20
+/* Longest a route change waits for the worker to apply it */
+#define CSK6_ROUTE_TIMEOUT_MS 250
+/* Longest the shutdown waits for the worker to leave */
+#define CSK6_WORKER_JOIN_MS 500
 #define NO_SOURCE (-1)
 /* Above the rtx and UI threads (Zephyr priority 14 as POSIX default), below
  * main, so the DSP streams are paced on time */
@@ -159,6 +163,10 @@ static volatile uint32_t streamMisses;
 static bool playbackRunning;
 static int64_t playbackDeadline;
 static uint32_t playbackFraction;
+/* Last time the worker went round its loop: a stalled worker is a stalled radio */
+static volatile int64_t workerBeat;
+/* Peak of what was played to the BK4819 through SINK_RTX, since the last read */
+static volatile uint16_t txPeak;
 static struct k_thread worker;
 static K_THREAD_STACK_DEFINE(workerStack, WORKER_STACK_SIZE);
 
@@ -587,32 +595,6 @@ static void setPlayback(AudioTrack *track, bool enable)
 }
 
 /**
- * Start or stop capture and playback to match the routes and attached
- * streams. Worker only.
- *
- * @param rec: capture stream.
- * @param track: playback stream.
- */
-static void applyRoutes(AudioRecord *rec, AudioTrack *track)
-{
-    bool capture = false;
-    bool playback = false;
-    for (size_t i = 0; i < CODEC_CHANNELS; i++) {
-        capture |= inputEnabled[i] || (outputSource[i] == SOURCE_MIC)
-                || (outputSource[i] == SOURCE_RTX);
-        playback |= outputEnabled(i);
-    }
-
-    setCapture(rec, capture);
-    setPlayback(track, playback);
-
-    if (routesDirty) {
-        routesDirty = false;
-        k_condvar_broadcast(&changed);
-    }
-}
-
-/**
  * Move an input endpoint past the samples just written. At a block boundary
  * notify the caller; at the end of the buffer wrap around, or stop a linear
  * stream.
@@ -858,6 +840,17 @@ static void playChannel(size_t channel, int16_t *dst, size_t stride,
 
     for (; done < count; done++)
         dst[done * stride] = 0;
+
+    /*
+     * Level of the transmit baseband as it goes to the BK4819. A keyed radio
+     * that transmits nothing and one that transmits silence look identical from
+     * the outside; this tells them apart in one number.
+     */
+    if ((channel == SINK_RTX) && (outputSource[channel] != NO_SOURCE)) {
+        uint16_t peak = peakMagnitude(dst, stride, count);
+        uint16_t held = txPeak - (txPeak >> 4);
+        txPeak = (peak > held) ? peak : held;
+    }
 }
 
 /**
@@ -972,7 +965,33 @@ static void audioWorker(void *a, void *b, void *c)
 
     while (!atomic_get(&stopRequested)) {
         k_mutex_lock(&audioMutex, K_FOREVER);
-        applyRoutes(&record, &playbackTrack);
+        bool capture = false;
+        bool playback = false;
+        for (size_t i = 0; i < CODEC_CHANNELS; i++) {
+            capture |= inputEnabled[i] || (outputSource[i] == SOURCE_MIC)
+                    || (outputSource[i] == SOURCE_RTX);
+            playback |= outputEnabled(i);
+        }
+        if (routesDirty) {
+            routesDirty = false;
+            k_condvar_broadcast(&changed);
+        }
+        k_mutex_unlock(&audioMutex);
+
+        /*
+         * Start and stop the DSP streams with the lock released. These calls go
+         * to the DSP core and can take a long time -- or never return. Holding
+         * audioMutex across them, as this loop used to, takes every audio
+         * caller with it: the RTX thread waits in a route change with the PA
+         * keyed, the UI waits for a voice prompt, and the radio looks hung.
+         * A stuck DSP call now only costs the audio, which the transmit
+         * supervisor then aborts.
+         */
+        setCapture(&record, capture);
+        setPlayback(&playbackTrack, playback);
+
+        k_mutex_lock(&audioMutex, K_FOREVER);
+        workerBeat = k_uptime_get();
         if (captureRunning)
             captureFrame(&record);
         playFrame(&playbackTrack);
@@ -1034,7 +1053,17 @@ void csk6codec_terminate(void)
     /* The worker cancels the streams as it exits */
     atomic_set(&stopRequested, 1);
     k_sem_give(&workerWake);
-    k_thread_join(&worker, K_FOREVER);
+
+    /*
+     * Bounded join: the worker may be inside a DSP call that never returns, and
+     * this runs on the way to shutdown. Waiting for ever there would hang the
+     * power-off; the DSP objects are left alone in that case, since touching
+     * them under a running worker is worse than leaking them until reset.
+     */
+    int ret = k_thread_join(&worker, K_MSEC(CSK6_WORKER_JOIN_MS));
+    if (ret != 0)
+        LOG_ERR("audio worker did not stop in %d ms: leaving it alone",
+                CSK6_WORKER_JOIN_MS);
 }
 
 uint16_t csk6codec_getMicPeak(void)
@@ -1055,6 +1084,24 @@ uint32_t csk6codec_getStreamMisses(void)
 void csk6codec_clearStreamMisses(void)
 {
     streamMisses = 0;
+}
+
+uint16_t csk6codec_getTxPeak(void)
+{
+    return txPeak;
+}
+
+void csk6codec_clearTxPeak(void)
+{
+    txPeak = 0;
+}
+
+int32_t csk6codec_getWorkerAge(void)
+{
+    int64_t beat = workerBeat;
+    if (beat == 0)
+        return -1;
+    return (int32_t)(k_uptime_get() - beat);
 }
 
 void csk6codec_setRoute(enum AudioSource source, enum AudioSink sink,
@@ -1079,11 +1126,26 @@ void csk6codec_setRoute(enum AudioSource source, enum AudioSink sink,
             detach(&outputs[sink].endpoint);
     }
 
-    /* Return only after the worker has applied the device start/stop. */
+    /*
+     * Return once the worker has applied the device start/stop, but not for
+     * ever: if the worker is stuck -- inside a DSP call, with the lock released
+     * -- the caller must still get out. The route is already recorded in the
+     * desired state above, so the worker applies it whenever it comes back; the
+     * caller only loses the guarantee that the DSP is ready, which shows up as a
+     * stream that does not deliver and is what the transmit supervisor handles.
+     */
     routesDirty = true;
     k_sem_give(&workerWake);
-    while (routesDirty && running)
-        k_condvar_wait(&changed, &audioMutex, K_FOREVER);
+    int64_t deadline = k_uptime_get() + CSK6_ROUTE_TIMEOUT_MS;
+    while (routesDirty && running) {
+        int64_t remaining = deadline - k_uptime_get();
+        if (remaining <= 0) {
+            LOG_WRN("route %d->%d not applied in %d ms: worker stalled",
+                    (int)source, (int)sink, CSK6_ROUTE_TIMEOUT_MS);
+            break;
+        }
+        k_condvar_wait(&changed, &audioMutex, K_MSEC(remaining));
+    }
     k_mutex_unlock(&audioMutex);
 }
 

@@ -66,6 +66,22 @@ public:
     }
 
     /**
+     * Force the current transmission to stop, from a thread that is not the one
+     * running update().
+     *
+     * The transmit supervisor calls this when a phase of the transmission
+     * misses its deadline -- typically because the thread running update() is
+     * blocked in an audio stream. It must therefore only do what is safe from
+     * another thread: cancel the transmit streams, which is what releases that
+     * thread, and nothing that owns a resource the mode releases by itself.
+     * The PA is already off: the supervisor unkeys before calling this.
+     *
+     * Implementations must be idempotent and must leave the mode unable to key
+     * again until the PTT has been released, or an abort loop follows.
+     */
+    virtual void abortTx() { }
+
+    /**
      * Get the mode identifier corresponding to the OpMode class.
      *
      * @return the corresponding flag from the opmode enum.

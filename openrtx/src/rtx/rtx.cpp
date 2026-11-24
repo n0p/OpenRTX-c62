@@ -5,11 +5,17 @@
  */
 
 #include "interfaces/radio.h"
+#include "interfaces/platform.h"
+#include "core/utils.h"
 #include "hwconfig.h"
+#include <stdio.h>
 #include <string.h>
 #include "rtx/rtx.h"
 #include "rtx/OpMode_FM.hpp"
 #include "rtx/OpMode_M17.hpp"
+#if defined(PLATFORM_C62)
+#include "drivers/audio/csk6_codec.h"
+#endif
 #ifdef CONFIG_DMR
 #include "rtx/OpMode_DMR.hpp"
 #endif
@@ -22,6 +28,26 @@ static const rtxStatus_t *newCnf;       // Pointer for incoming config messages
 static rtxStatus_t        rtxStatus;    // RTX driver status
 static rssi_t             rssi;         // Current RSSI in dBm
 static bool               reinitFilter; // Flag for RSSI filter re-initialisation
+
+/*
+ * Transmit supervision.
+ *
+ * The guard records the phases of a transmission and their deadlines; the
+ * supervisor (rtx_supervise(), from the main thread) reads it and, when a
+ * deadline is missed, unkeys and cancels the transmit streams from outside the
+ * RTX thread. That thread may be blocked in a stream sync or in a DSP call --
+ * which is exactly the failure this protects against -- so the unkey cannot be
+ * its job. It then finds its streams cancelled, unwinds, and finishes the
+ * transmission through the mode's normal exit path.
+ *
+ * txMutex protects the guard and the abort request: the RTX thread writes
+ * phases, the supervisor reads them and sets the request. It is never held
+ * across a call into audio or radio, so a blocked RTX thread never holds it.
+ */
+static pthread_mutex_t txMutex = PTHREAD_MUTEX_INITIALIZER;
+static struct txGuard  txGuard;
+static bool            txAbortPending;
+static uint32_t        txAbortTime;
 
 static OpMode  *currMode;               // Pointer to currently active opMode handler
 static OpMode     noMode;               // Empty opMode handler for opmode::NONE
@@ -72,6 +98,11 @@ void rtx_init(pthread_mutex_t *m)
     rtxStatus.dmrDestType   = DMR_DEST_GROUP;
     currMode = &noMode;
 
+    pthread_mutex_lock(&txMutex);
+    txg_init(&txGuard, (uint32_t)getTick());
+    txAbortPending = false;
+    pthread_mutex_unlock(&txMutex);
+
     /*
      * Initialise low-level platform-specific driver
      */
@@ -111,8 +142,133 @@ rtxStatus_t rtx_getCurrentStatus()
     return rtxStatus;
 }
 
+struct txGuard *rtx_getTxGuard()
+{
+    return &txGuard;
+}
+
+/**
+ * Force the transmitter off from outside the RTX thread.
+ *
+ * The PA goes first, so nothing is on the air while the streams are torn down,
+ * and the streams go second: cancelling them is what wakes the RTX thread if it
+ * is blocked waiting for one of their buffer boundaries.
+ */
+static void abortTransmission(uint32_t now, const char *why)
+{
+    radio_disableRtx();
+    currMode->abortTx();
+
+    #if defined(PLATFORM_C62)
+    /*
+     * Throttled: an abort is retried every 20 ms until the mode leaves
+     * transmit, and a 115200 baud line cannot take that many lines without
+     * becoming the reason the abort does not complete.
+     */
+    static uint32_t lastPrint = 0;
+    if ((uint32_t)(now - lastPrint) < 500)
+        return;
+    lastPrint = now;
+
+    char summary[96];
+    char trace[96];
+    txg_format(&txGuard, summary, sizeof(summary));
+    txg_formatTrace(&txGuard, trace, sizeof(trace));
+    printf("TX ABORT %s: %s | %s\r\n", why, trace, summary);
+    #else
+    (void)now;
+    (void)why;
+    #endif
+}
+
+/**
+ * One line in the log per transmission, with the trace of what it did.
+ *
+ * Printed on the way out, never on the way in: a serial line at 115200 baud
+ * takes about 5 ms for one of these lines, and the keying path has a budget of
+ * its own. The live state of an ongoing transmission is on the remote control
+ * instead ("tx" command), which is also where a transmission that never ends
+ * can be seen.
+ */
+static void logTxExit(void)
+{
+    #if defined(PLATFORM_C62)
+    /*
+     * Keyed on the transmission counter, not on the phase: an over that starts
+     * and fails inside a single rtx_task() never shows STARTING here, and the
+     * one that matters most is exactly that one.
+     */
+    static uint32_t lastSeen = 0;
+    uint32_t seen;
+
+    pthread_mutex_lock(&txMutex);
+    seen = txGuard.transmissions;
+    pthread_mutex_unlock(&txMutex);
+
+    if (seen == lastSeen)
+        return;
+    lastSeen = seen;
+
+    char trace[110];
+    char summary[130];
+    txg_formatTrace(&txGuard, trace, sizeof(trace));
+    txg_format(&txGuard, summary, sizeof(summary));
+    printf("TX exit %s | %s | pk=%u\r\n", trace, summary,
+           (unsigned int)csk6codec_getTxPeak());
+    /* The next over starts its baseband peak from zero */
+    csk6codec_clearTxPeak();
+    #endif
+}
+
+void rtx_supervise()
+{
+    const uint32_t now = (uint32_t)getTick();
+    const bool ptt = platform_getPttStatus() ? true : false;
+    bool abort = false;
+
+    pthread_mutex_lock(&txMutex);
+    if (txg_tick(&txGuard, now, ptt) == TXG_ACTION_ABORT) {
+        /*
+         * Request the abort once, then repeat it every 20 ms until the mode
+         * leaves transmit: the first attempt may have been refused by a radio
+         * driver that was busy, and this is the last line before the watchdog.
+         */
+        if (!txAbortPending) {
+            txAbortPending = true;
+            txAbortTime = now;
+            abort = true;
+        } else if ((now - txAbortTime) >= 20) {
+            txAbortTime = now;
+            abort = true;
+        }
+    }
+    pthread_mutex_unlock(&txMutex);
+
+    if (abort)
+        abortTransmission(now, txg_reasonName(txGuard.reason));
+}
+
 void rtx_task()
 {
+    const uint32_t now = (uint32_t)getTick();
+
+    /*
+     * A transmission the supervisor had to abort: it already unkeyed the PA and
+     * cancelled the streams, so all that is left is to leave the mode's
+     * transmit state -- the mode's own exit path releases the audio paths and
+     * stops the encoder, from the thread that owns them.
+     */
+    bool aborted = false;
+    pthread_mutex_lock(&txMutex);
+    if (txAbortPending) {
+        txAbortPending = false;
+        aborted = true;
+    }
+    pthread_mutex_unlock(&txMutex);
+
+    if (aborted)
+        rtxStatus.opStatus = OFF;
+
     // Check if there is a pending new configuration and, in case, read it.
     bool reconfigure = false;
     if(pthread_mutex_trylock(cfgMutex) == 0)
@@ -227,6 +383,8 @@ void rtx_task()
      * version of the RSSI level.
      */
     currMode->update(&rtxStatus, reconfigure);
+
+    logTxExit();
 }
 
 rssi_t rtx_getRssi()
