@@ -183,7 +183,10 @@ and the merged `state.c` and `ui.c` compile.
   block changes: call `ui_channels_open()` wherever the list should be reachable
   from (a menu entry works as well, the module does not care how it is opened).
 - `ui_channels_drawHints()` is the only drawing function the shared hint bar has
-  to replace; it receives the four labels (green, P1, P2, red).
+  to replace; it receives the four labels (green, P1, P2, red). **Done on the
+  merged tree**: the body is now `ui_hints_draw()`, and `CH_HINTS_H` is
+  `UI_HINTS_H` (11 px) so both bars are the same height. The quick menu is
+  gated on `!ui_channels_isOpen()` because P2 is EDIT here.
 
 ## Limitations
 

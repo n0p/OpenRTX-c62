@@ -18,7 +18,7 @@ sit in the matrix's second column, above the digits:
 | Physical key | Matrix | `KEY_*`     | Meaning in this UI                     |
 |--------------|--------|-------------|----------------------------------------|
 | Green MENU   | r0 c0  | `KEY_ENTER` | OK / Edit / open / load                |
-| P1           | r0 c1  | `KEY_F1`    | replay the last voice prompt; the hints row shows it as P1 |
+| P1           | r0 c1  | `KEY_F1`    | short: replay the last voice prompt; long: in-radio channel list. The hints row shows it as P1 |
 | P2           | r1 c1  | `KEY_F2`    | short: contextual quick menu; long: the legacy 3×3 macro grid |
 | Red A/B      | r3 c0  | `KEY_ESC`   | Back / cancel                          |
 | UP / DOWN    | r1 c0 / r2 c0 | `KEY_UP` / `KEY_DOWN` | move the cursor, change the value while editing |
@@ -65,6 +65,23 @@ how the stock manual names them.
 | Settings pages (display, radio, audio, M17, TETRA, FM, accessibility, time) | Edit | — | — | Back |
 | Default settings | Reset | — | — | Back |
 | Quick menu (popup) | Edit | — | Close | Close |
+
+## Channel list and editor
+
+P1 long press on the main screens opens the in-radio channel bank
+(`ui_channels.c`, `docs/CHANNELS.md`). The module takes over the keypad and the
+screen until it closes, holds `state.txDisable` true so nothing can transmit
+from it, and handles the keys before the screen switch, so ENTER and ESC reach
+the list and the editor untouched.
+
+It draws its own header and rows (20 px list rows, 12 px editor fields) but not
+its own hint bar: `ui_channels_drawHints()` builds a `ui_hints_t` from its four
+labels and calls `ui_hints_draw()`, so the bar is identical to every other
+screen and `CH_HINTS_H` is `UI_HINTS_H`.
+
+While the list is open the quick menu does not open: P2 there is EDIT, and the
+underlying screen is still `MAIN_VFO`/`MAIN_MEM`, so `qm_open()` is gated on
+`!ui_channels_isOpen()`.
 
 ## Contextual quick menu
 
