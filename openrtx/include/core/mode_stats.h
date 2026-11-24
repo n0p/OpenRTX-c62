@@ -64,8 +64,7 @@ extern "C" {
  * Modes with their own row. The values are part of the remote control output
  * and do not change.
  */
-enum modeStatsMode
-{
+enum modeStatsMode {
     MS_MODE_FM = 0, /**< Analog FM                    */
     MS_MODE_M17,    /**< M17                          */
     MS_MODE_DMR,    /**< DMR                          */
@@ -79,35 +78,34 @@ enum modeStatsMode
  * Averages are kept as they will be printed: the mean level is the mean of
  * the per-block means, the mean quality the mean of the per-frame figures.
  */
-struct modeStatsValues
-{
-    uint32_t blocks;  /**< Blocks of baseband processed            */
-    uint32_t frames;  /**< Frames, bursts or slots taken from them */
-    uint32_t valid;   /**< Frames whose check passed               */
-    uint32_t badCrc;  /**< Frames whose check failed               */
-    uint32_t lost;    /**< Blocks or frames that never arrived     */
-    uint32_t resyncs; /**< Resynchronisations of the receiver      */
+struct modeStatsValues {
+    uint32_t blocks;     /**< Blocks of baseband processed            */
+    uint32_t frames;     /**< Frames, bursts or slots taken from them */
+    uint32_t valid;      /**< Frames whose check passed               */
+    uint32_t badCrc;     /**< Frames whose check failed               */
+    uint32_t lost;       /**< Blocks or frames that never arrived     */
+    uint32_t resyncs;    /**< Resynchronisations of the receiver      */
 
-    uint32_t levelMean; /**< Mean of the per-block mean |sample| */
-    uint32_t levelPeak; /**< Peak |sample| seen                  */
-    bool rssiValid;     /**< An RSSI reading was reported        */
-    int16_t rssiPeak;   /**< Highest RSSI, dBm                   */
-    bool errorValid;    /**< A quality figure was reported       */
-    uint32_t errorMean; /**< Mean quality figure, thousandths    */
-    bool timingValid;   /**< A timing fit was reported           */
-    int32_t timingFit;  /**< Best timing fit, 1/1000 symbol      */
-    int32_t timingStep; /**< Step of that fit, 1/1000 symbol     */
+    uint32_t levelMean;  /**< Mean of the per-block mean |sample| */
+    uint32_t levelPeak;  /**< Peak |sample| seen                  */
+    bool rssiValid;      /**< An RSSI reading was reported        */
+    int16_t rssiPeak;    /**< Highest RSSI, dBm                   */
+    bool errorValid;     /**< A quality figure was reported       */
+    uint32_t errorMean;  /**< Mean quality figure, thousandths    */
+    bool timingValid;    /**< A timing fit was reported           */
+    int32_t timingFit;   /**< Best timing fit, 1/1000 symbol      */
+    int32_t timingStep;  /**< Step of that fit, 1/1000 symbol     */
 
-    bool costValid;     /**< The demodulation cost was measured  */
-    uint32_t costMinUs; /**< Shortest block, microseconds        */
-    uint32_t costMeanUs;/**< Mean block, microseconds            */
-    uint32_t costMaxUs; /**< Longest block, microseconds         */
+    bool costValid;      /**< The demodulation cost was measured  */
+    uint32_t costMinUs;  /**< Shortest block, microseconds        */
+    uint32_t costMeanUs; /**< Mean block, microseconds            */
+    uint32_t costMaxUs;  /**< Longest block, microseconds         */
 
-    uint32_t txKeys;    /**< Transmissions keyed                 */
-    bool txFirstValid;  /**< The first block was timed           */
-    uint32_t txFirstMs; /**< PTT to first block out, ms (last)   */
-    uint32_t txStarved; /**< Frames sent with no audio in time   */
-    uint32_t txGaps;    /**< Blocks that arrived late            */
+    uint32_t txKeys;     /**< Transmissions keyed                 */
+    bool txFirstValid;   /**< The first block was timed           */
+    uint32_t txFirstMs;  /**< PTT to first block out, ms (last)   */
+    uint32_t txStarved;  /**< Frames sent with no audio in time   */
+    uint32_t txGaps;     /**< Blocks that arrived late            */
 };
 
 #ifdef CONFIG_C62_MODE_STATS
@@ -219,23 +217,22 @@ uint32_t modeStats_platformCycles(void);
  * costs, which is nothing. They are typed all the same, so a call that would
  * not compile with the option on does not compile with it off either.
  */
-#define modeStats_blockStart(mode)             ((void)sizeof(mode))
-#define modeStats_block(mode, samples, count)                                 \
+#define modeStats_blockStart(mode) ((void)sizeof(mode))
+#define modeStats_block(mode, samples, count) \
     ((void)sizeof(mode), (void)sizeof(samples), (void)sizeof(count))
 #define modeStats_frames(mode, count) ((void)sizeof(mode), (void)sizeof(count))
-#define modeStats_valid(mode, count)  ((void)sizeof(mode), (void)sizeof(count))
+#define modeStats_valid(mode, count) ((void)sizeof(mode), (void)sizeof(count))
 #define modeStats_badCrc(mode, count) ((void)sizeof(mode), (void)sizeof(count))
-#define modeStats_lost(mode, count)   ((void)sizeof(mode), (void)sizeof(count))
-#define modeStats_resync(mode)        ((void)sizeof(mode))
-#define modeStats_rssi(mode, dbm)     ((void)sizeof(mode), (void)sizeof(dbm))
-#define modeStats_error(mode, value)  ((void)sizeof(mode), (void)sizeof(value))
-#define modeStats_timing(mode, fit, step)                                     \
+#define modeStats_lost(mode, count) ((void)sizeof(mode), (void)sizeof(count))
+#define modeStats_resync(mode) ((void)sizeof(mode))
+#define modeStats_rssi(mode, dbm) ((void)sizeof(mode), (void)sizeof(dbm))
+#define modeStats_error(mode, value) ((void)sizeof(mode), (void)sizeof(value))
+#define modeStats_timing(mode, fit, step) \
     ((void)sizeof(mode), (void)sizeof(fit), (void)sizeof(step))
-#define modeStats_txKey(mode, nowMs)  ((void)sizeof(mode), (void)sizeof(nowMs))
-#define modeStats_txBlock(mode, nowMs)                                        \
-    ((void)sizeof(mode), (void)sizeof(nowMs))
+#define modeStats_txKey(mode, nowMs) ((void)sizeof(mode), (void)sizeof(nowMs))
+#define modeStats_txBlock(mode, nowMs) ((void)sizeof(mode), (void)sizeof(nowMs))
 #define modeStats_txStarve(mode) ((void)sizeof(mode))
-#define modeStats_txEnd(mode)    ((void)sizeof(mode))
+#define modeStats_txEnd(mode) ((void)sizeof(mode))
 
 #endif /* CONFIG_C62_MODE_STATS */
 

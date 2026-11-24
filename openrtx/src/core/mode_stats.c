@@ -43,12 +43,14 @@
 static const uint8_t txPeriodMs[MS_MODE_COUNT] = { 40, 40, 60, 60 };
 
 static const char *const modeNames[MS_MODE_COUNT] = {
-    "fm", "m17", "dmr", "tetra",
+    "fm",
+    "m17",
+    "dmr",
+    "tetra",
 };
 
 /** Accumulators of one mode. Written by one thread: the one that owns it. */
-struct modeStatsState
-{
+struct modeStatsState {
     uint32_t blocks;
     uint32_t frames;
     uint32_t valid;
@@ -72,7 +74,7 @@ struct modeStatsState
 
     uint32_t costStart; /* Cycle counter at blockStart */
     bool costPending;
-    uint64_t costSum; /* Microseconds, summed */
+    uint64_t costSum;   /* Microseconds, summed */
     uint32_t costBlocks;
     uint32_t costMinUs;
     uint32_t costMaxUs;
@@ -376,9 +378,8 @@ int modeStats_format(enum modeStatsMode mode, char *buf, size_t len)
     char cost[56] = "-/-/-us p=-";
     if (v.costValid) {
         /* Budget: one 30 ms block, as tenths of a percent */
-        uint32_t tenths =
-            (uint32_t)((uint64_t)v.costMeanUs * 1000u /
-                       (MODE_STATS_BLOCK_MS * 1000u));
+        uint32_t tenths = (uint32_t)((uint64_t)v.costMeanUs * 1000u
+                                     / (MODE_STATS_BLOCK_MS * 1000u));
         snprintf(cost, sizeof(cost), "%lu/%lu/%luus p=%lu.%lu%%",
                  (unsigned long)v.costMinUs, (unsigned long)v.costMeanUs,
                  (unsigned long)v.costMaxUs, (unsigned long)(tenths / 10u),
@@ -398,8 +399,8 @@ int modeStats_format(enum modeStatsMode mode, char *buf, size_t len)
                      (unsigned long)v.badCrc, (unsigned long)v.lost,
                      (unsigned long)v.resyncs, (unsigned long)v.levelMean,
                      (unsigned long)v.levelPeak, rssi, quality, timing, cost,
-                     (unsigned long)v.txKeys, first,
-                     (unsigned long)v.txStarved, (unsigned long)v.txGaps);
+                     (unsigned long)v.txKeys, first, (unsigned long)v.txStarved,
+                     (unsigned long)v.txGaps);
 
     if (n < 0)
         return -1;
