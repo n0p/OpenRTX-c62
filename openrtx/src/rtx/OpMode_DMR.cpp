@@ -454,24 +454,6 @@ void OpMode_DMR::stopTx()
 }
 
 /**
- * Force the end of the call, from the supervisor thread.
- *
- * Cancels both streams: the baseband one is what the RTX thread waits on, and
- * cancelling it is what makes it return. No audio path is released here -- the
- * RTX thread owns those and does it in stopTx() -- and no attempt is made to
- * stop the vocoder, which has no thread of its own.
- */
-void OpMode_DMR::abortTx()
-{
-    txBlocked = true;
-
-    if (txId >= 0)
-        audioStream_terminate(txId);
-    if (micId >= 0)
-        audioStream_terminate(micId);
-}
-
-/**
  * Hand the rendered slot to the baseband stream and wait for it to be played.
  *
  * The blocking sync is what keeps the slot cadence: 1440 samples at 48 kHz are
@@ -720,6 +702,30 @@ bool OpMode_DMR::dataTxSlot(int16_t *out)
 }
 #endif /* CONFIG_DMR_SMS */
 #endif /* CONFIG_DMR_TX */
+
+/**
+ * Force the end of the call, from the supervisor thread.
+ *
+ * Cancels both streams: the baseband one is what the RTX thread waits on, and
+ * cancelling it is what makes it return. No audio path is released here -- the
+ * RTX thread owns those and does it in stopTx() -- and no attempt is made to
+ * stop the vocoder, which has no thread of its own.
+ *
+ * Defined in every build, because the vtable of the class is: with
+ * CONFIG_DMR_TX off there is no stream to cancel and the mode cannot key, so
+ * all that is left is the PTT lockout.
+ */
+void OpMode_DMR::abortTx()
+{
+    txBlocked = true;
+
+#ifdef CONFIG_DMR_TX
+    if (txId >= 0)
+        audioStream_terminate(txId);
+    if (micId >= 0)
+        audioStream_terminate(micId);
+#endif
+}
 
 void OpMode_DMR::update(rtxStatus_t *const rtx, const bool newCfg)
 {
