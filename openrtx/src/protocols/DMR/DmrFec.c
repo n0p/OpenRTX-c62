@@ -274,3 +274,118 @@ void dmr_fec_voice_interleave(const uint8_t frame[9], uint8_t payload[72])
         payload[2 * i + 1] = (uint8_t)planes[dmr_ry[i]][dmr_rz[i]];
     }
 }
+
+/*
+ * ---------------------------------------------------------------------------
+ * Transmit side: the inverses of the codes above.
+ * ---------------------------------------------------------------------------
+ */
+
+/** Parity of a Hamming(15,11,3) word: same equations as the fixer. */
+static void hamming_15113_encode(uint8_t d[15])
+{
+    d[11] = d[0] ^ d[1] ^ d[2] ^ d[3] ^ d[5] ^ d[7] ^ d[8];
+    d[12] = d[1] ^ d[2] ^ d[3] ^ d[4] ^ d[6] ^ d[8] ^ d[9];
+    d[13] = d[2] ^ d[3] ^ d[4] ^ d[5] ^ d[7] ^ d[9] ^ d[10];
+    d[14] = d[0] ^ d[1] ^ d[2] ^ d[4] ^ d[6] ^ d[7] ^ d[10];
+}
+
+/** Parity of a Hamming(13,9,3) word: BPTC columns. */
+static void hamming_1393_encode(uint8_t d[13])
+{
+    d[9] = d[0] ^ d[1] ^ d[3] ^ d[5] ^ d[6];
+    d[10] = d[0] ^ d[1] ^ d[2] ^ d[4] ^ d[6] ^ d[7];
+    d[11] = d[0] ^ d[1] ^ d[2] ^ d[3] ^ d[5] ^ d[7] ^ d[8];
+    d[12] = d[0] ^ d[2] ^ d[4] ^ d[5] ^ d[8];
+}
+
+void dmr_fec_bptc_encode(const uint8_t data[96], uint8_t out[196])
+{
+    uint8_t g[196];
+
+    memset(g, 0, sizeof(g));
+
+    /* Information bits: row 0 columns 4..11, then rows 1..8 columns 1..11. */
+    int pos = 0;
+    for (int a = 4; a <= 11; a++)
+        g[a] = data[pos++] & 1u;
+    for (int r = 1; r <= 8; r++) {
+        for (int a = 1; a <= 11; a++)
+            g[r * 15 + a] = data[pos++] & 1u;
+    }
+
+    for (int r = 0; r <= 8; r++)
+        hamming_15113_encode(&g[r * 15 + 1]);
+
+    for (int c = 0; c <= 14; c++) {
+        uint8_t col[13];
+        int p = c + 1;
+
+        for (int a = 0; a < 13; a++, p += 15)
+            col[a] = g[p];
+        hamming_1393_encode(col);
+        p = c + 1;
+        for (int a = 0; a < 13; a++, p += 15)
+            g[p] = col[a];
+    }
+
+    g[0] = 0; /* R(3), always zero */
+
+    /* Interleave: out[(a * 181) mod 196] = g[a]. */
+    for (int a = 0; a < 196; a++)
+        out[(a * 181) % 196] = g[a];
+}
+
+/*
+ * GF(2^8) of TS 102 361-1 annex B: x^8 + x^4 + x^3 + x^2 + 1 (0x11D).  A
+ * shift-and-add multiply is enough: one link control is 27 of them, once per
+ * data burst.
+ */
+static uint8_t gf_mul(uint8_t a, uint8_t b)
+{
+    uint8_t p = 0;
+
+    for (int i = 0; i < 8; i++) {
+        if ((b & 1u) != 0)
+            p ^= a;
+        b >>= 1;
+        if ((a & 0x80u) != 0)
+            a = (uint8_t)((a << 1) ^ 0x1Du);
+        else
+            a = (uint8_t)(a << 1);
+    }
+    return p;
+}
+
+void dmr_fec_rs129_encode(uint8_t lc[12], uint8_t dataType)
+{
+    /*
+     * Feedback shift register for g(x) = (x + a)(x + a^2)(x + a^3), whose
+     * coefficients x^3..x^0 are {1, 0x0E, 0x38, 0x40}.  The parity leaves the
+     * register as parity[2], parity[1], parity[0] -- the order the standard
+     * and every implementation put on the air.
+     */
+    static const uint8_t polyLow[3] = { 0x40, 0x38, 0x0E };
+    uint8_t par[3] = { 0, 0, 0 };
+
+    for (int i = 0; i < 9; i++) {
+        uint8_t fb = (uint8_t)(lc[i] ^ par[2]);
+        uint8_t p2 = (uint8_t)(par[1] ^ gf_mul(polyLow[2], fb));
+        uint8_t p1 = (uint8_t)(par[0] ^ gf_mul(polyLow[1], fb));
+
+        par[0] = gf_mul(polyLow[0], fb);
+        par[1] = p1;
+        par[2] = p2;
+    }
+
+    uint8_t mask = 0x00;
+
+    if (dataType == DMR_DT_VOICE_LC_HEADER)
+        mask = 0x96;
+    else if (dataType == DMR_DT_TERMINATOR_LC)
+        mask = 0x99;
+
+    lc[9] = (uint8_t)(par[2] ^ mask);
+    lc[10] = (uint8_t)(par[1] ^ mask);
+    lc[11] = (uint8_t)(par[0] ^ mask);
+}

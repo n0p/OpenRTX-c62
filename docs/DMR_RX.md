@@ -2,8 +2,9 @@
 
 DMR (ETSI TS 102 361-1) receiver for the Retevis C62: 4FSK demodulation of the
 radio's discriminator output, slot synchronisation, CACH, colour code and
-timeslot, and voice through the AMBE+2 decoder. **Receive only** — there is no
-DMR transmitter in this firmware.
+timeslot, and voice through the AMBE+2 decoder. This document covers the
+receive side; the transmitter is `docs/DMR_TX.md` and is off by default
+(`CONFIG_DMR_TX=n`) until an AMBE+2 encoder exists.
 
 The mode is a port of the host prototype in `work/dmr-rx`
 (`reports/dmr_rx_proto.md`), which validated the chain against a real repeater
@@ -306,9 +307,10 @@ INSNHIST_OUT=/tmp/h qemu-system-arm -M mps2-an505 -nographic \
 
 ## Limitations
 
-* **No TX.** The AMBE+2 encoder does not fit in the M33 (4.2 M instructions per
-  frame, 84–112 % of the core, `docs/DMR_VOCODER.md`), and the TDMA transmit
-  switch (2.5 ms guard, PA keying inside a 30 ms slot) has not been designed.
+* **No TX in this mode's default build.** The transmitter exists
+  (`docs/DMR_TX.md`) but `CONFIG_DMR_TX` is off until an AMBE+2 encoder is
+  linked in; the encoder does not fit in the M33 as it is (4.2 M instructions
+  per frame, 84–112 % of the core, `docs/DMR_VOCODER.md`).
 * **No LC RS(12,9).** The 96-bit link control block is decoded by BPTC but its
   Reed-Solomon layer is not, so **talkgroup and source/destination IDs are not
   shown**; colour code and data type come from the slot type, which needs no
@@ -332,20 +334,15 @@ INSNHIST_OUT=/tmp/h qemu-system-arm -M mps2-an505 -nographic \
 
 ## Next step: transmit
 
-In this order, because each one is testable on its own:
+The transmitter itself is done — `docs/DMR_TX.md` has the chain, the state
+machine, the costs and the loopback (150/150 frames, both layouts). What is
+left on the receive side is what the two halves still need:
 
 1. **RS(12,9) decode** for the LC: source and destination IDs on the screen,
    and a real call-state machine (header → voice → terminator) instead of the
-   300 ms sync timeout.
-2. **AMBE+2 encode somewhere else.** Options: the HiFi4 DSP (it already runs
-   the stock denoiser and has SIMD), or a fixed-point port of the OP25 encoder
-   with the pitch search pruned. The 9-byte frames, the interleaver
-   (`dmr_fec_voice_interleave()`) and the BPTC encoder (already in the
-   prototype) are all in place; what is missing is the encoder and the slot
-   timing.
-3. **TDMA transmit timing.** 30 ms slots, 2.5 ms guard, PA keying and the
-   BK4819 deviation set to 1944 Hz (the C62 transmits 1600 Hz in its own
-   firmware, which the receiver tolerates because it estimates levels per
-   burst — a DMR transmitter must not).
-4. **Colour code and talkgroup policy**, which is a UI/state question, not a
-   PHY one.
+   300 ms sync timeout. The encoder half already exists
+   (`dmr_fec_rs129_encode()`), so the GF(256) is half written.
+2. **The AMBE+2 encoder**, which is the only thing between
+   `CONFIG_DMR_TX=y` and a radio that talks: see `docs/DMR_TX.md`.
+3. **Deviation calibration** of `REG_40` against 1944 Hz and an adjacent
+   channel measurement, which need the bench, not more code.

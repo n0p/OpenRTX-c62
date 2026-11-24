@@ -76,15 +76,48 @@ config C62_DMR_VOCODER
 	  See docs/DMR_VOCODER.md.
 
 config C62_DMR_RX
-	bool "DMR receive mode (PHY, AMBE+2 vocoder and UI)"
+	bool "DMR mode (PHY, AMBE+2 vocoder, transmitter and UI)"
 	select C62_DMR_VOCODER
 	default n
 	help
-	  DMR receiver: 4FSK demodulation of the discriminator output, slot
-	  sync, CACH, colour code and timeslot, and voice through the AMBE+2
-	  decoder. Receive only, there is no DMR transmitter. Selects the
-	  vocoder. See docs/DMR_RX.md.
+	  DMR mode: 4FSK demodulation of the discriminator output, slot sync,
+	  CACH, colour code and timeslot, and voice through the AMBE+2
+	  decoder. Selects the vocoder. See docs/DMR_RX.md.
+
+	  It also contains the transmitter (docs/DMR_TX.md), which only keys
+	  the PA when an AMBE+2 encoder is linked in: CONFIG_DMR_TX builds the
+	  chain, but the encoder itself is the HiFi4 service or an optimised
+	  port. Without one, PTT in this mode does nothing.
+
 	  Enable it with west build -b c62 ... -- -DCONFIG_C62_DMR_RX=y
+
+config DMR_TX
+	bool "DMR transmitter (framing, FEC, 4FSK modulator, PTT)"
+	depends on C62_DMR_RX
+	default n
+	help
+	  Transmit chain of the DMR mode: voice LC header, voice bursts,
+	  terminator, CACH, BPTC/RS, 4FSK with a polyphase RRC and the PA
+	  envelope. 117 k instructions per 30 ms timeslot, 4.5 k more for an
+	  LC burst. It needs an AMBE+2 encoder, which DMR_TX_ENC below
+	  provides; without one PTT refuses to key. OFF by default until the
+	  deviation and the adjacent channel power have been measured on the
+	  bench (docs/DMR_TX.md).
+	  Enable it with west build -b c62 ... -- -DCONFIG_C62_DMR_RX=y -DCONFIG_DMR_TX=y
+
+config DMR_TX_ENC
+	bool "DMR transmitter: AMBE+2 encoder (lib/dmr_encoder)"
+	depends on DMR_TX
+	default y
+	help
+	  Build the AMBE+2 encoder that feeds the DMR transmitter: 160 samples
+	  of 8 kHz PCM in, one 72-bit frame out, 1.43 M instructions per 20 ms
+	  frame (24-32 % of the M33 at 300 MHz) and 63 KiB of flash, in C.
+	  Bit-exact with the OpenDMR reference encoder.
+
+	  Turn it off to keep the transmit chain without an encoder: PTT then
+	  refuses to key, which is what a build that gets its frames from the
+	  HiFi4 DSP wants (docs/DMR_TX.md, phase 3).
 
 endmenu
 
