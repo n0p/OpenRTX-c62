@@ -580,15 +580,16 @@ static bool listKey(kbd_msg_t *msg, bool *sync_rtx)
 {
     uint16_t count = (uint16_t)chstore_count();
 
-    if (msg->keys & (KEY_UP | KNOB_RIGHT)) {
-        if (count > 0) {
-            listSel = (listSel + 1 < count) ? (uint16_t)(listSel + 1) : 0;
-            clampList();
-        }
-    } else if (msg->keys & (KEY_DOWN | KNOB_LEFT)) {
+    /* UP is the previous entry, as in every other list of this UI */
+    if (msg->keys & (KEY_UP | KNOB_LEFT)) {
         if (count > 0) {
             listSel = (listSel > 0) ? (uint16_t)(listSel - 1)
                                     : (uint16_t)(count - 1);
+            clampList();
+        }
+    } else if (msg->keys & (KEY_DOWN | KNOB_RIGHT)) {
+        if (count > 0) {
+            listSel = (listSel + 1 < count) ? (uint16_t)(listSel + 1) : 0;
             clampList();
         }
     } else if (msg->keys & KEY_ENTER) {
@@ -619,16 +620,16 @@ static bool editKey(kbd_msg_t *msg, bool *sync_rtx)
 {
     (void)sync_rtx;
 
-    if (msg->keys & (KEY_UP | KNOB_RIGHT)) {
+    if (msg->keys & (KEY_UP | KNOB_LEFT)) {
         if (fieldEdit)
-            fieldChange(1, msg->long_press);
+            fieldChange(1, msg->long_press);   /* up raises the value */
         else
-            field = fieldStep(field, 1);
-    } else if (msg->keys & (KEY_DOWN | KNOB_LEFT)) {
+            field = fieldStep(field, -1);
+    } else if (msg->keys & (KEY_DOWN | KNOB_RIGHT)) {
         if (fieldEdit)
             fieldChange(-1, msg->long_press);
         else
-            field = fieldStep(field, -1);
+            field = fieldStep(field, 1);
     } else if (fieldEdit && (msg->keys & KEY_F1)) {
         /* The keypad has no left/right: P1/P2 move the caret */
         fieldCursorStep(-1);

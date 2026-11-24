@@ -78,8 +78,8 @@ TEST_CASE("Messages: multi-tap composition and draft", "[ui][messages]")
     press(KEY_F1);             /* backspace */
     press(KEY_ESC);            /* leave typing, keep the draft */
 
-    /* UP from TO is the text row */
-    press(KEY_UP);
+    /* DOWN from TO is the text row */
+    press(KEY_DOWN);
     press(KEY_ENTER);          /* typing */
     press(KEY_4);              /* G */
     press(KEY_3);              /* D: different key, new character */
@@ -103,14 +103,14 @@ TEST_CASE("Messages: sending is refused without a transport", "[ui][messages]")
     ui_msgs_compose("EA5ABC");
     REQUIRE(state.ui_screen == MSG_COMPOSE);
 
-    /* DOWN from TO is the TP row: no transport is compiled in on this host,
+    /* UP from TO is the TP row: no transport is compiled in on this host,
        so cycling it refuses and nothing is queued. */
-    press(KEY_DOWN);
+    press(KEY_UP);
     press(KEY_ENTER);
     REQUIRE(state.ui_screen == MSG_COMPOSE);
 
-    /* SEND row, same answer */
-    press(KEY_DOWN);           /* TP -> SEND */
+    /* SEND row, same answer: UP wraps from TP to SEND */
+    press(KEY_UP);             /* TP -> SEND */
     press(KEY_ENTER);
     REQUIRE(state.ui_screen == MSG_COMPOSE);
     REQUIRE(msg_sent_count() == 0);

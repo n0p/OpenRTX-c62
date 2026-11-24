@@ -429,10 +429,10 @@ static bool inboxKey(kbd_msg_t *msg, bool sent)
 
     if (msg->keys & KEY_UP) {
         if (n > 0)
-            mg.sel = (mg.sel + 1 < n) ? (uint8_t)(mg.sel + 1) : 0;
+            mg.sel = (mg.sel > 0) ? (uint8_t)(mg.sel - 1) : (uint8_t)(n - 1);
     } else if (msg->keys & KEY_DOWN) {
         if (n > 0)
-            mg.sel = (mg.sel > 0) ? (uint8_t)(mg.sel - 1) : (uint8_t)(n - 1);
+            mg.sel = (mg.sel + 1 < n) ? (uint8_t)(mg.sel + 1) : 0;
     } else if (msg->keys & KEY_ENTER) {
         msg_rec_t *r = listAt(sent, mg.sel);
         if (r != NULL) {
@@ -525,9 +525,9 @@ static bool composeKey(kbd_msg_t *msg, long long now)
     }
 
     if (msg->keys & KEY_UP) {
-        mg.row = (uint8_t)((mg.row + 1) % MG_ROW_NUM);
-    } else if (msg->keys & KEY_DOWN) {
         mg.row = (uint8_t)((mg.row + MG_ROW_NUM - 1) % MG_ROW_NUM);
+    } else if (msg->keys & KEY_DOWN) {
+        mg.row = (uint8_t)((mg.row + 1) % MG_ROW_NUM);
     } else if (msg->keys & KEY_F1) {
         if (mg.row == MG_ROW_TP)
             cycleTransport(-1);

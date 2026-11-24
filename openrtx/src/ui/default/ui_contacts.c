@@ -270,14 +270,15 @@ static bool listKey(kbd_msg_t *msg)
 {
     uint16_t count = (uint16_t)cstore_count();
 
+    /* UP is the previous contact, as in every other list */
     if (msg->keys & KEY_UP) {
-        if (count > 0)
-            ct.sel = (ct.sel + 1 < count) ? (uint16_t)(ct.sel + 1) : 0;
-        clampList();
-    } else if (msg->keys & KEY_DOWN) {
         if (count > 0)
             ct.sel = (ct.sel > 0) ? (uint16_t)(ct.sel - 1)
                                   : (uint16_t)(count - 1);
+        clampList();
+    } else if (msg->keys & KEY_DOWN) {
+        if (count > 0)
+            ct.sel = (ct.sel + 1 < count) ? (uint16_t)(ct.sel + 1) : 0;
         clampList();
     } else if (msg->keys & KEY_ENTER) {
         if (count > 0) {
