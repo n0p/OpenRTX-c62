@@ -15,11 +15,12 @@ instructions per 20 ms frame (24 – 38 % of the M33).
 |---|---|
 | voice LC header, voice bursts, terminator, CACH, BPTC(196,96), RS(12,9), Golay(20,8) | done |
 | polyphase RRC 4FSK, TDMA slot grid, PA ramps, pulse tail carried between slots | done |
-| PTT state machine in `OpMode_DMR` (lead → LC → voice → terminator → tail) | done |
+| PTT state machine in `OpMode_DMR` (lead → LC → voice → terminator → tail) | done; pure function, host-tested, two safety timeouts |
 | `CONFIG_DMR_TX`, off by default | done |
 | AMBE+2 encoder (`lib/dmr_encoder`, C, `CONFIG_DMR_TX_ENC`) | done, bit-exact with the reference |
 | deviation calibration (`REG_40 = 0x476`) | **pending**: a starting point, not a measurement |
 | adjacent channel power, real air test | **pending**: needs a bench |
+| audio cadence and key-up latency on hardware | **pending**: the loopback checks the frames, not the clock |
 
 ## Enabling it
 
@@ -130,16 +131,19 @@ The modulator is integer end to end: Q14 tables, no floating point, no
 
 ## The PTT state machine
 
-`OpMode_DMR::update()` runs in the rtx thread, one call per 30 ms slot:
+The stages live in a pure function, `openrtx/include/protocols/DMR/DmrTxFsm.h`
+(`dmrTxFsm_next()`), one call per 30 ms slot from `OpMode_DMR::txSlot()`. It
+needs no audio stream, no radio and no vocoder, so `tests/unit/dmr_tx_fsm.cpp`
+walks every state and every PTT/queue condition on the host.
 
 ```
         PTT, encoder available
 RX ─────────────────────────────► TX_LEAD ──► TX_LC_HEADER ──► TX_VOICE
-        stopSampling()                 1 slot       1 slot      n slots
-        radio_disableRtx()                                       │ PTT up
-        radio_enableTx()                                         ▼
-                                        OFF ◄── TX_TAIL ◄── TX_TERMINATOR
-                                        1 slot       1 slot
+        stopSampling()              n slots      1 slot          n slots
+        radio_disableRtx()            │                            │ PTT up
+        radio_enableTx()              │ PTT up, nothing sent       ▼
+                                      ▼               OFF ◄── TX_TAIL ◄── TX_TERMINATOR
+                                  (done)             unkey      1 slot       1 slot
 ```
 
 * `startTx()` refuses if `dmrVocoder_available()` is false: a mode that keys the
@@ -148,12 +152,11 @@ RX ─────────────────────────�
 * The receiver is stopped and the radio taken out of RX **before** the PA is
   keyed: the BK4819 is half duplex and both directions share the audio path.
 * One empty slot of lead lets the PA settle before the LC header, one empty slot
-  of tail carries the last pulse and ramps the PA down inside the guard.
-* The lead slot only **ends** when the PTT is down *and* the vocoder queue has a
-  frame: the LC header announces a call and the first voice burst follows it,
-  so keying the header with an empty queue would put a header and then silence
-  on the air. The cost is one slot of extra lead at most, since the encoder has
-  already produced the first frame when the lead slot runs.
+  of tail carries the last pulse; the PA ramp is a 1 ms raised cosine inside the
+  guard of the terminator, so it lands before the tail slot.
+* The lead stage waits for a queued frame before opening the call: the LC header
+  announces a call and the first voice burst follows it, so keying the header
+  with an empty queue would put a header and then silence on the air.
 * **One burst every other slot.** A call occupies one of the two timeslots of
   the carrier, and a voice burst carries 60 ms of speech — exactly what the
   vocoder produces in the 60 ms between two bursts of the same timeslot. The
@@ -167,6 +170,45 @@ RX ─────────────────────────�
   always carries three frames; missing ones are zero frames.
 * The slot cadence is the blocking write to the 48 kHz output stream: 1440
   samples are exactly 30 ms and the stream is double buffered.
+
+### Leaving transmit: one exit, two timeouts
+
+Leaving is decided by the slot counter first, **not** by the stage: a stage that
+only leaves when some condition becomes true can be trapped by a condition that
+never does. Both timeouts are in the header and covered by the host test:
+
+| Timeout | Slots | What it protects |
+|---|---|---|
+| `DMR_TX_MAX_SLOTS_AFTER_PTT` | 4 (120 ms) | PTT released: always ends, whatever the stage, even with an empty queue (the lead stage used to hold the carrier for ever here) |
+| `DMR_TX_MAX_LEAD_SLOTS` | 33 (1 s) | PTT held with a dead vocoder/microphone: no infinite unmodulated carrier |
+
+`stopTx()` is the only way out and it is unconditional: it stops the output
+stream, terminates the input stream, releases both audio paths and calls
+`radio_disableRtx()` itself, so the PA, the TX LED and the BK4819 go back to
+receive even if the caller's logic misbehaves. (It used to return early when
+`txRunning` was false, leaving half-open streams behind after a failed start.)
+
+### Buffers and the stream API
+
+An audio stream started with `BUF_CIRC_DOUBLE` is given the **whole two-half
+buffer** and hands out one half at a time (`blockSamples()` = `bufSize / 2`).
+The transmitter has to size its buffers accordingly:
+
+| Stream | Buffer | Half the driver hands out | Needed |
+|---|---|---|---|
+| MIC → MCU, 8 kHz | `micPcm[2 * 160]` | 160 samples = 20 ms | one AMBE+2 frame |
+| MCU → RTX, 48 kHz | `txSamples[2 * 1440]` | 1440 samples = 30 ms | one timeslot |
+
+Getting this wrong is not a small bug: with `txSamples[1440]` the idle half was
+720 samples while the renderer copied 1440, so every second slot wrote 1440
+bytes past the member — over `frameQueue`, `frameCount` and `txStage`, and past
+the end of `dmrMode` into `tetraMode` and `m17Mode` in `.bss` (the linker puts
+them next to each other). That was the stuck PA of the first bench test: the
+stage became an audio sample, so the machine never reached the terminator, and
+the PTT release was never seen. It is also why M17 crashed afterwards: the
+write landed on `M17::Modulator::baseband_buffer`, a `std::unique_ptr`, which
+`Modulator::init()` then freed.
+
 
 ## The encoder: lib/dmr_encoder
 
@@ -359,12 +401,23 @@ Zephyr build of this branch, `-DCONFIG_C62_DMR_RX=y -DCONFIG_C62_APRS=y`:
 | + DMR mode, `CONFIG_DMR_TX` **off** | 488 088 B (46.55 %) | 182 920 B (69.78 %) |
 | + `CONFIG_DMR_TX=y`, `CONFIG_DMR_TX_ENC=n` | 491 236 B (46.85 %) | 186 440 B (71.12 %) |
 | + `CONFIG_DMR_TX=y`, `CONFIG_DMR_TX_ENC=y` | **546 892 B (52.16 %)** | **192 224 B (73.33 %)** |
+| + as above, after the transmit-buffer fix (`c62/fix-tx`) | **547 924 B (52.25 %)** | **203 696 B (77.70 %)** |
 | plain build, no DMR, after the patch | 439 564 B (41.92 %) | 161 384 B (61.56 %) |
 | plain build, no DMR, `c62/full-aprs` | 439 532 B (41.92 %) | 161 368 B (61.56 %) |
 
+The transmit-buffer fix costs **+1 032 B of flash and +11 472 B of RAM** over
+the numbers of the previous row. The RAM is two corrections and one budget: the
+slot buffer must hold two halves (`txSamples[2 * 1440]`, +2880 B) and the
+microphone buffer two frames (`micPcm[2 * 160]`, +320 B), the rtx thread stack
+has to hold the AMBE+2 encoder (1 KiB → 9 KiB, +8192 B, from the kernel heap)
+and the kernel heap itself grows by the same 8192 B so Codec2 keeps the
+headroom M17 transmit needs. The flash is the stage machine and the guards of
+the M17 modulator.
+
 The transmitter costs **+3 148 B of flash and +3 520 B of RAM** on top of the
-receive mode. The RAM is the slot buffer handed to the output stream
-(1440 × 2 = 2880 B), the microphone buffer (160 × 2 B), the 12-frame queue
+receive mode. The RAM is the slot buffer (1440 × 2 = 2880 B at the time — one
+half of what it has to be, see "Buffers and the stream API" above), the
+microphone buffer (160 × 2 B), the 12-frame queue
 (108 B) and the modulator state including the 8-symbol pulse tail (~190 B).
 The flash is the modulator and its tables (180 B of RRC, 96 B of ramp) and the
 encode halves of the FEC.
@@ -384,7 +437,7 @@ grows by **32 B of flash and 16 B of RAM**: the four `rtxStatus_t` fields
 initialisation, which the settings and the mode share, and which no build can
 avoid. No DMR code, no TX chain, no slots buffer, no encoder.
 
-The 37 warnings of the DMR build are the same set as the base image: the
+The 38 warnings of the DMR build are the same set as the base image: the
 encoder compiles clean (`-Wall -Wextra`) and none of the new files appears in
 the warning list.
 
