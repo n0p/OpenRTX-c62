@@ -269,7 +269,7 @@ Es decir: el techo del algoritmo es +15 dB a 0 dB de SNR (hiss) y **+5…+7 dB c
 | Calidad medida (mismo arnés, 33 bloques) | peor en SNR/segSNR/STOI (0/12); mejor en PESQ en 5/12 | **mejor** en SNR/segSNR/STOI (12/12) |
 | Esfuerzo de integración | reescribir en PyTorch + QAT + rediseño de upsampling + memoria | reexpresar el grafo (ya hecho por Arm) + QAT |
 
-**La UNet no compra nada**: 96× los MACs de la red, 22× la memoria, 50–100× la latencia, para perder en todas las métricas salvo PESQ a 0 dB. Y no cabe.
+**La UNet no compra nada**: 96× los MACs de la red, 22× la memoria, 50–100× la latencia, para perder en SNR/segSNR/STOI en las 12 condiciones (PESQ solo lo gana en 5, todas a 0–10 dB). Y no cabe.
 
 ---
 
@@ -305,13 +305,13 @@ Y aun así el resultado seguiría sin caber (§2.3) y con 1 s de latencia (§2.4
 
 Dos conclusiones que salen de la tabla y no del gusto:
 
-1. **La tasa de MAC no baja recortando tiempo**: recortar la ventana de 128 a 32 tramas baja la memoria y la latencia 4× pero **deja 778 MMAC/s** (la misma cuenta por segundo). La tasa solo baja con **canales** (C²: 832 → 210 al pasar de 16 a 8).
+1. **La tasa de MAC no baja recortando tiempo**: pasar la ventana de 128 a 32 tramas baja memoria y latencia 4× pero **deja 778 MMAC/s** (la misma cuenta por segundo). La tasa solo baja con **canales** (C²: 832 → 210 al pasar de 16 a 8) y con **bins de frecuencia** (128 → 96: 210 → 135).
 2. **Para caber hay que irse a C4–C8 y ≤64 bins**: a C8/96×16 queda en 135 MMAC/s (11 % del HiFi4 pico, 35 % con eficiencia del 50 %) con 150 ms de ventana. Eso ya **no es este modelo**: es una CNN de espectrograma pequeña, que es *exactamente lo que el chip ya trae de fábrica* (`model-cmlp.bin`, 429 KB, `anker_unet`/`mtfaa`) y lo que RNNoise hace con 20× menos.
 
 Cambios mínimos si se insistiera:
 
-1. **Salida como máscara acotada** (`sigmoid` × `noisy`, piso −12 dB) en vez de resta libre en dB: mejor condicionada para int8, evita el colapso de armónicos y hace innecesario el `*10`. Medido: el techo del algoritmo no cambia (las columnas "suelo" de §3.4 dan lo mismo), pero la varianza del error baja.
-2. **`LeakyReLU` → `PReLU`**, `UpSampling2D+Conv` → `ConvTranspose2d` (requiere reentrenar) y `linear(N) → tanh` en la salida.
+1. **Salida como máscara acotada** (`sigmoid` × `noisy`, piso −12 dB) en vez de resta libre en dB: mejor condicionada para int8, evita el colapso de armónicos y hace innecesario el `*10`. El techo medido con suelos de −20/−12/−6 dB es el mismo (§3.4), así que la ganancia esperada es de robustez frente al error del estimador, no de techo.
+2. **`LeakyReLU` → `PReLU`** y **`UpSampling2D+Conv` → `ConvTranspose2d`** (requiere reentrenar).
 3. **Ventana de 16–32 tramas** (125–250 ms) en vez de 128; y normalización por **media móvil** en lugar de `ref=max` del parche, para que sea causal.
 4. **C = 4–8**, 5 niveles → 3–4 niveles, bins 64 (0–2 kHz) o 96.
 5. **QAT con `linger`**, int8 puro; entrada con escala fija (0,375 dB/LSB) y salida en máscara.
