@@ -180,7 +180,7 @@ void OpMode_NXDN::update(rtxStatus_t *const rtx, const bool newCfg)
      * level estimates would be taken from its transient.
      */
     if (settle > 0) {
-        settle -= (block.len < settle) ? block.len : settle;
+        settle -= (block.len < (size_t)settle) ? (int16_t)block.len : settle;
         return;
     }
 
