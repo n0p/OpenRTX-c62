@@ -6,6 +6,8 @@
 
 #include <string.h>
 
+#include "core/audio_path.h"
+#include "core/audio_stream.h"
 #include "core/utils.h"
 #include "interfaces/audio.h"
 #include "interfaces/delays.h"
