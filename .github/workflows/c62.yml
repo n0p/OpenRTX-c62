@@ -1,0 +1,123 @@
+# SPDX-FileCopyrightText: Copyright 2020-2026 OpenRTX Contributors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Retevis C62 firmware: built with the Docker image of scripts/c62 (ListenAI
+# Zephyr fork, fetched by west), as scripts/c62/README.md describes. The
+# artifact holds both images cskburn flashes: zephyr.bin and the DSP image.
+
+name: "Build C62"
+
+on:
+  push:
+  pull_request:
+
+# A newer push to the same branch replaces the build (and the pre-release)
+concurrency:
+  group: c62-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-c62:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write # The c62-latest pre-release
+    steps:
+      # west wants a workspace folder that holds the OpenRTX checkout. Full
+      # history and OpenRTX's release tags: the firmware's version string
+      # comes from git describe (v0.4.5-111-g34e1da8e5, not 34e1da8), as in
+      # a local build
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: OpenRTX
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Fetch the OpenRTX release tags
+        run: |
+          git -C OpenRTX fetch --tags https://github.com/OpenRTX/OpenRTX.git ||
+              echo "::warning::No OpenRTX tags: the version is the commit hash"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the C62 build environment
+        uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          context: OpenRTX/scripts/c62
+          tags: openrtx-c62:ci
+          load: true
+          cache-from: type=gha,scope=c62
+          cache-to: type=gha,scope=c62,mode=max
+
+      # The Zephyr fork and modules west fetches next to the checkout (over a
+      # gigabyte), and the compiler cache: fetched again only when the pins
+      # in west.yml change
+      - name: Cache the west workspace
+        uses: actions/cache@v4
+        with:
+          path: |
+            .west
+            zephyr-listenai
+            csk
+            modules
+            .ccache
+          key: c62-west-${{ hashFiles('OpenRTX/west.yml') }}
+          restore-keys: c62-west-
+
+      - name: Compile
+        run: docker run --rm -v "$PWD":/work openrtx-c62:ci
+
+      - name: Collect the images
+        run: |
+          mkdir c62
+          cp OpenRTX/build_c62/zephyr/zephyr.bin \
+             OpenRTX/build_c62/zephyr/dsp_firmware.bin c62/
+          cd c62
+          sha256sum zephyr.bin dsp_firmware.bin > SHA256SUMS
+          cat > FLASHING.txt <<'EOF'
+          OpenRTX for the Retevis C62, branch ${{ github.ref_name }}, commit ${{ github.sha }}
+
+          Flash with cskburn (https://github.com/LISTENAI/cskburn/releases)
+          over the Kenwood programming cable. Burn mode: radio off, hold the
+          lower side key, power on, release the key; the screen stays dark.
+          Do not press PTT while flashing. Back up the radio's own flash
+          first (it is per unit), see scripts/c62/README.md:
+
+            cskburn -s /dev/ttyUSB0 -C 6 -b 115200 -v --read 0x0:0x400000:backup.bin
+
+          Then, in burn mode again:
+
+            cskburn -s /dev/ttyUSB0 -C 6 -b 115200 -v --verify-all \
+                0x100000 dsp_firmware.bin \
+                0x000000 zephyr.bin
+
+          Power the radio off and on normally afterwards.
+          EOF
+
+      - name: Upload the C62 firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: openrtx-c62
+          path: c62/
+          if-no-files-found: error
+
+      # A download for everyone, without a GitHub account and without
+      # expiry: the c62-latest pre-release, replaced at each push to the
+      # c62/tetra branch, at fixed URLs such as
+      # https://github.com/<owner>/OpenRTX/releases/download/c62-latest/zephyr.bin
+      - name: Publish the c62-latest pre-release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/c62/tetra'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh release delete c62-latest --repo "$REPO" --cleanup-tag --yes || true
+          gh release create c62-latest c62/* --repo "$REPO" \
+              --target "$GITHUB_SHA" --prerelease \
+              --title "C62 latest build ($(git -C OpenRTX describe --tags --always))" \
+              --notes-file c62/FLASHING.txt

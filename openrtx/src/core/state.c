@@ -14,16 +14,48 @@
 #include "hwconfig.h"
 #include "interfaces/platform.h"
 #include "interfaces/nvmem.h"
+#include "core/crc.h"
 #include "interfaces/delays.h"
+#ifdef CONFIG_TETRA
+#include "protocols/TETRA/TetraSds.h"
+#endif
+
+#define NVM_WRITE_DEBOUNCE_MS 3000
+
+struct debouncer {
+    long long lastChange;
+    uint16_t crc;
+    bool pending;
+};
 
 state_t state;
 pthread_mutex_t state_mutex;
 static long long int lastUpdate = 0;
+static struct debouncer settingsDebouncer;
+static struct debouncer vfoDebouncer;
 
 // Commonly used frequency steps, expressed in Hz
 const uint32_t freq_steps[] = { 1000,  5000,  6250,  10000, 12500,
                                 15000, 20000, 25000, 50000, 100000 };
 const size_t n_freq_steps = sizeof(freq_steps) / sizeof(freq_steps[0]);
+
+static bool hasChanged(struct debouncer *db, const void *data, const size_t len)
+{
+    uint16_t crc = crc_ccitt(data, len);
+    if (crc != db->crc) {
+        db->crc = crc;
+        db->pending = true;
+        db->lastChange = getTick();
+    } else {
+        long long elapsed = getTick() - db->lastChange;
+        if (db->pending && (elapsed > NVM_WRITE_DEBOUNCE_MS)) {
+            db->pending = false;
+            return true;
+        }
+    }
+
+    return false;
+}
 
 void state_init()
 {
@@ -67,6 +99,14 @@ void state_init()
     if (state.settings.brightness > 100) {
         state.settings.brightness = 100;
     }
+
+    settingsDebouncer.crc = crc_ccitt(&state.settings, sizeof(settings_t));
+    vfoDebouncer.crc = crc_ccitt(&state.channel, sizeof(channel_t));
+
+#ifdef CONFIG_TETRA
+    /* Received SDS messages, kept across power cycles */
+    tetraSds_load();
+#endif
 }
 
 void state_terminate()
@@ -82,6 +122,9 @@ void state_terminate()
 
 void state_task()
 {
+    settings_t settings;
+    channel_t vfo;
+
     // Update radio state once every 100ms
     if ((getTick() - lastUpdate) < 100)
         return;
@@ -122,7 +165,19 @@ void state_task()
     state.time = platform_getCurrentTime();
 #endif
 
+    settings = state.settings;
+    vfo = state.channel;
     pthread_mutex_unlock(&state_mutex);
+
+#ifdef CONFIG_TETRA
+    /*
+     * Persist SDS messages once the traffic has been quiet for a while: an
+     * erase of the 4 KiB sector takes tens of milliseconds, which this task
+     * (100 ms cadence, not the audio path) can afford, but the first slot
+     * after a message must not wait for it.
+     */
+    tetraSds_task();
+#endif
 
     ui_pushEvent(EVENT_STATUS, 0);
 }

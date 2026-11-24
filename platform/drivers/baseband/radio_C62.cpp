@@ -1,0 +1,444 @@
+/*
+ * SPDX-FileCopyrightText: Copyright 2020-2026 OpenRTX Contributors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+#include <hwconfig.h>
+#include <interfaces/nvmem.h>
+#include <interfaces/radio.h>
+#include <interfaces/delays.h>
+
+#include <algorithm>
+
+#include "calibration/calib_C62.h"
+#include "drivers/baseband/BK4819.h"
+#include "radioUtils.h"
+#ifdef C62_BASEBAND_DUMP
+#include "../audio/baseband_dump_c62.h"
+#endif
+
+#include <zephyr/drivers/pwm.h>
+#include <zephyr/kernel.h>
+
+static const rtxStatus_t
+    *config; // Pointer to data structure with radio configuration
+
+static enum opstatus radioStatus; // Current operating status
+static enum opmode radioMode;     // Current operating mode
+
+/*
+ * CTCSS TX gain of the stock C62 firmware, REG_51 <6:0> "CTCSS/CDCSS Tx Gain1
+ * Tuning" (0 = min, 127 = max) in the BK4819 notes of
+ * https://github.com/egzumer/uv-k5-firmware-custom/blob/7607f0a4bd6203d1f06b70556fc1ce0d7399d6b3/driver/bk4819.c#L463-L471
+ */
+static constexpr uint8_t CTCSS_TX_GAIN = 65;
+
+/*
+ * C62 BK4819 settings for M17, on top of the audio bypass mode, from the
+ * A36Plus profile: https://wiki.m17foundation.org/index.php?title=A36Plus
+ */
+// Raw deviation tuning (not Hz), set for the TX DAC gain in hwconfig.h
+static constexpr uint16_t M17_TX_DEVIATION = 0x582;
+static constexpr uint8_t M17_RF_BW = 7;          // 4.5 kHz
+static constexpr uint8_t M17_RF_BW_WEAK = 4;     // 3.75 kHz
+static constexpr uint8_t M17_TX_LPF2_BW = 0;     // 3 kHz
+static constexpr uint8_t M17_RX_AUDIO_GAIN1 = 1; // -6 dB
+static constexpr uint8_t M17_RX_AUDIO_GAIN2 = 0x3f;
+static constexpr uint8_t M17_MIC_GAIN = 0;
+
+/*
+ * C62 BK4819 settings for DMR, receive only. DMR channels are 12.5 kHz, but
+ * the demodulator needs the discriminator flat and wide: as with TETRA, the
+ * chip runs in 25 kHz mode with the widest RF filters (REG_43 0x7e28), which
+ * is what the host prototype was validated on. The receiver estimates its
+ * levels per burst, so the deviation (1944 Hz on ETSI, 1600 Hz on the C62)
+ * does not have to be configured.
+ */
+static constexpr uint8_t DMR_RF_BW = 7;      // 4.5 kHz
+static constexpr uint8_t DMR_RF_BW_WEAK = 7; // 4.5 kHz
+static constexpr uint8_t DMR_TX_LPF2_BW = 0; // 3 kHz, unused in RX
+static constexpr uint8_t DMR_RX_AUDIO_GAIN1 = 1; // -6 dB
+static constexpr uint8_t DMR_RX_AUDIO_GAIN2 = 0x3f;
+static constexpr uint8_t DMR_MIC_GAIN = 0;
+
+/*
+ * C62 BK4819 settings for TETRA, receive only. TETRA channels are 25 kHz
+ * wide, so the chip runs in 25 kHz mode with the widest RF filters
+ * (REG_43 0x7e28): that is the flat receive path the measured equalizer taps
+ * in CONFIG_TETRA_EQ_INIT come from.
+ */
+static constexpr uint8_t TETRA_RF_BW = 7;      // 4.5 kHz
+static constexpr uint8_t TETRA_RF_BW_WEAK = 7; // 4.5 kHz
+static constexpr uint8_t TETRA_TX_LPF2_BW = 0; // 3 kHz, unused in RX
+static constexpr uint8_t TETRA_RX_AUDIO_GAIN1 = 1; // -6 dB
+static constexpr uint8_t TETRA_RX_AUDIO_GAIN2 = 0x3f;
+static constexpr uint8_t TETRA_MIC_GAIN = 0;
+
+/**
+ * Digital modes receive the raw discriminator through the flat audio path:
+ * M17, and DMR and TETRA (both receive only).
+ */
+static bool flatMode(enum opmode mode)
+{
+    return (mode == OPMODE_M17) || (mode == OPMODE_DMR) || (mode == OPMODE_TETRA);
+}
+
+/*
+ * Fine RX tuning offset, Hz, added to the channel frequency: for tests and the
+ * TETRA frequency correction loop. See c62_setRxOffset().
+ */
+static volatile int32_t rxOffset;
+
+/* Read by the baseband dump: the REG_43 value currently in use for RX */
+extern "C" {
+volatile uint16_t c62_rx_reg43 = 0x7808;
+}
+
+#ifdef C62_REG43_SWEEP
+/*
+ * Cycle REG_43 through these values in the digital RX modes,
+ * C62_REG43_SWEEP_MS each, to measure them with a fixed test signal. Each
+ * dump packet carries the value in use. The last three have undocumented bits
+ * set. The sweep clock only runs while the dump records, so with the default
+ * dwell one 10.4 s burst covers all seven values.
+ */
+static const uint16_t reg43Sweep[] = {
+    0x7808, // M17 default, 12.5 kHz
+    0x7828, // 25 kHz, weak-signal filter 3.75 kHz
+    0x7e28, // 25 kHz, weak-signal filter 4.5 kHz
+    0x7e2c, // as above, +6 dB after demodulation
+    0x7e38, // BW mode 3 (undocumented)
+    0x7e20, // bit 3 cleared (undocumented)
+    0xfe28, // bit 15 set (undocumented)
+};
+static size_t reg43SweepIndex;
+static int64_t reg43SweepLast;    // Uptime at the previous check
+static int64_t reg43SweepElapsed; // Recorded time on the current value
+static bool reg43SweepStarted;
+#endif
+
+static struct C62Calib calData;  // TX calibration
+static struct C62CalPoint txCal; // TX calibration at the TX frequency
+
+/**
+ * Set the TX power control (APC) voltage through the PWM on pin A03. The TX
+ * calibration gives the duty cycles of the low and high power settings at the
+ * TX frequency; the power is interpolated linearly between them, from the low
+ * setting at 1 W to the high one at 5 W, as on the MD-3x0 and MD-UV3x0. The
+ * PWM runs at 100 kHz, as in the stock firmware: at 1 kHz the APC voltage
+ * follows the ripple and the output power stops tracking the duty cycle.
+ *
+ * @param power: TX power, in mW.
+ */
+static void set_tx_power(const uint32_t power)
+{
+    float pwr = static_cast<float>(power) / 1000.0f;
+    pwr = std::max(std::min(pwr, 5.0f), 1.0f);
+    float pwrHi = static_cast<float>(txCal.hiPwr);
+    float pwrLo = static_cast<float>(txCal.loPwr);
+    uint8_t duty =
+        static_cast<uint8_t>(pwrLo + (pwrHi - pwrLo) / 4.0f * (pwr - 1.0f));
+
+    const uint32_t period_ns = 10000;
+    uint32_t pulse_ns = (period_ns * duty) / 100;
+
+    int ret = pwm_set_dt(&pwm_rf_apc, period_ns, pulse_ns);
+
+    if (ret < 0) {
+        printk("Failed to set TX power PWM: %d\n", ret);
+    }
+}
+
+void radio_init(const rtxStatus_t *rtxState)
+{
+    config = rtxState;
+    radioStatus = OFF;
+    radioMode = OPMODE_FM;
+
+    nvm_readCalibData(&calData);
+
+    bk4819_setAfOutput(&c62_bk4819, BK4819_AF_MUTE);
+
+    gpioDev_setMode(LNA_VHF_EN, OUTPUT_ACTIVE_LOW);
+    gpioDev_setMode(LNA_UHF_EN, OUTPUT_ACTIVE_LOW);
+    gpioDev_setMode(PA_VHF_EN, OUTPUT);
+    gpioDev_setMode(PA_UHF_EN, OUTPUT);
+    gpioDev_setMode(ALC_TX_LED_EN, OUTPUT);
+}
+
+void radio_terminate()
+{
+}
+
+void radio_tuneVcxo(const int16_t vhfOffset, const int16_t uhfOffset)
+{
+    (void)vhfOffset;
+    (void)uhfOffset;
+}
+
+void radio_setOpmode(const enum opmode mode)
+{
+    // The core calls this before disabling the old mode: unkey first
+    radio_disableRtx();
+
+    if (mode == OPMODE_M17) {
+        bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_BYPASS);
+        bk4819_setTxDeviation(&c62_bk4819, true, M17_TX_DEVIATION);
+#ifdef C62_WIDE_RX
+        // 25 kHz mode with the widest documented RF filters (REG_43 0x7e28)
+        bk4819_setBandwidth(&c62_bk4819, BK4819_BW_25K);
+        bk4819_setRfFilter(&c62_bk4819, M17_RF_BW, 7);
+        c62_rx_reg43 = 0x7e28;
+#else
+        // 12.5 kHz bandwidth mode; the M17 filters then replace its filters
+        bk4819_setBandwidth(&c62_bk4819, BK4819_BW_12K5);
+        bk4819_setRfFilter(&c62_bk4819, M17_RF_BW, M17_RF_BW_WEAK);
+        c62_rx_reg43 = 0x7808;
+#endif
+        bk4819_setTxAudioFilter(&c62_bk4819, M17_TX_LPF2_BW);
+        bk4819_setRxAudioGain(&c62_bk4819, M17_RX_AUDIO_GAIN1,
+                              M17_RX_AUDIO_GAIN2);
+        bk4819_setMicGain(&c62_bk4819, M17_MIC_GAIN);
+    } else if (mode == OPMODE_DMR) {
+        // Flat, wide receive path, as for TETRA
+        bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_BYPASS);
+        bk4819_setBandwidth(&c62_bk4819, BK4819_BW_25K);
+        bk4819_setRfFilter(&c62_bk4819, DMR_RF_BW, DMR_RF_BW_WEAK);
+        bk4819_setTxAudioFilter(&c62_bk4819, DMR_TX_LPF2_BW);
+        bk4819_setRxAudioGain(&c62_bk4819, DMR_RX_AUDIO_GAIN1,
+                              DMR_RX_AUDIO_GAIN2);
+        bk4819_setMicGain(&c62_bk4819, DMR_MIC_GAIN);
+        c62_rx_reg43 = 0x7e28;
+    } else if (mode == OPMODE_TETRA) {
+        // Flat, wide receive path: 25 kHz channel, widest RF filters
+        bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_BYPASS);
+        bk4819_setBandwidth(&c62_bk4819, BK4819_BW_25K);
+        bk4819_setRfFilter(&c62_bk4819, TETRA_RF_BW, TETRA_RF_BW_WEAK);
+        bk4819_setTxAudioFilter(&c62_bk4819, TETRA_TX_LPF2_BW);
+        bk4819_setRxAudioGain(&c62_bk4819, TETRA_RX_AUDIO_GAIN1,
+                              TETRA_RX_AUDIO_GAIN2);
+        bk4819_setMicGain(&c62_bk4819, TETRA_MIC_GAIN);
+        c62_rx_reg43 = 0x7e28;
+    } else {
+        bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_VOICE);
+    }
+
+    radioMode = mode;
+}
+
+bool radio_checkRxDigitalSquelch()
+{
+    return bk4819_getCtcss(&c62_bk4819);
+}
+
+void radio_enableAfOutput()
+{
+    /*
+     * Only the RTX to speaker path opens it: FM demodulated audio for the
+     * analog modes, the raw discriminator for the digital ones.
+     */
+    if (flatMode(radioMode))
+        bk4819_setAfOutput(&c62_bk4819, BK4819_AF_BYPASS);
+    else
+        bk4819_setAfOutput(&c62_bk4819, BK4819_AF_FM);
+}
+
+void radio_disableAfOutput()
+{
+    bk4819_setAfOutput(&c62_bk4819, BK4819_AF_MUTE);
+}
+
+void radio_enableRx()
+{
+    gpioDev_clear(LNA_VHF_EN);
+    gpioDev_clear(LNA_UHF_EN);
+    gpioDev_clear(PA_VHF_EN);
+    gpioDev_clear(PA_UHF_EN);
+    gpioDev_clear(ALC_TX_LED_EN);
+
+    //Before enable RX path delay to allow hardware to settle
+    delayMs(5);
+
+    if (config->rxFrequency < 174000000) {
+        gpioDev_set(LNA_VHF_EN);
+    } else {
+        gpioDev_set(LNA_UHF_EN);
+    }
+
+    bk4819_setFrequency(&c62_bk4819, config->rxFrequency + rxOffset);
+
+    if (flatMode(radioMode)) {
+        /*
+         * The DSP takes the baseband from the AF output for the whole
+         * reception. M17 and TETRA set their filters on the mode change and
+         * have no CTCSS.
+         */
+        bk4819_setAfOutput(&c62_bk4819, BK4819_AF_BYPASS);
+#ifdef C62_TETRA_IF_DC_FILTER
+        /*
+         * TETRA receive: re-enable the RX IF DC filter (REG_7E<2:0>, default
+         * 0b110) that the audio bypass mode clears. With it off, the IF DC
+         * offset of this low-IF receiver reaches the demodulator as a tone at
+         * the IF (16.9 kHz in 25 kHz mode), one-sided: it distorts the +3pi/4
+         * symbols much more than the -3pi/4 ones. The wanted signal is centred
+         * on the IF, so filtering DC at the IF input does not touch it.
+         */
+        if ((radioMode == OPMODE_TETRA) || (radioMode == OPMODE_DMR))
+            bk4819_maskSetRegister(&c62_bk4819, 0x7E, 0x0007, 0x0006);
+#endif
+    } else if (config->rxToneEn) {
+        bk4819_enableRxCtcss(&c62_bk4819, config->rxTone);
+    }
+
+    bk4819_enableRx(&c62_bk4819);
+    radioStatus = RX;
+}
+
+void radio_enableTx()
+{
+    // DMR and TETRA are receive only on this radio
+    if ((config->txDisable == 1) || (radioMode == OPMODE_DMR)
+        || (radioMode == OPMODE_TETRA))
+        return;
+
+    gpioDev_clear(LNA_VHF_EN);
+    gpioDev_clear(LNA_UHF_EN);
+    gpioDev_clear(PA_VHF_EN);
+    gpioDev_clear(PA_UHF_EN);
+    gpioDev_clear(ALC_TX_LED_EN);
+
+    //Before enable TX path delay to allow hardware to settle
+    delayMs(5);
+
+    if (config->txFrequency < 136000000 || config->txFrequency > 600000000)
+        return;
+
+    bk4819_setFrequency(&c62_bk4819, config->txFrequency);
+
+    if ((radioMode != OPMODE_M17) && config->txToneEn) {
+        bk4819_enableTxCtcss(&c62_bk4819, config->txTone, CTCSS_TX_GAIN);
+    }
+
+    if (config->txFrequency < 174000000) {
+        gpioDev_set(PA_VHF_EN);
+    } else {
+        gpioDev_set(PA_UHF_EN);
+    }
+
+    gpioDev_set(ALC_TX_LED_EN);
+
+    set_tx_power(config->txPower);
+
+    bk4819_enableTx(&c62_bk4819);
+    radioStatus = TX;
+}
+
+void radio_disableRtx()
+{
+    bk4819_disableCtdcss(&c62_bk4819);
+
+    gpioDev_clear(LNA_VHF_EN);
+    gpioDev_clear(LNA_UHF_EN);
+    gpioDev_clear(PA_VHF_EN);
+    gpioDev_clear(PA_UHF_EN);
+    gpioDev_clear(ALC_TX_LED_EN);
+
+    // Leaving RX closes the AF output: the digital modes opened it in
+    // radio_enableRx(), FM's audio path closes it too
+    if (radioStatus == RX)
+        radio_disableAfOutput();
+
+    bk4819_disableRtx(&c62_bk4819);
+    radioStatus = OFF;
+}
+
+void radio_updateConfiguration()
+{
+    // TX calibration at the TX frequency, from the band its PA is in
+    const struct C62BandCalib *band = &calData.uhf;
+    if (config->txFrequency < 174000000)
+        band = &calData.vhf;
+
+    txCal = calibC62_interp(band, config->txFrequency);
+
+    // Set bandwidth and deviation, only for analog FM mode
+    if (config->opMode == OPMODE_FM) {
+        switch (config->bandwidth) {
+            case BW_12_5:
+                bk4819_setBandwidth(&c62_bk4819, BK4819_BW_12K5);
+                bk4819_setTxDeviation(&c62_bk4819, true, txCal.txDevNarrow);
+                break;
+
+            case BW_25:
+                bk4819_setBandwidth(&c62_bk4819, BK4819_BW_25K);
+                bk4819_setTxDeviation(&c62_bk4819, true, txCal.txDevWide);
+                break;
+
+            default:
+                break;
+        }
+    }
+
+    /*
+     * Update VCO frequency and tuning parameters if current operating status
+     * is different from OFF.
+     * This is done by calling again the corresponding functions, which is safe
+     * to do and avoids code duplication.
+     */
+    if (radioStatus == RX)
+        radio_enableRx();
+    if (radioStatus == TX)
+        radio_enableTx();
+}
+
+rssi_t radio_getRssi()
+{
+#ifdef C62_REG43_SWEEP
+    /* Called by the rtx thread in RX, so it can own the BK4819 here */
+    if (flatMode(radioMode) && (radioStatus == RX)) {
+        int64_t now = k_uptime_get();
+        bool recording = true;
+#ifdef C62_BASEBAND_DUMP
+        recording = baseband_dump_recording();
+#endif
+        if (reg43SweepStarted && recording)
+            reg43SweepElapsed += now - reg43SweepLast;
+        reg43SweepLast = now;
+        if (!reg43SweepStarted || (reg43SweepElapsed >= C62_REG43_SWEEP_MS)) {
+            if (reg43SweepStarted)
+                reg43SweepIndex =
+                    (reg43SweepIndex + 1) % ARRAY_SIZE(reg43Sweep);
+            reg43SweepStarted = true;
+            reg43SweepElapsed = 0;
+            c62_rx_reg43 = reg43Sweep[reg43SweepIndex];
+            bk4819_writeReg(&c62_bk4819, 0x43, c62_rx_reg43);
+        }
+    }
+#endif
+    return bk4819_getRssi(&c62_bk4819);
+}
+
+enum opstatus radio_getStatus()
+{
+    return radioStatus;
+}
+
+extern "C" void c62_setRxOffset(int32_t hz)
+{
+    rxOffset = hz;
+    if ((radioStatus == RX) && (config != NULL))
+        bk4819_setFrequency(&c62_bk4819, config->rxFrequency + hz);
+}
+
+extern "C" int32_t c62_getRxOffset(void)
+{
+    return rxOffset;
+}
+
+#ifdef CONFIG_TETRA_AFC
+void radio_setRxOffset(int32_t hz)
+{
+    c62_setRxOffset(hz);
+}
+#endif

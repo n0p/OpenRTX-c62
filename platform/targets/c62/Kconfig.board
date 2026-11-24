@@ -1,0 +1,73 @@
+# SPDX-FileCopyrightText: Copyright 2020-2026 OpenRTX Contributors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+config BOARD_C62
+	bool "Retevis C62"
+	depends on SOC_CSK6
+
+menu "DSP Manipulation"
+
+config LSF_DSP
+	bool "DSP Manipulation"
+	default y
+	select FLASH
+	select FLASH_MAP
+
+if LSF_DSP
+
+DT_CHOSEN_LSF_DSP_FIRMWARE := lsf,dsp-firmware
+
+config LSF_DSP_LOAD_ON_BOOT
+	bool "Load DSP firmware on boot"
+	default y
+	depends on $(dt_chosen_enabled,$(DT_CHOSEN_LSF_DSP_FIRMWARE))
+
+endif # LSF_DSP
+
+endmenu
+
+#
+# This file is sourced inside the "Board Selection" choice, so the options
+# below live in a menu of their own (same shape as "DSP Manipulation" above).
+#
+# DMR receive vocoder: AMBE+2 decode (OpenDMR's decoder, lib/dmr_vocoder).
+# platform/targets/c62/CMakeLists.txt builds the library and links it into the
+# application when this is set. Enable it with
+#   west build -b c62 ... -- -DCONFIG_C62_DMR_VOCODER=y
+# OFF by default: it costs 41 KiB of flash and 52 KiB of RAM (measured). Select
+# it, with the mode that calls it, through C62_DMR_RX below.
+#
+menu "DMR"
+
+config C62_DMR_VOCODER
+	bool "AMBE+2 voice decoder (receive, decode only)"
+	default n
+	help
+	  Build the AMBE+2 voice decoder used by the DMR receive mode: 9-byte
+	  voice frames in, 160 samples of 8 kHz PCM out. Decode only, no
+	  encoder: the AMBE+2 encoder does not fit in the Cortex-M33's budget.
+	  See docs/DMR_VOCODER.md.
+
+config C62_DMR_RX
+	bool "DMR receive mode (PHY, AMBE+2 vocoder and UI)"
+	select C62_DMR_VOCODER
+	default n
+	help
+	  DMR receiver: 4FSK demodulation of the discriminator output, slot
+	  sync, CACH, colour code and timeslot, and voice through the AMBE+2
+	  decoder. Receive only, there is no DMR transmitter. Selects the
+	  vocoder. See docs/DMR_RX.md.
+	  Enable it with west build -b c62 ... -- -DCONFIG_C62_DMR_RX=y
+
+endmenu
+
+DT_COMPAT_LSF_SERVICE_CONTROLLER := lsf,service-controller
+
+config LSF_SERVICE_CONTROLLER
+	bool "LSF Service Controller"
+	select REQUIRES_FULL_LIBC
+
+if LSF_SERVICE_CONTROLLER
+orsource "services/Kconfig"
+endif # LSF_SERVICE_CONTROLLER
