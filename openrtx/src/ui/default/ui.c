@@ -1803,8 +1803,12 @@ void ui_updateFSM(bool *sync_rtx)
          * does nothing else, which is what the operator expects from a
          * receiver that is busy.  The PTT is handled by the service, which
          * sees the transmission from state_task().
+         *
+         * The event that reports the keys being *released* (keys == 0) is not
+         * a keystroke: letting go of the arrow that started the sweep must not
+         * stop it, so it is ignored here.
          */
-        if (vfoSearchService_active())
+        if (vfoSearchService_active() && (msg.keys != 0))
         {
             vfoSearchService_stop();
             searchArmKey  = 0;

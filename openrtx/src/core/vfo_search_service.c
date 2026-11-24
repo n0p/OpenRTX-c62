@@ -61,7 +61,7 @@
 #define VFO_SEARCH_DWELL_DIGITAL_MS 600
 
 /// TETRA drops half a second of samples after a retune before it decodes.
-#define VFO_SEARCH_DWELL_TETRA_MS  2000
+#define VFO_SEARCH_DWELL_TETRA_MS  2500
 
 /// Squelch stability required to believe a change, ms.
 #define VFO_SEARCH_DEBOUNCE_MS     20
