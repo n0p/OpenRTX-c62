@@ -148,6 +148,24 @@ endif()
 # C port of the host prototype in work/dmr-rx (see docs/DMR_RX.md); voice goes
 # through lib/dmr_vocoder, so this option selects C62_DMR_VOCODER.
 #
+#
+# C62_APRS: APRS on the analog FM path (messaging, beacon, station list).
+# The decoder is off at run time until it is enabled in the menu: this option
+# only decides whether the code is linked in. See docs/APRS.md.
+#
+if(CONFIG_C62_APRS)
+  target_sources(app PRIVATE
+    ${OPENRTX_ROOT}/openrtx/src/protocols/APRS/ax25.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/APRS/hdlc.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/APRS/afsk.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/APRS/aprs.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/APRS/aprs_msg.c
+    ${OPENRTX_ROOT}/openrtx/src/core/aprs_service.c
+    ${OPENRTX_ROOT}/openrtx/src/ui/default/ui_aprs.c)
+  target_compile_definitions(app PRIVATE CONFIG_APRS)
+  message(STATUS "C62: APRS on the FM path enabled")
+endif()
+
 if(CONFIG_C62_DMR_RX)
   target_sources(app PRIVATE
     ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrDefs.c

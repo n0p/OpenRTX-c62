@@ -88,6 +88,28 @@ config C62_DMR_RX
 
 endmenu
 
+#
+# APRS on the analog FM path: AX.25 frames, Bell 202 AFSK at 1200 baud,
+# messaging with acknowledgements, an optional beacon and the received station
+# list. It is not an operating mode: the decoder rides on FM and both the
+# decoding and the beacon are off until the operator enables them.
+# platform/targets/c62/CMakeLists.txt builds the sources and defines
+# CONFIG_APRS when this is set. See docs/APRS.md.
+#
+menu "APRS"
+
+config C62_APRS
+	bool "APRS on FM (AX.25, AFSK 1200, messaging)"
+	default y
+	help
+	  APRS decoding and messaging on the analog FM receive path. The
+	  discriminator is tapped with a second audio path, so audio is never
+	  interrupted; the tap only runs while the menu option "Decode" is on.
+	  Messages are sent from the APRS screens, never with the PTT, and a
+	  beacon is a separate option that is also off by default.
+
+endmenu
+
 DT_COMPAT_LSF_SERVICE_CONTROLLER := lsf,service-controller
 
 config LSF_SERVICE_CONTROLLER

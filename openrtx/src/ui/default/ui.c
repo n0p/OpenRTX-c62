@@ -68,6 +68,10 @@
 #include "core/beeps.h"
 #include "ui/ui_hints.h"
 #include "ui/ui_quickmenu.h"
+#ifdef CONFIG_APRS
+#include "ui/ui_aprs.h"
+#include "core/aprs_service.h"
+#endif
 
 /* UI main screen functions, their implementation is in "ui_main.c" */
 extern void _ui_drawMainBackground();
@@ -1402,6 +1406,11 @@ static void _ui_numberInputDel(uint32_t *num)
 
 void ui_init()
 {
+#ifdef CONFIG_APRS
+    /* The APRS service owns the station list, the mailbox and the receive tap:
+     * it must be initialised before the first frame can arrive. */
+    aprs_service_init();
+#endif
     last_event_tick = getTick();
     redraw_needed = true;
     _ui_calculateLayout(&layout);
@@ -1617,7 +1626,54 @@ void ui_updateFSM(bool *sync_rtx)
 
         // If MONI is pressed, activate MACRO functions; P2 long keeps the
         // legacy 3x3 grid as its shortcut
-        bool moniPressed = (msg.keys & KEY_MONI)
+#ifdef CONFIG_APRS
+        /*
+         * APRS screens own the keypad while one of them is on screen, the way
+         * the channel list does: they consume every key (ui_aprs_fsm() returns
+         * true for all of them) and the radio does not transmit on the PTT
+         * from a menu. The dispatch sits before the main switch so that the
+         * menu rework and the APRS screens stay independent, but after the
+         * quick menu, which keeps the keys while it is open.
+         */
+        if (ui_aprs_isScreen(state.ui_screen))
+        {
+            if (ui_aprs_fsm(msg, sync_rtx))
+            {
+                /* ESC can leave APRS for the VFO: re-arm the PTT in that case */
+                bool wantDisabled = ui_aprs_isScreen(state.ui_screen);
+                if (state.txDisable != wantDisabled)
+                {
+                    state.txDisable = wantDisabled;
+                    *sync_rtx = true;
+                }
+                redraw_needed = true;
+                return;
+            }
+        }
+
+        /*
+         * Entry point, and the one deliberate exception to the key map: on the
+         * FM main screen a long press of P2 opens the APRS screens. In FM that
+         * long press used to open the macro grid; the side key (MONI) still
+         * does, short or long, so nothing is lost. Everywhere else P2 keeps
+         * its meaning: short opens the quick menu, long opens the macro grid.
+         * Long press on purpose, so that nothing about APRS is reachable by
+         * accident, and so that the short press stays with the quick menu.
+         */
+        if (((state.ui_screen == MAIN_VFO) || (state.ui_screen == MAIN_MEM))
+            && (state.channel.mode == OPMODE_FM)
+            && (msg.keys & KEY_F2) && msg.long_press
+            && !ui_state.input_locked && !ui_state.edit_mode
+            && !ui_channels_isOpen())
+        {
+            ui_aprs_enter();
+            state.txDisable = true;
+            *sync_rtx = true;
+            redraw_needed = true;
+            return;
+        }
+#endif
+                bool moniPressed = (msg.keys & KEY_MONI)
                         || ((msg.keys & KEY_F2) && msg.long_press);
         if(moniPressed || macro_latched)
         {
@@ -3067,6 +3123,20 @@ bool ui_updateGUI()
         case MAIN_MEM:
             _ui_drawMainMEM(&ui_state);
             break;
+#ifdef CONFIG_APRS
+        /*
+         * APRS screens draw themselves: they are self contained so that the
+         * menus and hints rework does not collide with them.
+         */
+        case MENU_APRS:
+        case APRS_DETAIL:
+        case APRS_MSGS:
+        case APRS_MSG_VIEW:
+        case APRS_MSG_EDIT:
+        case APRS_CFG:
+            ui_aprs_draw(last_state.ui_screen);
+            break;
+#endif
         // Top menu screen
         case MENU_TOP:
             _ui_drawMenuTop(&ui_state);
