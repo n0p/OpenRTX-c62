@@ -21,9 +21,12 @@
 /** Samples in one frame. */
 #define FRAME_SAMPLES (YSF_FRAME_SYMBOLS * SPS)
 
-/** Raw-sample ring, power of two, one frame plus a sync of margin. */
-#define RING_LEN 8192
-#define RING_MASK (RING_LEN - 1)
+/**
+ * Raw-sample ring: one frame (4800) plus the largest block the audio stream
+ * hands out (2400), so a frame is always complete inside it.  Not a power of
+ * two -- that would cost 3 KB more for a mask -- so the wrap is a compare.
+ */
+#define RING_LEN 7360
 
 /** Sync allowed to lose this many of its 20 symbols. */
 #define SYNC_MAX_ERRORS 3
@@ -66,6 +69,14 @@ static struct
 /* Reading the ring                                                    */
 /* ------------------------------------------------------------------ */
 
+/** Ring index for an absolute sample position. */
+static inline unsigned ring_slot(long i)
+{
+    long k = i % RING_LEN;
+
+    return (unsigned)((k < 0) ? (k + RING_LEN) : k);
+}
+
 /** Sample at a fractional position, 4-point Lagrange. */
 static float sample_at(float at)
 {
@@ -75,10 +86,10 @@ static float sample_at(float at)
     if ((i < phy.ringIndex - RING_LEN + 3) || (i > phy.ringIndex - 3))
         return 0.0f;
 
-    float xm1 = phy.ring[(unsigned)(i - 1) & RING_MASK];
-    float x0 = phy.ring[(unsigned)i & RING_MASK];
-    float x1 = phy.ring[(unsigned)(i + 1) & RING_MASK];
-    float x2 = phy.ring[(unsigned)(i + 2) & RING_MASK];
+    float xm1 = phy.ring[ring_slot(i - 1)];
+    float x0 = phy.ring[ring_slot(i)];
+    float x1 = phy.ring[ring_slot(i + 1)];
+    float x2 = phy.ring[ring_slot(i + 2)];
 
     if (f == 0.0f)
         return x0;
@@ -454,8 +465,12 @@ static void track(ysfFrameHandler handler, void *user)
     if ((phy.coast > MAX_COAST) ||
         ((phy.ringIndex - phy.lastSync) > (long)(SYNC_TIMEOUT_FRAMES * FRAME_SAMPLES)))
     {
+        /*
+         * Drop the lock and hunt forward from here, never backwards: rewinding
+         * to the last good sync would re-emit frames that are already out.
+         */
         phy.hunt = 1;
-        phy.pos = (float)phy.lastSync + (float)FRAME_SAMPLES;
+        phy.pos = (float)phy.ringIndex;
     }
 }
 
@@ -491,7 +506,7 @@ static void append(const int16_t *samples, size_t n)
 {
     for (size_t i = 0; i < n; i++)
     {
-        phy.ring[(unsigned)phy.ringIndex & RING_MASK] = samples[i];
+        phy.ring[ring_slot(phy.ringIndex)] = samples[i];
         phy.ringIndex++;
     }
 }

@@ -18,7 +18,7 @@ CFLAGS   ?= -O2 -g -Wall -Wextra -Wno-unused-parameter
 CFLAGS   += -I$(OPENRTX)/include -I$(OPENRTX)/src -I$(LIB)
 CFLAGS   += -DCONFIG_YSF
 
-SRCS := main.c \
+SRCS := main.c txmodel.c \
         $(OPENRTX)/src/protocols/YSF/YsfPhy.c \
         $(OPENRTX)/src/protocols/YSF/YsfFrame.c \
         $(LIB)/dmr_vocoder.c \

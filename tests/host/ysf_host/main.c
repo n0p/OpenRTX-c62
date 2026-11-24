@@ -30,6 +30,7 @@
 
 #include "protocols/YSF/YsfFrame.h"
 #include "dmr_vocoder.h"
+#include "txmodel.h"
 #include "protocols/YSF/YsfPhy.h"
 
 /* ------------------------------------------------------------------ */
@@ -177,6 +178,8 @@ static struct
     unsigned unsupported;
 } stats;
 
+static long pushed;
+
 static const char *dtName(int dt)
 {
     switch (dt)
@@ -214,8 +217,8 @@ static void onFrame(const struct ysfFrame *frame, void *user)
     if (!d->fichOk)
     {
         stats.fichBad++;
-        printf("f=%3u sync=%d evm=%3u%% FICH FAIL\n", stats.frames,
-               20 - frame->syncErrors, frame->evm);
+        printf("[%7ld] f=%3u sync=%d evm=%3u%% FICH FAIL\n", pushed,
+               stats.frames, 20 - frame->syncErrors, frame->evm);
         return;
     }
 
@@ -253,9 +256,9 @@ static void onFrame(const struct ysfFrame *frame, void *user)
     if (c->dt == 3)
         stats.unsupported += YSF_VOICE_SLOTS;
 
-    printf("f=%3u sync=%d evm=%3u%% %-7s %s fn=%u/%u dgid=%s%u "
+    printf("[%7ld] f=%3u sync=%d evm=%3u%% %-7s %s fn=%u/%u dgid=%s%u "
            "DST='%s' SRC='%s' U/L='%s' D/L='%s' blk=%u\n",
-           stats.frames, 20 - frame->syncErrors, frame->evm, dtName(c->dt),
+           pushed, stats.frames, 20 - frame->syncErrors, frame->evm, dtName(c->dt),
            fiName(c->fi), c->fn, c->ft, c->dgidValid ? "" : "-", c->dgid,
            c->dest, c->source, c->uplink, c->downlink, c->dataBlocks);
 
@@ -310,11 +313,18 @@ int main(int argc, char **argv)
         if (n > 4800)
             n = 4800;
         ysfPhy_push(&mono[i], (size_t)n, onFrame, NULL);
+        pushed += n;
     }
 
     pcm_close();
 
     const struct ysfCallInfo *c = ysfFrame_call();
+    char sumDest[11], sumSrc[11];
+    unsigned sumDgid = c->dgid, sumBlocks = c->dataBlocks, sumVoices = c->voices;
+    bool sumDgidValid = c->dgidValid;
+
+    strcpy(sumDest, c->dest);
+    strcpy(sumSrc, c->source);
 
     printf("\nframes %u, FICH ok %u, FICH bad %u\n", stats.frames, stats.fichOk,
            stats.fichBad);
@@ -323,8 +333,37 @@ int main(int argc, char **argv)
            stats.unsupported);
     printf("text messages %u, PCM %ld samples\n", stats.textMessages,
            pcmSamples);
-    printf("last call: DST='%s' SRC='%s' DG-ID %s%u, %u data blocks\n", c->dest,
-           c->source, c->dgidValid ? "" : "-", c->dgid, c->dataBlocks);
+    printf("last call: DST='%s' SRC='%s' DG-ID %s%u, %u data blocks, %u voice"
+           " slots\n", sumDest, sumSrc, sumDgidValid ? "" : "-", sumDgid,
+           sumBlocks, sumVoices);
+
+    /*
+     * Text message, the other way round: no capture carries one, so build the
+     * frame with the published encoder and decode it with the same code the
+     * radio runs.
+     */
+    {
+        static const char *fields[2] = {"HELLO FROM", " THE C62  "};
+        struct ysfFrame tx;
+        const struct ysfDecoded *d = NULL;
+
+        ysfFrame_reset();
+
+        for (int i = 0; i < 2; i++)
+        {
+            txmodel_vd2_text((uint8_t)i, 1, fields[i], &tx);
+            d = ysfFrame_decode(&tx);
+
+            if ((d == NULL) || !d->fichOk)
+                printf("text test: frame %d did not decode\n", i);
+        }
+
+        const struct ysfText *t = ysfFrame_text();
+
+        printf("\ntext test: %s, %u block(s), message \"%s\"\n",
+               (t->complete && t->received == 2) ? "OK" : "FAILED", t->received,
+               t->text);
+    }
 
     free(mono);
     free(w.data);

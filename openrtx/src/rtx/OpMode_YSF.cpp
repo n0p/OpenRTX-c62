@@ -16,13 +16,18 @@
 #include "rtx/OpMode_YSF.hpp"
 #include "core/state.h"
 
-/* 100 ms of baseband at 48 kHz: one System Fusion frame exactly */
-#define FRAME_SAMPLES 4800
+/*
+ * 100 ms of baseband at 48 kHz: one System Fusion frame exactly.  The PHY
+ * takes any block size, but the stream half is one frame on purpose: the frame
+ * clock then lands on a buffer boundary and the decoder never has to catch up
+ * with a burst of frames read from a ring that has already wrapped.
+ */
+#define BLOCK_SAMPLES 4800
 
 /* Samples dropped after starting or retuning: 100 ms */
 #define SETTLE_SAMPLES 4800
 
-static int16_t baseband[2 * FRAME_SAMPLES];
+static int16_t baseband[2 * BLOCK_SAMPLES];
 
 void OpMode_YSF::frameTrampoline(const struct ysfFrame *frame, void *user)
 {
@@ -92,7 +97,7 @@ void OpMode_YSF::disable()
 void OpMode_YSF::startSampling()
 {
     basebandPath = audioPath_request(SOURCE_RTX, SINK_MCU, PRIO_RX);
-    basebandId = audioStream_start(basebandPath, baseband, 2 * FRAME_SAMPLES,
+    basebandId = audioStream_start(basebandPath, baseband, 2 * BLOCK_SAMPLES,
                                    48000, STREAM_INPUT | BUF_CIRC_DOUBLE);
 }
 
