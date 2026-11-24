@@ -488,6 +488,61 @@ void qm_tetra_fmt_call(char *buf, int len)
              (unsigned long)ts.callDst, ts.callGroup ? " G" : "",
              ts.callEncrypted ? " E" : "");
 }
+
+/**
+ * Registration state of the mobile station in the cell, as reported by the
+ * cell's mobility management (D-LOCATION-UPDATE-ACCEPT / REJECT). This radio
+ * is a monitor: it does not register itself, it reports what the network
+ * tells the mobiles it can hear.
+ */
+void qm_tetra_fmt_reg(char *buf, int len)
+{
+    struct tetraStatus ts;
+    tetra_getStatus(&ts);
+    if (ts.registered)
+        snprintf(buf, len, "ACC G%u", (unsigned)ts.groups);
+    else if (ts.mmCause != 0)
+        snprintf(buf, len, "REJ %u", (unsigned)ts.mmCause);
+    else
+        snprintf(buf, len, "-");
+}
+
+/**
+ * Network broadcast: neighbours announced, cell load and network time
+ * (UTC plus the local offset the cell broadcasts).
+ */
+void qm_tetra_fmt_net(char *buf, int len)
+{
+    struct tetraStatus ts;
+    tetra_getStatus(&ts);
+    if (!ts.haveNet) {
+        snprintf(buf, len, "-");
+        return;
+    }
+    if (!ts.netTime) {
+        snprintf(buf, len, "NB%u L%u", (unsigned)ts.neighbours,
+                 (unsigned)ts.netLoad);
+        return;
+    }
+    int32_t s = (int32_t)(ts.netUtc % 86400u) + 60 * (int32_t)ts.netOffsetMin;
+    s = ((s % 86400) + 86400) % 86400;
+    snprintf(buf, len, "NB%u %02d:%02d", (unsigned)ts.neighbours,
+             (int)(s / 3600), (int)((s / 60) % 60));
+}
+
+/**
+ * Uplink activity: a transmitter of the cell heard on the uplink frequency.
+ */
+void qm_tetra_fmt_ul(char *buf, int len)
+{
+    struct tetraStatus ts;
+    tetra_getStatus(&ts);
+    if (!ts.uplink) {
+        snprintf(buf, len, "-");
+        return;
+    }
+    snprintf(buf, len, "SSI %lu", (unsigned long)ts.uplinkSs);
+}
 #endif /* CONFIG_TETRA */
 
 /* ------------------------------------------------------------------------- */
@@ -865,6 +920,9 @@ static const qm_item_t qm_items_tetra[] =
 #endif
     QM_ITEM_INFO("CELL", qm_tetra_fmt_cell),
     QM_ITEM_INFO("LA/CC", qm_tetra_fmt_lacc),
+    QM_ITEM_INFO("REG", qm_tetra_fmt_reg),
+    QM_ITEM_INFO("NET", qm_tetra_fmt_net),
+    QM_ITEM_INFO("UL", qm_tetra_fmt_ul),
     QM_ITEM_INFO("CALL", qm_tetra_fmt_call),
     QM_ITEM_INT("BKL", 5, 100, 5, qm_get_brightness, qm_set_brightness),
 #ifdef CONFIG_KEY_BACKLIGHT

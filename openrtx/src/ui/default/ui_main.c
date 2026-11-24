@@ -25,6 +25,23 @@
 #ifdef UI_MODE_NXDN
 #include "protocols/NXDN/NxdnStatus.h"
 #endif
+
+#ifdef CONFIG_TETRA
+#include "protocols/TETRA/TetraSds.h"
+#include "protocols/TETRA/TetraStatus.h"
+#endif
+
+/* An SDS text stays on the main screen this long */
+#define TETRA_SDS_SHOW_MS 30000
+
+/*
+ * Text beside a symbol keeps this far from where gfx_drawSymbol() says the
+ * symbol ends: the symbol bitmaps are wider than their advance (13 against
+ * 9 pixels at 8 pt), and a gap keeps the two apart.
+ */
+#define TETRA_SYMBOL_GAP 6
+
+>>>>>>> c62/tetra-elk
 /**
  * Print, centred on a line, the first of several texts that fits clear of a
  * left margin and the same margin on the right, measured in the font; the
@@ -92,6 +109,7 @@ static void _ui_formatSsi(char *buf, size_t size, const char *prefix,
         snprintf(buf, size, "%s-", prefix);
 }
 
+#ifdef CONFIG_TETRA
 /**
  * Check whether a TETRA call takes over the main screen.
  */
