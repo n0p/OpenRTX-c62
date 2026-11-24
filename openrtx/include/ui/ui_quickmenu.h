@@ -138,10 +138,15 @@ void qm_requestSync(void);
  * read the same in the quick menu and in Settings > Radio.
  */
 int qm_get_power(void);
+void qm_set_power(int mw);
 void qm_fmt_power(char *buf, int len);
+int qm_get_brightness(void);
+void qm_set_brightness(int pct);
 int qm_get_rx_fine(void);
 void qm_set_rx_fine(int hz);
 void qm_fmt_fine(char *buf, int len);
+int qm_fm_get_sql(void);
+void qm_fm_set_sql(int level);
 
 #ifdef __cplusplus
 }

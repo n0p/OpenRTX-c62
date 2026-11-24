@@ -20,7 +20,6 @@ static const ui_hints_t hints_edit    = { "Edit", NULL, NULL, "Back" };
 static const ui_hints_t hints_vfo_in  = { "Set", NULL, NULL, "Cancel" };
 static const ui_hints_t hints_channel = { "Load", NULL, NULL, "Back" };
 static const ui_hints_t hints_reset   = { "Reset", NULL, NULL, "Back" };
-static const ui_hints_t hints_quick   = { "Edit", NULL, "Close", "Close" };
 
 const ui_hints_t *ui_hints_for_screen(uint8_t screen)
 {
