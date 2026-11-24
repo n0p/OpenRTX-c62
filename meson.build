@@ -62,6 +62,13 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/core/zones.c',
                'openrtx/src/core/agc.c',
                'openrtx/src/core/airband.c',
+               # NXDN status and FEC: the UI reads the receive status (RAN,
+               # sync, the SACCH message) and the host tests need exactly that
+               # module linked. They are portable C and do not pull the
+               # demodulator or the vocoder in, which is what keeps the UI
+               # testable without the radio.
+               'openrtx/src/protocols/NXDN/NxdnStatus.c',
+               'openrtx/src/protocols/NXDN/NxdnFec.c',
                'openrtx/src/core/slot_store.c',
                'openrtx/src/core/contact_store.c',
                'openrtx/src/core/msg_service.c',
@@ -398,8 +405,13 @@ linux_def  += {'sniprintf':'snprintf', 'vsniprintf':'vsnprintf'}
 # Standard UI
 #
 linux_default_src = linux_src + ui_src_default
+# UI_TEST_NXDN compiles the UI's NXDN screens into the host build. It is not
+# CONFIG_NXDN on purpose: that one makes rtx.cpp instantiate OpMode_NXDN, which
+# would drag the demodulator and the AMBE+2 vocoder into every test binary. The
+# UI only needs the status module (NxdnStatus.c, above), so the screens are
+# tested here and the mode itself on the radio.
 linux_default_def = linux_def + {'CONFIG_SCREEN_WIDTH': '160', 'CONFIG_SCREEN_HEIGHT': '128', 'CONFIG_PIX_FMT_RGB565': '',
-                                 'CONFIG_GPS': '', 'CONFIG_RTC': ''}
+                                 'CONFIG_GPS': '', 'CONFIG_RTC': '', 'UI_TEST_NXDN': ''}
 linux_small_def   = linux_def + {'CONFIG_SCREEN_WIDTH': '128', 'CONFIG_SCREEN_HEIGHT': '64', 'CONFIG_PIX_FMT_BW': '',
                                  'CONFIG_GPS': '', 'CONFIG_RTC': ''}
 
@@ -1308,6 +1320,12 @@ ui_zones_test = executable('ui_zones_test',
                            sources : unit_test_src + ['tests/unit/ui_zones.cpp'],
                            kwargs : unit_test_opts)
 
+# Registro de modos: la lista única de la que salen el editor de canales, la
+# tecla lateral, el menú rápido y las páginas de ajustes de cada modo.
+ui_modes_test = executable('ui_modes_test',
+                           sources : unit_test_src + ['tests/unit/ui_modes.cpp'],
+                           kwargs : unit_test_opts)
+
 user_stores_test = executable('user_stores_test',
                                 sources : unit_test_src + ['tests/unit/user_stores.cpp'],
                                 kwargs : unit_test_opts)
@@ -1459,6 +1477,7 @@ test('User Stores Test',     user_stores_test)
 test('UI Messages Test',     ui_messages_test)
 test('UI Layout Test',       ui_layout_test)
 test('UI Zones Test',        ui_zones_test)
+test('UI Modes Test',        ui_modes_test)
 test('DSP Oversampling Test', dsp_oversampling_test)
 test('DSP DC Block Test',    dsp_dcblock_test)
 test('GFX Text Test',        gfx_text_test)

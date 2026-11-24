@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include "ui/ui_default.h"
+#include "core/airband.h"
 #ifdef CONFIG_APRS
 #include "ui/ui_aprs.h"
 #endif
@@ -21,25 +22,18 @@
 #include "protocols/DMR/DmrDefs.h"
 #include "protocols/DMR/DmrStatus.h"
 #endif
-#ifdef CONFIG_TETRA
-#include "protocols/TETRA/TetraSds.h"
-#include "protocols/TETRA/TetraStatus.h"
-
-/* An SDS text stays on the main screen this long */
-#define TETRA_SDS_SHOW_MS 30000
-
-/*
- * Text beside a symbol keeps this far from where gfx_drawSymbol() says the
- * symbol ends: the symbol bitmaps are wider than their advance (13 against
- * 9 pixels at 8 pt), and a gap keeps the two apart.
- */
-#define TETRA_SYMBOL_GAP 6
-
+#ifdef UI_MODE_NXDN
+#include "protocols/NXDN/NxdnStatus.h"
+#endif
 /**
  * Print, centred on a line, the first of several texts that fits clear of a
  * left margin and the same margin on the right, measured in the font; the
  * last one is printed in any case. gfx_print() does not clip: text wider
  * than the screen wraps onto the line below.
+ *
+ * Shared by every mode with a status line (TETRA, DMR, NXDN, AM), so it lives
+ * outside the CONFIG_TETRA block: it used to be inside it, and a build with a
+ * mode that had a status line but no TETRA failed to link.
  *
  * @param pos: line position.
  * @param font: font.
@@ -59,6 +53,20 @@ static void _ui_printFit(point_t pos, fontSize_t font, uint16_t left,
         i++;
     gfx_print(pos, font, TEXT_ALIGN_CENTER, color_white, "%s", texts[i]);
 }
+
+#ifdef CONFIG_TETRA
+#include "protocols/TETRA/TetraSds.h"
+#include "protocols/TETRA/TetraStatus.h"
+
+/* An SDS text stays on the main screen this long */
+#define TETRA_SDS_SHOW_MS 30000
+
+/*
+ * Text beside a symbol keeps this far from where gfx_drawSymbol() says the
+ * symbol ends: the symbol bitmaps are wider than their advance (13 against
+ * 9 pixels at 8 pt), and a gap keeps the two apart.
+ */
+#define TETRA_SYMBOL_GAP 6
 
 /**
  * Draw a symbol at the left of a line and centre a text clear of it.
@@ -251,6 +259,28 @@ void _ui_drawMainBackground()
 
 void _ui_drawMainTop(ui_state_t * ui_state)
 {
+    /*
+     * Short mode name on the left, in the one place every main screen shares,
+     * so the mode reads the same in every mode's screen. The label is the mode
+     * registry's (ui/ui_modes.h) and it is measured before it is drawn: the
+     * left quarter of the bar belongs to it and to the keypad lock, and the
+     * clock in the middle is never overlapped, whatever a future mode is
+     * called.
+     */
+    char mode[UI_MODE_LABEL_LEN + 1];
+    const char *label = ui_mode_label(last_state.channel.mode);
+
+    snprintf(mode, sizeof(mode), "%s", label);
+    while ((strlen(mode) > 1)
+           && (gfx_getTextWidth(FONT_SIZE_6PT, mode) > UI_MODE_LABEL_MAX_W))
+        mode[strlen(mode) - 1] = '\0';
+
+    point_t mode_pos = { layout.horizontal_pad, layout.top_pos.y };
+    gfx_print(mode_pos, FONT_SIZE_6PT, TEXT_ALIGN_LEFT, yellow_fab413,
+              "%s", mode);
+
+    uint16_t mode_w = gfx_getTextWidth(FONT_SIZE_6PT, mode);
+
 #ifdef CONFIG_RTC
     // Print clock on top bar
     datetime_t local_time = utcToLocalTime(last_state.time,
@@ -279,8 +309,17 @@ void _ui_drawMainTop(ui_state_t * ui_state)
     }
 #endif
     if (ui_state->input_locked == true)
-      gfx_drawSymbol(layout.top_pos, layout.top_symbol_size, TEXT_ALIGN_LEFT,
-                     color_white, SYMBOL_LOCK);
+    {
+        point_t lock_pos = { (int16_t)(layout.top_pos.x + mode_w + 3),
+                             layout.top_pos.y };
+
+        /* Right of the mode label, so the two never draw over each other */
+        if (lock_pos.x > (int16_t)(CONFIG_SCREEN_WIDTH - 16))
+            lock_pos.x = layout.top_pos.x;
+
+        gfx_drawSymbol(lock_pos, layout.top_symbol_size, TEXT_ALIGN_LEFT,
+                       color_white, SYMBOL_LOCK);
+    }
 }
 
 void _ui_drawBankChannel()
@@ -362,6 +401,106 @@ static void _ui_drawDmrLine1(void)
     snprintf(a, sizeof(a), "%s e%u%%", state, (unsigned)(ds.evm / 10));
     snprintf(b, sizeof(b), "e%u%%", (unsigned)(ds.evm / 10));
     snprintf(c, sizeof(c), "%s", state);
+    const char *texts[] = { a, b, c };
+    _ui_printFit(layout.line1_pos, layout.line1_font, pad, texts, 3);
+}
+#endif
+
+#ifdef UI_MODE_NXDN
+/*
+ * NXDN line 2: the RAN the receiver locked to and the demodulator's state, or
+ * SRCH while nothing decodes. Line 1 carries the counters that matter when the
+ * eye is marginal: EVM and decoded frames.
+ */
+static void _ui_drawNxdnInfo(void)
+{
+    struct nxdnStatus st;
+    const uint16_t pad = layout.horizontal_pad;
+    char a[32], b[32], c[24];
+
+    nxdn_getStatus(&st);
+
+    if (!st.sync) {
+        const char *searching[] = { "NXDN SRCH", "SRCH" };
+        _ui_printFit(layout.line2_pos, layout.line2_font, pad, searching, 2);
+        return;
+    }
+
+    if (st.ran >= 0) {
+        snprintf(a, sizeof(a), "RAN%u %.2s", (unsigned)st.ran,
+                 st.voice ? "VOX" : "");
+        snprintf(b, sizeof(b), "RAN%u", (unsigned)st.ran);
+    } else {
+        snprintf(a, sizeof(a), "SYNC %.2s", st.voice ? "VOX" : "");
+        snprintf(b, sizeof(b), "SYNC");
+    }
+    snprintf(c, sizeof(c), "%s", st.voice ? "VOX" : "SYNC");
+
+    const char *texts[] = { a, b, c };
+    _ui_printFit(layout.line2_pos, layout.line2_font, pad, texts, 3);
+}
+
+static void _ui_drawNxdnLine1(void)
+{
+    struct nxdnStatus st;
+    const uint16_t pad = layout.horizontal_pad;
+    char a[40], b[40], c[24];
+
+    nxdn_getStatus(&st);
+
+    if (!st.sync)
+        return;
+
+    snprintf(a, sizeof(a), "e%u%% f%lu", (unsigned)(st.evm / 10),
+             (unsigned long)st.frames);
+    snprintf(b, sizeof(b), "e%u%%", (unsigned)(st.evm / 10));
+    snprintf(c, sizeof(c), "f%lu", (unsigned long)st.frames);
+
+    const char *texts[] = { a, b, c };
+    _ui_printFit(layout.line1_pos, layout.line1_font, pad, texts, 3);
+}
+#endif
+
+#ifdef UI_MODE_AIRBAND
+/*
+ * Airband line 2: the mode, the raster the operator chose and the designator of
+ * the channel the receiver is on ("118.005" is the channel whose carrier is
+ * 118.00833). Line 1 shows the AGC state and whether the carrier squelch is
+ * open, which in AM is the only "is anyone there" indication there is.
+ */
+static void _ui_drawAirbandInfo(void)
+{
+    const uint16_t pad = layout.horizontal_pad;
+    char name[AIRBAND_NAME_LEN] = "";
+    char a[40], b[40], c[24];
+    const char *raster = last_state.settings.am_step ? "8.33" : "25";
+
+    if (airband_inBand(last_state.channel.rx_frequency))
+        airband_channelName(last_state.channel.rx_frequency, name,
+                            sizeof(name));
+
+    if (name[0] != '\0')
+        snprintf(a, sizeof(a), "AM %s %s", raster, name);
+    else
+        snprintf(a, sizeof(a), "AM %s", raster);
+    snprintf(b, sizeof(b), "%s", name[0] != '\0' ? name : raster);
+    snprintf(c, sizeof(c), "AM");
+
+    const char *texts[] = { a, b, c };
+    _ui_printFit(layout.line2_pos, layout.line2_font, pad, texts, 3);
+}
+
+static void _ui_drawAirbandLine1(void)
+{
+    const uint16_t pad = layout.horizontal_pad;
+    char a[32], b[24], c[16];
+    const char *agc = last_state.settings.am_agc ? "AGC" : "AGC-";
+
+    snprintf(a, sizeof(a), "%s sql%u", agc,
+             (unsigned)last_state.settings.sqlLevel);
+    snprintf(b, sizeof(b), "%s", agc);
+    snprintf(c, sizeof(c), "sql%u", (unsigned)last_state.settings.sqlLevel);
+
     const char *texts[] = { a, b, c };
     _ui_printFit(layout.line1_pos, layout.line1_font, pad, texts, 3);
 }
@@ -516,6 +655,31 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
             _ui_drawTetraInfo();
             break;
         #endif
+
+        #ifdef UI_MODE_NXDN
+        case OPMODE_NXDN:
+            (void) ui_state;
+            _ui_drawNxdnInfo();
+            break;
+        #endif
+
+        #ifdef UI_MODE_AIRBAND
+        case OPMODE_AIRBAND:
+            (void) ui_state;
+            _ui_drawAirbandInfo();
+            break;
+        #endif
+
+        default:
+            /*
+             * A mode this build has but no line for: say its name instead of
+             * leaving the line blank, so the operator is never looking at an
+             * empty screen wondering whether the radio is in a mode at all.
+             */
+            gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
+                      color_white, "%s",
+                      ui_mode_title(last_state.channel.mode));
+            break;
     }
 }
 
@@ -662,7 +826,13 @@ void _ui_drawMainBottom()
                            true,
                            yellow_fab413);
             break;
-        case OPMODE_DMR:
+        default:
+            /*
+             * Every other mode gets the level meter: FM is the only one whose
+             * bar also shows the squelch threshold. A mode that was never
+             * listed here used to draw nothing at all, which is what NXDN and
+             * AM looked like before they were registered.
+             */
             gfx_drawSmeterLevel(meter_pos,
                                 meter_width,
                                 meter_height,
@@ -671,28 +841,6 @@ void _ui_drawMainBottom()
                                 volume,
                                 true);
             break;
-        #ifdef CONFIG_M17
-        case OPMODE_M17:
-            gfx_drawSmeterLevel(meter_pos,
-                                meter_width,
-                                meter_height,
-                                rssi,
-                                mic_level,
-                                volume,
-                                true);
-            break;
-        #endif
-        #ifdef CONFIG_TETRA
-        case OPMODE_TETRA:
-            gfx_drawSmeterLevel(meter_pos,
-                                meter_width,
-                                meter_height,
-                                rssi,
-                                mic_level,
-                                volume,
-                                true);
-            break;
-        #endif
     }
 }
 
@@ -714,6 +862,16 @@ void _ui_drawMainVFO(ui_state_t* ui_state)
     #ifdef CONFIG_TETRA
     if(last_state.channel.mode == OPMODE_TETRA)
         _ui_drawTetraLine1(ui_state);
+    #endif
+
+    #ifdef UI_MODE_NXDN
+    if(last_state.channel.mode == OPMODE_NXDN)
+        _ui_drawNxdnLine1();
+    #endif
+
+    #ifdef UI_MODE_AIRBAND
+    if(last_state.channel.mode == OPMODE_AIRBAND)
+        _ui_drawAirbandLine1();
     #endif
 
     _ui_drawMainBottom();
@@ -739,6 +897,11 @@ void _ui_drawMainMEM(ui_state_t* ui_state)
         _ui_drawBankChannel();
         _ui_drawFrequency();
     }
+
+    #ifdef UI_MODE_NXDN
+    if(last_state.channel.mode == OPMODE_NXDN)
+        _ui_drawNxdnLine1();
+    #endif
 
     _ui_drawMainBottom();
 }

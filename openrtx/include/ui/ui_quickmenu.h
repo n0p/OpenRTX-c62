@@ -54,13 +54,22 @@ typedef struct
     uint8_t goto_item;          /**< QM_GOTO: item selected there          */
 } qm_item_t;
 
-/** One mode's quick menu. */
+/**
+ * One operating mode: its quick menu rows and its capabilities.
+ *
+ * This is also the mode registry (ui/ui_modes.h): the channel editor's mode
+ * list, the side key's cycle and the Settings menu are filtered from the same
+ * table, so a mode is registered once and every screen picks it up. `flags` is
+ * taken from enum ui_mode_flags; a mode that is compiled out has no entry at
+ * all.
+ */
 typedef struct
 {
     uint8_t mode;               /**< OPMODE_* (rtx/rtx.h)                  */
     const char *title;          /**< Header text                           */
-    const qm_item_t *items;
-    uint8_t count;
+    const qm_item_t *items;     /**< Rows, also the Settings page          */
+    uint8_t count;              /**< Number of rows                        */
+    uint8_t flags;              /**< enum ui_mode_flags                    */
 } qm_menu_t;
 
 /** Popup state.
@@ -176,6 +185,71 @@ int16_t  qm_rowTop(uint8_t row);
 
 /** Value text of a row, for tests and voice prompts. */
 bool qm_value_text(uint8_t index, char *buf, int len);
+
+/**
+ * Value text of a row of any table (the popup's or a settings page's).
+ *
+ * @param qm: table to read.
+ * @param index: row of that table.
+ * @param buf, len: destination and its size.
+ * @return true when the row has a value to show.
+ */
+bool qm_value_text_of(const qm_menu_t *qm, uint8_t index, char *buf, int len);
+
+/*
+ * Settings page of a mode: the mode's own quick menu rows, drawn as a
+ * full-screen list instead of a popup. Settings → NXDN and Settings → AM are
+ * this page, so the values an operator can change, their limits and their
+ * setters are the ones the popup already has (and the ones the UI tests walk).
+ *
+ * The page has its own cursor: it is open while the popup is closed, and
+ * keeping the two states apart means opening Settings can never disturb a
+ * latched popup.
+ */
+typedef struct
+{
+    const qm_menu_t *qm;        /**< Table being shown, NULL when closed   */
+    uint8_t selected;           /**< Cursor                                */
+    uint8_t first;              /**< First visible row                     */
+} qm_page_t;
+
+extern qm_page_t qm_page_state;
+
+/**
+ * Open the page of a mode.
+ *
+ * @param mode: OPMODE_*; a mode without a row table falls back to FM's, the
+ *        same way the popup does, so a page is never empty.
+ */
+void qm_page_open(uint8_t mode);
+
+/** Close the page (leaving Settings). */
+void qm_page_close(void);
+
+/** True while a mode page is on screen. */
+bool qm_page_isOpen(void);
+
+/** Move the page cursor one row, wrapping at both ends. */
+void qm_page_move(int delta);
+
+/** Change the value of the highlighted row, as qm_adjust_step() does. */
+void qm_page_adjust(int delta, bool coarse);
+
+/** ENTER on the page: cycle a value or open the screen of a QM_GOTO row. */
+void qm_page_enter(void);
+
+/** Draw the page over the whole screen, with its own header and hints. */
+void qm_page_draw(void);
+
+/**
+ * Put the VFO's tuning step back on the airband raster the operator chose.
+ *
+ * The raster is a per-mode setting (25 kHz or 8.33 kHz), but the step itself is
+ * one global (state.step_index, the same one Settings → Radio → Step edits). The
+ * UI calls this on entering the airband mode, so the step, the menu row and the
+ * saved setting cannot disagree; in any other mode it does nothing.
+ */
+void qm_am_applyRaster(void);
 
 /*
  * Implemented in ui.c: the keypad lock lives in the UI state.

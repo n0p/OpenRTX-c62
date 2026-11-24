@@ -128,6 +128,15 @@ void vp_announceRadioMode(const uint8_t mode, const enum vpQueueFlags flags)
         case OPMODE_TETRA:
             vp_queueString("TETRA", (enum vpFlags)0);
             break;
+
+        case OPMODE_NXDN:
+            vp_queueString("NXDN", (enum vpFlags)0);
+            break;
+
+        case OPMODE_AIRBAND:
+            /* Spelled out: "AM" read as a word is not what the band is called */
+            vp_queueString("A M", (enum vpFlags)0);
+            break;
     }
 
     playIfNeeded(flags);

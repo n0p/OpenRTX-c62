@@ -598,15 +598,31 @@ void chstore_fromChannel(const channel_t *in, chstore_channel_t *out)
         out->flags |= CHSTORE_FLAG_SIMPLEX;
 }
 
+/**
+ * Short name of a mode, for the screen, the channel list and the header.
+ *
+ * This is the one place a mode is spelled: the registry (ui/ui_modes.h), the
+ * channel editor and the main screen's label all read it, so a mode cannot be
+ * called one thing in the list and another on the air.
+ *
+ * Two to five characters, because the header has room for five (see
+ * UI_MODE_LABEL_MAX_W); a mode this build does not have keeps its name here
+ * anyway, so a channel record that carries it still reads correctly.
+ */
 const char *chstore_modeName(uint8_t mode)
 {
     switch (mode)
     {
-        case OPMODE_FM:    return "FM";
-        case OPMODE_M17:   return "M17";
-        case OPMODE_DMR:   return "DMR";
-        case OPMODE_TETRA: return "TETRA";
+        case OPMODE_FM:      return "FM";
+        case OPMODE_M17:     return "M17";
+        case OPMODE_DMR:     return "DMR";
+        case OPMODE_TETRA:   return "TETRA";
+        case OPMODE_NXDN:    return "NXDN";
+        case OPMODE_DPMR:    return "dPMR";
+        case OPMODE_P25:     return "P25";
+        case OPMODE_YSF:     return "YSF";
+        case OPMODE_DSTAR:   return "DSTAR";
         case OPMODE_AIRBAND: return "AM";
-        default:           return "----";
+        default:             return "----";
     }
 }

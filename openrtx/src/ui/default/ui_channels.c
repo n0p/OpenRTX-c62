@@ -327,35 +327,73 @@ static void toneStep(bool tx, int dir)
     }
 }
 
-/* Modes this firmware can actually tune, in the order UP/DOWN walks them. A
-   channel can hold any of them; the list is filtered so that the editor never
-   offers a mode the build does not have. */
-static const uint8_t chModes[] = {
-    OPMODE_FM,
-#ifdef CONFIG_M17
-    OPMODE_M17,
-#endif
-#ifdef CONFIG_DMR
-    OPMODE_DMR,
-#endif
-#ifdef CONFIG_TETRA
-    OPMODE_TETRA,
-#endif
-};
+/*
+ * Modes this firmware can actually tune, in the order UP/DOWN walks them.
+ *
+ * The list is the mode registry's (ui/ui_modes.h): the same table the side key
+ * and the quick menu use, filtered on "the channel editor offers it". Keeping a
+ * copy here is how NXDN and AM ended up reachable from the keypad and not from
+ * a channel, so there is no copy any more.
+ */
+static bool chBwValid(uint8_t mode, uint8_t bw);
+static uint8_t chBwDefault(uint8_t mode);
 
-#define CH_MODES ((uint8_t)(sizeof(chModes) / sizeof(chModes[0])))
+static uint8_t chModeAt(uint8_t index)
+{
+    uint8_t n = 0;
+
+    for (uint8_t i = 0; i < ui_mode_count(); i++) {
+        const ui_mode_t *m = ui_mode_at(i);
+
+        if (!ui_mode_inChannelList(m->mode))
+            continue;
+
+        if (n == index)
+            return m->mode;
+
+        n++;
+    }
+
+    return OPMODE_FM;
+}
+
+static uint8_t chModeCount(void)
+{
+    uint8_t n = 0;
+
+    for (uint8_t i = 0; i < ui_mode_count(); i++) {
+        const ui_mode_t *m = ui_mode_at(i);
+
+        if (ui_mode_inChannelList(m->mode))
+            n++;
+    }
+
+    return n;
+}
 
 static void modeStep(int dir)
 {
+    uint8_t count = chModeCount();
     int cur = 0;
 
-    for (uint8_t i = 0; i < CH_MODES; i++) {
-        if (chModes[i] == edit.mode)
+    if (count == 0)
+        return;
+
+    for (uint8_t i = 0; i < count; i++) {
+        if (chModeAt(i) == edit.mode)
             cur = (int)i;
     }
 
-    cur = (cur + dir + CH_MODES) % CH_MODES;
-    edit.mode = chModes[cur];
+    cur = (cur + dir + count) % count;
+    edit.mode = chModeAt((uint8_t)cur);
+
+    /*
+     * Keep the bandwidth legal for the mode that was chosen: a NXDN channel is
+     * 6.25 or 12.5 kHz, an airband one is the wide or the narrow IF, and a mode
+     * that just arrived from another one must not inherit an impossible value.
+     */
+    if (!chBwValid(edit.mode, edit.bandwidth))
+        edit.bandwidth = chBwDefault(edit.mode);
 
     if (edit.mode == OPMODE_DMR && edit.dmr_cc == 0)
         edit.dmr_cc = 1;
@@ -363,6 +401,61 @@ static void modeStep(int dir)
     /* Keep the selection on a field that is still drawn */
     if (!fieldVisible(field))
         field = CF_MODE;
+}
+
+/*
+ * Bandwidth of a channel, per mode: the values a mode can use, in the order the
+ * editor walks them. FM offers the three the transmitter supports; NXDN the two
+ * channel spacings of NXDN48; AM the two IF filters of the BK4819's AM path.
+ */
+static bool chBwValid(uint8_t mode, uint8_t bw)
+{
+    switch (mode) {
+        case OPMODE_NXDN:
+            return (bw == BW_6_25) || (bw == BW_12_5);
+
+        case OPMODE_AIRBAND:
+            return (bw == BW_25) || (bw == BW_12_5);
+
+        default:
+            return (bw == BW_25) || (bw == BW_12_5) || (bw == BW_6_25);
+    }
+}
+
+static uint8_t chBwDefault(uint8_t mode)
+{
+    /* NXDN is deployed on 12.5 kHz here and in most NEXEDGE traffic; the
+       airband IF starts wide, which is the profile verified on air */
+    return (mode == OPMODE_NXDN) ? BW_12_5 : BW_25;
+}
+
+static void bwStep(uint8_t mode, int dir)
+{
+    static const uint8_t fmBw[]  = { BW_12_5, BW_25, BW_6_25 };
+    static const uint8_t nxdnBw[] = { BW_12_5, BW_6_25 };
+    static const uint8_t amBw[]  = { BW_25, BW_12_5 };
+
+    const uint8_t *list = fmBw;
+    uint8_t n = 3;
+
+    if (mode == OPMODE_NXDN) {
+        list = nxdnBw;
+        n = 2;
+    } else if (mode == OPMODE_AIRBAND) {
+        list = amBw;
+        n = 2;
+    }
+
+    int cur = -1;
+    for (uint8_t i = 0; i < n; i++) {
+        if (list[i] == edit.bandwidth)
+            cur = (int)i;
+    }
+
+    if (cur < 0)
+        cur = 0;
+    cur = (cur + dir + n) % n;
+    edit.bandwidth = list[cur];
 }
 
 static void powerStep(int dir)
@@ -423,7 +516,7 @@ static void fieldChange(int dir, bool coarse)
             break;
 
         case CF_BW:
-            edit.bandwidth = (edit.bandwidth == BW_25) ? BW_12_5 : BW_25;
+            bwStep(edit.mode, dir);
             break;
 
         case CF_POWER:
@@ -501,8 +594,8 @@ static const char *invalidReason(void)
 static void editorEnter(void)
 {
     /* Never hand an impossible record to the editor */
-    if (edit.bandwidth != BW_25 && edit.bandwidth != BW_12_5)
-        edit.bandwidth = BW_12_5;
+    if (!chBwValid(edit.mode, edit.bandwidth))
+        edit.bandwidth = chBwDefault(edit.mode);
     if (edit.power == 0 || edit.power > 5000)
         edit.power = 1000;
     if (edit.mode == OPMODE_DMR && edit.dmr_cc == 0)
@@ -842,8 +935,11 @@ static void fieldValue(uint8_t f, char *buf, size_t len)
             break;
 
         case CF_BW:
-            snprintf(buf, len, "%s", (edit.bandwidth == BW_12_5)
-                                     ? "12.5" : "25");
+            switch (edit.bandwidth) {
+                case BW_6_25: snprintf(buf, len, "6.25"); break;
+                case BW_12_5: snprintf(buf, len, "12.5"); break;
+                default:      snprintf(buf, len, "25");   break;
+            }
             break;
 
         case CF_POWER:

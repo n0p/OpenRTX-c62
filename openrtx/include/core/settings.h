@@ -24,8 +24,14 @@
  *  - 2: DMR destination, own DMR ID and SMS format appended.
  *  - 3: DMR timeslot appended (1 or 2), so the quick menu can move the call
  *       between the two slots of the 60 ms frame.
+ *  - 4: the receive-only modes' own controls appended: the NXDN RAN filter and
+ *       the airband AGC, raster and snap. `c62/scan` (scan configuration) and
+ *       `c62/dmr-pkg` (DMR air delay) also claim 4 on their branches: the three
+ *       blocks are appends at different offsets, so merging them is only a
+ *       renumber (the second one to land takes 5) and never a re-interpretation.
+ *       Nothing here reorders or reuses a field.
  */
-#define SETTINGS_VERSION 3
+#define SETTINGS_VERSION 4
 
 typedef enum
 {
@@ -114,6 +120,20 @@ typedef struct
     uint8_t  dmr_dest_type;       // enum dmrDestType
     uint8_t  sms_format;          // enum dmrSmsFormat
     uint8_t  dmr_timeslot;        // 1 or 2: the slot of the 60 ms TDMA frame
+    /*
+     * The receive-only modes' own controls, one block so that the whole of it
+     * is 4 bytes. They exist because the modes are not just "a frequency": the
+     * NXDN receiver has a RAN filter and the AM one has a level control and a
+     * channel raster, and none of those fit an FM page.
+     *
+     * Everything here has a default that reproduces the behaviour the modes had
+     * before the menu could reach them (RAN any, AGC on, 25 kHz, no snap), so a
+     * settings reset costs the operator nothing but the values he chose.
+     */
+    uint8_t  nxdn_ran;            // RAN the NXDN receiver accepts, 0xFF = any
+    bool     am_agc;              // Audio AGC of the AM receive path
+    bool     am_step;             // Airband raster: false 25 kHz, true 8.33 kHz
+    bool     am_snap;             // Snap tuning to the 8.33 kHz raster
 }
 __attribute__((packed)) settings_t;
 
@@ -165,6 +185,10 @@ static const settings_t default_settings =
     DMR_DEST_GROUP,               // Group call by default
     DMR_SMS_FMT_AUTO,             // The format this firmware always sent
     1,                            // Timeslot 1, the one every network uses
+    0xFF,                         // NXDN: any RAN, the pre-menu behaviour
+    true,                         // AM: audio AGC on
+    false,                        // AM: 25 kHz raster
+    false,                        // AM: do not snap (25 kHz needs no snapping)
 };
 
 /**

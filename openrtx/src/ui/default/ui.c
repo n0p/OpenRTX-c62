@@ -53,6 +53,8 @@
 #include <math.h>
 #include "ui/ui_default.h"
 #include "rtx/rtx.h"
+#include "core/airband.h"
+#include "core/channel_store.h"
 #include "interfaces/platform.h"
 #include "interfaces/display.h"
 #include "interfaces/cps_io.h"
@@ -152,6 +154,9 @@ const char *settings_items[] =
     "TETRA",
 #endif
     "FM",
+#define UI_MODE_PAGE(id, title) title,
+    UI_MODE_PAGES(UI_MODE_PAGE)
+#undef UI_MODE_PAGE
     "Accessibility",
     "Default Settings"
 };
@@ -680,6 +685,26 @@ static int _ui_fsm_loadChannel(int16_t channel_index, bool *sync_rtx)
 }
 
 /**
+ * Snap a frequency to the airband 8.33 kHz raster, when that applies.
+ *
+ * Only in the airband mode and only with the snap enabled: the 8.33 kHz step of
+ * the VFO is a whole number of hertz, so stepping drifts off the real carrier
+ * (25/3 kHz), and a designator copied from a chart ("118.005") is not the
+ * carrier of the channel it names (118.00833). Frequencies outside the band are
+ * left alone, which is what airband_snap() already does.
+ */
+static void _ui_airbandSnap(freq_t *freq)
+{
+    if ((state.channel.mode != OPMODE_AIRBAND) || (state.settings.am_snap == 0))
+        return;
+
+    freq_t snapped = airband_snap(*freq);
+
+    if (snapped != 0)
+        *freq = snapped;
+}
+
+/**
  * Apply the frequencies typed in the VFO input screen.
  *
  * In a receive-only mode (TETRA, DMR) there is one frequency: RX and TX are
@@ -695,6 +720,18 @@ static bool _ui_applyVFOInput(bool *sync_rtx)
     {
         ui_state.new_tx_frequency = ui_state.new_rx_frequency;
     }
+
+    /*
+     * Airband with the snap on: a frequency typed by hand lands on the nearest
+     * 8.33 kHz carrier (a designator such as 118.005 is not a frequency, its
+     * carrier is 118.00833), so the receiver is never a third of a channel off
+     * after the operator copied a designator from a chart.
+     */
+    _ui_airbandSnap(&ui_state.new_rx_frequency);
+    if (ui_state.new_tx_frequency == ui_state.new_rx_frequency)
+        ui_state.new_tx_frequency = ui_state.new_rx_frequency;
+    else
+        _ui_airbandSnap(&ui_state.new_tx_frequency);
 
     if((ui_state.new_rx_frequency == 0) ||
        (_ui_freq_check_limits(ui_state.new_rx_frequency) == false) ||
@@ -1096,30 +1133,12 @@ static void _ui_fsm_menuMacro(kbd_msg_t msg, bool *sync_rtx)
             break;
         case 5:
         {
-            // Cycle through radio modes: FM, M17, TETRA, DMR, back to FM
-#if defined(CONFIG_M17) || defined(CONFIG_TETRA) || defined(CONFIG_DMR)
-            static const uint8_t modes[] = {
-#ifdef CONFIG_M17
-                OPMODE_M17,
-#endif
-#ifdef CONFIG_TETRA
-                OPMODE_TETRA,
-#endif
-#ifdef CONFIG_DMR
-                OPMODE_DMR,
-#endif
-            };
-            uint8_t nextMode = OPMODE_FM;
-
-            for (size_t i = 0; i < ARRAY_SIZE(modes); i++)
-            {
-                if(state.channel.mode == modes[i])
-                    nextMode = (i + 1 < ARRAY_SIZE(modes)) ? modes[i + 1]
-                                                           : OPMODE_FM;
-            }
-            // Catch invalid states so they do not get locked out
-            if(state.channel.mode == OPMODE_FM)
-                nextMode = modes[0];
+            /*
+             * Cycle through the modes this build has. The order and the
+             * membership are the mode registry's (ui/ui_modes.h): a mode that
+             * is compiled in, or compiled out, changes nothing here.
+             */
+            uint8_t nextMode = ui_mode_next(state.channel.mode, +1);
 
             state.channel.mode = nextMode;
 
@@ -1129,7 +1148,13 @@ static void _ui_fsm_menuMacro(kbd_msg_t msg, bool *sync_rtx)
              */
             if(opmode_canTransmit(state.channel.mode) == false)
                 state.channel.tx_frequency = state.channel.rx_frequency;
-#endif
+
+            /*
+             * Airband: the operator's raster comes back with the mode, so the
+             * VFO steps on the same grid the quick menu shows.
+             */
+            qm_am_applyRaster();
+
             *sync_rtx = true;
             vp_announceRadioMode(state.channel.mode, queueFlags);
             break;
@@ -2005,12 +2030,24 @@ void ui_updateFSM(bool *sync_rtx)
                     }
                     else if(msg.keys & KEY_UP || msg.keys & KNOB_RIGHT)
                     {
-                        // Increment TX and RX frequency of 12.5KHz
+                        // Increment TX and RX frequency by the current step
                         if(_ui_freq_check_limits(state.channel.rx_frequency + freq_steps[state.step_index]) &&
                            _ui_freq_check_limits(state.channel.tx_frequency + freq_steps[state.step_index]))
                         {
-                            state.channel.rx_frequency += freq_steps[state.step_index];
-                            state.channel.tx_frequency += freq_steps[state.step_index];
+                            freq_t rx = state.channel.rx_frequency
+                                      + freq_steps[state.step_index];
+                            freq_t tx = state.channel.tx_frequency
+                                      + freq_steps[state.step_index];
+
+                            /* Airband: land on the raster after the step */
+                            _ui_airbandSnap(&rx);
+                            if (rx == tx)
+                                tx = rx;
+                            else
+                                _ui_airbandSnap(&tx);
+
+                            state.channel.rx_frequency = rx;
+                            state.channel.tx_frequency = tx;
                             *sync_rtx = true;
                             vp_announceFrequencies(state.channel.rx_frequency,
                                                    state.channel.tx_frequency,
@@ -2019,12 +2056,23 @@ void ui_updateFSM(bool *sync_rtx)
                     }
                     else if(msg.keys & KEY_DOWN || msg.keys & KNOB_LEFT)
                     {
-                        // Decrement TX and RX frequency of 12.5KHz
+                        // Decrement TX and RX frequency by the current step
                         if(_ui_freq_check_limits(state.channel.rx_frequency - freq_steps[state.step_index]) &&
                            _ui_freq_check_limits(state.channel.tx_frequency - freq_steps[state.step_index]))
                         {
-                            state.channel.rx_frequency -= freq_steps[state.step_index];
-                            state.channel.tx_frequency -= freq_steps[state.step_index];
+                            freq_t rx = state.channel.rx_frequency
+                                      - freq_steps[state.step_index];
+                            freq_t tx = state.channel.tx_frequency
+                                      - freq_steps[state.step_index];
+
+                            _ui_airbandSnap(&rx);
+                            if (rx == tx)
+                                tx = rx;
+                            else
+                                _ui_airbandSnap(&tx);
+
+                            state.channel.rx_frequency = rx;
+                            state.channel.tx_frequency = tx;
                             *sync_rtx = true;
                             vp_announceFrequencies(state.channel.rx_frequency,
                                                    state.channel.tx_frequency,
@@ -2424,6 +2472,13 @@ void ui_updateFSM(bool *sync_rtx)
                         case S_FM:
                             state.ui_screen = SETTINGS_FM;
                             break;
+#define UI_MODE_PAGE(id, title)                     \
+                        case S_PAGE_##id:           \
+                            qm_page_open(id);       \
+                            state.ui_screen = SETTINGS_MODE; \
+                            break;
+                        UI_MODE_PAGES(UI_MODE_PAGE)
+#undef UI_MODE_PAGE
                         case S_ACCESSIBILITY:
                             state.ui_screen = SETTINGS_ACCESSIBILITY;
                             break;
@@ -3146,6 +3201,29 @@ void ui_updateFSM(bool *sync_rtx)
                     _ui_menuBack(MENU_SETTINGS);
                 break;
 
+            /*
+             * A mode's own page (Settings → NXDN, Settings → AM): the mode's
+             * quick menu rows, walked with the same engine, so the keys mean
+             * here exactly what they mean in the popup.
+             */
+            case SETTINGS_MODE:
+                if (msg.keys & (KEY_UP | KNOB_LEFT))
+                    qm_page_move(-1);
+                else if (msg.keys & (KEY_DOWN | KNOB_RIGHT))
+                    qm_page_move(+1);
+                else if (msg.keys & KEY_F1)
+                    qm_page_adjust(-1, msg.long_press);
+                else if (msg.keys & KEY_F2)
+                    qm_page_adjust(+1, msg.long_press);
+                else if (msg.keys & KEY_ENTER)
+                    qm_page_enter();
+                else if (msg.keys & KEY_ESC)
+                {
+                    qm_page_close();
+                    _ui_menuBack(MENU_SETTINGS);
+                }
+                break;
+
             case SETTINGS_ACCESSIBILITY:
                 if(msg.keys & KEY_LEFT || (ui_state.edit_mode &&
                    (msg.keys & KEY_DOWN || msg.keys & KNOB_LEFT)))
@@ -3408,6 +3486,10 @@ bool ui_updateGUI()
         // FM settings screen
         case SETTINGS_FM:
             _ui_drawSettingsFM(&ui_state);
+            break;
+        // A mode's own settings page (its quick menu rows as a list)
+        case SETTINGS_MODE:
+            qm_page_draw();
             break;
         case SETTINGS_ACCESSIBILITY:
             _ui_drawSettingsAccessibility(&ui_state);

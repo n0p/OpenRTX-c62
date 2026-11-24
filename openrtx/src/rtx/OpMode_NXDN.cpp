@@ -40,6 +40,21 @@ void OpMode_NXDN::onFrame(const struct nxdnFrame *frame)
     if (!frame->lichOk)
         return;
 
+    /*
+     * The RAN travels in the SR bits of the SACCH, not in the LICH, so the
+     * filter can only be applied once a superframe has decoded: for the first
+     * ~320 ms after the carrier appears everything passes, and afterwards the
+     * frames of any other RAN are dropped before they reach the vocoder or the
+     * layer 3 assembler. 0xFF means "any", which is the default and what the
+     * mode did before the row existed.
+     */
+    if (frame->sacchOk)
+        lastRan = (int)(frame->sacchSr & 0x3Fu);
+
+    if ((state.settings.nxdn_ran <= 63) && (lastRan >= 0)
+        && (lastRan != (int)state.settings.nxdn_ran))
+        return;
+
     /* The SACCH of a superframe: 18 bits of layer 3 per frame, in the position
      * the SR field announces */
     if (frame->sacchOk) {
@@ -105,6 +120,7 @@ void OpMode_NXDN::enable()
     memset(sacchHave, 0, sizeof(sacchHave));
     settle = SETTLE_SAMPLES;
     dataErrors = 0;
+    lastRan = -1;
     startRx = true;
 }
 

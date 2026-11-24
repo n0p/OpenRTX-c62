@@ -53,6 +53,7 @@ private:
     int basebandId;
     int16_t settle;
     int dataErrors;
+    int lastRan;        ///< RAN of the last superframe, -1 until one decodes
     bool startRx;
 };
 

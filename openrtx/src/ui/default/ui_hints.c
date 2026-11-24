@@ -58,6 +58,12 @@ const ui_hints_t *ui_hints_for_screen(uint8_t screen)
         case SETTINGS_TETRA:
 #endif
         case SETTINGS_FM:
+        /*
+         * A mode's own page (Settings → NXDN, Settings → AM). The rows are the
+         * mode's quick menu ones, so the hints are the same as any settings
+         * page: green cycles a value, P1/P2 change it, red goes back.
+         */
+        case SETTINGS_MODE:
         case SETTINGS_ACCESSIBILITY:
 #ifdef CONFIG_RTC
         case SETTINGS_TIMEDATE:

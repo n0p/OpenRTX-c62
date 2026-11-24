@@ -212,7 +212,15 @@ static int64_t amAfGainTime;
  */
 static void amAudioProcess(int16_t *samples, size_t count, size_t stride)
 {
-    agc_process(&amAgc, samples, count, stride);
+    /*
+     * The operator can turn the AGC off from the quick menu or Settings → AM
+     * (settings.am_agc): a steady, weak carrier is sometimes easier to copy
+     * with the level left alone than with the AGC pumping on the noise between
+     * transmissions. The setting is read here, once per block, so the change is
+     * heard as soon as the row is moved.
+     */
+    if (state.settings.am_agc)
+        agc_process(&amAgc, samples, count, stride);
 }
 
 /**
@@ -345,7 +353,18 @@ void radio_setOpmode(const enum opmode mode)
          */
         bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_BYPASS);
         bk4819_setBandwidth(&c62_bk4819, BK4819_BW_12K5);
-        bk4819_setRfFilter(&c62_bk4819, 7, 7);
+        /*
+         * The IF filter follows the channel spacing the operator picked. 7,7 is
+         * 4.5 kHz, the widest, and the one every measurement in docs/RX_NXDN.md
+         * was taken with; a 6.25 kHz channel asks for 3,3 (about 2.9 kHz), which
+         * fits the 2.9 kHz the waveform occupies and rejects the adjacent
+         * 6.25 kHz slot. Only the IF changes: the channel selection is the
+         * demodulator's matched filter either way.
+         */
+        if (config->bandwidth == BW_6_25)
+            bk4819_setRfFilter(&c62_bk4819, 3, 3);
+        else
+            bk4819_setRfFilter(&c62_bk4819, 7, 7);
         c62_rx_reg43 = 0x7e48;
         bk4819_setTxAudioFilter(&c62_bk4819, DMR_TX_LPF2_BW);
         bk4819_setRxAudioGain(&c62_bk4819, DMR_RX_AUDIO_GAIN1,

@@ -15,6 +15,7 @@
 #include "core/event.h"
 #include "hwconfig.h"
 #include "core/ui.h"
+#include "ui/ui_modes.h"
 
 // Maximum menu entry length
 #define MAX_ENTRY_LEN 21
@@ -58,6 +59,12 @@ enum uiScreen
     SETTINGS_TETRA,
 #endif
     SETTINGS_FM,
+    /*
+     * A mode's own page: the mode's quick menu rows drawn as a list, so NXDN
+     * and AM (and every mode registered with UI_MODE_PAGE) get one without new
+     * code here. Which mode is in qm_page_state.qm (ui_quickmenu.h).
+     */
+    SETTINGS_MODE,
     SETTINGS_ACCESSIBILITY,
     SETTINGS_RESET2DEFAULTS,
     /*
@@ -125,6 +132,14 @@ enum settingsItems
     S_TETRA,
 #endif
     S_FM,
+    /*
+     * One page per mode that has its own settings (UI_MODE_PAGES in
+     * ui/ui_modes.h). The list is generated, in the same order, into
+     * settings_items[] in ui.c: registering a mode there adds its page here.
+     */
+#define UI_MODE_PAGE(id, title) S_PAGE_##id,
+    UI_MODE_PAGES(UI_MODE_PAGE)
+#undef UI_MODE_PAGE
     S_ACCESSIBILITY,
     S_RESET2DEFAULTS,
 };
