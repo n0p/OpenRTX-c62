@@ -87,6 +87,20 @@ void dmr_vocoder_init(dmr_vocoder_t *v);
 int dmr_vocoder_decode_frame(dmr_vocoder_t *v, const uint8_t frame[DMR_FRAME_BYTES],
                              int16_t pcm[DMR_PCM_SAMPLES], int *errs);
 
+/* The two halves of dmr_vocoder_decode_frame(), for a caller that has to take
+ * a keystream off the coded bits between them (DMR privacy, NXDN):
+ *
+ *   n = dmr_vocoder_unpack(frame, d);        // FEC, n = corrected bits
+ *   ... descramble d[0..48] ...
+ *   dmr_vocoder_decode_data(v, d, pcm);      // synthesis, no FEC
+ *
+ * dmr_vocoder_decode_data() is the mirror of mbelib's
+ * mbe_processAmbe2450Dataf(); dmr_vocoder_unpack() of its
+ * mbe_eccAmbe3600x2450C0() + mbe_demodulateAmbe3600x2450Data(). */
+int dmr_vocoder_unpack(const uint8_t frame[DMR_FRAME_BYTES], uint8_t d[49]);
+int dmr_vocoder_decode_data(dmr_vocoder_t *v, const uint8_t d[49],
+                            int16_t pcm[DMR_PCM_SAMPLES]);
+
 /* Size of one instance in bytes (for .bss placement decisions). */
 size_t dmr_vocoder_state_size(void);
 

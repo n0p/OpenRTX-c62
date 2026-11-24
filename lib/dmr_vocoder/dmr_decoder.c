@@ -844,14 +844,17 @@ void dmr_vocoder_init(dmr_vocoder_t *v)
 
 size_t dmr_vocoder_state_size(void) { return sizeof(dmr_vocoder_t); }
 
-int dmr_vocoder_decode_frame(dmr_vocoder_t *v, const uint8_t frame[DMR_FRAME_BYTES],
-                             int16_t pcm[DMR_PCM_SAMPLES], int *errs)
+/*
+ * Synthesis from the 49 AMBE parameter bits, the mirror of mbelib's
+ * mbe_processAmbe2450Dataf(): FEC already done (and any keystream taken off)
+ * by the caller.  Split out of dmr_vocoder_decode_frame() for the encrypted
+ * DMR paths, which have to descramble the data bits between the two.
+ */
+int dmr_vocoder_decode_data(dmr_vocoder_t *v, const uint8_t d[49],
+                            int16_t pcm[DMR_PCM_SAMPLES])
 {
-    if (!v || !frame || !pcm)
+    if (!v || !d || !pcm)
         return -1;
-
-    uint8_t d[49];
-    int nerr = unpack_frame(frame, d, errs != NULL);
 
     dmr_parms_t *cur = &v->cur;
     dmr_parms_t *prev = &v->prev;
@@ -862,8 +865,6 @@ int dmr_vocoder_decode_frame(dmr_vocoder_t *v, const uint8_t frame[DMR_FRAME_BYT
     /* The reference wrapper feeds zero FEC counters into the mbe layer, so
      * errorRate is only decayed.  Keep that behaviour to stay bit-exact and
      * report the corrected-bit count to the caller instead. */
-    if (errs)
-        *errs = nerr;
     cur->errorCountTotal = 0;
     cur->errorCount4 = 0;
     cur->errorRate = 0.95f * prev->errorRate;
@@ -901,4 +902,30 @@ int dmr_vocoder_decode_frame(dmr_vocoder_t *v, const uint8_t frame[DMR_FRAME_BYT
         pcm[i] = sat16((int32_t)a);
     }
     return 0;
+}
+
+/* 72-bit canonical frame -> the 49 FEC-corrected (still scrambled) data bits.
+ * Returns the number of corrected bits, so that a caller taking a keystream
+ * off them (Basic/Enhanced Privacy) reports the same figure as the clear
+ * path; -1 on bad arguments. */
+int dmr_vocoder_unpack(const uint8_t frame[DMR_FRAME_BYTES], uint8_t d[49])
+{
+    if (!frame || !d)
+        return -1;
+    return unpack_frame(frame, d, 1);
+}
+
+int dmr_vocoder_decode_frame(dmr_vocoder_t *v, const uint8_t frame[DMR_FRAME_BYTES],
+                             int16_t pcm[DMR_PCM_SAMPLES], int *errs)
+{
+    if (!v || !frame || !pcm)
+        return -1;
+
+    uint8_t d[49];
+    int nerr = unpack_frame(frame, d, errs != NULL);
+    int rc = dmr_vocoder_decode_data(v, d, pcm);
+
+    if ((rc == 0) && (errs != NULL))
+        *errs = nerr;
+    return rc;
 }
