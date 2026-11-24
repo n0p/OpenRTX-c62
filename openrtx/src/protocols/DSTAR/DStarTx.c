@@ -44,7 +44,7 @@ enum txStage {
 
 static enum txStage stage;
 static uint8_t headerBits[DSTAR_CODED_BITS];
-static uint16_t bitIndex;
+static uint32_t bitIndex;
 static uint32_t frameIndex;
 
 /* Slow data: a stream of 6-byte blocks, split into two 3-byte halves each. */
