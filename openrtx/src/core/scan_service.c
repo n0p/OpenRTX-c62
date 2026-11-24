@@ -61,6 +61,7 @@ struct scanHome
     uint8_t   dmrType;
     uint32_t  dmrId;
     uint8_t   dmrTs;
+    bool      onBank;   ///< The radio was on a channel, not on the VFO
     bool      valid;
 };
 
@@ -201,6 +202,7 @@ static void adoptCurrent(void)
     home.dmrType   = state.settings.dmr_dest_type;
     home.dmrId     = state.settings.dmr_dest_id;
     home.dmrTs     = state.settings.dmr_timeslot;
+    home.onBank    = state.bank_enabled;
     pthread_mutex_unlock(&state_mutex);
 
     home.valid = true;
@@ -222,8 +224,7 @@ static void finishRestore(void)
     state.settings.dmr_timeslot  = home.dmrTs;
     pthread_mutex_unlock(&state_mutex);
 
-    currentChannel   = (home.channel.mode == OPMODE_NONE) ? SCAN_CHANNEL_NONE
-                                                          : home.index;
+    currentChannel   = home.onBank ? home.index : SCAN_CHANNEL_NONE;
     currentFrequency = home.channel.rx_frequency;
     currentMode      = home.channel.mode;
     ui_rtxSyncRequest = true;
@@ -354,6 +355,11 @@ bool scan_service_start(uint8_t mode)
     scanConfig_t cfg;
     configFromSettings(&cfg, mode);
 
+    /* Applied before anything is saved: a refused configuration changes
+     * nothing on the radio */
+    if (!scan_configure(&engine, &cfg))
+        return false;
+
     pthread_mutex_lock(&state_mutex);
     home.channel    = state.channel;
     home.index      = state.channel_index;
@@ -363,21 +369,15 @@ bool scan_service_start(uint8_t mode)
     home.dmrType    = state.settings.dmr_dest_type;
     home.dmrId      = state.settings.dmr_dest_id;
     home.dmrTs      = state.settings.dmr_timeslot;
-    bool onBank     = state.bank_enabled;
+    home.onBank     = state.bank_enabled;
+    /* The UI hook: the previous mode is restored when the scan stops */
+    state.tuner_mode = (cfg.mode == SCAN_MODE_MEMORY) ? CHSCAN : SCAN;
     pthread_mutex_unlock(&state_mutex);
     home.valid = true;
 
-    /* The UI hook: the previous mode is restored when the scan stops */
-    pthread_mutex_lock(&state_mutex);
-    state.tuner_mode = (cfg.mode == SCAN_MODE_MEMORY) ? CHSCAN : SCAN;
-    pthread_mutex_unlock(&state_mutex);
-
-    if (!scan_configure(&engine, &cfg))
-        return false;
-
     uint16_t startChannel = (cfg.mode == SCAN_MODE_MEMORY) ? home.index
                                                            : SCAN_CHANNEL_NONE;
-    if ((cfg.mode == SCAN_MODE_MEMORY) && !onBank)
+    if ((cfg.mode == SCAN_MODE_MEMORY) && !home.onBank)
         startChannel = SCAN_CHANNEL_NONE;   /* parked on the VFO: from the top */
 
     uint32_t startFrequency = (cfg.mode == SCAN_MODE_VFO)
