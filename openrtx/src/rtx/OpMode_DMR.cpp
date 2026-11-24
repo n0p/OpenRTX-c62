@@ -13,6 +13,7 @@
 #include "protocols/DMR/DmrPhy.h"
 #include "protocols/DMR/DmrSpeech.h"
 #include "protocols/DMR/DmrStatus.h"
+#include "core/mode_stats.h"
 #include "rtx/OpMode_DMR.hpp"
 #include "core/utils.h"
 
@@ -65,6 +66,19 @@ void OpMode_DMR::burstTrampoline(const struct dmrBurst *burst, void *user)
 void OpMode_DMR::onBurst(const struct dmrBurst *burst)
 {
     dmrStatus_burst(burst);
+
+    /* Per-mode statistics: one burst, and what its own checks said of it */
+    modeStats_frames(MS_MODE_DMR, 1);
+    if (burst->crcChecked) {
+        if (burst->crcOk)
+            modeStats_valid(MS_MODE_DMR, 1);
+        else
+            modeStats_badCrc(MS_MODE_DMR, 1);
+    }
+    /* EVM of the burst against the symbol levels, 0..1: thousandths */
+    modeStats_error(MS_MODE_DMR, (uint32_t)(burst->evm * 1000.0f));
+    /* Fractional timing the burst settled on, in 1/1000 of a symbol */
+    modeStats_timing(MS_MODE_DMR, (int32_t)(dmrPhy_timing() * 200.0f), 125);
 
     if (burst->voice) {
         if (burst->frameCount > 0)
@@ -253,6 +267,7 @@ void OpMode_DMR::reset()
     dataErrors = 0;
     dmrPhy_reset();
     dmrStatus_reset();
+    modeStats_resync(MS_MODE_DMR);
 }
 
 void OpMode_DMR::enable()
@@ -424,6 +439,7 @@ bool OpMode_DMR::startTx(const rtxStatus_t *status)
     /* Last: the PA, the ramps of the first slot need it settled */
     radio_enableTx();
     txg_note(tx, TXG_EV_KEYED, (uint32_t)getTick());
+    modeStats_txKey(MS_MODE_DMR, (uint32_t)getTick());
     return true;
 }
 
@@ -475,6 +491,7 @@ void OpMode_DMR::stopTx()
      * before the PA was ever keyed.
      */
     txg_exit(rtx_getTxGuard(), (uint32_t)getTick(), TXG_REASON_MODE);
+    modeStats_txEnd(MS_MODE_DMR);
 }
 
 /**
@@ -510,6 +527,7 @@ bool OpMode_DMR::putSlot()
     } else {
         txg_block(tx, (uint32_t)getTick());
     }
+    modeStats_txBlock(MS_MODE_DMR, (uint32_t)getTick());
 
     return true;
 }
@@ -556,8 +574,15 @@ bool OpMode_DMR::txSlot(const rtxStatus_t *status)
     step = dmrTxFsm_next(&fsm, platform_getPttStatus(), frameCount > 0);
 
     memset(frames, 0, sizeof(frames));
-    if (step.kind == DMR_TXB_VOICE)
+    bool starved = false;
+    if (step.kind == DMR_TXB_VOICE) {
+        /* A voice slot that goes out with an empty queue: the vocoder was
+         * late, and the burst carries silence */
+        starved = (frameCount == 0);
         dequeueFrames(frames);
+    }
+    if (starved)
+        modeStats_txStarve(MS_MODE_DMR);
     dmrTx_slot(&tx, step.kind, (const uint8_t (*)[DMR_AMBE_BYTES])frames,
                txSamples);
 
@@ -913,9 +938,11 @@ void OpMode_DMR::update(rtxStatus_t *const rtx, const bool newCfg)
      */
     dataBlock_t block = inputStream_getData(basebandId);
     if (block.data == NULL) {
+        modeStats_lost(MS_MODE_DMR, 1);
         if (dataErrors++ == 0) {
             dmrPhy_reset();
             dmrStatus_reset();
+            modeStats_resync(MS_MODE_DMR);
         } else {
             sleepFor(0, 10);
         }
@@ -932,7 +959,10 @@ void OpMode_DMR::update(rtxStatus_t *const rtx, const bool newCfg)
         return;
     }
 
+    modeStats_blockStart(MS_MODE_DMR);
     dmrPhy_push(block.data, block.len, burstTrampoline, this);
+    modeStats_block(MS_MODE_DMR, block.data, block.len);
+    modeStats_rssi(MS_MODE_DMR, (int)rtx_getRssi());
 
     if (dmrPhy_synced())
         platform_ledOn(GREEN);

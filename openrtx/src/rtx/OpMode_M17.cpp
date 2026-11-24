@@ -13,6 +13,7 @@
 #include "core/audio_codec.h"
 #include <errno.h>
 #include "core/gps.h"
+#include "core/mode_stats.h"
 #include "core/state.h"
 #include "core/utils.h"
 #include "rtx/rtx.h"
@@ -26,6 +27,31 @@ extern mod17Calib_t mod17CalData;
 
 using namespace std;
 using namespace M17;
+
+#ifdef CONFIG_C62_MODE_STATS
+/**
+ * How far the soft bits of a frame sit from full confidence, in thousandths:
+ * 0 when every bit is decided at its nearest symbol level, 1000 when every bit
+ * sits on its decision boundary. It is the M17 receiver's EVM: the decoder
+ * still corrects a few percent of this, and nothing decodes past about 400.
+ */
+static uint32_t m17SoftError(const softFrame_t &soft)
+{
+    uint32_t bits = (uint32_t)soft.size();
+    if(bits == 0)
+        return 0;
+
+    uint32_t distance = 0;
+    for(size_t i = 0; i < soft.size(); i++)
+    {
+        int32_t d = (int32_t)soft[i] - 0x8000;
+        distance += (uint32_t)((d < 0) ? -d : d);
+    }
+
+    uint32_t mean = distance / bits;
+    return (0x8000u - mean) * 1000u / 0x8000u;
+}
+#endif
 
 OpMode_M17::OpMode_M17() : startRx(false), startTx(false), txBlocked(false),
                            locked(false), dataValid(false), extendedCall(false),
@@ -198,6 +224,11 @@ void OpMode_M17::rxState(rtxStatus_t *const status)
     bool newData = demodulator.update(invertRxPhase);
     bool lock    = demodulator.isLocked();
 
+    modeStats_rssi(MS_MODE_M17, (int)rtx_getRssi());
+    /* Sampling instant the clock recovery settled on: 1/5 symbol per step */
+    modeStats_timing(MS_MODE_M17, (int32_t)(demodulator.timingFit() * 200u),
+                     200);
+
     // Reset frame decoder when transitioning from unlocked to locked state.
     if((lock == true) && (locked == false))
     {
@@ -207,6 +238,7 @@ void OpMode_M17::rxState(rtxStatus_t *const status)
 
         decoder.reset();
         locked = lock;
+        modeStats_resync(MS_MODE_M17);
     }
 
     if(locked)
@@ -214,9 +246,25 @@ void OpMode_M17::rxState(rtxStatus_t *const status)
         // Process new data
         if(newData)
         {
-            auto  type    = decoder.decodeFrame(demodulator.getSoftFrame());
+            const softFrame_t& soft = demodulator.getSoftFrame();
+            auto  type    = decoder.decodeFrame(soft);
             auto  lsf     = decoder.getLsf();
             status->lsfOk = lsf.valid();
+
+            /*
+             * Per-mode statistics: one frame, whether its LSF decoded, and the
+             * mean distance of its soft bits from full confidence, which is the
+             * M17 receiver's equivalent of an EVM (0: every bit decided at its
+             * nearest symbol level, 1000: every bit on the boundary).
+             */
+            modeStats_frames(MS_MODE_M17, 1);
+            if(status->lsfOk)
+                modeStats_valid(MS_MODE_M17, 1);
+            else
+                modeStats_badCrc(MS_MODE_M17, 1);
+#ifdef CONFIG_C62_MODE_STATS
+            modeStats_error(MS_MODE_M17, m17SoftError(soft));
+#endif
 
             if(status->lsfOk)
             {
@@ -373,6 +421,7 @@ void OpMode_M17::txState(rtxStatus_t *const status)
     {
         startTx = false;
         txg_enter(tx, (uint32_t)getTick());
+        modeStats_txKey(MS_MODE_M17, (uint32_t)getTick());
 
         LinkSetupFrame lsf;
 
@@ -445,6 +494,7 @@ void OpMode_M17::txState(rtxStatus_t *const status)
         modulator.sendPreamble();
         /* The preamble is on the air: the sink has consumed its first block */
         txg_firstBlock(tx, (uint32_t)getTick());
+        modeStats_txBlock(MS_MODE_M17, (uint32_t)getTick());
         modulator.sendFrame(m17Frame);
         txg_block(tx, (uint32_t)getTick());
     }
@@ -465,6 +515,7 @@ void OpMode_M17::txState(rtxStatus_t *const status)
         startRx     = true;
         status->opStatus = OFF;
         txg_note(tx, TXG_EV_ENCODER, (uint32_t)getTick());
+        modeStats_txStarve(MS_MODE_M17);
     }
 
     if(platform_getPttStatus() == false)
@@ -481,6 +532,7 @@ void OpMode_M17::txState(rtxStatus_t *const status)
     encoder.encodeStreamFrame(dataFrame, m17Frame, lastFrame);
     modulator.sendFrame(m17Frame);
     txg_block(tx, (uint32_t)getTick());
+    modeStats_txBlock(MS_MODE_M17, (uint32_t)getTick());
 
     // After encoding a stream frame the encoder advances its LICH counter.
     // When it wraps back to zero a new superframe begins and the encoder
@@ -515,6 +567,7 @@ void OpMode_M17::txState(rtxStatus_t *const status)
 
         txg_exit(tx, (uint32_t)getTick(),
                  encoderDead ? TXG_REASON_ENCODER : TXG_REASON_PTT);
+        modeStats_txEnd(MS_MODE_M17);
     }
 }
 

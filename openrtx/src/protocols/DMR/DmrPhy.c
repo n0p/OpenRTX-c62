@@ -283,6 +283,11 @@ int dmrPhy_phase(void)
     return phy.phase;
 }
 
+float dmrPhy_timing(void)
+{
+    return phy.timing;
+}
+
 bool dmrPhy_synced(void)
 {
     long elapsed = phy.inIndex - phy.lastBurstSample;

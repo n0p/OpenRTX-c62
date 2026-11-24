@@ -16,6 +16,7 @@
 #include "protocols/TETRA/TetraDemod.h"
 #include "protocols/TETRA/TetraSpeech.h"
 #include "protocols/TETRA/TetraStatus.h"
+#include "core/mode_stats.h"
 #include "rtx/OpMode_TETRA.hpp"
 #ifdef CONFIG_TETRA_AFC
 #include "core/state.h"
@@ -36,6 +37,12 @@ static struct tetra_tmo_rx tmo;
 /* Diagnostics and remote control (see TetraStatus.h) */
 static uint32_t crcBase; /* CRC passes of earlier tmo contexts */
 static uint32_t lastCrc; /* CRC passes the demodulator was told of */
+#ifdef CONFIG_C62_MODE_STATS
+/* Per-mode statistics: the last values the monotonic counters reported */
+static uint32_t statFrames;
+static uint32_t statBad;
+static uint32_t statCrc;
+#endif
 #ifdef CONFIG_TETRA_AFC
 /*
  * Automatic frequency correction: every AFC_PERIOD_MS, the mean carrier
@@ -233,6 +240,7 @@ void OpMode_TETRA::resync(bool overrun)
     cfg.promiscuous = true;
     tetra_tmo_init(&tmo, &cfg);
     tetraStatus_lostSync(overrun);
+    modeStats_resync(MS_MODE_TETRA);
 }
 
 void OpMode_TETRA::enable()
@@ -335,6 +343,7 @@ void OpMode_TETRA::update(rtxStatus_t *const rtx, const bool newCfg)
      */
     dataBlock_t block = inputStream_getData(basebandId);
     if (block.data == NULL) {
+        modeStats_lost(MS_MODE_TETRA, 1);
         if (dataErrors++ == 0)
             resync(true);
         else
@@ -353,6 +362,7 @@ void OpMode_TETRA::update(rtxStatus_t *const rtx, const bool newCfg)
         return;
     }
 
+    modeStats_blockStart(MS_MODE_TETRA);
     size_t n = tetraDemod_process(&demod, block.data, block.len, soft);
 
     /* The demodulator followed a timing jump or re-acquired: resync too */
@@ -363,6 +373,7 @@ void OpMode_TETRA::update(rtxStatus_t *const rtx, const bool newCfg)
     }
 
     tetra_tmo_push_soft(&tmo, soft, n);
+    modeStats_block(MS_MODE_TETRA, block.data, block.len);
 
     /* Blocks decode: the demodulator keeps its lock */
     uint32_t crc = crcBase + tetra_tmo_crc_ok(&tmo);
@@ -373,6 +384,26 @@ void OpMode_TETRA::update(rtxStatus_t *const rtx, const bool newCfg)
         lastCrcTick = getTick();
 #endif
     }
+
+    /*
+     * Per-mode statistics: what this block carried. The speech counters are
+     * monotonic for the whole power on, so the deltas survive a mode change.
+     * Under the option, this is the only place that recomputes them.
+     */
+#ifdef CONFIG_C62_MODE_STATS
+    uint32_t sframes, sbad, sother;
+    tetraSpeech_stats(&sframes, &sbad, &sother);
+    modeStats_frames(MS_MODE_TETRA, sframes - statFrames);
+    modeStats_badCrc(MS_MODE_TETRA, sbad - statBad);
+    modeStats_valid(MS_MODE_TETRA, crc - statCrc);
+    modeStats_error(MS_MODE_TETRA, 10u * tetraDemod_phaseError(&demod));
+    /* Timing loop: drift in samples at 144 kHz, one phase is 1/8 symbol */
+    modeStats_timing(MS_MODE_TETRA, (int32_t)(demod.drift * 125.0f), 125);
+    modeStats_rssi(MS_MODE_TETRA, (int)rtx_getRssi());
+    statFrames = sframes;
+    statBad = sbad;
+    statCrc = crc;
+#endif
 #ifdef CONFIG_TETRA_AFC
     afcUpdate();
 #endif

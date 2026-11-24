@@ -74,6 +74,16 @@ set(C62_BASEBAND_DUMP_FORMAT 1 CACHE STRING
 option(C62_BASEBAND_DUMP_BURST
        "Fill 1 MiB of PSRAM, send it, repeat (gapless at any baud rate)" ON)
 option(C62_REG43_SWEEP "Cycle REG_43 test values in M17 RX" OFF)
+# C62_MODE_STATS: per-mode receive and transmit statistics (core/mode_stats.h),
+#   read with the "rx" command of the remote control. OFF by default: with it
+#   off the hooks compile to nothing and the image is the one the build would
+#   produce without the layer. On, it costs a few integer adds per block of
+#   baseband plus the cycle counter reads, and about 100 bytes of RAM per mode.
+#     west build -b c62 -d build_stats . -- -DC62_MODE_STATS=ON -DC62_REMOTE=ON \
+#         -DC62_BASEBAND_DUMP=ON
+#   See docs/STATS.md.
+option(C62_MODE_STATS "Per-mode RX/TX counters, quality and demodulation cost"
+       OFF)
 # C62_DMR_12K5: run the DMR mode in the BK4819's 12.5 kHz channel mode with the
 #   4.5 kHz IF filters, which is what the stock firmware uses for its own 4FSK
 #   digital mode (REG_43 = 0x7e48), instead of the 25 kHz mode used for TETRA
@@ -100,6 +110,13 @@ endif()
 if(C62_REG43_SWEEP)
   target_compile_definitions(app PRIVATE C62_REG43_SWEEP
                              C62_REG43_SWEEP_MS=${C62_REG43_SWEEP_MS})
+endif()
+if(C62_MODE_STATS)
+  target_sources(app PRIVATE
+    ${OPENRTX_ROOT}/openrtx/src/core/mode_stats.c
+    ${OPENRTX_ROOT}/platform/mcu/CSK6011B/drivers/cycles.c)
+  target_compile_definitions(app PRIVATE CONFIG_C62_MODE_STATS)
+  message(STATUS "C62: per-mode RX/TX statistics enabled")
 endif()
 if(C62_REMOTE AND NOT C62_BASEBAND_DUMP)
   message(FATAL_ERROR "C62_REMOTE needs C62_BASEBAND_DUMP: its replies are "

@@ -7,6 +7,7 @@
 #include "interfaces/platform.h"
 #include "interfaces/delays.h"
 #include "interfaces/radio.h"
+#include "core/mode_stats.h"
 #include "rtx/OpMode_FM.hpp"
 #include "rtx/rtx.h"
 #include "core/utils.h"
@@ -89,6 +90,7 @@ void OpMode_FM::disable()
 
     /* Leaving the mode ends whatever transmission was open */
     txg_exit(rtx_getTxGuard(), (uint32_t)getTick(), TXG_REASON_MODE);
+    modeStats_txEnd(MS_MODE_FM);
     radio_disableRtx();
     rfSqlOpen = false;
     sqlOpen   = false;
@@ -107,10 +109,18 @@ void OpMode_FM::update(rtxStatus_t *const status, const bool newCfg)
     // RX logic
     if(status->opStatus == RX)
     {
+        /*
+         * One 30 ms poll is this mode's block: FM audio never enters the CPU
+         * (it goes from the discriminator to the speaker inside the DSP), so
+         * what there is to measure is what this thread does per poll.
+         */
+        modeStats_blockStart(MS_MODE_FM);
+
         // RF squelch mechanism: the squelch level is the S-level opening
         // it, S0 (open) to S9 + 20 dB, as on the S-meter
         rssi_t squelch = sLevelToRssi(status->sqlLevel);
         rssi_t rssi    = rtx_getRssi();
+        modeStats_rssi(MS_MODE_FM, (int)rssi);
 
         // Provide a bit of hysteresis, only change state if the RSSI has
         // moved more than 1dBm on either side of the current squelch setting.
@@ -143,6 +153,9 @@ void OpMode_FM::update(rtxStatus_t *const status, const bool newCfg)
          */
         aprsReceiveStep(rfSql || toneSql);
 #endif
+
+        /* No samples reach this thread in FM: level and quality stay empty */
+        modeStats_block(MS_MODE_FM, NULL, 0);
     }
     else if((status->opStatus == OFF) && enterRx)
     {
@@ -204,8 +217,16 @@ void OpMode_FM::update(rtxStatus_t *const status, const bool newCfg)
         txg_enter(tx, (uint32_t)getTick());
         txg_streamsOpen(tx, (uint32_t)getTick());
         txg_firstBlock(tx, (uint32_t)getTick());
+        modeStats_txKey(MS_MODE_FM, (uint32_t)getTick());
+        modeStats_txBlock(MS_MODE_FM, (uint32_t)getTick());
 
         status->opStatus = TX;
+    }
+    else if(status->opStatus == TX)
+    {
+        /* One block per poll: the codec worker keeps the PA fed, this is the
+         * cadence the mode is expected to hold */
+        modeStats_txBlock(MS_MODE_FM, (uint32_t)getTick());
     }
 
     if(!platform_getPttStatus() && (status->opStatus == TX))
@@ -214,6 +235,7 @@ void OpMode_FM::update(rtxStatus_t *const status, const bool newCfg)
         radio_disableRtx();
 
         txg_exit(rtx_getTxGuard(), (uint32_t)getTick(), TXG_REASON_PTT);
+        modeStats_txEnd(MS_MODE_FM);
 
         status->opStatus = OFF;
         enterRx = true;

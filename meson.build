@@ -1485,4 +1485,29 @@ test('S-Level Test', slevel_test)
 test('Audio Codec Test',     audio_codec_test)
 test('DMR TX FSM Test',      dmr_tx_fsm_test)
 test('TX Guard Test',        tx_guard_test)
+
+# Per-mode statistics (core/mode_stats.h). The layer takes everything it
+# measures as an argument and its cycle counter is a weak symbol, so this links
+# mode_stats.c alone and drives the counter from the test. Built with the
+# option on and one cycle per microsecond, so the cost figures in the test are
+# the cycle counts it sets.
+mode_stats_test = executable('mode_stats_test',
+                             sources : ['tests/unit/mode_stats.cpp',
+                                        'openrtx/src/core/mode_stats.c'],
+                             kwargs  : {'c_args'             : linux_c_args +
+                                           ['-DCONFIG_C62_MODE_STATS',
+                                            '-DMODE_STATS_CPU_MHZ=1'],
+                                        'cpp_args'           : linux_cpp_args +
+                                           ['-DCONFIG_C62_MODE_STATS'],
+                                        'include_directories': linux_inc +
+                                           ['openrtx/include'],
+                                        'dependencies'       : [catch2_dep],
+                                        'link_args'          : linux_l_args})
+test('Mode Stats Test', mode_stats_test)
+
+# And with the option off: the hooks must compile to nothing at all.
+mode_stats_off_script = find_program('tests/mode_stats_off.sh')
+test('Mode Stats Off Test', mode_stats_off_script,
+     args : [meson.project_source_root(), ''])
+
 test('M17 Baseband Replay Test', m17_replay_test, timeout : 120) # ~40 s in CI with coverage
