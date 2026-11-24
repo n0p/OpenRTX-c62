@@ -1351,6 +1351,32 @@ dmr_sms_format_test = executable('dmr_sms_format_test',
                                      'tests/unit/dmr_sms_format.cpp'],
                                  kwargs  : unit_test_opts)
 
+# dPMR (TS 102 490): capa de codificacion, reparto AMBE+2 contra el camino DMR,
+# datos cortos y una captura real por el demodulador completo.  El vocoder es
+# el mismo lib/dmr_vocoder que usa el modo DMR.
+dpmr_rx_test = executable('dpmr_rx_test',
+                          sources : unit_test_src + [
+                              'openrtx/src/protocols/DPMR/DpmrDefs.c',
+                              'openrtx/src/protocols/DPMR/DpmrData.c',
+                              'openrtx/src/protocols/DPMR/DpmrPhy.c',
+                              'openrtx/src/protocols/DMR/DmrDefs.c',
+                              'openrtx/src/protocols/DMR/DmrFec.c',
+                              'lib/dmr_vocoder/dmr_vocoder.c',
+                              'lib/dmr_vocoder/dmr_decoder.c',
+                              'lib/dmr_vocoder/dmr_fft.c',
+                              'tests/unit/dpmr_rx.cpp'],
+                          kwargs : unit_test_opts + {
+                              'include_directories' : linux_inc + ['lib/dmr_vocoder'],
+                              # El demodulador decide por margenes de EVM y de
+                              # correlacion: -O2 y -ffp-contract=off son las
+                              # opciones del firmware, y con ellas las capturas
+                              # dan el mismo numero de tramas en host y en el
+                              # C62.  Con -O0 el mismo fichero da 111 en vez de
+                              # 121: la sensibilidad esta medida y documentada
+                              # en docs/RX_DPMR.md.
+                              'c_args' : linux_c_args + ['-O2', '-ffp-contract=off'],
+                              'cpp_args' : linux_cpp_args + ['-O2']})
+
 c62_calib_test = executable('c62_calib_test',
                             sources : ['tests/unit/C62_calib.cpp',
                                        'platform/targets/c62/calib_C62.c'],
@@ -1440,6 +1466,7 @@ test('Settings Record Test', settings_record_test)
 test('APRS Config Test',     aprs_config_test)
 test('DMR SMS Format Test',  dmr_sms_format_test)
 test('DMR LC Destination Test', dmr_lc_dest_test)
+test('dPMR RX Test',          dpmr_rx_test)
 test('User Stores Test',     user_stores_test)
 test('UI Messages Test',     ui_messages_test)
 test('UI Layout Test',       ui_layout_test)
