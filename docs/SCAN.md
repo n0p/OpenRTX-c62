@@ -151,7 +151,7 @@ flash: solo se puede añadir al final.
 
 ## 7. Ajustes persistidos
 
-En `settings_t` (`core/settings.h`), **versión 4** del registro. Son 14 bytes, y
+En `settings_t` (`core/settings.h`), **versión 4** del registro. Son 15 bytes, y
 el registro pasa de 175 B a 190 B con APRS (el límite del driver es 256 B).
 Las unidades son gruesas a propósito: un menú enseña segundos, y el registro es
 el espacio más escaso del firmware.
@@ -188,9 +188,25 @@ En el firmware, cada paso lee el banco dos veces (el candidato y el que decide),
 y durante la escucha no lee nada. `scan_service_poll()` se llama 200 veces por
 segundo desde `state_task()` y cuesta un test de bandera cuando no hay scan.
 
-Tamaño en el binario: ver la sección de medidas al final (`zephyr.bin` y las
-regiones de RAM). El bloque de ajustes añade 14 B a `settings_t`, que está en RAM
-y en flash.
+Medida en el binario de la C62 (`c62-build -DCONFIG_C62_DMR_RX=y
+-DCONFIG_C62_APRS=y`, mapa de regiones del enlazador):
+
+| | master `44ece688` | con scan | diferencia |
+|---|---|---|---|
+| FLASH | 518 104 B | 520 320 B | **+2 216 B** (0,21 % de 1 MiB) |
+| RAM | 196 688 B | 196 984 B | **+296 B** (0,11 % de 256 KiB) |
+| PSRAM | 379 064 B | 379 064 B | 0 |
+
+Por fichero (`arm-zephyr-eabi-size`): `scanner.c` 1 552 B de código y datos
+(incluidas las tablas de nombres de estado y evento), `scan_service.c` 1 818 B
+de código y 271 B de `.bss` (la máquina, la cola de 8 eventos y el estado de
+casa). El resto del delta son la tabla de pasos y los nombres en `settings.c`,
+los dos ayudantes de SKIP en `channel_store.c` y las llamadas de `state.c`.
+
+La RAM es lo que hay que vigilar (el build de DMR-TX está al 75 %): el bloque
+de ajustes añade 15 B a `settings_t` y el servicio 271 B, ninguno de los cuales
+crece con el número de canales — la cola de eventos está acotada a 8 y descarta
+el más viejo.
 
 ## 9. Integración: qué llama a qué
 
