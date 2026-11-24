@@ -1892,6 +1892,7 @@ void ui_updateFSM(bool *sync_rtx)
                 return;
             }
         }
+#endif /* CONFIG_APRS */
 
         /*
          * Messaging screens (ui_messages.c) and the contact book
@@ -1944,6 +1945,7 @@ void ui_updateFSM(bool *sync_rtx)
             return;
         }
 
+#ifdef CONFIG_APRS
         /*
          * Entry point, and the one deliberate exception to the key map: on the
          * FM main screen a long press of P2 opens the APRS screens. In FM that
@@ -1965,7 +1967,7 @@ void ui_updateFSM(bool *sync_rtx)
             redraw_needed = true;
             return;
         }
-#endif
+#endif /* CONFIG_APRS */
 
         // If MONI is pressed, activate MACRO functions; P2 long keeps the
         // legacy 3x3 grid as its shortcut everywhere APRS does not claim it
@@ -2061,6 +2063,19 @@ void ui_updateFSM(bool *sync_rtx)
 
                 if ((ui_state.input_locked == true) && (skipLock == false))
                     break;
+
+                /*
+                 * On a main screen the only field that can be edited is the M17
+                 * destination, and only M17's key (#) enters the edit. A mode
+                 * change with that field still being edited left the screen
+                 * deaf to every key: the edit branch below has no exit for any
+                 * other mode (its handlers are inside the M17 build), so P2
+                 * stopped opening the quick menu, the digits never reached the
+                 * frequency input and a long press of an arrow never armed the
+                 * carrier search. Drop a stale edit instead.
+                 */
+                if (ui_state.edit_mode && (state.channel.mode != OPMODE_M17))
+                    ui_state.edit_mode = false;
 
                 if(ui_state.edit_mode)
                 {
@@ -2291,6 +2306,11 @@ void ui_updateFSM(bool *sync_rtx)
                 }
                 if (ui_state.input_locked)
                     break;
+
+                /* Same stale-edit guard as MAIN_VFO: only M17 edits here */
+                if (ui_state.edit_mode && (state.channel.mode != OPMODE_M17))
+                    ui_state.edit_mode = false;
+
                 // M17 Destination callsign input
                 if(ui_state.edit_mode)
                 {
