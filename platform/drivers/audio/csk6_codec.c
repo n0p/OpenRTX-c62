@@ -964,7 +964,7 @@ static void audioWorker(void *a, void *b, void *c)
     (void)c;
 
     while (!atomic_get(&stopRequested)) {
-        k_mutex_lock(&audioMutex);
+        k_mutex_lock(&audioMutex, K_FOREVER);
         bool capture = false;
         bool playback = false;
         for (size_t i = 0; i < CODEC_CHANNELS; i++) {
@@ -990,7 +990,7 @@ static void audioWorker(void *a, void *b, void *c)
         setCapture(&record, capture);
         setPlayback(&playbackTrack, playback);
 
-        k_mutex_lock(&audioMutex);
+        k_mutex_lock(&audioMutex, K_FOREVER);
         workerBeat = k_uptime_get();
         if (captureRunning)
             captureFrame(&record);
