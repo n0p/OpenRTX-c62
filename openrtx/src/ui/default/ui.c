@@ -1624,8 +1624,6 @@ void ui_updateFSM(bool *sync_rtx)
             return;
         }
 
-        // If MONI is pressed, activate MACRO functions; P2 long keeps the
-        // legacy 3x3 grid as its shortcut
 #ifdef CONFIG_APRS
         /*
          * APRS screens own the keypad while one of them is on screen, the way
@@ -1673,7 +1671,10 @@ void ui_updateFSM(bool *sync_rtx)
             return;
         }
 #endif
-                bool moniPressed = (msg.keys & KEY_MONI)
+
+        // If MONI is pressed, activate MACRO functions; P2 long keeps the
+        // legacy 3x3 grid as its shortcut everywhere APRS does not claim it
+        bool moniPressed = (msg.keys & KEY_MONI)
                         || ((msg.keys & KEY_F2) && msg.long_press);
         if(moniPressed || macro_latched)
         {
