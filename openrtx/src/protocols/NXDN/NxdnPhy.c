@@ -104,16 +104,6 @@ static const float nxdn_rrc[NXDN_MF_TAPS] = {
     8.656555859e-03f,
 };
 
-/**
- * The frame sync word as dibits, one per symbol, sign bit first: 11 00 11 01
- * 11 11 01 01 10 01, i.e. hex CDF59.  Comparing these instead of the signs is
- * what makes the detector reject a run of outer symbols that merely has the
- * right signs.
- */
-static const uint8_t nxdnFswDibit[NXDN_FSW_SYMBOLS] = {
-    3, 0, 3, 1, 3, 3, 1, 1, 2, 1,
-};
-
 /** Four-level model of one window of symbols. */
 struct nxdnLevels {
     float dc;    ///< Residual carrier offset
