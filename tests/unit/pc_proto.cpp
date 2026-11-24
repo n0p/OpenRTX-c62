@@ -152,7 +152,7 @@ std::vector<Frame> takeFrames()
                                           (body[body.size() - 1] << 8));
                 if (body[0] == PC_PROTO_FRAME_VERSION &&
                     plen == body.size() - 10 &&
-                    crc_ccitt(body.data(), body.size() - 2) == crc) {
+                    crc_ccitt_update(0xFFFF, body.data(), body.size() - 2) == crc) {
                     Frame f;
                     f.type = body[1];
                     f.seq = body[2];
@@ -831,7 +831,7 @@ TEST_CASE("Settings read back whole, with their version and CRC", "[pcproto]")
     REQUIRE(getRaw(f.payload, PC_TAG_SETTINGS, raw));
     REQUIRE(raw.size() == sizeof(settings_t));
     REQUIRE(getU16(f.payload, PC_TAG_SETTINGS_CRC, crc));
-    REQUIRE(crc == crc_ccitt(raw.data(), raw.size()));
+    REQUIRE(crc == crc_ccitt_update(0xFFFF, raw.data(), raw.size()));
 }
 
 TEST_CASE("A settings field is written, verified and read back", "[pcproto]")

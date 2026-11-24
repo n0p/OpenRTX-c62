@@ -28,6 +28,21 @@
 #define BODY_TRAILER 2
 
 /*
+ * The frame CRC: CRC-16/CCITT-FALSE, polynomial 0x1021 with the register
+ * starting at 0xFFFF.
+ *
+ * core/crc.h's crc_ccitt() is the same polynomial but starts at zero (what the
+ * repository calls crc_ccitt is CRC-16/XMODEM numerically), so the seed is
+ * passed explicitly here instead of relying on the name.  CCITT-FALSE is the
+ * one the baseband dump and its reader already use, so a client carries one
+ * CRC routine for the whole cable.
+ */
+static uint16_t pcCrc(const void *data, size_t len)
+{
+    return crc_ccitt_update(0xFFFF, data, len);
+}
+
+/*
  * ----------------------------------------------------------------------------
  * TLV
  * ----------------------------------------------------------------------------
@@ -287,7 +302,7 @@ size_t pc_proto_encode(uint8_t type, uint8_t seq, uint16_t id, uint8_t flags,
         return 0;
 
     struct slipWriter w = { .out = out, .cap = cap, .n = 0, .ok = true,
-                            .crc = 0 };
+                            .crc = 0xFFFF };
 
     slipPlain(&w, PC_PROTO_END);
     slipBody(&w, PC_PROTO_FRAME_VERSION);
@@ -734,7 +749,7 @@ static uint32_t pc_deliver(pcProto_t *p)
         return 0;
     }
     uint16_t crc = (uint16_t)(body[len - 2] | (body[len - 1] << 8));
-    if (crc_ccitt(body, len - 2) != crc) {
+    if (pcCrc(body, len - 2) != crc) {
         p->stats.crcErrors++;
         return 0;
     }

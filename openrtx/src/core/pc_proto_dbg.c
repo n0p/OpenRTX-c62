@@ -288,6 +288,11 @@ int pc_dbg_logSub(struct pcReq *r)
 
     r->p->logRate = rate;
     r->p->logLastMs = r->p->nowMs;
+    /* A subscription starts a new stream: lines buffered before it belong to
+     * whoever was listening then (nobody), and keeping them would send lines
+     * that do not match the filter the client just set. */
+    r->p->logCount = 0;
+    r->p->logHead = 0;
     /* No free line at the start: the first one goes out when a line's worth of
      * time has passed, so "N lines a second" holds from the first second. */
     r->p->logTokens = 0;

@@ -211,7 +211,7 @@ static int logHook(int c)
 
 extern void __printk_hook_install(int (*fn)(int c));
 extern void __stdout_hook_install(int (*hook)(int c));
-extern int (*__printk_hook_get(void))(int c);
+extern void *__printk_get_hook(void);
 
 /* ------------------------------------------------------------------------- */
 /* Platform hooks of the protocol                                            */
@@ -561,7 +561,7 @@ void pc_proto_c62_init(void)
     while (sys_read32(UART_BASE + UART_LSR) & LSR_DR)
         (void)sys_read32(UART_BASE + UART_RBR);
 
-    prevPrintkHook = __printk_hook_get();
+    prevPrintkHook = (int (*)(int))__printk_get_hook();
     __printk_hook_install(logHook);
     __stdout_hook_install(logHook);
 

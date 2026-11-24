@@ -887,7 +887,7 @@ int pc_ops_settingsGet(struct pcReq *r)
         off = pc_tlv_u16(r->out, r->outCap, off, PC_TAG_SETTINGS_SIZE,
                          (uint16_t)sizeof(s));
         off = pc_tlv_u16(r->out, r->outCap, off, PC_TAG_SETTINGS_CRC,
-                         crc_ccitt(&s, sizeof(s)));
+                         crc_ccitt_update(0xFFFF, &s, sizeof(s)));
         off = pc_tlv_bytes(r->out, r->outCap, off, PC_TAG_SETTINGS, &s,
                            sizeof(s));
     }
@@ -952,7 +952,7 @@ int pc_ops_settingsSet(struct pcReq *r)
     size_t off = pc_tlv_u16(r->out, r->outCap, 0, PC_TAG_SETTINGS_VER,
                             SETTINGS_VERSION);
     off = pc_tlv_u16(r->out, r->outCap, off, PC_TAG_SETTINGS_CRC,
-                     crc_ccitt(&back, sizeof(back)));
+                     crc_ccitt_update(0xFFFF, &back, sizeof(back)));
     off = pc_tlv_u8(r->out, r->outCap, off, PC_TAG_VERIFY, 1);
     if (off == 0) {
         r->err = PC_ERR_TOO_LARGE;
@@ -975,7 +975,7 @@ int pc_ops_settingsInfo(struct pcReq *r)
     off = pc_tlv_u16(r->out, r->outCap, off, PC_TAG_SETTINGS_SIZE,
                      (uint16_t)sizeof(s));
     off = pc_tlv_u16(r->out, r->outCap, off, PC_TAG_SETTINGS_CRC,
-                     crc_ccitt(&s, sizeof(s)));
+                     crc_ccitt_update(0xFFFF, &s, sizeof(s)));
     off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_UPTIME_MS, r->p->nowMs);
     if (off == 0) {
         r->err = PC_ERR_TOO_LARGE;

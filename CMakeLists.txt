@@ -140,6 +140,11 @@ target_sources(app
     openrtx/src/core/msg_service.c
     openrtx/src/core/messaging.c
     openrtx/src/core/messaging_store_none.c
+    # Binary protocol between the radio and a computer (docs/PC_PROTO.md).
+    # The transport and its two build options live in the platform target.
+    openrtx/src/core/pc_proto.c
+    openrtx/src/core/pc_proto_ops.c
+    openrtx/src/core/pc_proto_dbg.c
     openrtx/src/rtx/rtx.cpp
     openrtx/src/rtx/TxGuard.c
     openrtx/src/rtx/OpMode_FM.cpp
