@@ -19,6 +19,7 @@
 #include "protocols/DMR/DmrStatus.h"
 #endif
 #ifdef CONFIG_TETRA
+#include "protocols/TETRA/TetraSds.h"
 #include "protocols/TETRA/TetraStatus.h"
 
 /* An SDS text stays on the main screen this long */
@@ -159,8 +160,8 @@ static void _ui_drawTetraInfo(void)
 }
 
 /**
- * TETRA line 1 in VFO mode, when no call is shown: the last SDS (scrolling)
- * or the demodulator quality.
+ * TETRA line 1 in VFO mode, when no call is shown: the received SDS messages
+ * (paged, scrolling) or the demodulator quality.
  */
 static void _ui_drawTetraLine1(ui_state_t *ui_state)
 {
@@ -172,11 +173,19 @@ static void _ui_drawTetraLine1(ui_state_t *ui_state)
         return;
 
     long long now = getTick();
-    if (ts.sdsSrc != 0 && now - ts.sdsTime < TETRA_SDS_SHOW_MS) {
+    char sds[96];
+
+    /*
+     * tetraSds_line() pages through the messages not seen yet and marks them
+     * read once it has shown them all, so a burst of short data is not lost
+     * behind the newest one. Fresh messages are shown for TETRA_SDS_SHOW_MS.
+     */
+    if (tetraSds_count() > 0 &&
+        (tetraSds_unread() > 0 || now - ts.sdsTime < TETRA_SDS_SHOW_MS)) {
         char text[96];
         char msg[14];
-        snprintf(text, sizeof(text), "%lu: %s   ", (unsigned long)ts.sdsSrc,
-                 ts.sds);
+        snprintf(text, sizeof(text), "%s   ",
+                 tetraSds_line(sds, sizeof(sds), now));
         scrollTextPeek(text, msg, sizeof(msg),
                        ui_state->m17_meta_text_scroll_position);
         if (now - ui_state->m17_meta_text_last_scroll_tick >= 100) {
