@@ -11,14 +11,21 @@
  * decoder for real captures.
  *
  * Build (from the repository root):
- *   gcc -O2 -std=c11 -Iopenrtx/include -o dstar_host tests/host/dstar/dstar_host.c \
- *       openrtx/src/protocols/DSTAR/{DStarFec,DStarPhy,DStarSlowData,DStarTx}.c -lm
+ *   gcc -O2 -std=c11 -Iopenrtx/include -Ilib/dmr_vocoder -Ilib/dstar_vocoder \
+ *       -o dstar_host tests/host/dstar/dstar_host.c \
+ *       openrtx/src/protocols/DSTAR/{DStarFec,DStarPhy,DStarSlowData,DStarTx,DStarVocoder}.c \
+ *       lib/dstar_vocoder/{dstar_vocoder,dstar_decoder}.c \
+ *       lib/dmr_vocoder/{dmr_fft,dmr_golay,dmr_golay_table}.c -lm
  *
  * Usage:
  *   dstar_host selftest
  *   dstar_host loop [snr_db] [frames] [bt]      (default 30 dB, 100 frames)
  *   dstar_host rx <raw s16le 48 kHz> [text]
  *   dstar_host tx <out.raw> [text]
+ *   dstar_host voice <bank.air> [out.wav] [snr_db] [frames]
+ *       the whole voice path: AMBE frames -> GMSK -> channel -> demodulator
+ *       -> FEC -> AMBE 3600x2400 decoder -> 8 kHz WAV.  `frames` caps the
+ *       bank (default 400, 8 s of audio).
  */
 
 #include <math.h>
@@ -32,6 +39,8 @@
 #include "protocols/DSTAR/DStarPhy.h"
 #include "protocols/DSTAR/DStarSlowData.h"
 #include "protocols/DSTAR/DStarTx.h"
+#include "dstar_vocoder.h"
+#include "protocols/DSTAR/DStarVocoder.h"
 
 static int gFrames;
 static int gSyncs;
@@ -158,6 +167,227 @@ static int16_t *makeTransmission(int voiceFrames, const char *text, int *outLen)
     dstarTx_samples(buf + frameSamples, endSamples, 24000);
     *outLen = totalSamples;
     return buf;
+}
+
+/* ------------------------------------------------- voice end to end ------ */
+
+/*
+ * The whole D-STAR voice path in one host run: AMBE frames from a bank ->
+ * GMSK transmitter -> AWGN channel -> demodulator -> FEC -> decoder -> WAV.
+ * The frames are real AMBE 3600x2400 channel frames (tests/data/bank.air is
+ * built by lib/dstar_vocoder tests/ref/gen_bank.c), so what comes out of the
+ * speaker path is what the vocoder does with what the PHY delivered.
+ */
+static const uint8_t *gVoiceBank;
+static long gVoiceBankFrames;
+static long gVoiceSent;
+static int16_t gVoicePcm[48000 * 8];
+static long gVoicePcmLen;
+static long gVoiceSyncs;   /* resync frames the demodulator reported */
+static long gVoiceLastSync;
+
+static int voiceSource(uint8_t frame[DSTAR_VOICE_BYTES], void *user)
+{
+    (void)user;
+    if (gVoiceSent >= gVoiceBankFrames)
+        return -1;
+    memcpy(frame, gVoiceBank + 9 * gVoiceSent, DSTAR_VOICE_BYTES);
+    gVoiceSent++;
+    return 0;
+}
+
+static void voiceOnFrame(const struct dstarPhyFrame *f, void *user)
+{
+    (void)user;
+    if (f->sync) {
+        gVoiceSyncs++;
+        gVoiceLastSync = (long)f->index;
+        return; /* the resync word rides in the slow-data field */
+    }
+    if (gFrames >= gExpectedFrames)
+        return;
+    /* The bank index is the number of voice frames received so far: the
+     * transmitter interleaves a resync frame every 21st, which the PHY reports
+     * separately and which carries no voice payload. */
+    gFrames++;
+    {
+        int16_t pcm[DSTAR_PCM_SAMPLES];
+        if (dstarVocoder_decode(f->voice, pcm) == 0 &&
+            gVoicePcmLen + DSTAR_PCM_SAMPLES <= (long)(sizeof(gVoicePcm) / 2)) {
+            memcpy(&gVoicePcm[gVoicePcmLen], pcm, sizeof(pcm));
+            gVoicePcmLen += DSTAR_PCM_SAMPLES;
+        }
+        {
+            /* f->index is the frame's position in the transmission, counted by
+             * the demodulator, so a lost frame does not shift the comparison.
+             * The transmitter refreshes its voice frame when a frame starts,
+             * so the first frame on air carries no bank frame and frame n
+             * carries bank frame n - 1. */
+            /* Frames 1..N-1 of the transmission carry bank frames 0..N-2 in
+             * full; the last one is sliced out of the end pattern's tail and
+             * is not part of the measurement. */
+            const long k = (long)f->index - 1;
+            const uint8_t *sent = (f->index >= 1 && k < gVoiceBankFrames - 1)
+                                      ? gVoiceBank + 9 * k
+                                      : NULL;
+            int frameErrs = 0;
+            for (int i = 0; sent != NULL && i < DSTAR_VOICE_BYTES; i++) {
+                uint8_t x = (uint8_t)(f->voice[i] ^ sent[i]);
+                while (x) {
+                    x &= (uint8_t)(x - 1);
+                    frameErrs++;
+                }
+                gBitTotal += 8;
+            }
+            gBitErrors += frameErrs;
+        }
+    }
+}
+
+/* 16-bit mono WAV, 8 kHz */
+static int writeWav(const char *path, const int16_t *pcm, long nsamples, int rate)
+{
+    FILE *f = fopen(path, "wb");
+    if (f == NULL)
+        return -1;
+    uint32_t dataBytes = (uint32_t)(nsamples * 2);
+    uint32_t riff = 36 + dataBytes;
+    uint16_t one = 1, channels = 1, bits = 16, block = 2;
+    uint32_t byteRate = (uint32_t)rate * 2, fmtLen = 16;
+    uint16_t pcmFmt = 1;
+    fwrite("RIFF", 1, 4, f);
+    fwrite(&riff, 4, 1, f);
+    fwrite("WAVEfmt ", 1, 8, f);
+    fwrite(&fmtLen, 4, 1, f);
+    fwrite(&pcmFmt, 2, 1, f);
+    fwrite(&channels, 2, 1, f);
+    fwrite(&rate, 4, 1, f);
+    fwrite(&byteRate, 4, 1, f);
+    fwrite(&block, 2, 1, f);
+    fwrite(&bits, 2, 1, f);
+    fwrite("data", 1, 4, f);
+    fwrite(&dataBytes, 4, 1, f);
+    fwrite(pcm, 2, (size_t)nsamples, f);
+    fclose(f);
+    (void)one;
+    return 0;
+}
+
+static int voiceEndToEnd(const char *bankPath, const char *wavPath, double snrDb,
+                         long limit)
+{
+    FILE *f = fopen(bankPath, "rb");
+    if (f == NULL) {
+        printf("cannot open %s\n", bankPath);
+        return 1;
+    }
+    fseek(f, 0, SEEK_END);
+    long bytes = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    uint8_t *bank = malloc((size_t)bytes);
+    if (bank == NULL || fread(bank, 1, (size_t)bytes, f) != (size_t)bytes) {
+        printf("cannot read %s\n", bankPath);
+        return 1;
+    }
+    fclose(f);
+    gVoiceBank = bank;
+    gVoiceBankFrames = bytes / 9;
+    if (limit > 0 && limit < gVoiceBankFrames)
+        gVoiceBankFrames = limit;
+
+    struct dstarTxConfig cfg;
+    defaultHeader(&cfg.hdr);
+    cfg.text = "VOZ D-STAR C62";
+    cfg.repeatHeader = true;
+    cfg.useNullVoice = false;
+    dstarTx_setVoiceSource(voiceSource, NULL);
+    dstarTx_begin(&cfg);
+    gExpectedFrames = (int)gVoiceBankFrames;
+
+    int frameSamples =
+        (int)(((int64_t)(64 + 15 + 660 + gVoiceBankFrames * 96) * 48000) / 4800) + 64;
+    int endSamples = (48 * 48000) / 4800 + 4800;
+    int totalSamples = frameSamples + endSamples;
+    int16_t *sig = calloc((size_t)totalSamples, sizeof(int16_t));
+    dstarTx_samples(sig, frameSamples, 24000);
+    dstarTx_end();
+    dstarTx_samples(sig + frameSamples, endSamples, 24000);
+    dstarTx_setVoiceSource(NULL, NULL);
+
+    /* channel: AWGN over the 6.25 kHz channel, quoted against the signal */
+    {
+        double sigSq = 0;
+        for (int i = 0; i < totalSamples; i++)
+            sigSq += (double)sig[i] * sig[i];
+        double rms = sqrt(sigSq / totalSamples);
+        double sigma = rms * sqrt(48000.0 / (6250.0 * pow(10.0, snrDb / 10.0)));
+        uint32_t seed = 12345;
+        for (int i = 0; i < totalSamples; i++) {
+            seed = seed * 1103515245u + 12345u;
+            double u1 = ((double)(seed >> 8) + 1.0) / 16777216.0;
+            seed = seed * 1103515245u + 12345u;
+            double u2 = ((double)(seed >> 8) + 1.0) / 16777216.0;
+            double n = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
+            double v = sig[i] + sigma * n;
+            if (v > 32767.0)
+                v = 32767.0;
+            if (v < -32768.0)
+                v = -32768.0;
+            sig[i] = (int16_t)v;
+        }
+    }
+
+    resetStats();
+    dstarPhy_reset();
+    gVoicePcmLen = 0;
+    gVoiceSyncs = 0;
+    gVoiceLastSync = -1;
+    dstarVocoder_reset();
+    for (int off = 0; off < totalSamples; off += 160) {
+        int n = (totalSamples - off < 160) ? totalSamples - off : 160;
+        dstarPhy_push(sig + off, (size_t)n, onHeader, voiceOnFrame, onEot, NULL);
+    }
+    free(sig);
+
+    printf("voice end to end: %ld frames sent, %d decoded, header=%d, "
+           "%ld/%ld payload bits differ (%.2e), %ld PCM samples\n",
+           gVoiceBankFrames, gFrames, gHeaderOk, gBitErrors, gBitTotal,
+           gBitTotal ? (double)gBitErrors / (double)gBitTotal : 0.0,
+           gVoicePcmLen);
+    if (gVoicePcmLen == 0) {
+        printf("FAIL: nothing decoded\n");
+        return 1;
+    }
+    if (writeWav(wavPath, gVoicePcm, gVoicePcmLen, DSTAR_VOCODER_SAMPLE_RATE) != 0) {
+        printf("cannot write %s\n", wavPath);
+        return 1;
+    }
+    printf("wrote %s: %.2f s of 8 kHz audio\n", wavPath,
+           (double)gVoicePcmLen / DSTAR_VOCODER_SAMPLE_RATE);
+    /* A receiver drops frames: the demodulator re-measures its timing block
+     * every 13 ms, so "every frame" is not the criterion.  95 % of them and a
+     * payload BER under 1 % is what the mode is good for above 14 dB. */
+    {
+        /* The resync word is what keeps the demodulator's frame boundary: if
+         * it stops being found, every frame after that point is compared
+         * against the wrong bank entry and the BER says "codec broken".  Check
+         * it first so a long transmission fails with the reason instead. */
+        long resyncOk =
+            (gVoiceBankFrames + DSTAR_SUPERFRAME - 1) / DSTAR_SUPERFRAME;
+        int lost = gVoiceSyncs * 10 < resyncOk * 9;
+        int ok = !lost && gHeaderOk > 0 &&
+                 gFrames >= (int)(gVoiceBankFrames * 95 / 100) &&
+                 gBitErrors * 100 <= gBitTotal;
+        printf("%s: %d/%ld frames, BER %.2e, %ld/%ld resync words\n",
+               ok ? "PASS" : "FAIL", gFrames, gVoiceBankFrames,
+               gBitTotal ? (double)gBitErrors / (double)gBitTotal : 0.0, gVoiceSyncs,
+               resyncOk);
+        if (lost)
+            printf("      the demodulator stopped finding the resync word after "
+                   "frame %ld: use fewer frames (the fifth argument)\n",
+                   gVoiceLastSync);
+        return ok ? 0 : 1;
+    }
 }
 
 /* ------------------------------------------------------------- self test --- */
@@ -462,6 +692,13 @@ int main(int argc, char **argv)
             printf("        -> header decoded in %d/%d runs\n", ok, runs);
         }
         return 0;
+    }
+
+    if (strcmp(argv[1], "voice") == 0 && argc > 2) {
+        const char *wav = (argc > 3) ? argv[3] : "dstar_voice.wav";
+        double snr = (argc > 4) ? atof(argv[4]) : 20.0;
+        long frames = (argc > 5) ? atol(argv[5]) : 400;
+        return voiceEndToEnd(argv[2], wav, snr, frames);
     }
 
     if (strcmp(argv[1], "rx") == 0 && argc > 2)
