@@ -30,6 +30,36 @@
 #endif
 #include "controller.h"
 #include "dsp.h"
+#include <string.h>
+#include <stdint.h>
+
+/*
+ * DMR package state in PSRAM (platform/targets/c62/psram_dmr.ld): the
+ * demodulator's sample ring, the call log, the voice burst queue, the slot
+ * state machine, the data reassembly buffers, the Tier III engine and the
+ * transmitter's vocoder tables.  Too big for SRAM, and only touched once per
+ * burst, never inside a sample loop.
+ *
+ * The section is NOLOAD, so nothing zeroes it but this: the PSRAM controller's
+ * calibration leaves test words in the region, and a stale "already
+ * initialised" flag would be read as true.  It is zeroed here, once, before
+ * anything can use it; each module still rearms its own state in its reset
+ * function when the mode opens.
+ *
+ * A separate output section, not .psram_section, because that one also holds
+ * the CSK6 system heap: zeroing it wholesale would wipe it.
+ */
+extern uint32_t __psram_dmr_start[];
+extern uint32_t __psram_dmr_end[];
+
+static void psram_dmr_clear(void)
+{
+    const uintptr_t n =
+        (uintptr_t)__psram_dmr_end - (uintptr_t)__psram_dmr_start;
+
+    if (n > 0)
+        memset(__psram_dmr_start, 0, n);
+}
 
 /*
  * Tuning range.
@@ -167,6 +197,9 @@ static bool captureKeyHeld(void)
 
 void platform_init_csk6()
 {
+    /* Zeros the NOLOAD DMR PSRAM section: see psram_dmr_clear() above */
+    psram_dmr_clear();
+
     /* Initialise non volatile memory manager */
     nvm_init();
 

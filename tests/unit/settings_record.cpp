@@ -26,6 +26,13 @@ extern "C" {
 #include "core/crc.h"
 }
 
+/*
+ * Version 4 appended the DMR transmit air delay: the new octets are the end
+ * of the payload, so a version-3 record is the same payload two bytes shorter
+ * and must be dropped as a whole instead of read with the delay missing.
+ */
+#define V3_PAYLOAD_LEN (sizeof(settings_t) - sizeof(int16_t))
+
 static const settings_t &dflt()
 {
     return default_settings;
@@ -53,6 +60,7 @@ TEST_CASE("Settings round-trip through the record", "[settings]")
     s.dmr_dest_id = 1234567;
     s.sms_format = DMR_SMS_FMT_DD_UTF8;
     s.dmr_timeslot = 2;
+    s.dmr_tx_air_delay_us = 12500;
     s.m17_can = 3;
 
     uint8_t rec[SETTINGS_RECORD_SIZE];
@@ -73,8 +81,23 @@ TEST_CASE("Settings round-trip through the record", "[settings]")
     REQUIRE(out.dmr_dest_id == 1234567);
     REQUIRE(out.sms_format == DMR_SMS_FMT_DD_UTF8);
     REQUIRE(out.dmr_timeslot == 2);
+    REQUIRE(out.dmr_tx_air_delay_us == 12500);
     REQUIRE(out.m17_can == 3);
     REQUIRE(memcmp(&out, &s, sizeof(s)) == 0);
+}
+
+TEST_CASE("The record is version 4: the DMR air delay is the last field",
+          "[settings]")
+{
+    /* Only version 4 carries the transmit air delay */
+    REQUIRE(SETTINGS_VERSION == 4);
+    REQUIRE(sizeof(settings_t) == V3_PAYLOAD_LEN + sizeof(int16_t));
+
+    /*
+     * A default radio sends the measured delay: the field is 0 in the record,
+     * which the mode reads as "use the measured default" (dmr_glue.c).
+     */
+    REQUIRE(dflt().dmr_tx_air_delay_us == 0);
 }
 
 TEST_CASE("A record of an older version is discarded with a reason", "[settings]")
@@ -120,6 +143,36 @@ TEST_CASE("A record of an older version is discarded with a reason", "[settings]
     rec[6] = (uint8_t)(SETTINGS_VERSION + 1);
     REQUIRE(settings_recordRead(rec, sizeof(rec), &out) ==
             SETTINGS_RECORD_ERR_VERSION);
+}
+
+TEST_CASE("A version-3 record is a migration, not a loss", "[settings]")
+{
+    settings_t s = dflt();
+    uint8_t v3[SETTINGS_RECORD_SIZE];
+
+    /*
+     * The record the previous firmware wrote: version 3, a payload without
+     * the DMR air delay, a valid magic and CRC.  It is refused as a whole and
+     * leaves the radio at its defaults, which is the same thing that happens
+     * with any older record: the first firmware has no delay to inherit.
+     */
+    memset(v3, 0xFF, sizeof(v3));
+    v3[0] = 0x58; v3[1] = 0x54; v3[2] = 0x52; v3[3] = 0x4F;  /* "ORTX" */
+    v3[4] = (uint8_t)(crc_ccitt(&s, V3_PAYLOAD_LEN) & 0xFF);
+    v3[5] = (uint8_t)(crc_ccitt(&s, V3_PAYLOAD_LEN) >> 8);
+    v3[6] = 3; v3[7] = 0;             /* version 3 */
+    memcpy(&v3[SETTINGS_RECORD_HDR], &s, V3_PAYLOAD_LEN);
+
+    settings_t out;
+    uint8_t cause = SETTINGS_NO_RESET;
+    memset(&out, 0x5A, sizeof(out));
+
+    REQUIRE(settings_recordLoad(v3, sizeof(v3), &out, &cause) ==
+            SETTINGS_RECORD_ERR_VERSION);
+    REQUIRE(cause == SETTINGS_RESET_VERSION);
+
+    /* The reset state is what the upgrade leaves: measured delay, no trim */
+    REQUIRE(dflt().dmr_tx_air_delay_us == 0);
 }
 
 TEST_CASE("A damaged or blank record is reported, not loaded", "[settings]")

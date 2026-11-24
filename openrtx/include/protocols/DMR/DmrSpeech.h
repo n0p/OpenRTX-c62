@@ -7,29 +7,26 @@
 #ifndef OPENRTX_DMR_SPEECH_H
 #define OPENRTX_DMR_SPEECH_H
 
-/**
- * @file DmrSpeech.h
- * @brief DMR voice playback: AMBE+2 frames queued by the DMR mode, decoded by
- * dmr_vocoder_decode() on a playback thread and played at 8 kHz.
- *
- * Decoding costs about 3 ms of the Cortex-M33 per 20 ms frame, so it does not
- * run in the rtx thread: the mode queues the three 9-byte frames of each voice
- * burst and returns to the demodulator within a few tens of microseconds.
- */
-
 #include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
-
-#include "protocols/DMR/DmrDefs.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+/*
+ * DMR speech playback for the DMR receive mode. The receiver queues the
+ * voice bursts of the slot being heard (dmr_voice.c); a playback thread
+ * decodes them with the vocoder backend that is built in (lib/dmr_vocoder by
+ * default, mbelib with DMR_VOICE_ENABLED) and plays them on the speaker,
+ * taking the speaker path when speech arrives and releasing it after one
+ * second of silence.
+ *
+ * Built with DMR_VOICE_OWN or DMR_VOICE_ENABLED (CMake option C62_DMR_VOICE);
+ * without either these functions do nothing.
+ */
+
 /**
- * Start the playback thread.  Costs a stack allocation, do it when the mode is
- * enabled, not on every burst.
+ * Start the playback thread.
  */
 void dmrSpeech_start(void);
 
@@ -39,25 +36,10 @@ void dmrSpeech_start(void);
 void dmrSpeech_stop(void);
 
 /**
- * Queue the voice frames of one burst, in the order they were received.
- *
- * @param frames: frameCount 9-byte AMBE+2 frames, canonical A|B|C order.
- * @param count: number of frames, 0 to DMR_FRAMES_PER_BURST.
+ * Check whether speech is being played, until a second after its end:
+ * only clear calls are played. Wakes the screen like an open squelch.
  */
-void dmrSpeech_push(const uint8_t frames[DMR_FRAMES_PER_BURST][DMR_AMBE_BYTES],
-                    unsigned count);
-
-/**
- * Playback statistics since the mode was enabled, for the diagnostics.
- *
- * @param queued: frames queued by the demodulator.
- * @param played: frames decoded and played.
- * @param dropped: frames discarded because the queue was full.
- * @param underruns: frames played as silence for want of a queued frame.
- * @param bursts: playback bursts begun (one per transmission).
- */
-void dmrSpeech_stats(uint32_t *queued, uint32_t *played, uint32_t *dropped,
-                     uint32_t *underruns, uint32_t *bursts);
+bool dmrSpeech_playing(void);
 
 #ifdef __cplusplus
 }

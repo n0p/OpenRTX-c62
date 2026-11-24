@@ -57,37 +57,25 @@ endmenu
 # This file is sourced inside the "Board Selection" choice, so the options
 # below live in a menu of their own (same shape as "DSP Manipulation" above).
 #
-# DMR receive vocoder: AMBE+2 decode (OpenDMR's decoder, lib/dmr_vocoder).
-# platform/targets/c62/CMakeLists.txt builds the library and links it into the
-# application when this is set. Enable it with
-#   west build -b c62 ... -- -DCONFIG_C62_DMR_VOCODER=y
-# OFF by default: it costs 41 KiB of flash and 52 KiB of RAM (measured). Select
-# it, with the mode that calls it, through C62_DMR_RX below.
-#
 menu "DMR"
 
-config C62_DMR_VOCODER
-	bool "AMBE+2 voice decoder (receive, decode only)"
-	default n
-	help
-	  Build the AMBE+2 voice decoder used by the DMR receive mode: 9-byte
-	  voice frames in, 160 samples of 8 kHz PCM out. Decode only, no
-	  encoder: the AMBE+2 encoder does not fit in the Cortex-M33's budget.
-	  See docs/DMR_VOCODER.md.
-
 config C62_DMR_RX
-	bool "DMR mode (PHY, AMBE+2 vocoder, transmitter and UI)"
-	select C62_DMR_VOCODER
+	bool "DMR mode (protocol package: demod, FEC, voice, TX, trunk)"
 	default n
 	help
-	  DMR mode: 4FSK demodulation of the discriminator output, slot sync,
-	  CACH, colour code and timeslot, and voice through the AMBE+2
-	  decoder. Selects the vocoder. See docs/DMR_RX.md.
+	  DMR mode built on the protocol package: 4FSK demodulation of the
+	  discriminator output with soft values, BPTC/Golay/RS/trellis FEC, the
+	  burst and slot state machine, voice playback, the transmitter, data,
+	  short messages, LRRP positions, encryption and Tier III.  See
+	  docs/DMR_PKG.md for the file map, what it replaced and its licences.
 
-	  It also contains the transmitter (docs/DMR_TX.md), which only keys
-	  the PA when an AMBE+2 encoder is linked in: CONFIG_DMR_TX builds the
-	  chain, but the encoder itself is the HiFi4 service or an optimised
-	  port. Without one, PTT in this mode does nothing.
+	  Voice comes from lib/dmr_vocoder and the transmitter's encoder from
+	  lib/dmr_encoder, both built in (C).  The package's own pair (mbelib
+	  for the decoder, OpenDMR for the encoder) stays selectable with
+	  -DC62_DMR_VOICE=ON and -DDMR_ENC=ON, but is off by default: neither
+	  fits the M33 in real time (mbelib 9.36 M instructions per 20 ms
+	  frame, OpenDMR 4.10 M; ours are 113 k and 1.43 M).  See
+	  docs/DMR_PKG.md, "The vocoders".
 
 	  Enable it with west build -b c62 ... -- -DCONFIG_C62_DMR_RX=y
 
@@ -96,28 +84,31 @@ config DMR_TX
 	depends on C62_DMR_RX
 	default n
 	help
-	  Transmit chain of the DMR mode: voice LC header, voice bursts,
-	  terminator, CACH, BPTC/RS, 4FSK with a polyphase RRC and the PA
-	  envelope. 117 k instructions per 30 ms timeslot, 4.5 k more for an
-	  LC burst. It needs an AMBE+2 encoder, which DMR_TX_ENC below
-	  provides; without one PTT refuses to key. OFF by default until the
-	  deviation and the adjacent channel power have been measured on the
-	  bench (docs/DMR_TX.md).
-	  Enable it with west build -b c62 ... -- -DCONFIG_C62_DMR_RX=y -DCONFIG_DMR_TX=y
+	  Transmit chain: voice LC headers, voice superframes, terminator,
+	  4FSK with the package's root raised cosine, the repeater alignment
+	  with the measured air delay of the audio path (Ajustes > DMR, see
+	  docs/DMR_PKG.md "Transmit air delay").  The AMBE+2 encoder is
+	  lib/dmr_encoder (ours); PTT refuses to key when none is built.
 
-config DMR_TX_ENC
-	bool "DMR transmitter: AMBE+2 encoder (lib/dmr_encoder)"
-	depends on DMR_TX
+config DMR_TRUNK
+	bool "DMR Tier III (RadioFoundry engine)"
+	depends on C62_DMR_RX
 	default y
 	help
-	  Build the AMBE+2 encoder that feeds the DMR transmitter: 160 samples
-	  of 8 kHz PCM in, one 72-bit frame out, 1.43 M instructions per 20 ms
-	  frame (24-32 % of the M33 at 300 MHz) and 63 KiB of flash, in C.
-	  Bit-exact with the OpenDMR reference encoder.
+	  Tier III trunking: the control channel hunt, camping, call following
+	  and, with a radio ID, registration.  The engine is RadioFoundry's
+	  (MIT, trunk/LICENSE.radiofoundry).  It listens only unless a radio ID
+	  is set; without a system to listen to it stays in the hunt state and
+	  transmits nothing.
 
-	  Turn it off to keep the transmit chain without an encoder: PTT then
-	  refuses to key, which is what a build that gets its frames from the
-	  HiFi4 DSP wants (docs/DMR_TX.md, phase 3).
+config DMR_SMS
+	bool "DMR short messages into the shared message store"
+	depends on C62_DMR_RX
+	default y
+	help
+	  Texts received in DMR data calls are mirrored into core/messaging
+	  (the inbox the screen reads) and queued messages leave as data calls
+	  with the package's three formats (TMS, ETSI IP, ETSI short data).
 
 endmenu
 

@@ -24,8 +24,10 @@
  *  - 2: DMR destination, own DMR ID and SMS format appended.
  *  - 3: DMR timeslot appended (1 or 2), so the quick menu can move the call
  *       between the two slots of the 60 ms frame.
+ *  - 4: DMR transmit air delay (microseconds) appended: the calibrated delay
+ *       of the audio path, see docs/DMR_PKG.md.
  */
-#define SETTINGS_VERSION 3
+#define SETTINGS_VERSION 4
 
 typedef enum
 {
@@ -114,6 +116,13 @@ typedef struct
     uint8_t  dmr_dest_type;       // enum dmrDestType
     uint8_t  sms_format;          // enum dmrSmsFormat
     uint8_t  dmr_timeslot;        // 1 or 2: the slot of the 60 ms TDMA frame
+    /**
+     * Transmit air delay of the audio path, microseconds: from writing a slot
+     * into the baseband stream to it leaving the PA.  0 keeps the measured
+     * default of the mode (protocols/DMR/dmr_glue.c); anything else is a
+     * bench calibration against a repeater.  Positive moves the burst later.
+     */
+    int16_t  dmr_tx_air_delay_us;
 }
 __attribute__((packed)) settings_t;
 
@@ -165,6 +174,7 @@ static const settings_t default_settings =
     DMR_DEST_GROUP,               // Group call by default
     DMR_SMS_FMT_AUTO,             // The format this firmware always sent
     1,                            // Timeslot 1, the one every network uses
+    0,                            // Air delay 0: the measured default
 };
 
 /**

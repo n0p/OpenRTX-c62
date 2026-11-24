@@ -1331,25 +1331,42 @@ aprs_config_test = executable('aprs_config_test',
                                   'tests/unit/aprs_config.cpp'],
                               kwargs  : unit_test_opts)
 
-# Cabecera de llamada de DMR: el destino configurado llega al LC
+# The package's own files include their headers without a prefix (dmr_fec.h,
+# dmr_sms.h), so a target that compiles them needs the DMR directories too.
+dmr_inc = ['openrtx/include/protocols/DMR',
+           'openrtx/include/protocols/DMR/trunk']
+dmr_test_opts = unit_test_opts + {'include_directories' : linux_inc + dmr_inc}
+
+# Cabecera de llamada de DMR: el destino configurado llega al LC del paquete
+# (dmr_tx_setup) y se lee de vuelta de la rafaga, como lo hace un receptor.
 dmr_lc_dest_test = executable('dmr_lc_dest_test',
                               sources : unit_test_src + [
-                                  'openrtx/src/protocols/DMR/DmrDefs.c',
-                                  'openrtx/src/protocols/DMR/DmrFec.c',
-                                  'openrtx/src/protocols/DMR/DmrTx.c',
-                                  'openrtx/src/protocols/DMR/DmrTxTables.c',
+                                  'openrtx/src/protocols/DMR/dmr_fec.c',
+                                  'openrtx/src/protocols/DMR/dmr_trellis.c',
+                                  'openrtx/src/protocols/DMR/dmr_tx.c',
                                   'tests/unit/dmr_lc_dest.cpp'],
-                              kwargs  : unit_test_opts)
+                              kwargs  : dmr_test_opts)
 
-# DMR SMS: formato de payload elegido en los ajustes
+# DMR SMS: formato de payload elegido en los ajustes -> las tres formas del
+# paquete, y las rafagas que salen por el aire para cada una.
 dmr_sms_format_test = executable('dmr_sms_format_test',
                                  sources : unit_test_src + [
-                                     'openrtx/src/protocols/DMR/DmrDefs.c',
-                                     'openrtx/src/protocols/DMR/DmrFec.c',
-                                     'openrtx/src/protocols/DMR/DmrSms.c',
-                                     'openrtx/src/protocols/DMR/DmrSmsApp.c',
+                                     'openrtx/src/protocols/DMR/dmr_fec.c',
+                                     'openrtx/src/protocols/DMR/dmr_trellis.c',
+                                     'openrtx/src/protocols/DMR/dmr_data.c',
+                                     'openrtx/src/protocols/DMR/dmr_lrrp.c',
+                                     'openrtx/src/protocols/DMR/dmr_sms.c',
+                                     'openrtx/src/protocols/DMR/dmr_glue.c',
                                      'tests/unit/dmr_sms_format.cpp'],
-                                 kwargs  : unit_test_opts)
+                                 kwargs  : dmr_test_opts)
+
+# Nuestro glue: los records que lee el paquete, el retardo de aire y su
+# pre-roll.
+dmr_glue_test = executable('dmr_glue_test',
+                           sources : unit_test_src + [
+                               'openrtx/src/protocols/DMR/dmr_glue.c',
+                               'tests/unit/dmr_glue.cpp'],
+                           kwargs  : dmr_test_opts)
 
 c62_calib_test = executable('c62_calib_test',
                             sources : ['tests/unit/C62_calib.cpp',
@@ -1375,16 +1392,6 @@ slevel_test = executable('slevel_test',
 audio_codec_test = executable('audio_codec_test',
                               sources : unit_test_src + ['tests/unit/audio_codec.cpp'],
                               kwargs  : unit_test_opts)
-
-# Transmit stage machine of the DMR mode: a header-only pure function, so the
-# test links nothing but Catch2.
-dmr_tx_fsm_test = executable('dmr_tx_fsm_test',
-                             sources : ['tests/unit/dmr_tx_fsm.cpp'],
-                             kwargs  : {'cpp_args'           : linux_cpp_args,
-                                        'include_directories': linux_inc +
-                                             ['openrtx/include'],
-                                        'dependencies'       : [catch2_dep],
-                                        'link_args'          : linux_l_args})
 
 # Transmit lifecycle: phases, deadlines and trace. TxGuard.c has no dependency
 # on the OS at all (the time is passed in), so this links the guard alone.
@@ -1440,6 +1447,7 @@ test('Settings Record Test', settings_record_test)
 test('APRS Config Test',     aprs_config_test)
 test('DMR SMS Format Test',  dmr_sms_format_test)
 test('DMR LC Destination Test', dmr_lc_dest_test)
+test('DMR Glue Test',        dmr_glue_test)
 test('User Stores Test',     user_stores_test)
 test('UI Messages Test',     ui_messages_test)
 test('UI Layout Test',       ui_layout_test)
@@ -1449,6 +1457,5 @@ test('DSP DC Block Test',    dsp_dcblock_test)
 test('GFX Text Test',        gfx_text_test)
 test('S-Level Test', slevel_test)
 test('Audio Codec Test',     audio_codec_test)
-test('DMR TX FSM Test',      dmr_tx_fsm_test)
 test('TX Guard Test',        tx_guard_test)
 test('M17 Baseband Replay Test', m17_replay_test, timeout : 120) # ~40 s in CI with coverage

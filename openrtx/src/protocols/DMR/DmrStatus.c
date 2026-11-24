@@ -6,119 +6,109 @@
 
 /**
  * @file DmrStatus.c
- * @brief DMR receive status for the UI, see DmrStatus.h.
+ * @brief Translation of the package's decoder snapshot into the struct the
+ *        UI reads (DmrStatus.h).  Ours: the package's own snapshots
+ *        (dmr_proto_get_slot/_get_stats, dmr_demod_get_status) stay as they
+ *        are.
  */
 
-#include "protocols/DMR/DmrStatus.h"
-
 #include <string.h>
+#include "protocols/DMR/DmrStatus.h"
+#include "protocols/DMR/dmr_demod.h"
+#include "protocols/DMR/dmr_proto.h"
+#include "protocols/DMR/dmr_voice.h"
 
-#ifdef CONFIG_DMR
+/** A burst this recent means "sync" */
+#define SYNC_WINDOW_MS 300
+/** A voice burst this recent means "voice" */
+#define VOICE_WINDOW_MS 1000
 
-#include <pthread.h>
+static struct dmrStatus s_status;
 
-#include "interfaces/delays.h"
-#include "protocols/DMR/DmrPhy.h"
+/*
+ * Link quality, per mille, from the embedded link controls of the voice
+ * bursts: the package does not compute an EVM (its slicer carries no
+ * per-bit decisions to compare), but the EMB QR word either decodes or it
+ * does not, and their ratio is what the screen prints as "e%".
+ */
+static uint16_t linkQuality(const dmr_proto_stats_t *st)
+{
+    const uint32_t n = st->emb_lc_ok + st->emb_bad;
 
-/** A voice burst this recent keeps the call shown */
-#define VOICE_HOLD_MS 1000
-/** A burst this recent keeps the synchronisation indicator on */
-#define SYNC_HOLD_MS 300
-
-static pthread_mutex_t statusMutex = PTHREAD_MUTEX_INITIALIZER;
-static struct dmrStatus status; /* Under statusMutex */
-static long long lastVoice;     /* Tick of the last voice burst */
-static long long lastBurst;     /* Tick of the last burst */
+    if (n == 0)
+        return 0;
+    return (uint16_t)((st->emb_lc_ok * 1000u) / n);
+}
 
 void dmrStatus_clear(void)
 {
-    pthread_mutex_lock(&statusMutex);
-    memset(&status, 0, sizeof(status));
-    status.colourCode = -1;
-    status.lastType = -1;
-    lastVoice = 0;
-    pthread_mutex_unlock(&statusMutex);
+    memset(&s_status, 0, sizeof(s_status));
+    s_status.colourCode = -1;
+    s_status.lastType = -1;
 }
 
 void dmrStatus_reset(void)
 {
-    pthread_mutex_lock(&statusMutex);
-    status.sync = false;
-    status.voice = false;
-    status.colourCode = -1;
-    status.timeslot = 0;
-    status.accessType = 0;
-    status.lateEntry = false;
-    status.evm = 0;
-    status.lastType = -1;
-    pthread_mutex_unlock(&statusMutex);
+    dmrStatus_clear();
 }
 
-void dmrStatus_burst(const struct dmrBurst *burst)
+void dmrStatus_update(void)
 {
-    pthread_mutex_lock(&statusMutex);
+    dmr_slot_info_t s0, s1;
+    dmr_proto_stats_t st;
+    dmr_demod_status_t ds;
+    int bsSlot = 0;
 
-    lastBurst = getTick();
-    status.evm = (uint16_t)(burst->evm * 1000.0f);
+    memset(&s0, 0, sizeof(s0));
+    memset(&s1, 0, sizeof(s1));
+    dmr_proto_get_slot(0, &s0);
+    dmr_proto_get_slot(1, &s1);
+    dmr_proto_get_stats(&st);
+    dmr_demod_get_status(&ds);
 
-    if (burst->cachValid) {
-        status.accessType = burst->accessType;
-        status.timeslot = burst->timeslot2 ? 2 : 1;
-        status.lateEntry = burst->lateEntry;
-    }
+    const dmr_slot_info_t *last = (s1.last_ms > s0.last_ms) ? &s1 : &s0;
+    const uint32_t now = ds.now_ms;
 
-    if (burst->slotTypeValid) {
-        status.colourCode = (int8_t)burst->colourCode;
-        status.lastType = (int8_t)burst->dataType;
-    }
+    s_status.sync = (last->activity != DMR_ACT_NONE)
+                 && ((uint32_t)(now - last->last_ms) < SYNC_WINDOW_MS);
+    s_status.voice = (last->activity == DMR_ACT_VOICE)
+                  && ((uint32_t)(now - last->last_ms) < VOICE_WINDOW_MS);
+    s_status.colourCode = (int8_t)((last->cc >= 0) ? last->cc : -1);
 
-    if (burst->voice) {
-        status.voiceBursts++;
-        status.frames += burst->frameCount;
-        status.voice = true;
-        lastVoice = getTick();
-    } else {
-        if (burst->crcChecked) {
-            status.crcChecks++;
-            if (burst->crcOk)
-                status.crcOk++;
-        }
-    }
+    if (dmr_proto_bs_slot(&bsSlot))
+        s_status.timeslot = (int8_t)(bsSlot + 1);
+    else if (dmr_proto_is_ms_mode())
+        s_status.timeslot = 0;
 
-    status.bursts++;
-    pthread_mutex_unlock(&statusMutex);
+    if (s_status.voice)
+        s_status.lastType = -1;
+    else if (last->activity == DMR_ACT_CSBK)
+        s_status.lastType = 3; /* DMR_DT_CSBK, DmrDefs.h */
+    else if (last->activity == DMR_ACT_DATA)
+        s_status.lastType = 7; /* DMR_DT_RATE_12 */
+    else if (last->activity == DMR_ACT_IDLE)
+        s_status.lastType = 9; /* DMR_DT_IDLE */
+
+    s_status.evm = linkQuality(&st);
+
+    uint32_t fecBits, fecFrames;
+    dmr_voice_get_fec(&fecBits, &fecFrames);
+    (void)fecBits;
+    s_status.bursts = st.frames;
+    s_status.voiceBursts = st.voice_bf;
+    s_status.frames = fecFrames;
+    s_status.crcChecks = st.data_packets + st.data_crc_bad;
+    s_status.crcOk = st.data_packets;
 }
 
 void dmr_getStatus(struct dmrStatus *out)
 {
-    pthread_mutex_lock(&statusMutex);
-    long long now = getTick();
-    status.sync = (now - lastBurst) < SYNC_HOLD_MS;
-    status.voice = status.voice && ((now - lastVoice) < VOICE_HOLD_MS);
-    *out = status;
-    pthread_mutex_unlock(&statusMutex);
+    if (out == NULL)
+        return;
+    /*
+     * One struct copy: the fields are written by the rtx thread and read by
+     * the UI.  The copy may be one burst behind, never wrong on anything the
+     * screen shows (a colour code one burst old is the same colour code).
+     */
+    *out = s_status;
 }
-
-#else  /* CONFIG_DMR */
-
-void dmrStatus_clear(void)
-{
-}
-
-void dmrStatus_reset(void)
-{
-}
-
-void dmrStatus_burst(const struct dmrBurst *burst)
-{
-    (void)burst;
-}
-
-void dmr_getStatus(struct dmrStatus *out)
-{
-    memset(out, 0, sizeof(*out));
-    out->colourCode = -1;
-    out->lastType = -1;
-}
-
-#endif /* CONFIG_DMR */

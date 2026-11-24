@@ -7,207 +7,175 @@
 /*
  * The SMS payload format is a setting: the operator picks the flavour that the
  * other radios of his network read, and the radio has to build exactly that.
- * Each format is encoded with the real encoder and read back with the real
- * decoder, so this is the round trip of the radio and not a table lookup.
+ *
+ * Our record has eight flavours (enum dmrSmsFmtSetting, kept for the settings
+ * written by the older firmware); the package sends three payload layouts
+ * (dmr_sms.h): TMS, ETSI IP text and ETSI defined short data.  The setting is
+ * mapped in dmr_glue.c and the bursts built for each layout are inspected
+ * here: data header, SAP and UDP port, and the text in the encoding the
+ * format names.  That is what leaves the radio.
  */
 
 #include <catch2/catch_test_macros.hpp>
+#include <cstdint>
 #include <cstring>
 #include <string>
 
 extern "C" {
-#include "core/settings.h"
-#include "protocols/DMR/DmrSms.h"
+#include "core/datatypes.h"
+#include "protocols/DMR/dmr_glue.h"
+#include "protocols/DMR/dmr_sms.h"
 }
 
-static int encodeDecode(uint8_t format, std::string &textOut,
-                        struct dmrSmsMessage *msgOut)
-{
-    struct dmrSmsEncode req;
-    struct dmrSmsPacket pkt;
+/* Slot type data types of the bursts (ETSI TS 102 361-1 table 6.6) */
+#define DT_CSBK 3
+#define DT_DATA_HEADER 6
+#define DT_RATE_12 7
 
-    memset(&req, 0, sizeof(req));
-    req.app = dmrSms_appForFormat(format);
-    req.src = 2142123;
-    req.dst = 2142;
-    req.group = true;
-    req.confirmed = false;
-    req.tmsSeq = 5;                 /* TMS needs a sequence number */
-    req.text = "Hola 123";
+#define PREAMBLES 16
+#define MAX_BURSTS 48
 
-    if (dmrSms_encode(&req, &pkt) != 0)
-        return -1;
+struct Bursts {
+    uint8_t dt[MAX_BURSTS];
+    uint8_t b[MAX_BURSTS][12];
+    int n;
 
-    struct dmrSmsMessage msg;
-    memset(&msg, 0, sizeof(msg));
+    /* The user octets of the packet: the rate 1/2 blocks in order */
+    std::string payload() const
+    {
+        std::string s;
 
-    if (dmrSms_decodePacket(pkt.header, pkt.blocks, pkt.blockCount, &msg) != 0)
-        return -2;
-
-    textOut = msg.text;
-
-    if (msgOut != nullptr)
-        *msgOut = msg;
-
-    return 0;
-}
-
-TEST_CASE("Auto is the format this firmware has always sent", "[dmr-sms]")
-{
-    REQUIRE(dmrSms_appForFormat(DMR_SMS_FMT_AUTO) == DMR_SMS_APP_IP_HC);
-
-    /* An unknown value (a record from another build) degrades to auto */
-    REQUIRE(dmrSms_appForFormat(200) == DMR_SMS_APP_IP_HC);
-}
-
-TEST_CASE("Every format builds the application it names", "[dmr-sms]")
-{
-    REQUIRE(dmrSms_appForFormat(DMR_SMS_FMT_DD_UTF16BE) ==
-            DMR_SMS_APP_DD_UTF16BE);
-    REQUIRE(dmrSms_appForFormat(DMR_SMS_FMT_DD_UTF8) == DMR_SMS_APP_DD_UTF8);
-    REQUIRE(dmrSms_appForFormat(DMR_SMS_FMT_IP_5016) == DMR_SMS_APP_IP);
-    REQUIRE(dmrSms_appForFormat(DMR_SMS_FMT_IP_HC) == DMR_SMS_APP_IP_HC);
-    REQUIRE(dmrSms_appForFormat(DMR_SMS_FMT_ANYTONE) == DMR_SMS_APP_ANYTONE);
-    REQUIRE(dmrSms_appForFormat(DMR_SMS_FMT_TMS) == DMR_SMS_APP_TMS);
-    REQUIRE(dmrSms_appForFormat(DMR_SMS_FMT_HYTERA) == DMR_SMS_APP_HYTERA);
-
-    /* ... and none of them is silent */
-    for (uint8_t f = 0; f < DMR_SMS_FMT_COUNT; f++)
-        REQUIRE(dmrSms_appIsText(dmrSms_appForFormat(f)));
-}
-
-TEST_CASE("The text survives every payload format", "[dmr-sms]")
-{
-    for (uint8_t f = 0; f < DMR_SMS_FMT_COUNT; f++) {
-        std::string text;
-        struct dmrSmsMessage msg;
-
-        INFO("format " << (int)f << " = " << settings_smsFormatName(f));
-        REQUIRE(encodeDecode(f, text, &msg) == 0);
-        REQUIRE(text == "Hola 123");
-        REQUIRE(msg.crcOk);
-        REQUIRE(msg.src == 2142123);
-        REQUIRE(msg.dst == 2142);
-        REQUIRE(msg.group);
+        for (int i = 0; i < n; i++)
+            if (dt[i] == DT_RATE_12)
+                s.append((const char *)b[i], 12);
+        return s;
     }
+};
+
+static Bursts build(uint8_t format, const char *text, bool group = true,
+                    uint32_t dst = 2142, uint32_t src = 2142123)
+{
+    Bursts out;
+
+    memset(&out, 0, sizeof(out));
+    out.n = dmrSms_build(dst, group, format, text, src, out.dt, out.b,
+                         MAX_BURSTS);
+    return out;
 }
 
-TEST_CASE("The defined-data formats differ in the way ETSI says", "[dmr-sms]")
+/* Big-endian 16-bit field at an offset */
+static uint16_t u16(const std::string &s, size_t off)
 {
-    std::string text;
-    struct dmrSmsMessage utf16;
-    struct dmrSmsMessage utf8;
-
-    REQUIRE(encodeDecode(DMR_SMS_FMT_DD_UTF16BE, text, &utf16) == 0);
-    REQUIRE(encodeDecode(DMR_SMS_FMT_DD_UTF8, text, &utf8) == 0);
-
-    /* DD_HEAD with DD = 0x14 (UTF-16BE) against DD = 0x12 (UTF-8) */
-    REQUIRE(utf16.dd == DMR_SMS_DD_UTF16BE);
-    REQUIRE(utf8.dd == DMR_SMS_DD_UTF8);
-    REQUIRE(utf16.app == DMR_SMS_APP_DD_UTF16BE);
-    REQUIRE(utf8.app == DMR_SMS_APP_DD_UTF8);
-
-    /* UTF-16BE needs two octets per character, UTF-8 one for ASCII */
-    struct dmrSmsEncode req;
-    struct dmrSmsPacket pkt;
-    memset(&req, 0, sizeof(req));
-    req.src = 1;
-    req.dst = 2;
-    req.text = "Hola 123";
-
-    req.app = DMR_SMS_APP_DD_UTF8;
-    REQUIRE(dmrSms_encode(&req, &pkt) == 0);
-    unsigned utf8Blocks = pkt.blockCount;
-
-    req.app = DMR_SMS_APP_DD_UTF16BE;
-    REQUIRE(dmrSms_encode(&req, &pkt) == 0);
-    REQUIRE(pkt.blockCount > utf8Blocks);
+    return (uint16_t)(((uint8_t)s[off] << 8) | (uint8_t)s[off + 1]);
 }
 
-TEST_CASE("The IP formats carry the ETSI UDP port", "[dmr-sms]")
+TEST_CASE("Every setting maps to a payload layout the package can send",
+          "[dmr-sms]")
 {
-    std::string text;
-    struct dmrSmsMessage ip;
-    struct dmrSmsMessage hc;
-    struct dmrSmsMessage anytone;
+    /* AUTO is what this firmware has always sent: ETSI IP text (5016) */
+    REQUIRE(dmrGlue_smsFormat(DMR_SMS_FMT_AUTO) == DMR_SMS_ETSI_IP);
+    REQUIRE(dmrGlue_smsFormat(DMR_SMS_FMT_IP_5016) == DMR_SMS_ETSI_IP);
+    REQUIRE(dmrGlue_smsFormat(DMR_SMS_FMT_IP_HC) == DMR_SMS_ETSI_IP);
+    REQUIRE(dmrGlue_smsFormat(DMR_SMS_FMT_ANYTONE) == DMR_SMS_ETSI_IP);
+    REQUIRE(dmrGlue_smsFormat(DMR_SMS_FMT_TMS) == DMR_SMS_TMS);
+    REQUIRE(dmrGlue_smsFormat(DMR_SMS_FMT_DD_UTF16BE) == DMR_SMS_ETSI_DD);
+    REQUIRE(dmrGlue_smsFormat(DMR_SMS_FMT_DD_UTF8) == DMR_SMS_ETSI_DD);
+    REQUIRE(dmrGlue_smsFormat(DMR_SMS_FMT_HYTERA) == DMR_SMS_ETSI_DD);
 
-    REQUIRE(encodeDecode(DMR_SMS_FMT_IP_5016, text, &ip) == 0);
-    REQUIRE(encodeDecode(DMR_SMS_FMT_IP_HC, text, &hc) == 0);
-    REQUIRE(encodeDecode(DMR_SMS_FMT_ANYTONE, text, &anytone) == 0);
+    /* No setting, and no value from an older or newer record, is unusable */
+    for (uint8_t f = 0; f < DMR_SMS_FMT_COUNT; f++)
+        REQUIRE(dmrGlue_smsFormat(f) < DMR_SMS_FORMATS);
+    REQUIRE(dmrGlue_smsFormat(200) < DMR_SMS_FORMATS);
+}
 
-    REQUIRE(ip.udpDst == 5016);
-    REQUIRE(hc.udpDst == 5016);
-    REQUIRE(anytone.udpDst == 5016);
+TEST_CASE("A TMS message leaves as UDP 4007 with the TMS header", "[dmr-sms]")
+{
+    Bursts out = build(DMR_SMS_TMS, "Hola 123");
+    REQUIRE(out.n > PREAMBLES + 1);
+
+    /* Preambles, a data header, then the packet in rate 1/2 blocks */
+    for (int i = 0; i < PREAMBLES; i++)
+        REQUIRE(out.dt[i] == DT_CSBK);
+    REQUIRE(out.dt[PREAMBLES] == DT_DATA_HEADER);
+
+    /* Unconfirmed packet (DPF 2), SAP 4 = IP */
+    REQUIRE((out.b[PREAMBLES][0] & 0x3Fu) == 0x02);
+    REQUIRE((out.b[PREAMBLES][1] >> 4) == 0x04);
+
+    /* The IPv4/UDP destination and source ports */
+    std::string p = out.payload();
+    REQUIRE(p.size() >= 34);
+    REQUIRE(u16(p, 20) == 4007);
+    REQUIRE(u16(p, 22) == 4007);
 
     /*
-     * The receiver classifies any 5016 record as ETSI IP; what tells the two
-     * flavours apart is the SAP the encoder put in the header, so that is what
-     * is checked here (and the text, of course).
+     * TMS simple text: length, header 0xA0 (0xE0 when an individual peer has
+     * to acknowledge), sequence, encoding 4, the text in UTF-16LE.
      */
-    struct dmrSmsEncode req;
-    struct dmrSmsPacket pkt;
+    REQUIRE(((uint8_t)p[30] & 0xE0u) == 0xA0u);
+    REQUIRE((uint8_t)p[31] == 0x00);
+    REQUIRE((uint8_t)p[33] == 0x04);
 
-    memset(&req, 0, sizeof(req));
-    req.src = 1;
-    req.dst = 2;
-    req.text = "Hola 123";
+    const char utf16le[] = { 'H', 0, 'o', 0, 'l', 0, 'a', 0, ' ', 0 };
+    REQUIRE(p.compare(34, sizeof(utf16le), utf16le, sizeof(utf16le)) == 0);
 
-    req.app = DMR_SMS_APP_IP;
-    REQUIRE(dmrSms_encode(&req, &pkt) == 0);
-    REQUIRE(pkt.app == DMR_SMS_APP_IP);
-
-    req.app = DMR_SMS_APP_IP_HC;
-    REQUIRE(dmrSms_encode(&req, &pkt) == 0);
-    REQUIRE(pkt.app == DMR_SMS_APP_IP_HC);
-
-    req.app = DMR_SMS_APP_ANYTONE;
-    REQUIRE(dmrSms_encode(&req, &pkt) == 0);
-    REQUIRE(pkt.app == DMR_SMS_APP_ANYTONE);
-
-    REQUIRE(anytone.app == DMR_SMS_APP_ANYTONE);
-    REQUIRE(text == "Hola 123");
+    /* A message to one subscriber asks for its acknowledgement */
+    Bursts priv = build(DMR_SMS_TMS, "Hola 123", false, 1234567);
+    std::string pp = priv.payload();
+    REQUIRE(((uint8_t)pp[30] & 0xE0u) == 0xE0u);
 }
 
-TEST_CASE("A message reassembled burst by burst keeps the format", "[dmr-sms]")
+TEST_CASE("ETSI IP text leaves as UDP 5016, UTF-16BE", "[dmr-sms]")
 {
-    struct dmrSmsEncode req;
-    struct dmrSmsPacket pkt;
+    Bursts out = build(DMR_SMS_ETSI_IP, "Hola 123");
+    REQUIRE(out.dt[PREAMBLES] == DT_DATA_HEADER);
+    REQUIRE((out.b[PREAMBLES][0] & 0x3Fu) == 0x02);
+    REQUIRE((out.b[PREAMBLES][1] >> 4) == 0x04);
 
-    memset(&req, 0, sizeof(req));
-    req.app = dmrSms_appForFormat(DMR_SMS_FMT_DD_UTF8);
-    req.src = 2142123;
-    req.dst = 91;
-    req.group = true;
-    req.text = "Mensaje de prueba";
+    std::string p = out.payload();
+    REQUIRE(u16(p, 20) == 5016);
+    REQUIRE(u16(p, 22) == 5016);
 
-    REQUIRE(dmrSms_encode(&req, &pkt) == 0);
+    /* 0x00 before every ASCII character: UTF-16BE */
+    const char utf16be[] = { 0, 'H', 0, 'o', 0, 'l', 0, 'a', 0, ' ' };
+    REQUIRE(p.compare(28, sizeof(utf16be), utf16be, sizeof(utf16be)) == 0);
+}
 
-    struct dmrSmsRx rx;
-    dmrSmsRx_reset(&rx);
+TEST_CASE("Defined short data leaves as DPF 13, SAP 10, ISO 8859-1",
+          "[dmr-sms]")
+{
+    Bursts out = build(DMR_SMS_ETSI_DD, "Hola 123");
+    REQUIRE(out.dt[PREAMBLES] == DT_DATA_HEADER);
 
-    bool done = false;
-    struct dmrSmsRxResult res;
+    /* DPF 13 (short defined), SAP 10 (short data) */
+    REQUIRE((out.b[PREAMBLES][0] & 0x3Fu) == 0x0D);
+    REQUIRE((out.b[PREAMBLES][1] >> 4) == 0x0A);
 
-    for (unsigned i = 0; i <= pkt.blockCount; i++) {
-        uint8_t dataType = 0;
-        uint8_t info[96];
-        uint8_t block[12];
-        memset(&res, 0, sizeof(res));
+    /* The text as it is, one octet per character, no IP layer */
+    std::string p = out.payload();
+    REQUIRE(p.compare(0, 8, "Hola 123") == 0);
+}
 
-        REQUIRE(dmrSms_packetBurst(&pkt, i, &dataType, info));
+TEST_CASE("The packet carries both identifiers", "[dmr-sms]")
+{
+    Bursts out = build(DMR_SMS_ETSI_IP, "Hola", true, 91, 2142123);
 
-        memset(block, 0, sizeof(block));
-        for (int b = 0; b < 96; b++)
-            block[b >> 3] |= (uint8_t)(info[b] << (7 - (b & 7)));
+    /* Destination at octet 2, source at 5 (TS 102 361-3, figure 8.3) */
+    const uint8_t *h = out.b[PREAMBLES];
+    REQUIRE((((uint32_t)h[2] << 16) | (h[3] << 8) | h[4]) == 91);
+    REQUIRE((((uint32_t)h[5] << 16) | (h[6] << 8) | h[7]) == 2142123);
+    REQUIRE((h[0] & 0x80u) != 0);   /* group destination */
+}
 
-        if (dmrSmsRx_feed(&rx, dataType, block, &res) == 1) {
-            REQUIRE(res.message);
-            REQUIRE(res.msg.app == DMR_SMS_APP_DD_UTF8);
-            REQUIRE(res.msg.dd == DMR_SMS_DD_UTF8);
-            REQUIRE(std::string(res.msg.text) == "Mensaje de prueba");
-            done = true;
-        }
-    }
+TEST_CASE("An empty or oversized text is not sent", "[dmr-sms]")
+{
+    REQUIRE(build(DMR_SMS_ETSI_IP, "").n == 0);
 
-    REQUIRE(done);
+    std::string longText(DMR_SMS_TEXT_MAX + 1, 'x');
+    REQUIRE(build(DMR_SMS_ETSI_IP, longText.c_str()).n == 0);
+
+    /* The whole length fits, in the shortest layout */
+    std::string maxText(DMR_SMS_TEXT_MAX, 'x');
+    Bursts out = build(DMR_SMS_ETSI_DD, maxText.c_str());
+    REQUIRE(out.n > PREAMBLES + 1);
 }
