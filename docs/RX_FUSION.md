@@ -43,11 +43,11 @@ the recording shows:
 
 Sources: op25 `ysf_tx_sb_impl.cc` (`ysf_fs[]` = `{3,1,1,0,1,3,0,1,3,0,2,1,1,2,0,3,1,0,3,1}`,
 the dibits of `0xD471C9634D`), Rafe's YSF page (`_LEVEL = {1:3, 0:1, 2:-1, 3:-3}`),
-dsd-fme `ysf.c`. MMDVM's `YSFDefines.h` publishes the same 20 symbol values but
-with **two of them wrong**: its `YSF_SYNC_SYMBOLS_VALUES` has `+3` where the
-pattern's own comment (and every other implementation) has `+1`, at index 14,
-and `-1` where it has `-3` at index 15. The array is only used for a
-correlation, which is why the bug has survived; do not copy it.
+dsd-fme `ysf.c`. MMDVM's `YSFDefines.h` publishes the same 20 symbol values but with **one of
+them wrong**: `YSF_SYNC_SYMBOLS_VALUES[14]` is `+3` where the pattern (and its
+own explanatory comment two lines above) gives `+1` — dibit `00` of the third
+group. The array is only used for a correlation, which is why the typo has
+survived; do not copy it.
 
 The polarity of the received signal is *not* inverted on air: correlating the
 recording against the pattern as written finds 26 syncs, correlating against its
@@ -215,7 +215,7 @@ What the chain decodes from it:
 
 ```
 frames 83, FICH ok 80 (96 %), FICH bad 3
-voice slots 370 of 400 at 49 bits (V/D mode 2), 347 with the fixed bit clean
+voice slots 370 of 400 at 49 bits (V/D mode 2), all with the fixed bit clean
 DST "*****F0XHI"  SRC "N8KDR-TERY"  U/L "W8USA"  D/L "W8USA"  DG-ID 00
 PCM 59 200 samples (7.4 s of speech)
 ```
@@ -229,8 +229,8 @@ PCM 59 200 samples (7.4 s of speech)
   node names come out of a 200-bit block protected by CRC + a convolutional
   code + whitening. Random decoding cannot produce them.
 * The data channel CRC holds on 77 of 83 frames, and the fixed bit of the V/D 2
-  voice slot (bit 103, transmitted as zero) is clean on 347 of 370 slots, which
-  is the structural check on the voice de-interleave and whitening: a wrong
+  voice slot (bit 103, transmitted as zero) is clean on 370 of the 400 slots,
+  which is the structural check on the voice de-interleave and whitening: a wrong
   permutation or whitening fails it half the time by chance.
 
 Comparison with a reference decoder: the frame, FICH and data channel results
