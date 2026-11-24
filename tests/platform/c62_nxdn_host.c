@@ -320,7 +320,7 @@ static void on_frame(const struct nxdnFrame *f, void *user)
 
     pad_to(f->symbol);
 
-    if ((f->frameCount == 0) || (pcmFile == NULL))
+    if (f->frameCount == 0)
         return;
 
     voiceFrames++;
