@@ -16,6 +16,7 @@
 #include "interfaces/nvmem.h"
 #include "core/crc.h"
 #include "core/channel_store.h"
+#include "core/scan_service.h"
 #include "interfaces/delays.h"
 #ifdef CONFIG_TETRA
 #include "protocols/TETRA/TetraSds.h"
@@ -157,10 +158,25 @@ void state_init()
     /* The message store: outbox and inbox, also kept across power cycles */
     messaging_init();
 #endif
+
+#ifdef CONFIG_SCAN
+    /* Scan and vigilance: the machine is reset here, the bank and the settings
+     * it will read are already loaded above */
+    scan_service_init();
+#endif
 }
 
 void state_terminate()
 {
+#ifdef CONFIG_SCAN
+    /*
+     * A scan in progress must not be stored as if it were the operator's
+     * channel: stop it first, which puts the receiver (and the DMV/VFO record)
+     * back where the scan found it.
+     */
+    scan_service_stop();
+#endif
+
     // Never store a brightness of 0 to avoid booting with a black screen
     if (state.settings.brightness == 0) {
         state.settings.brightness = 5;
@@ -177,6 +193,16 @@ void state_task()
 #ifdef NVMEM_DEBOUNCED_WRITE
     settings_t settings;
     channel_t vfo;
+#endif
+
+#ifdef CONFIG_SCAN
+    /*
+     * The scan is stepped here, before the 100 ms gate below: its timers are in
+     * milliseconds and a retune has to land between two audio blocks, so it
+     * runs at the 5 ms cadence of this task.  It costs nothing while no scan is
+     * running (one flag test).
+     */
+    scan_service_poll();
 #endif
 
     // Update radio state once every 100ms

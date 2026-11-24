@@ -184,6 +184,22 @@ if(CONFIG_MESSAGING)
   message(STATUS "C62: shared message store enabled")
 endif()
 
+#
+# CONFIG_SCAN: memory and VFO scanning with a priority channel, per-channel
+# SKIP and a configurable resume rule (core/scanner.c, core/scan_service.c).
+# The state machine is pure and unit tested on the host; the service is what
+# moves the radio, from state_task(). See docs/SCAN.md.
+#
+option(CONFIG_SCAN "Channel and VFO scan with priority and configurable resume" ON)
+
+if(CONFIG_SCAN)
+  target_sources(app PRIVATE
+    ${OPENRTX_ROOT}/openrtx/src/core/scanner.c
+    ${OPENRTX_ROOT}/openrtx/src/core/scan_service.c)
+  target_compile_definitions(app PRIVATE CONFIG_SCAN)
+  message(STATUS "C62: scan and vigilance enabled")
+endif()
+
 if(CONFIG_C62_APRS)
   target_sources(app PRIVATE
     ${OPENRTX_ROOT}/openrtx/src/protocols/APRS/ax25.c
