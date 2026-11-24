@@ -305,6 +305,96 @@ INSNHIST_OUT=/tmp/h qemu-system-arm -M mps2-an505 -nographic \
    -plugin file=$D/common/libinsnframe.so -d plugin
 ```
 
+## Capturing what the radio hears
+
+Everything above is verified on files. The one question files cannot answer is
+what the BK4819 hands to the demodulator on this particular receiver: level,
+bandwidth, continuity. The baseband dump exists for that, and it is the first
+thing to run when a digital mode decodes nothing (or decodes badly) on the air.
+
+**It is a build option, and it is off in the default image**
+(`-DC62_BASEBAND_DUMP=ON` for a capture session): compiled in it holds 1 MiB of
+PSRAM — 77,8 % of it with the dump against 20,7 % without — for something that
+is used once in a while. A build without it says so at power on:
+`C62: baseband dump not built in`.
+
+**Arm it from the keypad**: hold the A/B key (the red one, `KEY_ESC`) while
+switching the radio on. The log prints `baseband dump armed` and is muted from
+then on; without the key the dump is inert and the console is a normal console.
+The first capture starts when a mode opens the radio receive path, so switch to
+DMR, tune the channel and wait for the bursts.
+
+**Get the samples out**: the console UART is the Kenwood programming cable
+(`/dev/ttyUSB0` with the usual USB-serial adapter), and the default build fills
+1 MiB of PSRAM (10.4 s of 48 kHz audio) and then sends it in one burst, gapless,
+at 115200 baud, taking about 91 s:
+
+```sh
+scripts/c62_bbdump.py -p /dev/ttyUSB0 -t 100 -o dmr_air
+```
+
+Each burst gives `dmr_air_burst000.wav` (48 kHz mono, exactly what
+`dmrPhy_push()` receives), a `.f32` for GNU Radio, a per-packet `.csv` with
+REG_43 and RSSI, and `dmr_air_radio.txt` with the radio's own report: the
+BK4819 registers read back over SPI when reception started, and once a second
+the level into the codec ADC and the number of buffer halves the reader lost.
+
+Raise the rate if the adapter allows it: `-DC62_BASEBAND_DUMP_BAUD=1500000`
+with the s16 format, or 921600 with `-DC62_BASEBAND_DUMP_FORMAT=2` (12-bit
+packed, 16 dB of dynamic range less, still enough to see a 4FSK eye).
+
+**Decode it on the host**, which separates a PHY defect from an audio-path one:
+
+```sh
+make -C tests/host/dmr_phy_host
+tests/host/dmr_phy_host/build/dmr_phy_host dmr_air_burst000.wav   # the firmware code
+/home/n0p/src/c62/work/dmr-rx/build/dmr_rx dmr_air_burst000.wav --no-wav  # the prototype
+```
+
+* Both decode it, and the radio's live numbers are worse: the firmware is
+  losing blocks or the blocks are stale, not the signal (check `misses=` and
+  `rxpk=` in the radio report, and the `sequence gaps` count of the tool).
+* Neither decodes it: the analog path is the problem, and
+  `tests/host/dmr_phy_host/run.sh` says which defect produces the numbers the
+  radio showed. A baseband high-pass is the one that keeps the sync and the
+  CACH intact while destroying the payload, because the 4FSK slicer needs the
+  absolute levels, not the sign.
+* Only the firmware decodes it: a timing or level bug in `DmrPhy.c`; the
+  prototype's `--csv` gives the per-burst offset and EVM to compare.
+
+## When DMR decodes badly: the value to try for each symptom
+
+The full study is in `reports/dmr_rx_hw.md` (outside this repository); this is
+the part to keep at hand when a capture has been made and the radio still does
+not decode. Decode `dmr_air_burst000.wav` on the host first — that separates
+"the signal is bad" from "the radio is losing it".
+
+| What the capture shows | Diagnosis | What to change, and to what |
+|---|---|---|
+| The host decodes (CRC >= 90 %) and the radio does not | the signal is fine, blocks are lost or late | `misses=` in `dmr_air_radio.txt` and the `sequence gaps` of the dump. `misses` growing: raise the rtx thread priority (`Rtx` in `openrtx/src/core/threads.c`) or cut the per-slot cost. Dump gaps: raise the dump baud rate (extraction only, it does not affect decoding) |
+| `rxpk` pinned at 32767, eye flat at the extremes | codec ADC clipping | `C62_ADC_RX_GAIN_D` 20 -> 14 in `platform/targets/c62/hwconfig.h`; if it persists, `REG_48<9:4>` (AF Rx Gain2) `0x3f` -> `0x33` in `radio_C62.cpp` |
+| `rxpk` below 5 % of full scale (< 1600) | too low for the slicer | `REG_43<2> = 1` (+6 dB after the demodulator): `0x7e28` -> `0x7e2c`; or `C62_ADC_RX_GAIN_D` 20 -> 26 |
+| Spectrum falling below 100-300 Hz (compare with the PSD of `dmr_t3_cc`) | **baseband high-pass** | this is what the current code fixes: `REG_7E<2:0> = 0b000` for DMR, i.e. the DC filter off, same as M17. If it persists with the fix in, the high-pass is before the BK4819 or in the DSP: write `REG_7E<2:0> = 0b000` explicitly after `bk4819_enableRx()`, and if that does not help, leaky-integrate in `dmrPhy_push()` |
+| Strong tone at 16,9 kHz, rest of the spectrum low | IF DC offset artefact, the reason TETRA filters it | re-enable `REG_7E<2:0> = 0b110` for DMR only and lower `C62_ADC_RX_GAIN_D`, or notch 16,9 kHz in the DMR path |
+| Neighbouring channels inside the filter | `REG_43` too wide (25 kHz mode doubles the RF filter: 7 -> 9 kHz) | build with `-DC62_DMR_12K5=ON`: 12.5 kHz channel mode and `REG_43 = 0x7e48`, what the stock firmware uses for its own 4FSK. Alternatives: `0x7828` (25 kHz, RF 4/4) or `0x7808` (12.5 kHz, RF 7/4, as M17 without `C62_WIDE_RX`) |
+| Eye open but the prototype's `timing` goes past 0.3 symbol | sample clock or repeated blocks | compare the sample index of the `.csv` with the dump's; a jump means the stream (first row) |
+| None of the above, and the host does not decode either | what arrives is not DMR, or is far too degraded | check with the radio's own transmitter (`CONFIG_DMR_TX=ON`, local loop to another frequency) that the receiver decodes what it sends |
+
+The signature that identified the hardware fault is worth remembering, because
+it is easy to misread as "bad RF": with a 100-300 Hz baseband high-pass the sync
+and the CACH survive (they are two-level and sign-based), the colour code and
+the timeslot start jumping (the 20-bit Golay field fails), and the payload CRC
+falls to 0/32 while the EVM stays at 0.17-0.25 — under the 0.42 quality gate, so
+the bursts are accepted with garbage inside. `tests/host/dmr_phy_host/run.sh`
+reproduces each distortion on a clean capture and prints the same figures the
+radio shows, which is how the two were matched.
+
+Registers worth reading back on a bad capture, all through the dump's control
+channel (`regs` line in `dmr_air_radio.txt`): `0x43` (channel mode and IF
+filters), `0x7E` (baseband DC filters), `0x48` (AF RX gains), `0x10`-`0x14`
+(RX AGC gains), `0x2B`/`0x31`/`0x47`/`0x4B` (AF filters, compander, output, ALC)
+and `0x73`.
+
 ## Limitations
 
 * **No TX in this mode's default build.** The transmitter exists
@@ -331,6 +421,11 @@ INSNHIST_OUT=/tmp/h qemu-system-arm -M mps2-an505 -nographic \
 * **Audio quality is mbelib-neo's**, a reimplementation of AMBE+2. It is
   intelligible on the real capture, but nothing here has been compared against
   a DVSI reference decode.
+* **Not yet verified on the radio.** Every number above comes from files decoded
+  on the host with the same C code the firmware runs. What the BK4819 of a real
+  C62 hands over (level, bandwidth, continuity) is exactly what the baseband
+  dump captures — see *Capturing what the radio hears* — and DMR RX on hardware
+  is what `reports/dmr_rx_hw.md` is about.
 
 ## Next step: transmit
 

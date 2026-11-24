@@ -41,6 +41,7 @@ import time
 import wave
 
 MAGIC = b"\xa5\x5a\xc3\x3c"
+MAGIC_CTRL = b"\xa5\x5a\xc3\x3d"
 HEADER = struct.Struct("<4sBBHIHHHhH")  # 22 bytes
 SAMPLE_RATE = 48000
 MAX_PAYLOAD = 4096
@@ -92,12 +93,40 @@ class Parser:
         self.packets_ok = 0
         self.crc_errors = 0
         self.skipped_bytes = 0
+        self.texts = []
+
+    def _control(self, data):
+        """Text control packet: the radio's own report, keep it verbatim.
+
+        @return 1 if one was consumed, 0 if more bytes are needed, -1 if the
+                CRC does not match.
+        """
+        if len(data) < 5:
+            return 0
+        n = data[4]
+        if len(data) < 5 + n + 2:
+            return 0
+        if crc16(data[4:5 + n]) != struct.unpack_from("<H", data, 5 + n)[0]:
+            return -1
+        self.texts.append(data[5:5 + n].decode("ascii", "replace"))
+        del self.buf[:5 + n + 2]
+        return 1
 
     def feed(self, data):
         self.buf += data
         out = []
         while True:
             start = self.buf.find(MAGIC)
+            ctrl = self.buf.find(MAGIC_CTRL)
+            if 0 <= ctrl and ((start < 0) or (ctrl < start)):
+                del self.buf[:ctrl]
+                got = self._control(self.buf)
+                if got == 0:
+                    return out  # Wait for the rest of it
+                if got < 0:
+                    self.skipped_bytes += 1
+                    del self.buf[:1]
+                continue
             if start < 0:
                 keep = len(MAGIC) - 1
                 self.skipped_bytes += max(0, len(self.buf) - keep)
@@ -239,6 +268,7 @@ def main():
 
     parser = Parser()
     sinks = {}
+    radio_log = []
     raw = open(args.raw, "wb") if args.raw else None
     last_seq = None
     seq_gaps = 0
@@ -247,6 +277,10 @@ def main():
 
     def handle(packets):
         nonlocal last_seq, seq_gaps, restarts, burst
+        while parser.texts:
+            line = parser.texts.pop(0)
+            radio_log.append(line)
+            print("radio: %s" % line, file=sys.stderr)
         for p in packets:
             if last_seq is not None and p.seq != (last_seq + 1) & 0xFFFF:
                 seq_gaps += 1
@@ -310,6 +344,11 @@ def main():
     print("packets %d, CRC errors %d, sequence gaps %d, capture restarts %d, "
           "non-packet bytes %d" % (parser.packets_ok, parser.crc_errors,
                                    seq_gaps, restarts, parser.skipped_bytes))
+    if radio_log:
+        path = args.output + "_radio.txt"
+        with open(path, "w") as f:
+            f.write("\n".join(radio_log) + "\n")
+        print("radio reports: %s" % path)
     for key, s in sorted(sinks.items(), key=lambda kv: str(kv[0])):
         s.report(s.prefix[len(args.output) + 1:] or "all")
     if not sinks:

@@ -205,6 +205,11 @@ bool baseband_dump_recording(void)
     return active && !burst_hold;
 }
 
+bool baseband_dump_active(void)
+{
+    return active;
+}
+
 void baseband_dump_restart(void)
 {
     /* Start a fresh packet so the flag marks where the capture restarted */
@@ -221,6 +226,28 @@ void baseband_dump_push(const int16_t *samples, size_t count)
         memcpy(&pending[pending_count], samples, n * sizeof(*samples));
         pending_count += n;
         samples += n;
+        count -= n;
+        if (pending_count == BBDUMP_PACKET_SAMPLES) {
+            emit_packet();
+            pending_count = 0;
+        }
+    }
+}
+
+void baseband_dump_pushChannel(const int16_t *samples, size_t stride,
+                               size_t count)
+{
+    if (!active || paused)
+        return;
+    while (count > 0) {
+        size_t n = MIN(count, BBDUMP_PACKET_SAMPLES - pending_count);
+        int16_t *dst = &pending[pending_count];
+
+        for (size_t i = 0; i < n; i++)
+            dst[i] = samples[i * stride];
+
+        pending_count += n;
+        samples += n * stride;
         count -= n;
         if (pending_count == BBDUMP_PACKET_SAMPLES) {
             emit_packet();

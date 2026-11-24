@@ -50,13 +50,17 @@ target_sources(app
 #   TETRA RX always uses that setting: its equalizer taps were measured on it.
 #   OFF gives upstream's reviewed M17 setting, 12.5 kHz mode (0x7808).
 # C62_BASEBAND_DUMP: stream the raw 48 kHz RX audio over the console UART,
-#   muting the log. See platform/drivers/audio/baseband_dump_c62.h and
-#   scripts/c62_bbdump.py.
+#   muting the log. OFF by default: the dump holds 1 MiB of PSRAM (77,8 % of it
+#   with the dump, 20,7 % without) and takes the console, and it is only armed
+#   by holding A/B at power on anyway. Turn it on for a capture session:
+#     west build -b c62 -d build_dump . -- -DC62_BASEBAND_DUMP=ON
+#   See platform/drivers/audio/baseband_dump_c62.h, scripts/c62_bbdump.py and
+#   docs/DMR_RX.md.
 # C62_REG43_SWEEP: in M17 RX, cycle REG_43 through test values, each for
 #   C62_REG43_SWEEP_MS. Use it with the dump to measure each setting.
 #
 option(C62_WIDE_RX "Widest BK4819 RX filter in M17 mode" ON)
-option(C62_BASEBAND_DUMP "Stream raw RX baseband over UART" ON)
+option(C62_BASEBAND_DUMP "Stream raw RX baseband over UART" OFF)
 # C62_REMOTE: remote control over the programming cable, for automated tests
 #   (scripts/c62_remote.py). The cable's TX line is the PTT pad, which
 #   becomes UART RX: PTT does not work in these builds.
@@ -70,6 +74,12 @@ set(C62_BASEBAND_DUMP_FORMAT 1 CACHE STRING
 option(C62_BASEBAND_DUMP_BURST
        "Fill 1 MiB of PSRAM, send it, repeat (gapless at any baud rate)" ON)
 option(C62_REG43_SWEEP "Cycle REG_43 test values in M17 RX" OFF)
+# C62_DMR_12K5: run the DMR mode in the BK4819's 12.5 kHz channel mode with the
+#   4.5 kHz IF filters, which is what the stock firmware uses for its own 4FSK
+#   digital mode (REG_43 = 0x7e48), instead of the 25 kHz mode used for TETRA
+#   and M17-wide (0x7e28, where the IF filters are doubled to 9 kHz). See
+#   reports/dmr_rx_hw.md.
+option(C62_DMR_12K5 "DMR in the BK4819 12.5 kHz channel mode" OFF)
 # C62_TETRA: TETRA TMO downlink receive mode ("T" under key 5), decoded with
 #   libtetra, which west fetches to modules/lib/libtetra.
 option(C62_TETRA "TETRA receive mode" ON)
@@ -83,6 +93,9 @@ set(C62_REG43_SWEEP_MS 1400 CACHE STRING "REG_43 sweep dwell time, ms")
 
 if(C62_WIDE_RX)
   target_compile_definitions(app PRIVATE C62_WIDE_RX)
+endif()
+if(C62_DMR_12K5)
+  target_compile_definitions(app PRIVATE C62_DMR_12K5)
 endif()
 if(C62_REG43_SWEEP)
   target_compile_definitions(app PRIVATE C62_REG43_SWEEP
@@ -309,6 +322,7 @@ endif()
 
 message(STATUS "C62: wide RX ${C62_WIDE_RX}, TETRA ${C62_TETRA} "
                "(speech ${C62_TETRA_SPEECH}), REG_43 sweep ${C62_REG43_SWEEP}, "
+               "DMR 12.5 kHz ${C62_DMR_12K5}, "
                "baseband dump ${C62_BASEBAND_DUMP} "
                "(${C62_BASEBAND_DUMP_BAUD} baud, format "
                "${C62_BASEBAND_DUMP_FORMAT}, burst ${C62_BASEBAND_DUMP_BURST})")
