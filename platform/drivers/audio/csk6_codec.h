@@ -7,6 +7,7 @@
 #ifndef CSK6_CODEC_H
 #define CSK6_CODEC_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include <interfaces/audio.h>
 
@@ -22,6 +23,21 @@ enum Csk6CodecMode {
     CSK6_CODEC_MODE_OUTPUT = 0, ///< Playback to the speaker or radio
     CSK6_CODEC_MODE_INPUT = 1,  ///< Capture from the microphone or radio
 };
+
+/**
+ * Processing applied to the radio audio on its way to the speaker, in place.
+ *
+ * The callback runs in the audio worker, on every playback frame, on the
+ * samples of the SOURCE_RTX to SINK_SPK path only: the radio to the speaker
+ * passthrough that a mode like AM opens. It must therefore be cheap, must not
+ * block, and must not touch the radio: what it gets is 48 kHz audio.
+ *
+ * @param samples: first sample of the block.
+ * @param count: number of samples of the speaker channel.
+ * @param stride: distance between consecutive samples, in samples.
+ */
+typedef void (*csk6codec_rxProcessor)(int16_t *samples, size_t count,
+                                      size_t stride);
 
 /**
  * C62 audio through the CSK6 codec and DSP: one 48 kHz stereo stream each way,
@@ -57,6 +73,18 @@ void csk6codec_terminate(void);
  */
 void csk6codec_setRoute(enum AudioSource source, enum AudioSink sink,
                         bool enabled);
+
+/**
+ * Install or remove the processing of the radio audio towards the speaker.
+ *
+ * It is a per-sample filter, so the owner of the mode has to set it before
+ * opening the SOURCE_RTX to SINK_SPK path and remove it after closing it: with
+ * the path closed the worker has nothing from the radio to process, and a
+ * callback left behind would only be called on a later mode's audio.
+ *
+ * @param processor: the callback, NULL to remove it.
+ */
+void csk6codec_setRxProcessor(csk6codec_rxProcessor processor);
 
 /**
  * Peak microphone magnitude of the last captured DSP frame.
