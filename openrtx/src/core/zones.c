@@ -199,7 +199,11 @@ bool zones_channelValid(const zone_channel_t *zc)
 
     if (zc->mode != OPMODE_FM && zc->mode != OPMODE_M17 &&
         zc->mode != OPMODE_DMR && zc->mode != OPMODE_TETRA &&
+<<<<<<< HEAD
         zc->mode != OPMODE_AIRBAND)
+=======
+        zc->mode != OPMODE_YSF)
+>>>>>>> c62/rx-fusion
         return false;
 
     return true;

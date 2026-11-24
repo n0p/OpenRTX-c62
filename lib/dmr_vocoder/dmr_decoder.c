@@ -158,7 +158,7 @@ static void parms_init(dmr_parms_t *p)
 /* AMBE 2450 parameter decode (mbe_decodeAmbe2450Parms)               */
 /* ------------------------------------------------------------------ */
 
-static int decode_parms(const uint8_t *d, dmr_parms_t *cur, dmr_parms_t *prev)
+static int decode_parms_values(const uint8_t *d, dmr_parms_t *cur, dmr_parms_t *prev)
 {
     int ji, i, j, k, l, L = 0, m, am, ak;
     int intkl[57];
@@ -844,15 +844,33 @@ void dmr_vocoder_init(dmr_vocoder_t *v)
 
 size_t dmr_vocoder_state_size(void) { return sizeof(dmr_vocoder_t); }
 
-int dmr_vocoder_decode_frame(dmr_vocoder_t *v, const uint8_t frame[DMR_FRAME_BYTES],
-                             int16_t pcm[DMR_PCM_SAMPLES], int *errs)
+int dmr_golay24_correct(uint32_t w24, uint32_t *info12)
 {
-    if (!v || !frame || !pcm)
+    /* Extended Golay(24,12): 12 information bits, 11 parity, one overall
+     * parity bit last.  The (23,12) core is perfect, so the syndrome table
+     * gives the error pattern directly; the parity bit then says whether the
+     * correction is inside the three-bit radius. */
+    uint32_t a23 = (w24 >> 1) & 0x7FFFFFu;
+    uint32_t e = (uint32_t)dmr_golay_hi[golay_syndrome(a23)];
+    uint32_t corrected = a23 ^ e;
+    int weight = popcount23(e) + (((popcount23(corrected) & 1) != (int)(w24 & 1u)) ? 1 : 0);
+
+    if (weight > 3)
         return -1;
 
-    uint8_t d[49];
-    int nerr = unpack_frame(frame, d, errs != NULL);
+    if (info12)
+        *info12 = corrected >> 11;
 
+    return weight;
+}
+
+/**
+ * The part of a frame decode that does not depend on the channel format: the
+ * 49 AMBE parameters in, 20 ms of PCM out.
+ */
+static void decode_params(dmr_vocoder_t *v, const uint8_t d[49],
+                          int16_t pcm[DMR_PCM_SAMPLES], int nerr, int *errs)
+{
     dmr_parms_t *cur = &v->cur;
     dmr_parms_t *prev = &v->prev;
     dmr_parms_t *enh = &v->enh;
@@ -868,7 +886,7 @@ int dmr_vocoder_decode_frame(dmr_vocoder_t *v, const uint8_t frame[DMR_FRAME_BYT
     cur->errorCount4 = 0;
     cur->errorRate = 0.95f * prev->errorRate;
 
-    int bad = decode_parms(d, cur, prev);
+    int bad = decode_parms_values(d, cur, prev);
     cur->repeat = 0;
     cur->repeatCount = 0;
 
@@ -900,5 +918,29 @@ int dmr_vocoder_decode_frame(dmr_vocoder_t *v, const uint8_t frame[DMR_FRAME_BYT
             a = -maxamp;
         pcm[i] = sat16((int32_t)a);
     }
+}
+
+int dmr_vocoder_decode_ambe_params(dmr_vocoder_t *v, const uint8_t d[49],
+                           int16_t pcm[DMR_PCM_SAMPLES], int *errs)
+{
+    if (!v || !d || !pcm)
+        return -1;
+
+    decode_params(v, d, pcm, 0, errs);
+
+    return 0;
+}
+
+int dmr_vocoder_decode_frame(dmr_vocoder_t *v, const uint8_t frame[DMR_FRAME_BYTES],
+                             int16_t pcm[DMR_PCM_SAMPLES], int *errs)
+{
+    if (!v || !frame || !pcm)
+        return -1;
+
+    uint8_t d[49];
+    int nerr = unpack_frame(frame, d, errs != NULL);
+
+    decode_params(v, d, pcm, nerr, errs);
+
     return 0;
 }

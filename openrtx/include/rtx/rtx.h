@@ -95,6 +95,7 @@ enum opmode
     OPMODE_DMR  = 2,        /**< DMR                */
     OPMODE_M17  = 3,        /**< M17                */
     OPMODE_TETRA = 4,       /**< TETRA (receive)    */
+<<<<<<< HEAD
     /*
 <<<<<<< HEAD
      * Receiving-only modes, numbered in the order they were added. Every new
@@ -114,6 +115,22 @@ enum opmode
      */
     OPMODE_P25 = 7          /**< P25 Phase 1 (receive) */
 >>>>>>> c62/rx-p25
+=======
+    OPMODE_NXDN = 5,        /**< Reserved: NXDN     */
+    OPMODE_DPMR = 6,        /**< Reserved: dPMR     */
+    OPMODE_P25  = 7,        /**< Reserved: P25      */
+    OPMODE_YSF  = 8,        /**< System Fusion, C4FM (receive) */
+    OPMODE_DSTAR = 9,       /**< Reserved: D-STAR   */
+    OPMODE_AIRBAND = 10,    /**< Reserved: air band */
+
+    /*
+     * The numbering is fixed across branches even where this tree has no
+     * implementation: the mode value is what the channel store, the zones and
+     * the UI quick menu persist, and two branches that picked their own next
+     * free value would collide the moment they merge. New modes take the next
+     * number after OPMODE_AIRBAND.
+     */
+>>>>>>> c62/rx-fusion
 };
 
 /**

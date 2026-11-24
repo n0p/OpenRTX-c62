@@ -74,6 +74,22 @@ int dmr_vocoder_decode(const uint8_t frame[DMR_VOCODER_FRAME_BYTES],
                        int16_t pcm[DMR_VOCODER_PCM_SAMPLES]);
 
 /**
+ * @brief Decode one 49-bit AMBE+2 parameter frame to PCM.
+ *
+ * System Fusion's V/D mode 2 carries the parameters with its own repetition
+ * and whitening, so no Golay/Hamming layer is left for the vocoder: this entry
+ * takes what dmr_vocoder_decode() recovers internally from a 72-bit frame.
+ * Same instance and state, so a decoder started on one mode continues on the
+ * other without a reset.
+ *
+ * @param d: 49 parameter bits, one per byte, MSB first.
+ * @param pcm: 160 samples of 16-bit PCM at 8 kHz.
+ * @return 0 on success, -1 on bad arguments.
+ */
+int dmr_vocoder_decode_ambe(const uint8_t d[49],
+                            int16_t pcm[DMR_VOCODER_PCM_SAMPLES]);
+
+/**
  * @brief Reset the decoder state.
  *
  * Call at the start of a new transmission, or when synchronisation is lost, so

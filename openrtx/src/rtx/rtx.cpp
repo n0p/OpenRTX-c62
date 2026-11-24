@@ -20,6 +20,9 @@
 #ifdef CONFIG_DMR
 #include "rtx/OpMode_DMR.hpp"
 #endif
+#ifdef CONFIG_YSF
+#include "rtx/OpMode_YSF.hpp"
+#endif
 #ifdef CONFIG_TETRA
 #include "rtx/OpMode_TETRA.hpp"
 #endif
@@ -72,12 +75,17 @@ static OpMode_TETRA tetraMode;          // TETRA mode handler
 static OpMode_DMR dmrMode;              // DMR mode handler
 #endif
 <<<<<<< HEAD
+<<<<<<< HEAD
 #ifdef CONFIG_NXDN
 static OpMode_NXDN nxdnMode;            // NXDN mode handler
 =======
 #ifdef CONFIG_P25
 static OpMode_P25 p25Mode;              // P25 Phase 1 mode handler
 >>>>>>> c62/rx-p25
+=======
+#ifdef CONFIG_YSF
+static OpMode_YSF ysfMode;              // System Fusion mode handler
+>>>>>>> c62/rx-fusion
 #endif
 
 
@@ -349,6 +357,9 @@ void rtx_task()
                 #ifdef CONFIG_P25
                 case OPMODE_P25:  currMode = &p25Mode;  break;
                 #endif
+                #ifdef CONFIG_YSF
+                case OPMODE_YSF:   currMode = &ysfMode;   break;
+                #endif
                 default:   currMode = &noMode;
             }
 
@@ -441,6 +452,7 @@ bool opmode_canTransmit(uint8_t mode)
             /* Receive only: OpMode_TETRA forces the status back to RX */
             return false;
 <<<<<<< HEAD
+<<<<<<< HEAD
         case OPMODE_NXDN:
         case OPMODE_DPMR:
         case OPMODE_P25:
@@ -454,6 +466,10 @@ bool opmode_canTransmit(uint8_t mode)
         case OPMODE_P25:
             /* Receive only: OpMode_P25 forces the status back to RX */
 >>>>>>> c62/rx-p25
+=======
+        case OPMODE_YSF:
+            /* Receive only: OpMode_YSF forces the status back to RX */
+>>>>>>> c62/rx-fusion
             return false;
         default:
             return false;
