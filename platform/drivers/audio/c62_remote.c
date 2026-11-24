@@ -31,6 +31,8 @@
  *   tx                   transmit lifecycle: phases, deadlines, blocks, the
  *                        level of the baseband sent to the BK4819 and how long
  *                        ago the audio worker ran
+ *   rx                   per-mode receive and transmit statistics, one line
+ *                        per mode (see core/mode_stats.h); rx 0 clears them
  *   ptt 0|1|-1           force the PTT (this build has no PTT button); -1
  *                        returns to the pad
  *   d 0|1                stop or resume recording baseband samples
@@ -53,6 +55,7 @@
 #include <IOMuxManager.h>
 #include "core/event.h"
 #include "core/input.h"
+#include "core/mode_stats.h"
 #include "core/state.h"
 #include "core/ui.h"
 #include "interfaces/keyboard.h"
@@ -154,6 +157,54 @@ static void status(void)
     baseband_dump_send_text(text, n);
 }
 
+#ifdef CONFIG_C62_MODE_STATS
+/**
+ * Is the mode built into this firmware? A mode that is not compiled has no
+ * row: its counters would only ever read zero.
+ */
+static bool modeBuilt(enum modeStatsMode mode)
+{
+    switch (mode) {
+        case MS_MODE_FM:
+        case MS_MODE_M17:
+            return true;
+#ifdef CONFIG_DMR
+        case MS_MODE_DMR:
+            return true;
+#endif
+#ifdef CONFIG_TETRA
+        case MS_MODE_TETRA:
+            return true;
+#endif
+        default:
+            return false;
+    }
+}
+
+/**
+ * The per-mode summary: one control packet per mode, same field order for all
+ * of them, so a script reads the same line whichever mode the radio is in.
+ */
+static void rxSummary(bool reset)
+{
+    if (reset) {
+        modeStats_reset(MS_MODE_COUNT);
+        reply("rx 0");
+        return;
+    }
+
+    /* One at a time: the reply buffer is the reply() stack, not ours */
+    static char text[CTRL_TEXT_MAX];
+
+    for (int mode = 0; mode < MS_MODE_COUNT; mode++) {
+        if (!modeBuilt((enum modeStatsMode)mode))
+            continue;
+        if (modeStats_format((enum modeStatsMode)mode, text, sizeof(text)) > 0)
+            reply("%s", text);
+    }
+}
+#endif
+
 static const struct {
     const char *name;
     uint32_t key;
@@ -233,6 +284,12 @@ static void execute(char *cmd)
         reply("pong");
     } else if (!strcmp(argv[0], "s")) {
         status();
+    } else if (!strcmp(argv[0], "rx")) {
+#ifdef CONFIG_C62_MODE_STATS
+        rxSummary(argc == 2 && argv[1][0] == '0');
+#else
+        reply("rx off");
+#endif
     } else if (!strcmp(argv[0], "a") && argc == 2) {
         autoMs = strtoul(argv[1], NULL, 0);
         autoNext = k_uptime_get();

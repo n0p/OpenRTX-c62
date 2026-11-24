@@ -97,6 +97,14 @@ public:
     bool isLocked();
 
     /**
+     * Get the sampling instant the clock recovery settled on.
+     *
+     * @return the sampling point within a symbol, 0 to
+     *         SAMPLES_PER_SYMBOL - 1.
+     */
+    uint32_t timingFit();
+
+    /**
      * Get the soft bits of the last demodulated frame, one per coded bit and
      * parallel to the frame returned by getFrame(): 0x0000 is a confident 0,
      * 0xFFFF a confident 1. Valid for the same lifetime as getFrame(), and

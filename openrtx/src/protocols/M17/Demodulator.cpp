@@ -9,6 +9,7 @@
 #include "protocols/M17/DSP.hpp"
 #include "protocols/M17/Utils.hpp"
 #include "core/audio_stream.h"
+#include "core/mode_stats.h"
 #include <math.h>
 #include <cstring>
 #include <stdio.h>
@@ -302,10 +303,17 @@ bool Demodulator::update(const bool invertPhase)
         return false;
 
     // Process samples
+    modeStats_blockStart(MS_MODE_M17);
     for(size_t i = 0; i < baseband.len; i++)
         sample(baseband.data[i], invertPhase);
+    modeStats_block(MS_MODE_M17, baseband.data, baseband.len);
 
     return newFrame;
+}
+
+uint32_t Demodulator::timingFit()
+{
+    return samplingPoint;
 }
 
 void Demodulator::quantize(stream_sample_t sample)

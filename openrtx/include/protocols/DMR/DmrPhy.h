@@ -101,6 +101,12 @@ void dmrPhy_push(const int16_t *samples, size_t count, dmrBurstHandler handler,
 int dmrPhy_phase(void);
 
 /**
+ * @return the fractional symbol timing of the last burst, in 48 kHz samples:
+ * one symbol is five of them, so 200 thousandths of a symbol each.
+ */
+float dmrPhy_timing(void);
+
+/**
  * @return true while a burst has been decoded in the last 300 ms.
  */
 bool dmrPhy_synced(void);
