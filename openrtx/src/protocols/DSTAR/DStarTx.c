@@ -169,8 +169,13 @@ void dstarTx_begin(const struct dstarTxConfig *cfg)
 
 void dstarTx_end(void)
 {
-    if (stage != TX_IDLE && stage != TX_DONE)
+    if (stage != TX_IDLE && stage != TX_DONE) {
+        /* The end pattern has its own bit counter: bitIndex still holds the
+         * position inside the last frame, and TX_END tests it against the
+         * pattern length. */
+        bitIndex = 0;
         stage = TX_END;
+    }
 }
 
 bool dstarTx_done(void)

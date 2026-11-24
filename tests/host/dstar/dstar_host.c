@@ -45,6 +45,7 @@ static int gEot;
 static uint8_t gLastVoice[DSTAR_VOICE_BYTES];
 static long gBitErrors;
 static long gBitTotal;
+static int gExpectedFrames;
 static uint32_t gVoiceSum;
 
 static void onHeader(const struct dstarHeader *h, int syncErrors, void *user)
@@ -64,7 +65,11 @@ static void onFrame(const struct dstarPhyFrame *f, void *user)
     gFrames++;
     memcpy(gLastVoice, f->voice, DSTAR_VOICE_BYTES);
     /* Payload BER: the transmitter sends the D-STAR null frame in every slot,
-     * so every received voice bit can be checked against a known value. */
+     * so every received voice bit can be checked against a known value.  Frames
+     * past the transmission (the demodulator keeps slicing the noise floor) are
+     * not part of the measurement. */
+    if ((int)f->index >= gExpectedFrames)
+        return;
     for (int i = 0; i < DSTAR_VOICE_BYTES; i++) {
         uint8_t x = (uint8_t)(f->voice[i] ^ dstarNullVoice[i]);
         while (x) {
@@ -142,7 +147,10 @@ static int16_t *makeTransmission(int voiceFrames, const char *text, int *outLen)
 
     /* bit sync + frame sync + header + frames, then the end pattern */
     int frameSamples = (int)(((int64_t)(64 + 15 + 660 + voiceFrames * 96) * 48000) / 4800) + 64;
-    int endSamples = (48 * 48000) / 4800 + 64;
+    /* The end pattern, then 50 ms of receiver noise floor: a real receiver
+     * keeps sampling after the carrier drops, and the demodulator needs a few
+     * symbols after the last bit to finish its timing block. */
+    int endSamples = (48 * 48000) / 4800 + 4800;
     int totalSamples = frameSamples + endSamples;
     int16_t *buf = calloc((size_t)totalSamples, sizeof(int16_t));
     dstarTx_samples(buf, frameSamples, 24000);
@@ -265,6 +273,7 @@ static int loopback(double snrDb, int frames, int verbose)
     dstarPhy_reset();
 
     int len = 0;
+    gExpectedFrames = frames;
     int16_t *sig = makeTransmission(frames, "PRUEBA D-STAR C62", &len);
 
     /* Channel: AWGN at the given SNR in the 6.25 kHz channel, and a timing
@@ -281,7 +290,9 @@ static int loopback(double snrDb, int frames, int verbose)
     double sum = 0;
     double sigSq = 0, noiseSq = 0;
     for (int i = 0; i < len; i++) {
-        double noise = sigma * gaussNoise();
+        /* The last 4800 samples are the receiver's noise-free tail: they let
+         * the demodulator finish its timing block without inventing frames. */
+        double noise = (i < len - 4800) ? sigma * gaussNoise() : 0.0;
         double v = sig[i] + noise;
         sigSq += (double)sig[i] * sig[i];
         noiseSq += noise * noise;
@@ -329,6 +340,7 @@ static int stress(double snrDb, double ppm, double fracDelay, int invert, int fr
     dstarPhy_reset();
 
     int len = 0;
+    gExpectedFrames = frames;
     int16_t *sig = makeTransmission(frames, "PRUEBA D-STAR C62", &len);
 
     /* Resample by (1 + ppm) with linear interpolation and shift by fracDelay

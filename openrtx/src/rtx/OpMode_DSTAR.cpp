@@ -258,6 +258,10 @@ void OpMode_DSTAR::disable()
 bool OpMode_DSTAR::rxSquelchOpen()
 {
     struct dstarStatus st;
+
+    /* Age the flags first: a call that stopped must close the squelch without
+     * waiting for the next frame to arrive. */
+    dstarStatus_age((uint32_t)getTick());
     dstar_getStatus(&st);
     return st.sync;
 }

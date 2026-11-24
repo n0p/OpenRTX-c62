@@ -32,6 +32,7 @@ static struct dstarHeardStation heard[DSTAR_HEARD_MAX];
 static unsigned heardCount;
 static char lastText[DSTAR_TEXT_LEN + 1];
 static char lastTextCall[DSTAR_CALL_LEN + 1];
+static uint32_t lastVoiceMs;
 
 void dstarStatus_reset(void)
 {
@@ -123,8 +124,8 @@ void dstarStatus_frame(const struct dstarPhyFrame *frame, uint32_t now)
 {
     status.frames++;
     status.sync = true;
-    if (frame->index < 4)
-        status.voice = true;
+    status.voice = true;
+    lastVoiceMs = now;
 
     if (frame->sync) {
         status.resyncs++;
@@ -186,6 +187,17 @@ void dstar_getStatus(struct dstarStatus *out)
 {
     if (out != NULL)
         *out = status;
+}
+
+/**
+ * @brief Voice activity, with the one-second window the UI expects.
+ *
+ * Kept out of the struct so the caller does not have to know the tick.
+ */
+void dstarStatus_age(uint32_t now)
+{
+    status.voice = (now - lastVoiceMs) < 1000u;
+    status.sync = (now - lastVoiceMs) < 2000u;
 }
 
 const struct dstarHeardStation *dstarHeard(int i)

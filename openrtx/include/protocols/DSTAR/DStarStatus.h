@@ -114,6 +114,13 @@ struct dstarSlow *dstarStatus_slow(void);
 /** Copy the status out. */
 void dstar_getStatus(struct dstarStatus *out);
 
+/**
+ * @brief Age the voice/sync flags so the UI sees them fall off.
+ *
+ * @param now: uptime in ms.
+ */
+void dstarStatus_age(uint32_t now);
+
 /** @return the i-th heard station, most recent first, NULL out of range. */
 const struct dstarHeardStation *dstarHeard(int i);
 

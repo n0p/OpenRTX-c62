@@ -213,6 +213,19 @@ static void bitIn(uint8_t bit, int8_t soft)
         break;
 
     case RX_DATA: {
+        /* The end pattern is 32 alternating bits then 0001001101011110
+         * (STD-7 4.1.2 h).  All 48 are required: 16 bits alone would fire on
+         * noise a few times a second and cut the call short.  It ends the
+         * transmission wherever it lands, not on a frame boundary. */
+        if ((bitHist & 0xFFFFu) == 0x135Eu &&
+            ((bitHist >> 16) & 0xFFFFFFFFu) == 0xAAAAAAAAu) {
+            state = RX_SEARCH;
+            resetFrame();
+            if (eotCb != NULL)
+                eotCb(cbUser);
+            break;
+        }
+
         if (frameBit < DSTAR_VOICE_BITS) {
             frameVoice[frameBit >> 3] =
                 (uint8_t)(frameVoice[frameBit >> 3] | (bit << (frameBit & 7)));
@@ -247,18 +260,6 @@ static void bitIn(uint8_t bit, int8_t soft)
                 frmCb(&f, cbUser);
 
             frameIndex++;
-
-            /* The end pattern is 32 alternating bits then 0001001101011110
-             * (STD-7 4.1.2 h): require all 48, or noise would end a call every
-             * couple of seconds. */
-            if ((bitHist & 0xFFFFu) == 0x135Eu &&
-                ((bitHist >> 16) & 0xFFFFFFFFu) == 0xAAAAAAAAu) {
-                state = RX_SEARCH;
-                if (eotCb != NULL)
-                    eotCb(cbUser);
-                break;
-            }
-
             resetFrame();
 
             if (framesSinceSync > 2u * DSTAR_SUPERFRAME) {
