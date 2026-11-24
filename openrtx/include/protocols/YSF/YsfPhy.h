@@ -27,7 +27,7 @@
  *
  * Nothing here is System Fusion specific beyond the sync word and the frame
  * length, so the block is small: no matched filter (the radio's IF filter
- * already shapes the eye, as in DmrPhy), no AGC, no AFC.
+ * already shapes the eye, as in the DMR demodulator), no AGC, no AFC.
  *
  * Dibit values follow the air interface, not the symbol voltage:
  *   00 -> +1, 01 -> +3, 10 -> -1, 11 -> -3

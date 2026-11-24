@@ -63,12 +63,12 @@ enum dmrDestType
 /**
  * \brief Payload format of a DMR short message.
  *
- * Seven of these are in the air (see protocols/DMR/DmrSms.h); the operator
+ * Seven of these are in the air (see protocols/DMR/dmr_sms.h); the operator
  * picks which one the radio transmits.  AUTO is the format this firmware has
  * always sent, so an upgrade does not change what leaves the radio.  The
  * numeric values are stored in the settings record: only append.
  */
-enum dmrSmsFormat
+enum dmrSmsFmtSetting
 {
     DMR_SMS_FMT_AUTO = 0,   /**< The radio's own default (IP_HC today)      */
     DMR_SMS_FMT_DD_UTF16BE, /**< Defined data (DD_HEAD 0xD), UTF-16BE       */

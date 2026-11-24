@@ -45,6 +45,27 @@ as the reference implementation).  Diagnostics: `dmr_vocoder_last_errors()`
 (Golay corrections in the last frame), `dmr_vocoder_state_bytes()` (8 540 B) and
 `dmr_vocoder_arena_used()` (always 0: nothing is allocated).
 
+### The two halves, for encrypted calls
+
+A caller that has to take a keystream off the coded bits between the FEC and
+the synthesis (DMR Basic/Enhanced Privacy, NXDN) uses the per-instance header
+and the two halves of the same call:
+
+```c
+#include "dmr_decoder.h"   /* dmr_vocoder_t, the per-instance API */
+
+int n = dmr_vocoder_unpack(frame, d);       /* Golay FEC: frame -> 49 bits   */
+/* ... d[0..48] ^= keystream ... */
+dmr_vocoder_decode_data(&v, d, pcm);        /* synthesis, no FEC             */
+```
+
+`dmr_vocoder_unpack()` returns the corrected-bit count that
+`dmr_vocoder_decode_frame()` reports, and `dmr_vocoder_decode_data()` is the
+mirror of mbelib's `mbe_processAmbe2450Dataf()` (and of the second half of
+`mbe_processAmbe3600x2450Framef()`). The DMR mode places its instance in DTCM
+through this header (`dmr_voice.c`); the single-instance `dmr_vocoder.h` above
+is the same decoder in plain `.bss`.
+
 ### The backend is replaceable
 
 `lib/dmr_vocoder` is a *backend*: the DMR mode only sees `dmr_vocoder.h`, which

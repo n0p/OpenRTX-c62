@@ -7,7 +7,47 @@
 #include <string.h>
 
 #include "protocols/NXDN/NxdnFec.h"
-#include "protocols/DMR/DmrDefs.h"
+
+/*
+ * Voice frame geometry.  NXDN and DMR carry the same AMBE+2 frame; only the
+ * packing into the burst differs, so the dibit schedule that turns the 72
+ * on-air bits into mbelib's ambe_fr[4][24] planes is the DMR one.  It used to
+ * be exported by protocols/DMR/DmrDefs.h; when the DMR package took over that
+ * directory the schedule came here, which is now its only user.
+ */
+
+/* 72 on-air bits of a voice frame (36 dibits, MSB first) -> the planes. */
+static const int8_t ambe_rw[36] = { 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1,
+                                    0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 2,
+                                    0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2 };
+
+static const int8_t ambe_rx[36] = { 23, 10, 22, 9, 21, 8, 20, 7, 19, 6, 18, 5,
+                                    17, 4,  16, 3, 15, 2, 14, 1, 13, 0, 12, 10,
+                                    11, 9,  10, 8, 9,  7, 8,  6, 7,  5, 6,  4 };
+
+static const int8_t ambe_ry[36] = { 0, 2, 0, 2, 0, 2, 0, 2, 0, 3, 0, 3,
+                                    1, 3, 1, 3, 1, 3, 1, 3, 1, 3, 1, 3,
+                                    1, 3, 1, 3, 1, 3, 1, 3, 1, 3, 1, 3 };
+
+static const int8_t ambe_rz[36] = { 5,  3,  4,  2,  3,  1, 2,  0, 1,  13, 0,  12,
+                                    22, 11, 21, 10, 20, 9, 19, 8, 18, 7,  17, 6,
+                                    16, 5,  15, 4,  14, 3, 13, 2, 12, 1,  11, 0 };
+
+/*
+ * ambe_fr[row][col] -> transmission-order bit index.  Matches mbelib's
+ * mbe_eccAmbe3600Data_common: A = row0[23..0], B = row1[22..0],
+ * C = row2[10..0] followed by row3[13..0].
+ */
+static const int8_t ambe_layout[4][24] = {
+    { 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12,
+      11, 10, 9,  8,  7,  6,  5,  4,  3,  2,  1,  0 },
+    { 46, 45, 44, 43, 42, 41, 40, 39, 38, 37, 36, 35,
+      34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, -1 },
+    { 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, -1,
+      -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 },
+    { 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60,
+      59, 58, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 },
+};
 
 void nxdnFecDescramble(uint8_t dibits[182], bool inverted)
 {
@@ -218,15 +258,15 @@ void nxdnFecVchToAmbe(const uint8_t dibits[NXDN_VCH_DIBITS],
     for (int i = 0; i < 36; i++) {
         /* Sign bit of the dibit first, then its magnitude bit: the same
          * schedule the DMR voice frame uses. */
-        planes[dmr_rw[i]][dmr_rx[i]] = (int8_t)((dibits[i] >> 1) & 1u);
-        planes[dmr_ry[i]][dmr_rz[i]] = (int8_t)(dibits[i] & 1u);
+        planes[ambe_rw[i]][ambe_rx[i]] = (int8_t)((dibits[i] >> 1) & 1u);
+        planes[ambe_ry[i]][ambe_rz[i]] = (int8_t)(dibits[i] & 1u);
     }
 
     memset(frame, 0, NXDN_AMBE_BYTES);
 
     for (int r = 0; r < 4; r++) {
         for (int c = 0; c < 24; c++) {
-            int t = dmr_ambe_layout[r][c];
+            int t = ambe_layout[r][c];
 
             if ((t >= 0) && (planes[r][c] != 0))
                 frame[t >> 3] |= (uint8_t)(0x80u >> (t & 7));

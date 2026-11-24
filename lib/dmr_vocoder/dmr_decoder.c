@@ -931,6 +931,33 @@ int dmr_vocoder_decode_ambe_params(dmr_vocoder_t *v, const uint8_t d[49],
     return 0;
 }
 
+/* Synthesis straight from the 49 parameter bits, the mirror of mbelib's
+ * mbe_processAmbe2450Dataf(): the FEC (and any keystream the caller had to
+ * take off d[]) is already done.  This is the second half of
+ * dmr_vocoder_decode_frame(), split out for the encrypted DMR paths. */
+int dmr_vocoder_decode_data(dmr_vocoder_t *v, const uint8_t d[49],
+                            int16_t pcm[DMR_PCM_SAMPLES])
+{
+    if (!v || !d || !pcm)
+        return -1;
+
+    decode_params(v, d, pcm, 0, NULL);
+
+    return 0;
+}
+
+/* 72-bit canonical frame -> the 49 FEC-corrected (still scrambled) data bits.
+ * Returns the number of corrected bits, so that a caller taking a keystream
+ * off them (Basic/Enhanced Privacy) reports the same figure as the clear
+ * path; -1 on bad arguments. */
+int dmr_vocoder_unpack(const uint8_t frame[DMR_FRAME_BYTES], uint8_t d[49])
+{
+    if (!frame || !d)
+        return -1;
+
+    return unpack_frame(frame, d, 1);
+}
+
 int dmr_vocoder_decode_frame(dmr_vocoder_t *v, const uint8_t frame[DMR_FRAME_BYTES],
                              int16_t pcm[DMR_PCM_SAMPLES], int *errs)
 {

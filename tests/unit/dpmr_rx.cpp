@@ -14,7 +14,7 @@
  *     and 9 (Hamming, CRC, scrambler, CCH/HI/END layout), including vectors
  *     taken from an independent implementation (DSDcc, fec.cpp / dpmr.cpp).
  *  2. The AMBE+2 frame mapping: dpmrFec_voiceFrame() must produce the same 9
- *     bytes as the DMR path's dmr_fec_voice_deinterleave() on the same payload,
+ *     bytes as the DMR voice path's de-interleaver on the same payload,
  *     which is what lets lib/dmr_vocoder be reused unchanged.
  *  3. A real over-the-air capture: samples/dpmr.dis from the DSDcc project
  *     (S16LE 48 kS/s discriminator output of a French professional dPMR
@@ -39,7 +39,6 @@ extern "C" {
 #include "protocols/DPMR/DpmrData.h"
 #include "protocols/DPMR/DpmrDefs.h"
 #include "protocols/DPMR/DpmrPhy.h"
-#include "protocols/DMR/DmrFec.h"
 #include "dmr_vocoder.h"
 }
 
@@ -509,6 +508,26 @@ TEST_CASE("dPMR scrambler is X^9+X^5+1 preset to ones", "[dpmr]")
     REQUIRE(seq[3] == 1);
 }
 
+/*
+ * Reference de-interleaver: the four-block voice interleave of TS 102 361-1,
+ * the one dmr_enc.c writes and dmr_voice.c undoes (its rW/rX/rY/rZ schedule):
+ * canonical bit c travels as air bit 4*(c mod 18) + c/18.  It used to be
+ * dmr_fec_voice_deinterleave() of the tree's own DMR FEC, which the protocol
+ * package replaced; the package keeps the schedule private to dmr_voice.c, so
+ * the reference the dPMR side is checked against lives here.
+ */
+static void refVoiceDeinterleave(const uint8_t air[72], uint8_t frame[9])
+{
+    memset(frame, 0, 9);
+
+    for (int c = 0; c < 72; c++) {
+        const int a = 4 * (c % 18) + c / 18;
+
+        if (air[a] != 0)
+            frame[c >> 3] |= (uint8_t)(0x80u >> (c & 7));
+    }
+}
+
 TEST_CASE("dPMR TCH bits map onto the same AMBE+2 frame as DMR", "[dpmr]")
 {
     /*
@@ -534,7 +553,7 @@ TEST_CASE("dPMR TCH bits map onto the same AMBE+2 frame as DMR", "[dpmr]")
         uint8_t dmrFrame[9];
 
         dpmrFec_voiceFrame(dibits, dpmrFrame);
-        dmr_fec_voice_deinterleave(payload, dmrFrame);
+        refVoiceDeinterleave(payload, dmrFrame);
 
         REQUIRE(memcmp(dpmrFrame, dmrFrame, 9) == 0);
     }

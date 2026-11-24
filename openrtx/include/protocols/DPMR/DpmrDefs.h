@@ -275,7 +275,8 @@ bool dpmrFec_endDecode(const uint8_t dibits[DPMR_END_FIELD_SYMBOLS],
  * dPMR carries the same AMBE+2 3600x2450 frame as DMR, with its own bit order:
  * the 72 bits of the frame are transmitted as four interleaved streams of 18
  * bits, canonical bit (4*k + j) going out as transmitted bit (18*j + k).  The
- * result is bit-identical to dmr_fec_voice_deinterleave() on the same payload,
+ * result is bit-identical to the four-block voice interleave of TS 102 361-1
+ * (the one dmr_enc.c writes and dmr_voice.c undoes) on the same payload,
  * which the unit test checks, so the DMR vocoder is reused unchanged.
  */
 void dpmrFec_voiceFrame(const uint8_t dibits[36], uint8_t frame[DPMR_AMBE_BYTES]);

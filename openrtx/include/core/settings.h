@@ -32,6 +32,11 @@ extern "C" {
  *       AGC, raster and snap).
  *  - 5: scan configuration appended (resume rule, dwell, hold, priority
  *       channel, VFO range and step), see core/scanner.h and docs/SCAN.md.
+ *  - 5: the DMR transmit air delay appended after the scan block when the DMR
+ *       package landed (docs/DMR_PKG.md).  Same version on purpose: the whole
+ *       tree is one development line and no field is ever reinterpreted, but
+ *       the record grew, so a record of the previous pass fails its CRC and is
+ *       dropped as a whole instead of loaded with the delay missing.
  *       The blocks are appends at different offsets, so merging branches is a
  *       renumber and never a re-interpretation: nothing here reorders or reuses
  *       a field.
@@ -156,6 +161,13 @@ typedef struct
     uint8_t  scan_flags;          // enum settingsScanFlags
     uint32_t scan_vfoLow;         // VFO scan start / limit, Hz
     uint32_t scan_vfoHigh;        // VFO scan limit, Hz
+    /**
+     * Transmit air delay of the audio path, microseconds: from writing a slot
+     * into the baseband stream to it leaving the PA.  0 keeps the measured
+     * default of the mode (protocols/DMR/dmr_glue.c); anything else is a
+     * bench calibration against a repeater.  Positive moves the burst later.
+     */
+    int16_t  dmr_tx_air_delay_us;
 }
 __attribute__((packed)) settings_t;
 
@@ -257,6 +269,7 @@ static const settings_t default_settings =
     SETTINGS_SCAN_VFO_LOOP,       // VFO scan wraps, up, no priority
     144000000U,                   // VFO scan: 2 m band
     146000000U,
+    0,                            // Air delay 0: the measured default
 };
 
 /**

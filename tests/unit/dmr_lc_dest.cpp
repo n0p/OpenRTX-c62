@@ -10,6 +10,13 @@
  * FLCO 0x00 and every radio on that talkgroup opens, a unit call is FLCO 0x03
  * and only the addressed subscriber opens.  The source ID travels in the same
  * PDU: it is the radio's own DMR ID from the settings.
+ *
+ * The package builds the LC (dmr_tx_setup, dmr_tx.h) and puts it in the air
+ * twice: whole in the voice LC header and terminator bursts, and as four
+ * fragments of an embedded LC in every superframe, which is what a receiver
+ * uses to keep tracking the call.  Both are read back here from the bursts
+ * themselves, through the same de-interleaving and BPTC(196,96) a receiver
+ * runs, so the test fails if the LC only exists in the call state.
  */
 
 #include <catch2/catch_test_macros.hpp>
@@ -17,11 +24,12 @@
 #include <cstring>
 
 extern "C" {
-#include "protocols/DMR/DmrTx.h"
+#include "protocols/DMR/dmr_fec.h"
+#include "protocols/DMR/dmr_tx.h"
 }
 
 /* Read n bits, MSB first, from a packed 12-byte LC */
-static uint32_t bits(const uint8_t lc[12], int off, int n)
+static uint32_t bytesBits(const uint8_t lc[12], int off, int n)
 {
     uint32_t v = 0;
 
@@ -33,64 +41,146 @@ static uint32_t bits(const uint8_t lc[12], int off, int n)
     return v;
 }
 
+/* Read n bits, MSB first, from an unpacked bit array (one bit per byte) */
+static uint32_t bitBits(const uint8_t *bits, int off, int n)
+{
+    uint32_t v = 0;
+
+    for (int i = 0; i < n; i++)
+        v = (v << 1) | (bits[off + i] & 1u);
+
+    return v;
+}
+
+/*
+ * Recover the 196 info bits of a data burst (header, terminator: info 0..97,
+ * slot type, sync, slot type, info 166..263; see dmr_tx.c), BPTC-decode them
+ * and hand back the LC octets and the slot type.
+ */
+struct DataBurst {
+    uint8_t lc[12];   /* LC octets, RS parity in 9..11 */
+    uint8_t cc;
+    uint8_t dt;
+};
+
+static DataBurst decodeDataBurst(const uint8_t dibits[DMR_TX_BURST_DIBITS])
+{
+    uint8_t bits[264];
+
+    for (int i = 0; i < 264; i++)
+        bits[i] = (uint8_t)((dibits[i / 2] >> (1 - (i % 2))) & 1u);
+
+    uint8_t info[196], decoded[96];
+    memcpy(info, bits, 98);
+    memcpy(&info[98], &bits[166], 98);
+
+    DataBurst out;
+    memset(&out, 0, sizeof(out));
+    REQUIRE(dmr_bptc196_decode(info, decoded) == 0);
+
+    for (int i = 0; i < 72; i++)
+        out.lc[i / 8] |= (uint8_t)(decoded[i] << (7 - i % 8));
+
+    /* Slot type: the same 10-bit Golay codeword twice, 8 data bits */
+    uint32_t cw = (bitBits(bits, 98, 10) << 10) | bitBits(bits, 156, 10);
+    REQUIRE(dmr_golay_20_8_decode(&cw));
+    const uint32_t d = (cw >> 12) & 0xFFu; /* data bits 19..12 */
+    out.cc = (uint8_t)((d >> 4) & 0x0Fu);
+    out.dt = (uint8_t)(d & 0x0Fu);
+    return out;
+}
+
 TEST_CASE("A group call is addressed to its talkgroup", "[dmr-tx]")
 {
-    uint8_t lc[12];
+    dmr_tx_t tx;
+    uint8_t dibits[DMR_TX_BURST_DIBITS];
 
-    dmrTx_linkControl(lc, 2142123, 2142, true, DMR_DT_VOICE_LC_HEADER);
+    dmr_tx_setup(&tx, 2142123, 2142, true, 5);
 
-    REQUIRE(bits(lc, 0, 1) == 0);        /* PF */
-    REQUIRE(bits(lc, 2, 6) == 0x00);     /* FLCO: group voice channel user */
-    REQUIRE(bits(lc, 8, 8) == 0x00);     /* FID: standard */
-    REQUIRE(bits(lc, 16, 8) == 0x00);    /* service options */
-    REQUIRE(bits(lc, 24, 24) == 2142);   /* destination: the talkgroup */
-    REQUIRE(bits(lc, 48, 24) == 2142123);/* source: our DMR ID */
+    /* The call state, in bits, as the receiver reads it */
+    REQUIRE(bitBits(tx.lc, 0, 1) == 0);        /* PF */
+    REQUIRE(bitBits(tx.lc, 2, 6) == 0x00);     /* FLCO: group voice channel user */
+    REQUIRE(bitBits(tx.lc, 8, 8) == 0x00);     /* FID: standard */
+    REQUIRE(bitBits(tx.lc, 16, 8) == 0x00);    /* service options */
+    REQUIRE(bitBits(tx.lc, 24, 24) == 2142);   /* destination: the talkgroup */
+    REQUIRE(bitBits(tx.lc, 48, 24) == 2142123);/* source: our DMR ID */
+
+    /* ... and on the air, in the header burst */
+    dmr_tx_header(&tx, dibits);
+    DataBurst h = decodeDataBurst(dibits);
+    REQUIRE(h.dt == 1);                        /* voice LC header */
+    REQUIRE(h.cc == 5);                        /* the channel's colour code */
+    REQUIRE(bytesBits(h.lc, 2, 6) == 0x00);
+    REQUIRE(bytesBits(h.lc, 24, 24) == 2142);
+    REQUIRE(bytesBits(h.lc, 48, 24) == 2142123);
 }
 
 TEST_CASE("A unit call is addressed to one subscriber", "[dmr-tx]")
 {
-    uint8_t lc[12];
+    dmr_tx_t tx;
+    uint8_t dibits[DMR_TX_BURST_DIBITS];
 
-    dmrTx_linkControl(lc, 2142123, 1234567, false, DMR_DT_VOICE_LC_HEADER);
+    dmr_tx_setup(&tx, 2142123, 1234567, false, 9);
 
-    REQUIRE(bits(lc, 2, 6) == 0x03);         /* FLCO: unit-to-unit */
-    REQUIRE(bits(lc, 24, 24) == 1234567);
-    REQUIRE(bits(lc, 48, 24) == 2142123);
+    REQUIRE(bitBits(tx.lc, 2, 6) == 0x03);     /* FLCO: unit-to-unit */
+    REQUIRE(bitBits(tx.lc, 24, 24) == 1234567);
+    REQUIRE(bitBits(tx.lc, 48, 24) == 2142123);
+
+    dmr_tx_header(&tx, dibits);
+    DataBurst h = decodeDataBurst(dibits);
+    REQUIRE(h.dt == 1);
+    REQUIRE(h.cc == 9);
+    REQUIRE(bytesBits(h.lc, 2, 6) == 0x03);
+    REQUIRE(bytesBits(h.lc, 24, 24) == 1234567);
+}
+
+TEST_CASE("The embedded LC of every superframe repeats the destination",
+          "[dmr-tx]")
+{
+    dmr_tx_t tx;
+    uint8_t lc[72];
+
+    dmr_tx_setup(&tx, 2142123, 2142, true, 5);
+
+    /*
+     * The embedded LC is the same 72 bits, Golay-coded in 128 bits of four
+     * fragments: a receiver tracks the call with it when the header is over.
+     */
+    REQUIRE(dmr_emb_lc_decode(tx.embLc, lc));
+    REQUIRE(memcmp(lc, tx.lc, sizeof(lc)) == 0);
+
+    dmr_tx_setup(&tx, 2142123, 1234567, false, 5);
+    REQUIRE(dmr_emb_lc_decode(tx.embLc, lc));
+    REQUIRE(bitBits(lc, 2, 6) == 0x03);
+    REQUIRE(bitBits(lc, 24, 24) == 1234567);
+}
+
+TEST_CASE("The terminator carries the same link control", "[dmr-tx]")
+{
+    dmr_tx_t tx;
+    uint8_t dibits[DMR_TX_BURST_DIBITS];
+
+    dmr_tx_setup(&tx, 2142123, 2142, true, 1);
+    dmr_tx_terminator(&tx, dibits);
+
+    DataBurst t = decodeDataBurst(dibits);
+    REQUIRE(t.dt == 2);                        /* terminator with LC */
+    REQUIRE(bytesBits(t.lc, 2, 6) == 0x00);    /* group voice channel user */
+    REQUIRE(bytesBits(t.lc, 24, 24) == 2142);
+    REQUIRE(bytesBits(t.lc, 48, 24) == 2142123);
 }
 
 TEST_CASE("The LC carries the identifiers whole and no more", "[dmr-tx]")
 {
-    uint8_t lc[12];
+    dmr_tx_t tx;
 
     /* The largest 24-bit identifiers */
-    dmrTx_linkControl(lc, 0xFFFFFF, 0xFFFFFF, true, DMR_DT_VOICE_LC_HEADER);
-    REQUIRE(bits(lc, 24, 24) == 0xFFFFFF);
-    REQUIRE(bits(lc, 48, 24) == 0xFFFFFF);
+    dmr_tx_setup(&tx, 0xFFFFFF, 0xFFFFFF, true, 0);
+    REQUIRE(bitBits(tx.lc, 24, 24) == 0xFFFFFF);
+    REQUIRE(bitBits(tx.lc, 48, 24) == 0xFFFFFF);
 
     /* A 32-bit value must be cut to its 24 bits, not shifted into the CRC */
-    dmrTx_linkControl(lc, 0x01234567, 0x0089ABCD, true, DMR_DT_VOICE_LC_HEADER);
-    REQUIRE(bits(lc, 24, 24) == 0x89ABCD);
-    REQUIRE(bits(lc, 48, 24) == 0x234567);
-}
-
-TEST_CASE("The terminator of a data call keeps the destination", "[dmr-tx]")
-{
-    uint8_t lc[12];
-
-    dmrTx_dataTerminator(lc, 2142123, 2142, true);
-
-    /*
-     * Terminator Data Link Control (TS 102 361-3 table 7.1): FLCO 110000, then
-     * the destination at bit 16 (there is no service-options octet), the source
-     * at bit 40, and the G/I bit at 64.
-     */
-    REQUIRE(bits(lc, 2, 6) == 0x30);     /* terminator with LC */
-    REQUIRE(bits(lc, 16, 24) == 2142);
-    REQUIRE(bits(lc, 40, 24) == 2142123);
-    REQUIRE(bits(lc, 64, 1) == 1);       /* G/I: the call was a group one */
-    REQUIRE(bits(lc, 66, 1) == 1);       /* FMF: last fragment */
-
-    dmrTx_dataTerminator(lc, 2142123, 1234567, false);
-    REQUIRE(bits(lc, 16, 24) == 1234567);
-    REQUIRE(bits(lc, 64, 1) == 0);       /* unit call */
+    dmr_tx_setup(&tx, 0x01234567, 0x0089ABCD, true, 0);
+    REQUIRE(bitBits(tx.lc, 24, 24) == 0x89ABCD);
+    REQUIRE(bitBits(tx.lc, 48, 24) == 0x234567);
 }

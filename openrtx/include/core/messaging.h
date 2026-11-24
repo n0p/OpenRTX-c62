@@ -17,7 +17,7 @@
  * needs to know which one carried the text:
  *
  *   - APRS, on the analog FM path (aprs_service, AX.25 UI frames);
- *   - DMR short messages, in a data call (protocols/DMR/DmrSms.h);
+ *   - DMR short messages, in a data call (protocols/DMR/dmr_sms.h);
  *   - TETRA SDS, the uplink PDU of EN 300 392-2 (protocols/TETRA/SdsEnc.h).
  *
  * The outbox is a small ring of pending messages; the transport that can send

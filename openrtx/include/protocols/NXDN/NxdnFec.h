@@ -72,10 +72,10 @@ bool nxdnFecSacch(const uint8_t bits[NXDN_SACCH_BITS], uint8_t out[26]);
 /**
  * @brief Map the 36 dibits of a VCH to one canonical AMBE+2 frame.
  *
- * The 72 on-air bits go through the same dibit schedule DMR uses
- * (dmr_rw/dmr_rx/dmr_ry/dmr_rz of protocols/DMR/DmrDefs.h), which is the
- * mbelib ambe_fr[4][24] plane order: NXDN and DMR carry the same AMBE+2 frame,
- * they only pack it into the burst differently.  The result is the 9-byte
+ * The 72 on-air bits go through the same dibit schedule DMR uses (a private
+ * table in NxdnFec.c since the DMR package took over protocols/DMR/), which is
+ * the mbelib ambe_fr[4][24] plane order: NXDN and DMR carry the same AMBE+2
+ * frame, they only pack it into the burst differently.  The result is the 9-byte
  * A(24) | B(23) | C(25) layout dmr_vocoder_decode() takes.
  */
 void nxdnFecVchToAmbe(const uint8_t dibits[NXDN_VCH_DIBITS],

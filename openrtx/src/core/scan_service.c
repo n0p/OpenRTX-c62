@@ -23,7 +23,8 @@
  *   - the list the machine walks is the channel bank, read through
  *     chstore_get() (two reads per step, none while listening);
  *   - the squelch is rtx_rxSquelchOpen(), which is the analog squelch in FM and
- *     the carrier/sync detector in DMR (dmrPhy_synced) and M17 (LSF valid);
+ *     the carrier/sync detector in DMR (dmrSpeech_playing / dmr_demod) and
+ *     M17 (LSF valid);
  *   - a retune is a channel of state.channel plus ui_rtxSyncRequest, the same
  *     door the quick menu and the remote control use, so the UI thread builds
  *     the RTX configuration and the mode reinitialises itself;

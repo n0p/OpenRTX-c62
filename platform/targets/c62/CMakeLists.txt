@@ -139,14 +139,45 @@ if(C62_BASEBAND_DUMP)
   endif()
 endif()
 #
-# C62_DMR_VOCODER: AMBE+2 voice decoder for the DMR receive mode.
-# Builds lib/dmr_vocoder (the decoder half of OpenDMR, C only, static state, no
-# heap) and links it into the application. OFF by default: it costs 41 KiB of
-# flash and 52 KiB of RAM (measured, see docs/DMR_VOCODER.md), and nothing calls
-# it until CONFIG_C62_DMR_RX is set.
+# DMR: the protocol package of protocols/DMR/ (dmr_demod.c .. trunk/, the tree
+# of c62/tetra as packaged, see docs/DMR_PKG.md for the map and licences).
 #
-if(CONFIG_C62_DMR_VOCODER)
-  add_subdirectory(${OPENRTX_ROOT}/lib/dmr_vocoder ${CMAKE_BINARY_DIR}/dmr_vocoder)
+# Options:
+#   CONFIG_C62_DMR_RX  the mode                     (Kconfig, OFF)
+#   CONFIG_DMR_TX      the transmit chain           (Kconfig, OFF)
+#   CONFIG_DMR_TRUNK   Tier III                     (Kconfig, ON)
+#   CONFIG_DMR_SMS     messages bridged to core/messaging (Kconfig, ON)
+#   C62_DMR_VOICE      the AMBE+2 decoder: ours (OFF, default) or mbelib (ON)
+#   DMR_ENC            the AMBE+2 encoder: ours (OFF, default) or OpenDMR (ON)
+#
+# mbelib and OpenDMR are the package's choice, fetched by
+# scripts/c62/fetch_mbelib.sh and scripts/c62/fetch_opendmr.sh into
+# <west>/modules/lib/.  Both are off by default now: neither vocoder fits the
+# M33 in real time (mbelib 9.36 M instructions per 20 ms frame, OpenDMR
+# 4.10 M), while lib/dmr_vocoder (113 k) and lib/dmr_encoder (1.43 M) do.
+# They stay selectable so the decision can be revisited with measurements;
+# mbelib is also the only one that decodes D-STAR and P25 IMBE.  See
+# docs/DMR_PKG.md, "The vocoders".
+#
+set(C62_DMR_VOICE OFF CACHE STRING
+    "DMR voice: AMBE+2 decoder, ON = mbelib, OFF = lib/dmr_vocoder (ours)")
+set(DMR_ENC OFF CACHE STRING
+    "DMR transmitter: AMBE+2 encoder, ON = OpenDMR, OFF = lib/dmr_encoder (ours)")
+
+set(C62_DMR_SRC ${OPENRTX_ROOT}/openrtx/src/protocols/DMR)
+set(C62_MBELIB ${WEST_TOPDIR}/modules/lib/mbelib)
+set(C62_OPENDMR ${WEST_TOPDIR}/modules/lib/opendmr)
+
+#
+# lib/dmr_vocoder: the AMBE+2 3600x2450 decoder, one static library shared by
+# every mode that carries that frame -- DMR (the package's voice path), NXDN,
+# YSF and dPMR -- and, through dmr_golay.c, the D-STAR front end.  It is built
+# here, once, whichever of those modes asked for it: a second
+# add_subdirectory() on the same binary directory is a CMake error.
+#
+if(CONFIG_C62_DMR_RX OR CONFIG_C62_DMR_VOCODER)
+  add_subdirectory(${OPENRTX_ROOT}/lib/dmr_vocoder
+                   ${CMAKE_BINARY_DIR}/dmr_vocoder)
   # Build it with the Zephyr compiler flags (CPU, FPU, ABI, include paths).
   target_compile_options(dmr_vocoder PRIVATE
     $<TARGET_PROPERTY:zephyr_interface,INTERFACE_COMPILE_OPTIONS>)
@@ -156,10 +187,16 @@ if(CONFIG_C62_DMR_VOCODER)
     $<TARGET_PROPERTY:zephyr_interface,INTERFACE_INCLUDE_DIRECTORIES>)
   target_include_directories(dmr_vocoder SYSTEM PRIVATE
     $<TARGET_PROPERTY:zephyr_interface,INTERFACE_SYSTEM_INCLUDE_DIRECTORIES>)
-  # Nothing calls the vocoder until the DMR receive mode is merged, and the
-  # linker drops an unreferenced static library.  This forces the symbol in
-  # anyway so its flash/RAM cost can be measured on the real firmware image;
-  # it is a measurement aid, off by default.
+  target_link_libraries(app PRIVATE dmr_vocoder)
+  target_include_directories(app PRIVATE ${OPENRTX_ROOT}/lib/dmr_vocoder)
+
+  if(CONFIG_C62_DMR_VOCODER)
+    target_compile_definitions(app PRIVATE CONFIG_DMR_VOCODER)
+  endif()
+
+  # A measurement aid, off by default: an unreferenced static library is
+  # dropped by the linker, and this forces the symbol in so its cost can be
+  # read off the real image.
   option(C62_DMR_VOCODER_FORCE_LINK
          "Link the vocoder without a caller (size measurement only)" OFF)
   if(C62_DMR_VOCODER_FORCE_LINK)
@@ -167,20 +204,10 @@ if(CONFIG_C62_DMR_VOCODER)
     zephyr_link_libraries(-Wl,-u,dmr_vocoder_decode)
   endif()
 
-  target_link_libraries(app PRIVATE dmr_vocoder)
-  target_compile_definitions(app PRIVATE CONFIG_DMR_VOCODER)
-
-  message(STATUS "C62: DMR AMBE+2 vocoder (decode only) enabled"
+  message(STATUS "C62: AMBE+2 decoder enabled"
                  " (force link: ${C62_DMR_VOCODER_FORCE_LINK})")
 endif()
 
-#
-# C62_DMR_RX: DMR mode. The PHY, the FEC and the burst handling are the C port
-# of the host prototype in work/dmr-rx (see docs/DMR_RX.md); voice goes through
-# lib/dmr_vocoder, so this option selects C62_DMR_VOCODER.
-#
-# With CONFIG_DMR_TX the same option also builds the transmit chain (DmrTx.c,
-# the encode halves of DmrFec.c and the DmrVocoder.c hook), see docs/DMR_TX.md.
 #
 # C62_APRS: APRS on the analog FM path (messaging, beacon, station list).
 # The decoder is off at run time until it is enabled in the menu: this option
@@ -191,13 +218,14 @@ endif()
 # inbox, states and the flash record, used by APRS, DMR SMS and TETRA SDS.  The
 # messaging screen of the UI talks to this and nothing else.
 #
-# The option is NOT called CONFIG_MESSAGING on purpose, and so are C62_SCAN and
-# C62_DMR_SMS below: Zephyr takes every CMake cache variable named CONFIG_* as
-# a Kconfig assignment (cmake/modules/kconfig.cmake), so an option named that
-# way survives in CMakeCache.txt and the next configure aborts with "attempt
-# to assign the value 'ON' to the undefined symbol".  The CONFIG_* spelling is
-# the C macro the sources see, and that one is emitted by
-# target_compile_definitions below.
+# The option is NOT called CONFIG_MESSAGING on purpose, and so is C62_SCAN
+# below: Zephyr takes every CMake cache variable named CONFIG_* as a Kconfig
+# assignment (cmake/modules/kconfig.cmake), so an option named that way
+# survives in CMakeCache.txt and the next configure aborts with "attempt to
+# assign the value 'ON' to the undefined symbol".  The CONFIG_* spelling is the
+# C macro the sources see, and that one is emitted by target_compile_definitions
+# below -- or, for DMR_SMS and DMR_TRUNK, it is the Kconfig symbol itself, read
+# here as a CMake variable (CONFIG_DMR_SMS), which is not a cache entry.
 #
 option(C62_MESSAGING "Shared text message store (APRS, DMR SMS, TETRA SDS)" ON)
 
@@ -257,7 +285,6 @@ if(CONFIG_C62_NXDN_RX)
   target_sources(app PRIVATE
     ${OPENRTX_ROOT}/openrtx/src/protocols/NXDN/NxdnDefs.c
     ${OPENRTX_ROOT}/openrtx/src/protocols/NXDN/NxdnFec.c
-    ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrDefs.c
     ${OPENRTX_ROOT}/openrtx/src/protocols/NXDN/NxdnPhy.c
     ${OPENRTX_ROOT}/openrtx/src/protocols/NXDN/NxdnSpeech.c
     ${OPENRTX_ROOT}/openrtx/src/protocols/NXDN/NxdnStatus.c
@@ -294,21 +321,8 @@ if(CONFIG_C62_DPMR_RX)
     ${OPENRTX_ROOT}/openrtx/src/protocols/DPMR/DpmrPhy.c
     PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 
-  if(CONFIG_C62_DMR_VOCODER)
-    target_link_libraries(app PRIVATE dmr_vocoder)
-  endif()
-
   message(STATUS "C62: dPMR receive mode enabled")
 endif()
-
-#
-#
-# C62_DMR_SMS: short messages in the DMR mode (protocols/DMR/DmrSms.c).
-# A data call carries the text, one burst per TDMA frame; the message store
-# (C62_MESSAGING) holds the queue the UI writes to.  Needs CONFIG_DMR_TX to
-# transmit and CONFIG_C62_DMR_RX to receive, but compiles with either alone.
-#
-option(C62_DMR_SMS "DMR short messages (data calls)" ON)
 
 #
 # C62_YSF: Yaesu System Fusion receive mode.  The frame layer reuses the Golay
@@ -381,43 +395,189 @@ if(CONFIG_C62_DSTAR)
 endif()
 
 if(CONFIG_C62_DMR_RX)
+  target_include_directories(app PRIVATE ${C62_DMR_SRC}
+    ${OPENRTX_ROOT}/openrtx/include/protocols/DMR
+    ${OPENRTX_ROOT}/openrtx/include/protocols/DMR/trunk)
+
   target_sources(app PRIVATE
-    ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrDefs.c
-    ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrFec.c
-    ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrPhy.c
-    ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrSpeech.c
-    ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrStatus.c
-    ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrVocoder.c
+    ${C62_DMR_SRC}/DmrDefs.c
+    ${C62_DMR_SRC}/DmrStatus.c
+    ${C62_DMR_SRC}/dmr_glue.c
+    ${C62_DMR_SRC}/dmr_demod.c
+    ${C62_DMR_SRC}/dmr_fec.c
+    ${C62_DMR_SRC}/dmr_trellis.c
+    ${C62_DMR_SRC}/dmr_proto.c
+    ${C62_DMR_SRC}/dmr_data.c
+    ${C62_DMR_SRC}/dmr_lrrp.c
+    ${C62_DMR_SRC}/dmr_track.c
+    ${C62_DMR_SRC}/dmr_voice.c
+    ${C62_DMR_SRC}/DmrSpeech.c
+    ${C62_DMR_SRC}/dmr_sms.c
+    ${C62_DMR_SRC}/dmr_ep.c
+    ${C62_DMR_SRC}/dmr_aes.c
+    ${C62_DMR_SRC}/dmr_hytera.c
+    ${C62_DMR_SRC}/aes/tinyaes.c
+    ${C62_DMR_SRC}/aes/tinyaes128.c
+    ${C62_DMR_SRC}/aes/des.c
     ${OPENRTX_ROOT}/openrtx/src/rtx/OpMode_DMR.cpp)
   target_compile_definitions(app PRIVATE CONFIG_DMR)
-  message(STATUS "C62: DMR mode enabled")
+  message(STATUS "C62: DMR mode enabled (protocol package)")
 
-  if(C62_DMR_SMS)
-    if(NOT C62_MESSAGING)
-      message(FATAL_ERROR "C62_DMR_SMS needs C62_MESSAGING")
+  # ---- voice: ours by default, mbelib selectable (off) --------------------
+  if(C62_DMR_VOICE STREQUAL "AUTO")
+    set(C62_DMR_VOICE OFF) # old build lines: AUTO used to mean "mbelib if there"
+  endif()
+  if(C62_DMR_VOICE)
+    if(NOT EXISTS ${C62_MBELIB}/mbelib.c)
+      message(FATAL_ERROR "C62_DMR_VOICE needs mbelib in ${C62_MBELIB}: run "
+                          "scripts/c62/fetch_mbelib.sh")
     endif()
-    target_sources(app PRIVATE
-      ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrSms.c
-      ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrSmsApp.c)
-    target_compile_definitions(app PRIVATE CONFIG_DMR_SMS)
-    message(STATUS "C62: DMR short messages enabled")
+    file(GLOB C62_MBELIB_SRC ${C62_MBELIB}/*.c)
+    # Its own static library: mbelib is C89-ish and warns on Zephyr's flag set.
+    # A COMPILE_OPTIONS property on the sources does not reach the command
+    # line here, so the -w is a target option of the library (as libtetra).
+    add_library(c62_mbelib STATIC ${C62_MBELIB_SRC})
+    target_compile_options(c62_mbelib PRIVATE
+      $<TARGET_PROPERTY:zephyr_interface,INTERFACE_COMPILE_OPTIONS> -w)
+    target_compile_definitions(c62_mbelib PRIVATE
+      $<TARGET_PROPERTY:zephyr_interface,INTERFACE_COMPILE_DEFINITIONS>
+      _GNU_SOURCE M_PI=3.14159265358979323846f)
+    target_include_directories(c62_mbelib PRIVATE
+      $<TARGET_PROPERTY:zephyr_interface,INTERFACE_INCLUDE_DIRECTORIES>
+      ${C62_MBELIB})
+    target_include_directories(c62_mbelib SYSTEM PRIVATE
+      $<TARGET_PROPERTY:zephyr_interface,INTERFACE_SYSTEM_INCLUDE_DIRECTORIES>)
+    target_link_libraries(app PRIVATE c62_mbelib)
+    # Only dmr_voice.c may see this mbelib.h: OpenDMR carries its own copy in
+    # decoder/, and a target-wide -I would shadow it (two different
+    # declarations of the same symbols, one without extern "C").
+    set_source_files_properties(${C62_DMR_SRC}/dmr_voice.c
+      DIRECTORY ${CMAKE_SOURCE_DIR}
+      PROPERTIES INCLUDE_DIRECTORIES ${C62_MBELIB})
+    target_compile_definitions(app PRIVATE DMR_VOICE_ENABLED)
+    message(STATUS "C62: DMR voice: mbelib (reference, 9.36 M instr/frame)")
+  else()
+    # Ours: lib/dmr_vocoder, 113 k instructions per 20 ms frame.  Its state
+    # (8 540 B) goes to DTCM from dmr_voice.c (DMR_FAST_BSS), so only the
+    # per-instance header is used; dmr_vocoder.c stays in the library for
+    # the host tests.  The library itself is built once by the shared block
+    # near the top of this file (NXDN, YSF and dPMR link the same one).
+    target_compile_definitions(app PRIVATE DMR_VOICE_OWN)
+    message(STATUS "C62: DMR voice: lib/dmr_vocoder (ours, 113 k instr/frame)")
   endif()
 
+  # ---- short messages ----------------------------------------------------
+  if(CONFIG_DMR_SMS)
+    if(NOT C62_MESSAGING)
+      message(FATAL_ERROR "CONFIG_DMR_SMS needs C62_MESSAGING")
+    endif()
+    target_compile_definitions(app PRIVATE CONFIG_DMR_SMS)
+    message(STATUS "C62: DMR short messages bridged to core/messaging")
+  endif()
+
+  # ---- Tier III ----------------------------------------------------------
+  if(CONFIG_DMR_TRUNK)
+    target_include_directories(app PRIVATE ${C62_DMR_SRC}/trunk)
+    target_sources(app PRIVATE
+      ${C62_DMR_SRC}/trunk/dmr_trunk.c
+      ${C62_DMR_SRC}/trunk/t3_ms.c
+      ${C62_DMR_SRC}/trunk/t3_pdu.c
+      ${C62_DMR_SRC}/trunk/t3_plan.c
+      ${C62_DMR_SRC}/trunk/t3_sys.c)
+    target_compile_definitions(app PRIVATE CONFIG_DMR_TRUNK)
+    message(STATUS "C62: DMR Tier III enabled")
+  endif()
+
+  # ---- transmitter -------------------------------------------------------
   if(CONFIG_DMR_TX)
     target_sources(app PRIVATE
-      ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrTx.c
-      ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrTxTables.c)
+      ${C62_DMR_SRC}/dmr_tx.c
+      ${C62_DMR_SRC}/dmr_enc.c)
     target_compile_definitions(app PRIVATE CONFIG_DMR_TX)
     message(STATUS "C62: DMR transmit chain enabled")
 
-    #
-    # DMR_TX_ENC: the AMBE+2 encoder (lib/dmr_encoder, pure C: the fixed-point
-    # analysis of the IMBE encoder plus the OP25 quantiser and Golay).  It
-    # overrides the weak dmrVocoder_encode() hook, so with this on the PTT of
-    # the DMR mode really transmits.  1.43 M instructions per 20 ms frame,
-    # 63 KiB of flash, 5.5 KiB of .bss; see docs/DMR_TX.md.
-    #
-    if(CONFIG_DMR_TX_ENC)
+    if(DMR_ENC STREQUAL "AUTO")
+      set(DMR_ENC OFF) # old build lines: ours is the default now
+    endif()
+    if(DMR_ENC)
+      if(NOT EXISTS ${C62_OPENDMR}/opendmr.h)
+        message(FATAL_ERROR "DMR_ENC needs OpenDMR in ${C62_OPENDMR}: run "
+                            "scripts/c62/fetch_opendmr.sh")
+      endif()
+      # OpenDMR is self-contained (its own mbelib in decoder/, the IMBE
+      # analyser in encoder/): the same list as its Makefile.  It is its own
+      # static library for two reasons: the -w (third-party C and C++), and
+      # the defines below, which must reach every one of its translation
+      # units (a source-file property does not, see c62_mbelib above).
+      set(C62_OPENDMR_SRC
+        ${C62_OPENDMR}/opendmr.cpp
+        ${C62_OPENDMR}/decoder/mbelib.c
+        ${C62_OPENDMR}/decoder/mbe_adaptive.c
+        ${C62_OPENDMR}/decoder/mbe_unvoiced_fft.c
+        ${C62_OPENDMR}/decoder/ambe3600x2450.c
+        ${C62_OPENDMR}/decoder/ambe_common.c
+        ${C62_OPENDMR}/decoder/ecc.c
+        ${C62_OPENDMR}/decoder/ecc_const.c
+        ${C62_OPENDMR}/decoder/pffft.c
+        ${C62_OPENDMR}/decoder/fftpack.c
+        ${C62_OPENDMR}/encoder/cgolay24128.cpp
+        ${C62_OPENDMR}/encoder/mbeenc.cpp
+        ${C62_OPENDMR}/encoder/aux_sub.cc
+        ${C62_OPENDMR}/encoder/basicop2.cc
+        ${C62_OPENDMR}/encoder/ch_encode.cc
+        ${C62_OPENDMR}/encoder/dc_rmv.cc
+        ${C62_OPENDMR}/encoder/dsp_sub.cc
+        ${C62_OPENDMR}/encoder/encode.cc
+        ${C62_OPENDMR}/encoder/imbe_vocoder.cc
+        ${C62_OPENDMR}/encoder/imbe_vocoder_impl.cc
+        ${C62_OPENDMR}/encoder/math_sub.cc
+        ${C62_OPENDMR}/encoder/pe_lpf.cc
+        ${C62_OPENDMR}/encoder/pitch_est.cc
+        ${C62_OPENDMR}/encoder/pitch_ref.cc
+        ${C62_OPENDMR}/encoder/qnt_sub.cc
+        ${C62_OPENDMR}/encoder/rand_gen.cc
+        ${C62_OPENDMR}/encoder/sa_encode.cc
+        ${C62_OPENDMR}/encoder/tbls.cc
+        ${C62_OPENDMR}/encoder/v_uv_det.cc)
+      # OpenDMR carries its own mbelib (decoder/), and the receive voice path
+      # links mbelib proper for dmr_voice.c: both export the same 28 globals
+      # (golayGenerator ... mbe_useLastMbeParms).  Every OpenDMR translation
+      # unit sees them renamed, so the two libraries stay whole and apart.
+      # Mechanical: the names are mangled the same way inside OpenDMR, and
+      # nobody outside refers to its copies.
+      set(C62_OPENDMR_PREFIX -DgolayGenerator=odmr_golayGenerator;-DgolayMatrix=odmr_golayMatrix;-DhammingGenerator=odmr_hammingGenerator;-Dimbe7100x4400hammingGenerator=odmr_imbe7100x4400hammingGenerator;-Dmbe_7100x4400hamming1511=odmr_mbe_7100x4400hamming1511;-Dmbe_checkGolayBlock=odmr_mbe_checkGolayBlock;-Dmbe_decodeAmbe2450Parms=odmr_mbe_decodeAmbe2450Parms;-Dmbe_demodulateAmbe3600x2450Data=odmr_mbe_demodulateAmbe3600x2450Data;-Dmbe_dumpAmbe2450Data=odmr_mbe_dumpAmbe2450Data;-Dmbe_dumpAmbe3600x2450Frame=odmr_mbe_dumpAmbe3600x2450Frame;-Dmbe_eccAmbe3600x2450C0=odmr_mbe_eccAmbe3600x2450C0;-Dmbe_eccAmbe3600x2450Data=odmr_mbe_eccAmbe3600x2450Data;-Dmbe_floattoshort=odmr_mbe_floattoshort;-Dmbe_golay2312=odmr_mbe_golay2312;-Dmbe_hamming1511=odmr_mbe_hamming1511;-Dmbe_initMbeParms=odmr_mbe_initMbeParms;-Dmbe_moveMbeParms=odmr_mbe_moveMbeParms;-Dmbe_printVersion=odmr_mbe_printVersion;-Dmbe_processAmbe2450Data=odmr_mbe_processAmbe2450Data;-Dmbe_processAmbe2450Dataf=odmr_mbe_processAmbe2450Dataf;-Dmbe_processAmbe3600x2450Frame=odmr_mbe_processAmbe3600x2450Frame;-Dmbe_processAmbe3600x2450Framef=odmr_mbe_processAmbe3600x2450Framef;-Dmbe_spectralAmpEnhance=odmr_mbe_spectralAmpEnhance;-Dmbe_synthesizeSilence=odmr_mbe_synthesizeSilence;-Dmbe_synthesizeSilencef=odmr_mbe_synthesizeSilencef;-Dmbe_synthesizeSpeech=odmr_mbe_synthesizeSpeech;-Dmbe_synthesizeSpeechf=odmr_mbe_synthesizeSpeechf;-Dmbe_useLastMbeParms=odmr_mbe_useLastMbeParms)
+      add_library(c62_opendmr STATIC ${C62_OPENDMR_SRC})
+      target_compile_options(c62_opendmr PRIVATE
+        $<TARGET_PROPERTY:zephyr_interface,INTERFACE_COMPILE_OPTIONS> -w)
+      # MBE_THREAD_LOCAL carries the DMR PSRAM section: the C62 has no TLS
+      # (the header is patched by scripts/c62/fetch_opendmr.sh to be
+      # overridable), so the four statics that hook marks are plain statics in
+      # .psram_dmr, which platform_init zeroes at boot.  They are the decoder's
+      # DCT cosine cache (23.7 KB, built on the first decode and only read
+      # afterwards) and three small decoder seeds/pointers: the transmitter
+      # never touches them, and the receiver's voice goes through mbelib, not
+      # through OpenDMR's decoder, whose code the linker drops.
+      target_compile_definitions(c62_opendmr PRIVATE
+        $<TARGET_PROPERTY:zephyr_interface,INTERFACE_COMPILE_DEFINITIONS>
+        _GNU_SOURCE M_PI=3.14159265358979323846f
+        "MBE_THREAD_LOCAL=__attribute__((section(\".psram_dmr\")))"
+        ${C62_OPENDMR_PREFIX})
+      target_include_directories(c62_opendmr PRIVATE
+        $<TARGET_PROPERTY:zephyr_interface,INTERFACE_INCLUDE_DIRECTORIES>
+        ${C62_OPENDMR} ${C62_OPENDMR}/decoder ${C62_OPENDMR}/encoder)
+      target_include_directories(c62_opendmr SYSTEM PRIVATE
+        $<TARGET_PROPERTY:zephyr_interface,INTERFACE_SYSTEM_INCLUDE_DIRECTORIES>)
+      target_link_libraries(app PRIVATE c62_opendmr)
+      # dmr_enc.c includes opendmr.h. SYSTEM, so a -I of our own headers
+      # (dmr_voice.c's mbelib.h) still wins for the file that needs it.
+      target_include_directories(app SYSTEM PRIVATE ${C62_OPENDMR}
+        ${C62_OPENDMR}/decoder ${C62_OPENDMR}/encoder)
+      target_compile_definitions(app PRIVATE CONFIG_DMR_ENC_OPENDMR)
+      message(STATUS "C62: DMR encoder: OpenDMR (reference, 4.10 M instr/frame)")
+    else()
+      # Ours: lib/dmr_encoder, 1.43 M instructions per 20 ms frame (28-38 %
+      # of the M33).  dmr_enc.c interleaves its canonical frames to the burst
+      # order as it does OpenDMR's (see dmr_enc.c).
       add_subdirectory(${OPENRTX_ROOT}/lib/dmr_encoder
                        ${CMAKE_BINARY_DIR}/dmr_encoder)
       target_compile_options(dmr_encoder PRIVATE
@@ -429,10 +589,8 @@ if(CONFIG_C62_DMR_RX)
       target_include_directories(dmr_encoder SYSTEM PRIVATE
         $<TARGET_PROPERTY:zephyr_interface,INTERFACE_SYSTEM_INCLUDE_DIRECTORIES>)
       target_link_libraries(app PRIVATE dmr_encoder)
-      target_sources(app PRIVATE
-        ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrVocoderEncoder.c)
-      target_compile_definitions(app PRIVATE CONFIG_DMR_TX_ENC)
-      message(STATUS "C62: DMR AMBE+2 encoder enabled (transmit)")
+      target_include_directories(app PRIVATE ${OPENRTX_ROOT}/lib/dmr_encoder)
+      message(STATUS "C62: DMR encoder: lib/dmr_encoder (ours, 1.43 M instr/frame)")
     endif()
   endif()
 endif()
@@ -526,6 +684,11 @@ message(STATUS "C62: wide RX ${C62_WIDE_RX}, TETRA ${C62_TETRA} "
 add_subdirectory(services)
 zephyr_library_link_libraries(lsf_client)
 zephyr_linker_sources(DATA_SECTIONS lsf_service.ld)
+
+# .psram_dmr: the DMR package's state in PSRAM, an output section of its own so
+# that platform_init_csk6() can zero it (the PSRAM region also holds the CSK6
+# system heap, so .psram_section cannot be zeroed wholesale).
+zephyr_linker_sources(SECTIONS ${CMAKE_CURRENT_LIST_DIR}/psram_dmr.ld)
 
 target_include_directories(app
   PRIVATE
