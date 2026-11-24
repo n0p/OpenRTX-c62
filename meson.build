@@ -1309,6 +1309,16 @@ audio_codec_test = executable('audio_codec_test',
                               sources : unit_test_src + ['tests/unit/audio_codec.cpp'],
                               kwargs  : unit_test_opts)
 
+# Transmit stage machine of the DMR mode: a header-only pure function, so the
+# test links nothing but Catch2.
+dmr_tx_fsm_test = executable('dmr_tx_fsm_test',
+                             sources : ['tests/unit/dmr_tx_fsm.cpp'],
+                             kwargs  : {'cpp_args'           : linux_cpp_args,
+                                        'include_directories': linux_inc +
+                                             ['openrtx/include'],
+                                        'dependencies'       : [catch2_dep],
+                                        'link_args'          : linux_l_args})
+
 # Baseband replay (tests/platform/M17Replay.hpp): a command line tool and a
 # unit test replaying a committed recording through the same class. The test
 # gets the asset directory as an absolute path so it does not depend on the
@@ -1351,4 +1361,5 @@ test('DSP DC Block Test',    dsp_dcblock_test)
 test('GFX Text Test',        gfx_text_test)
 test('S-Level Test', slevel_test)
 test('Audio Codec Test',     audio_codec_test)
+test('DMR TX FSM Test',      dmr_tx_fsm_test)
 test('M17 Baseband Replay Test', m17_replay_test, timeout : 120) # ~40 s in CI with coverage
