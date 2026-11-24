@@ -654,6 +654,44 @@ TEST_CASE("The DMR destination of a channel round-trips and is validated",
     REQUIRE(bad.dmr_cc == 4);
 }
 
+TEST_CASE("The SKIP flag survives a reboot and does not touch anything else",
+          "[chstore]")
+{
+    TestBank tb;
+    fillThree(tb);
+
+    /* Nothing is skipped until the operator says so */
+    REQUIRE_FALSE(chstore_skipped(0));
+    REQUIRE_FALSE(chstore_skipped(1));
+    REQUIRE_FALSE(chstore_skipped(2));
+
+    REQUIRE(chstore_setSkipped(1, true) == 0);
+    REQUIRE(chstore_skipped(1));
+    REQUIRE_FALSE(chstore_skipped(0));
+
+    /* It is a flag, not a deletion: the channel is still there, with its
+     * name and frequencies, and the bank did not renumber anything */
+    tb.boot();
+    REQUIRE(chstore_count() == 3);
+    REQUIRE(nameOf(1) == "BRAVO");
+    REQUIRE(chstore_skipped(1));
+    REQUIRE_FALSE(chstore_skipped(2));
+
+    chstore_channel_t back;
+    REQUIRE(chstore_get(1, &back) == 0);
+    REQUIRE((back.flags & CHSTORE_FLAG_SKIP) != 0);
+
+    /* Clearing it writes the bank again and the channel comes back into the
+     * walk */
+    REQUIRE(chstore_setSkipped(1, false) == 0);
+    tb.boot();
+    REQUIRE_FALSE(chstore_skipped(1));
+
+    /* A bad index is not a crash and not a skip */
+    REQUIRE_FALSE(chstore_skipped(99));
+    REQUIRE(chstore_setSkipped(99, true) == -EINVAL);
+}
+
 TEST_CASE("A stored channel fills the RTX configuration, DMR included",
           "[chstore]")
 {

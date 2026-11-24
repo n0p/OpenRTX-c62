@@ -49,6 +49,7 @@ reinterprete: el que llegue segundo sube a la versión 5 y el registro de la otr
 rama se descarta y vuelve a valores por defecto, que es lo que ya pasa entre
 cualesquiera dos versiones. Lo que no puede hacerse es reordenar ni reutilizar
 un campo.
+| 4 | configuración del scan (`scan_*`: regla de reanudación, tiempos, canal prioritario, rango y paso de VFO), ver `docs/SCAN.md` |
 
 Un registro de la versión 1 tiene el campo de versión a 0, así que se descarta
 solo: no hace falta código de migración y no hay forma de leerlo mal.
@@ -71,8 +72,8 @@ buscando su indicativo.
 
 ## 4. Tamaño
 
-`sizeof(settings_t)` es 167 B con APRS y los campos nuevos;
-`SETTINGS_RECORD_SIZE` = 175 B, por debajo del límite de 256 B del registro del
+`sizeof(settings_t)` es 182 B con APRS y los campos nuevos;
+`SETTINGS_RECORD_SIZE` = 190 B, por debajo del límite de 256 B del registro del
 driver (`NVM_RECORD_MAX`). El test comprueba que el registro no pase de 192 B
 para que quede margen antes de tocar la estructura otra vez.
 
