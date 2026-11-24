@@ -83,7 +83,14 @@ extern "C" {
 enum chstoreFlags
 {
     CHSTORE_FLAG_RX_ONLY = 0x01, /**< TX disabled on this channel */
-    CHSTORE_FLAG_SIMPLEX = 0x02  /**< TX frequency follows RX */
+    CHSTORE_FLAG_SIMPLEX = 0x02, /**< TX frequency follows RX */
+    CHSTORE_FLAG_SKIP    = 0x04  /**< Passed over by the memory scan
+                                  *   (core/scanner.h): a channel the operator
+                                  *   keeps for direct selection but does not
+                                  *   want to hear every lap.  The flag is in a
+                                  *   byte that already existed, so the record
+                                  *   size and the format version do not
+                                  *   change. */
 };
 
 /**
@@ -258,10 +265,24 @@ int chstore_delete(uint16_t idx);
 int chstore_loadDefaults(void);
 
 /**
+ * True if the channel is flagged SKIP (CHSTORE_FLAG_SKIP): kept in the bank,
+ * selected by hand, but passed over by the memory scan.  A bad index is not
+ * skipped, so a stale index reports as "would be scanned" rather than silently
+ * disappearing.
+ */
+bool chstore_skipped(uint16_t idx);
+
+/**
+ * Set or clear the SKIP flag of channel idx and write the bank back.
+ *
+ * @return 0 on success, -EINVAL on a bad index, -EIO if the write failed.
+ */
+int chstore_setSkipped(uint16_t idx, bool skip);
+
+/**
  * Index of the channel that was selected at power-off, or -1 if none.
  */
 int chstore_lastUsed(void);
-
 /**
  * Remember the selected channel. This only touches RAM: the value reaches
  * flash from chstore_task() after CHSTORE_LASTUSED_DELAY_MS, or from

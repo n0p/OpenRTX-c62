@@ -387,6 +387,29 @@ int chstore_add(const chstore_channel_t *ch)
     return (int)(nbChannels - 1);
 }
 
+bool chstore_skipped(uint16_t idx)
+{
+    if (idx >= nbChannels)
+        return false;
+
+    return (bank[idx].flags & CHSTORE_FLAG_SKIP) != 0;
+}
+
+int chstore_setSkipped(uint16_t idx, bool skip)
+{
+    if (idx >= nbChannels)
+        return -EINVAL;
+
+    chstore_channel_t ch = bank[idx];
+
+    if (skip)
+        ch.flags |= (uint8_t)CHSTORE_FLAG_SKIP;
+    else
+        ch.flags &= (uint8_t)~CHSTORE_FLAG_SKIP;
+
+    return chstore_set(idx, &ch);
+}
+
 int chstore_delete(uint16_t idx)
 {
     if (idx >= nbChannels)

@@ -40,6 +40,7 @@ versión, para poder distinguir «escrito por otra versión» de «corrupto».
 | 1 | registro original, sin campo de versión en la cabecera (el hueco era relleno a 0) |
 | 2 | destino DMR (`dmr_dest_type`, `dmr_dest_id`), DMRID propio (`dmr_id`) y formato de SMS (`sms_format`) |
 | 3 | timeslot de DMR (`dmr_timeslot`, 1 o 2) para el menú rápido |
+| 4 | configuración del scan (`scan_*`: regla de reanudación, tiempos, canal prioritario, rango y paso de VFO), ver `docs/SCAN.md` |
 
 Un registro de la versión 1 tiene el campo de versión a 0, así que se descarta
 solo: no hace falta código de migración y no hay forma de leerlo mal.
@@ -62,8 +63,8 @@ buscando su indicativo.
 
 ## 4. Tamaño
 
-`sizeof(settings_t)` es 167 B con APRS y los campos nuevos;
-`SETTINGS_RECORD_SIZE` = 175 B, por debajo del límite de 256 B del registro del
+`sizeof(settings_t)` es 182 B con APRS y los campos nuevos;
+`SETTINGS_RECORD_SIZE` = 190 B, por debajo del límite de 256 B del registro del
 driver (`NVM_RECORD_MAX`). El test comprueba que el registro no pase de 192 B
 para que quede margen antes de tocar la estructura otra vez.
 

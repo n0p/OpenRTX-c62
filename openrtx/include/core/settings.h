@@ -11,6 +11,10 @@
 #include "core/datatypes.h"
 #include <stdbool.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /**
  * Version of the settings payload, kept in the record header by the NVM
  * driver (see core/settings_record.h).
@@ -24,8 +28,10 @@
  *  - 2: DMR destination, own DMR ID and SMS format appended.
  *  - 3: DMR timeslot appended (1 or 2), so the quick menu can move the call
  *       between the two slots of the 60 ms frame.
+ *  - 4: scan configuration appended (resume rule, dwell, hold, priority
+ *       channel, VFO range and step), see core/scanner.h and docs/SCAN.md.
  */
-#define SETTINGS_VERSION 3
+#define SETTINGS_VERSION 4
 
 typedef enum
 {
@@ -114,8 +120,62 @@ typedef struct
     uint8_t  dmr_dest_type;       // enum dmrDestType
     uint8_t  sms_format;          // enum dmrSmsFormat
     uint8_t  dmr_timeslot;        // 1 or 2: the slot of the 60 ms TDMA frame
+    /*
+     * Scan and vigilance (core/scanner.h, docs/SCAN.md).
+     *
+     * The units are chosen to keep the whole block in 15 bytes: the record has
+     * a 256 B ceiling and every future field competes for it.  The times a
+     * menu shows as seconds are stored coarse on purpose (a scan does not care
+     * about 10 ms) and scan_service.c expands them.
+     */
+    uint8_t  scan_resume;         // enum scanResume: carrier, timeout, hold
+    uint8_t  scan_priority;       // Priority channel index + 1, 0 = none
+    uint8_t  scan_step;           // Index into scan_steps[], 0..5
+    uint8_t  scan_dwell;          // Dwell per channel, units of 10 ms
+    uint8_t  scan_hold;           // Hang / hold time, units of 100 ms
+    uint8_t  scan_prioInterval;   // Between priority checks, 100 ms units
+    uint8_t  scan_flags;          // enum settingsScanFlags
+    uint32_t scan_vfoLow;         // VFO scan start / limit, Hz
+    uint32_t scan_vfoHigh;        // VFO scan limit, Hz
 }
 __attribute__((packed)) settings_t;
+
+/**
+ * Flags of settings_t.scan_flags.
+ *
+ * The mirror of scanConfig_t in core/scanner.h, kept as bits because the
+ * settings record is the scarcest space in the firmware: scan_service.c is the
+ * one place that translates them, so nothing else has to know both spellings.
+ */
+enum settingsScanFlags
+{
+    SETTINGS_SCAN_VFO_LOOP = 0x01, /**< VFO scan wraps at its limits        */
+    SETTINGS_SCAN_PRIORITY = 0x02, /**< Check a priority channel           */
+    SETTINGS_SCAN_DOWN     = 0x04  /**< VFO scan goes down, not up         */
+};
+
+/** Number of entries of the scan step table (scan_service.c). */
+#define SETTINGS_SCAN_STEPS 6
+
+/**
+ * Scan step table, Hz: 5, 6.25, 8.33, 10, 12.5 and 25 kHz.  The index lives
+ * in settings_t.scan_step, so the numeric values are stored in flash: only
+ * append.
+ *
+ * 8.33 kHz is 25000/3 Hz and cannot be written as an integer frequency, so the
+ * table carries 8330 Hz: the error is 0.04 % of the step and 4 Hz on a channel
+ * that the radio's own reference is not that accurate on either.
+ */
+extern const uint32_t scan_steps[SETTINGS_SCAN_STEPS];
+
+/** "5", "6.25", "8.33", "10", "12.5", "25": short name of a step, kHz. */
+const char *settings_scanStepName(uint8_t idx);
+
+/** True if idx names a step of the table. */
+static inline bool settings_scanStepValid(uint8_t idx)
+{
+    return idx < SETTINGS_SCAN_STEPS;
+}
 
 
 static const settings_t default_settings =
@@ -165,6 +225,15 @@ static const settings_t default_settings =
     DMR_DEST_GROUP,               // Group call by default
     DMR_SMS_FMT_AUTO,             // The format this firmware always sent
     1,                            // Timeslot 1, the one every network uses
+    0,                            // Scan resumes when the carrier drops
+    0,                            // No priority channel
+    4,                            // Scan step index 4: 12.5 kHz
+    15,                           // Scan dwell 150 ms per channel
+    20,                           // Scan hang / hold 2 s
+    20,                           // Priority channel every 2 s
+    SETTINGS_SCAN_VFO_LOOP,       // VFO scan wraps, up, no priority
+    144000000U,                   // VFO scan: 2 m band
+    146000000U,
 };
 
 /**
@@ -207,6 +276,12 @@ static inline bool settings_smsFormatValid(uint8_t f)
     return f < (uint8_t)DMR_SMS_FMT_COUNT;
 }
 
+/** True if r names one of the resume rules of core/scanner.h. */
+static inline bool settings_scanResumeValid(uint8_t r)
+{
+    return r <= 2; /* carrier, timeout, hold */
+}
+
 /** "none", "group", "user": short name of a destination type, for menus. */
 const char *settings_dmrDestName(uint8_t type);
 
@@ -223,5 +298,9 @@ enum settingsReset {
     SETTINGS_RESET_VERSION,  /**< Written by an older firmware: discarded   */
     SETTINGS_RESET_CORRUPT,  /**< Bad CRC: discarded                        */
 };
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
 
 #endif /* SETTINGS_H */

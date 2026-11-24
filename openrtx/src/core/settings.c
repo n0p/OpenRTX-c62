@@ -11,6 +11,27 @@
  * settings.h so that a menu can check a value without a call.
  */
 
+/*
+ * Scan steps, Hz.  The index is stored in flash (settings_t.scan_step), so the
+ * order is part of the format: append only.
+ *
+ * 8.33 kHz is 25000/3 Hz, which no integer frequency can express: 8330 Hz is
+ * the usual rounding and the error (4 Hz) is below the radio's own reference
+ * accuracy.
+ */
+const uint32_t scan_steps[SETTINGS_SCAN_STEPS] = {
+    5000U, 6250U, 8330U, 10000U, 12500U, 25000U
+};
+
+const char *settings_scanStepName(uint8_t idx)
+{
+    static const char *const names[SETTINGS_SCAN_STEPS] = {
+        "5", "6.25", "8.33", "10", "12.5", "25"
+    };
+
+    return (idx < SETTINGS_SCAN_STEPS) ? names[idx] : "----";
+}
+
 const char *settings_dmrDestName(uint8_t type)
 {
     switch (type)
