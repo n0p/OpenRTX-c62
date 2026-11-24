@@ -10,6 +10,7 @@
 #include <inttypes.h>
 #include "core/utils.h"
 #include "ui/ui_default.h"
+#include "ui/ui_messages.h"
 #include "interfaces/nvmem.h"
 #include "interfaces/cps_io.h"
 #include "interfaces/platform.h"
@@ -239,6 +240,19 @@ void _ui_drawMenuListValue(ui_state_t* ui_state, uint8_t selected,
 int _ui_getMenuTopEntryName(char *buf, uint8_t max_len, uint8_t index)
 {
     if(index >= menu_num) return -1;
+
+    /* Unread messages ride on the menu entry: "Messages !3" */
+    if(index == M_MESSAGES)
+    {
+        char badge[8];
+        ui_msgs_fmt_unread(badge, sizeof(badge));
+        if(badge[0] != '\0')
+        {
+            sniprintf(buf, max_len, "%s %s", menu_items[index], badge);
+            return 0;
+        }
+    }
+
     sniprintf(buf, max_len, "%s", menu_items[index]);
     return 0;
 }

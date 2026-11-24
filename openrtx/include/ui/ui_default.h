@@ -70,6 +70,16 @@ enum uiScreen
     APRS_MSG_VIEW,
     APRS_MSG_EDIT,
     APRS_CFG,
+    /*
+     * Messaging screens (ui_messages.c): transport agnostic inbox, sent
+     * folder, composer and delivery status. Owned by their module, the same
+     * way the APRS screens are.
+     */
+    MENU_MESSAGES,
+    MSG_VIEW,
+    MSG_SENT,
+    MSG_COMPOSE,
+    MSG_STATUS,
     LOW_BAT
 };
 
@@ -86,6 +96,7 @@ enum menuItems
     M_BANK = 0,
     M_CHANNEL,
     M_CONTACTS,
+    M_MESSAGES,
 #ifdef CONFIG_GPS
     M_GPS,
 #endif

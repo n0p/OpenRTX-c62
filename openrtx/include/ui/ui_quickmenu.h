@@ -63,12 +63,17 @@ typedef struct
     uint8_t count;
 } qm_menu_t;
 
-/** Popup state. */
+/** Popup state.
+ *
+ * There is no "edit mode": on a keypad without arrow keys a modal editor is
+ * useless, so P1/P2 change the value of the highlighted row directly and
+ * UP/DOWN only move the cursor. `latched` is only set by a long P2/MONI press;
+ * an unlatched popup closes itself after QM_TIMEOUT_MS without keys.
+ */
 typedef struct
 {
     bool open;                  /**< Popup visible                         */
     bool latched;               /**< Kept open after the key is released   */
-    bool editing;               /**< Editing the selected value            */
     uint8_t selected;           /**< Cursor, index into qm->items          */
     uint8_t first;              /**< First visible row                     */
     long long lastKeyTick;      /**< Auto-close timer                      */
@@ -94,17 +99,28 @@ void qm_close(void);
 /** Toggle the latch (P2/MONI long press). */
 void qm_toggleLatch(void);
 
+/** Time without keys after which an unlatched popup closes itself, ms. */
+#define QM_TIMEOUT_MS 15000
+
 /**
- * Move the cursor, or change the value while editing.
+ * Move the cursor, or change the value with qm_adjust().
  *
- * @param delta: -1 up, +1 down.
+ * @param delta: -1 up, +1 down. Never changes a value: use qm_adjust().
  */
 void qm_move(int delta);
 
-/** ENTER: start editing, commit the value, toggle, or open a screen. */
+/**
+ * Change the value of the highlighted row by one step.
+ *
+ * @param delta: -1 (P1) or +1 (P2). Integers clamp at min/max, enumerations
+ *        and toggles wrap; read-only rows do nothing but beep.
+ */
+void qm_adjust(int delta);
+
+/** ENTER: cycle a value, toggle it, or open the screen of a QM_GOTO row. */
 void qm_enter(void);
 
-/** ESC while editing: leave the value as it was. */
+/** ESC: close the popup. Values are applied as they are changed, no undo. */
 void qm_cancel(void);
 
 /**
@@ -120,6 +136,22 @@ void qm_select(uint8_t index);
 
 /** Draw the popup over the current screen. */
 void qm_draw(void);
+
+/*
+ * Row geometry, for the layout test and for anything that needs to line up
+ * with the popup. All values are pixels; QM_ROW_BASELINE is measured from the
+ * top of the row and is where gfx_print() puts the 5 pt baseline.
+ */
+#define QM_HEADER_H   14   /* header band, 8 pt title                   */
+#define QM_ROW_H      10   /* one row, 5 pt text with 2 px of slack     */
+#define QM_ROW_BASELINE 8  /* baseline offset inside a row               */
+#define QM_TEXT_X      2   /* left margin of the labels                  */
+#define QM_VALUE_X     2   /* right margin of the values                 */
+
+uint8_t  qm_rowHeight(void);
+uint8_t  qm_rowBaseline(void);
+uint8_t  qm_visibleRows(void);
+int16_t  qm_rowTop(uint8_t row);
 
 /** Value text of a row, for tests and voice prompts. */
 bool qm_value_text(uint8_t index, char *buf, int len);

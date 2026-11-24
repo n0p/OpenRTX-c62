@@ -20,9 +20,11 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <hwconfig.h>
 #include "core/state.h"
 #include "core/cps.h"
+#include "core/msg_store.h"
 #include "core/ui.h"
 #include "core/beeps.h"
 #include "core/graphics.h"
@@ -34,6 +36,7 @@
 #include "rtx/rtx.h"
 #include "ui/ui_default.h"
 #include "ui/ui_hints.h"
+#include "ui/ui_messages.h"
 #include "ui/ui_quickmenu.h"
 #ifdef CONFIG_TETRA
 #include "protocols/TETRA/TetraStatus.h"
@@ -42,15 +45,12 @@
 #include "protocols/DMR/DmrStatus.h"
 #endif
 
-#define QM_HEADER_H 14
-#define QM_ROW_H 12
-#define QM_VISIBLE_ROWS 6
 #define QM_TOP_Y (layout.top_h)
 #define QM_ROW_Y(i) (QM_TOP_Y + QM_HEADER_H + (i) * QM_ROW_H)
 
 qm_state_t qm_state;
 
-static const ui_hints_t qm_hints = { "Edit", NULL, "Close", "Close" };
+static const ui_hints_t qm_hints = { "OK", "-", "+", "Close" };
 
 static void qm_scroll(void);
 
@@ -211,7 +211,16 @@ void qm_set_mode(int opmode)
     qm_state.qm = qm_findMenu(state.channel.mode);
     qm_state.selected = 0;
     qm_state.first = 0;
-    qm_state.editing = false;
+}
+
+/* Unread messages badge, shown on the MSGS row of every table */
+static void qm_fmt_unread(char *buf, int len)
+{
+    uint8_t n = msg_unread();
+    if (n == 0)
+        buf[0] = '\0';
+    else
+        snprintf(buf, len, "!%u", (unsigned)n);
 }
 
 void qm_fmt_frequency(char *buf, int len)
@@ -487,6 +496,8 @@ void qm_dmr_fmt_sync(char *buf, int len)
     { label, QM_INFO, 0, 0, 1, NULL, NULL, NULL, fmt, 0, 0 }
 #define QM_ITEM_GOTO(label, screen, item) \
     { label, QM_GOTO, 0, 0, 1, NULL, NULL, NULL, NULL, screen, item }
+#define QM_ITEM_GOTO_F(label, screen, fmt) \
+    { label, QM_GOTO, 0, 0, 1, NULL, NULL, NULL, fmt, screen, 0 }
 #define QM_ITEM_MODE() \
     { "MODE", QM_MODE, 0, 3, 1, qm_get_mode, qm_set_mode, qm_names_mode, \
       NULL, 0, 0 }
@@ -510,6 +521,7 @@ static const qm_item_t qm_items_fm[] =
     QM_ITEM_TOGGLE("KEYLIT", qm_get_keylight, qm_set_keylight),
 #endif
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
+    QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
     QM_ITEM_MODE(),
 };
 
@@ -527,6 +539,7 @@ static const qm_item_t qm_items_m17[] =
     QM_ITEM_TOGGLE("KEYLIT", qm_get_keylight, qm_set_keylight),
 #endif
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
+    QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
     QM_ITEM_MODE(),
 };
 
@@ -546,6 +559,7 @@ static const qm_item_t qm_items_tetra[] =
     QM_ITEM_TOGGLE("KEYLIT", qm_get_keylight, qm_set_keylight),
 #endif
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
+    QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
     QM_ITEM_MODE(),
 };
 #endif /* CONFIG_TETRA */
@@ -565,6 +579,7 @@ static const qm_item_t qm_items_dmr[] =
     QM_ITEM_TOGGLE("KEYLIT", qm_get_keylight, qm_set_keylight),
 #endif
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
+    QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
     QM_ITEM_MODE(),
 };
 #endif /* CONFIG_DMR */
@@ -601,24 +616,58 @@ const qm_menu_t *qm_findMenu(uint8_t opmode)
 /* State machine                                                              */
 /* ------------------------------------------------------------------------- */
 
+/*
+ * Geometry. The screen is 160x128, layout.top_h is 16 and the hint bar takes
+ * the last 11 px, so the popup has 16..116 for a 14 px header and 10 px rows:
+ * eight rows fit and the ninth would land on the hints.
+ */
+uint8_t qm_rowHeight(void)
+{
+    return QM_ROW_H;
+}
+
+uint8_t qm_rowBaseline(void)
+{
+    return QM_ROW_BASELINE;
+}
+
+uint8_t qm_visibleRows(void)
+{
+    int16_t avail = (int16_t)(CONFIG_SCREEN_HEIGHT - UI_HINTS_H
+                              - (layout.top_h + QM_HEADER_H));
+    if (avail < QM_ROW_H)
+        return 0;
+    return (uint8_t)(avail / QM_ROW_H);
+}
+
+int16_t qm_rowTop(uint8_t row)
+{
+    return (int16_t)(QM_TOP_Y + QM_HEADER_H + row * QM_ROW_H);
+}
+
 static void qm_scroll(void)
 {
     const qm_menu_t *qm = qm_active();
-    if (qm == NULL)
+    uint8_t rows = qm_visibleRows();
+
+    if ((qm == NULL) || (rows == 0))
         return;
 
     if (qm_state.selected < qm_state.first)
         qm_state.first = qm_state.selected;
-    if (qm_state.selected >= qm_state.first + QM_VISIBLE_ROWS)
-        qm_state.first = qm_state.selected - QM_VISIBLE_ROWS + 1;
+    if (qm_state.selected >= qm_state.first + rows)
+        qm_state.first = (uint8_t)(qm_state.selected - rows + 1);
+
+    /* Never leave blank lines above the last items */
+    if (qm->count > rows && qm_state.first > (uint8_t)(qm->count - rows))
+        qm_state.first = (uint8_t)(qm->count - rows);
 }
 
 void qm_open(void)
 {
     qm_state.qm = qm_findMenu(state.channel.mode);
     qm_state.open = true;
-    qm_state.latched = true;
-    qm_state.editing = false;
+    qm_state.latched = false;   /* long P2 latches it, see qm_toggleLatch() */
     qm_state.selected = 0;
     qm_state.first = 0;
     qm_state.lastKeyTick = getTick();
@@ -628,7 +677,6 @@ void qm_open(void)
 void qm_close(void)
 {
     qm_state.open = false;
-    qm_state.editing = false;
     qm_state.qm = NULL;
 }
 
@@ -644,26 +692,12 @@ void qm_select(uint8_t index)
     if ((qm_state.qm == NULL) || (index >= qm_state.qm->count))
         return;
     qm_state.selected = index;
-    qm_state.editing = false;
     qm_scroll();
 }
 
 void qm_move(int delta)
 {
-    const qm_item_t *item =
-        (qm_state.qm != NULL) ? &qm_state.qm->items[qm_state.selected] : NULL;
-
-    if (item == NULL)
-        return;
-
-    if (qm_state.editing && (item->get != NULL) && (item->set != NULL)) {
-        int value = qm_current(item) + delta * item->step;
-        qm_clamp(&value, item);
-        item->set(value);
-        return;
-    }
-
-    if (qm_state.qm->count == 0)
+    if ((qm_state.qm == NULL) || (qm_state.qm->count == 0))
         return;
 
     if (delta < 0) {
@@ -681,40 +715,76 @@ void qm_move(int delta)
     qm_scroll();
 }
 
+static const qm_item_t *qm_selected(void)
+{
+    if ((qm_state.qm == NULL) || (qm_state.selected >= qm_state.qm->count))
+        return NULL;
+    return &qm_state.qm->items[qm_state.selected];
+}
+
+void qm_adjust(int delta)
+{
+    const qm_item_t *item = qm_selected();
+
+    if ((item == NULL) || (delta == 0))
+        return;
+
+    /* Read only rows: no value to change, but never silently do nothing */
+    if ((item->type == QM_INFO) || (item->type == QM_GOTO)
+        || (item->get == NULL) || (item->set == NULL)) {
+        vp_beep(400, SHORT_BEEP);
+        return;
+    }
+
+    int value = qm_current(item) + delta * item->step;
+
+    switch (item->type) {
+        case QM_ENUM:
+        case QM_TOGGLE:
+        case QM_MODE: {
+            /* Enumerations wrap: the last entry is next to the first one */
+            int span = item->max - item->min + 1;
+            if (span <= 0)
+                return;
+            while (value < item->min)
+                value += span * abs(delta);
+            while (value > item->max)
+                value -= span * abs(delta);
+            break;
+        }
+
+        case QM_INT:
+        default:
+            /* Numbers stop at their limits: a squelch at 15 stays at 15 */
+            qm_clamp(&value, item);
+            break;
+    }
+
+    item->set(value);
+}
+
 void qm_enter(void)
 {
-    const qm_item_t *item =
-        (qm_state.qm != NULL) ? &qm_state.qm->items[qm_state.selected] : NULL;
+    const qm_item_t *item = qm_selected();
 
     if (item == NULL)
         return;
 
     switch (item->type) {
         case QM_INT:
-            /* ENTER toggles edit mode, UP/DOWN change the value */
-            qm_state.editing = !qm_state.editing;
-            break;
-
         case QM_ENUM:
-        case QM_MODE: {
-            /* Cycle the value, which is what these items are for */
-            int value = qm_current(item) + 1;
-            if (value > item->max)
-                value = item->min;
-            if (item->set != NULL)
-                item->set(value);
-            break;
-        }
-
         case QM_TOGGLE:
-            if (item->set != NULL)
-                item->set(qm_current(item) ? 0 : 1);
+        case QM_MODE:
+            /* Green is the same as P2: cycle forward. It never closes. */
+            qm_adjust(+1);
             break;
 
         case QM_GOTO:
-            state.ui_screen = item->goto_screen;
             qm_close();
-            qm_state.selected = item->goto_item;
+            if (item->goto_screen == MENU_MESSAGES)
+                ui_msgs_open();
+            else
+                state.ui_screen = item->goto_screen;
             break;
 
         case QM_INFO:
@@ -726,10 +796,6 @@ void qm_enter(void)
 
 void qm_cancel(void)
 {
-    if (qm_state.editing) {
-        qm_state.editing = false;
-        return;
-    }
     qm_close();
 }
 
@@ -743,11 +809,10 @@ bool qm_tick(long long now)
         qm_state.qm = qm_findMenu(state.channel.mode);
         qm_state.selected = 0;
         qm_state.first = 0;
-        qm_state.editing = false;
         return true;
     }
 
-    if (!qm_state.latched && (now - qm_state.lastKeyTick > 10000)) {
+    if (!qm_state.latched && (now - qm_state.lastKeyTick > QM_TIMEOUT_MS)) {
         qm_close();
         return true;
     }
@@ -789,13 +854,40 @@ bool qm_value_text(uint8_t index, char *buf, int len)
     return false;
 }
 
+/*
+ * Make a value fit in `avail` pixels of the 5 pt font. Long values are cut on
+ * the left, where the least information is (a frequency keeps its tail), and
+ * marked with '<' so that a shortened value never looks like a real one.
+ */
+static void qm_fitValue(char *buf, size_t len, uint16_t avail)
+{
+    if ((buf[0] == '\0') || (gfx_getTextWidth(FONT_SIZE_5PT, buf) <= avail))
+        return;
+
+    size_t n = strlen(buf);
+    while (n > 0) {
+        char tmp[QM_VALUE_BUF];
+        memmove(tmp, buf + (strlen(buf) - n), n);
+        tmp[n] = '\0';
+        if (gfx_getTextWidth(FONT_SIZE_5PT, tmp) <= avail - 4)
+            break;
+        n--;
+    }
+    /* Prefix in place: no snprintf, whose overlapping source and destination
+       is exactly the warning gcc reports here. */
+    memmove(buf + 1, buf + (strlen(buf) - n), n);
+    buf[0] = '<';
+    buf[n + 1] = '\0';
+    (void)len;
+}
+
 /* Header: mode on the left, frequency (or the mode's own state) on the right */
 static void qm_drawHeader(void)
 {
     char right[QM_VALUE_BUF] = "";
-    point_t pos = { layout.horizontal_pad, QM_TOP_Y + 2 };
+    point_t pos = { QM_TEXT_X, (int16_t)(QM_TOP_Y + QM_HEADER_H - 4) };
 
-    gfx_print(pos, layout.top_font, TEXT_ALIGN_LEFT, yellow_fab413, "%s",
+    gfx_print(pos, FONT_SIZE_8PT, TEXT_ALIGN_LEFT, yellow_fab413, "%s",
               qm_state.qm->title);
 
     if (qm_state.qm->mode == OPMODE_TETRA) {
@@ -813,7 +905,8 @@ static void qm_drawHeader(void)
     if (right[0] == '\0')
         qm_fmt_frequency(right, sizeof(right));
 
-    gfx_print(pos, layout.top_font, TEXT_ALIGN_RIGHT, color_white, "%s", right);
+    gfx_print((point_t){ QM_VALUE_X, pos.y }, FONT_SIZE_8PT, TEXT_ALIGN_RIGHT,
+              color_white, "%s", right);
 }
 
 void qm_draw(void)
@@ -828,33 +921,39 @@ void qm_draw(void)
     qm_drawHeader();
     gfx_drawHLine(QM_TOP_Y + QM_HEADER_H - 1, 1, color_grey);
 
-    for (uint8_t row = 0; row < QM_VISIBLE_ROWS; row++) {
-        uint8_t index = qm_state.first + row;
+    uint8_t rows = qm_visibleRows();
+
+    for (uint8_t row = 0; row < rows; row++) {
+        uint8_t index = (uint8_t)(qm_state.first + row);
         if (index >= qm_state.qm->count)
             break;
 
         const qm_item_t *item = &qm_state.qm->items[index];
         bool selected = (index == qm_state.selected);
-        int16_t y = QM_ROW_Y(row);
+        int16_t top = qm_rowTop(row);
+        /* Baseline inside the row: glyphs occupy top+3 .. top+7 (5 pt cap
+           height is 5 px with a yOffset of -5), so the text can never spill
+           into the row above, which was the visible bug. */
+        int16_t baseline = (int16_t)(top + QM_ROW_BASELINE);
         char value[QM_VALUE_BUF] = "";
 
-        if (selected) {
-            gfx_drawRect((point_t){ 0, (int16_t)(y - 1) }, CONFIG_SCREEN_WIDTH,
-                         QM_ROW_H, color_white, true);
+        if (selected)
+            gfx_drawRect((point_t){ 0, top }, CONFIG_SCREEN_WIDTH, QM_ROW_H,
+                         color_white, true);
+
+        color_t fg = selected ? color_black : color_white;
+        uint16_t label_w = gfx_getTextWidth(FONT_SIZE_5PT, item->label);
+        uint16_t value_x = (uint16_t)(QM_TEXT_X + label_w + 4);
+        uint16_t avail = (uint16_t)(CONFIG_SCREEN_WIDTH - QM_VALUE_X - value_x);
+
+        gfx_print((point_t){ QM_TEXT_X, baseline }, FONT_SIZE_5PT,
+                  TEXT_ALIGN_LEFT, fg, "%s", item->label);
+
+        if (qm_value_text(index, value, sizeof(value))) {
+            qm_fitValue(value, sizeof(value), avail);
+            gfx_print((point_t){ QM_VALUE_X, baseline }, FONT_SIZE_5PT,
+                      TEXT_ALIGN_RIGHT, fg, "%s", value);
         }
-
-        color_t label_color = selected ? color_black : color_white;
-        color_t value_color = selected ? color_black
-                                       : (qm_state.editing ? yellow_fab413
-                                                           : color_white);
-
-        point_t pos = { layout.horizontal_pad + 2, (int16_t)(y + 1) };
-        gfx_print(pos, FONT_SIZE_6PT, TEXT_ALIGN_LEFT, label_color, "%s",
-                  item->label);
-
-        if (qm_value_text(index, value, sizeof(value)))
-            gfx_print(pos, FONT_SIZE_6PT, TEXT_ALIGN_RIGHT, value_color, "%s",
-                      value);
     }
 
     ui_hints_draw(&qm_hints);

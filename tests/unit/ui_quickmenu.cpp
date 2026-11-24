@@ -19,6 +19,8 @@ extern "C" {
 #include "rtx/rtx.h"
 #include "ui/ui_default.h"
 #include "ui/ui_quickmenu.h"
+#include "ui/ui_hints.h"
+#include "core/graphics.h"
 }
 
 extern "C" state_t state;
@@ -45,7 +47,6 @@ static void openMode(uint8_t mode)
     qm_state.qm = NULL;
     qm_state.selected = 0;
     qm_state.first = 0;
-    qm_state.editing = false;
     qm_open();
     REQUIRE(qm_state.open);
     REQUIRE(qm_state.qm != NULL);
@@ -149,22 +150,118 @@ TEST_CASE("Quick menu editing clamps at the top and bottom", "[ui][quickmenu]")
     REQUIRE(power > 0);
 
     qm_select((uint8_t)power);
-    qm_enter(); /* Start editing */
-    REQUIRE(qm_state.editing);
 
-    /* Twenty steps of 500 mW from 1 W: must stop at 5 W, not overflow */
+    /* P2/P1 change the value of the highlighted row directly: no modal edit
+       mode, because the keypad has no arrow keys to drive one. */
     for (int i = 0; i < 20; i++)
-        qm_move(+1);
+        qm_adjust(+1);
     REQUIRE(state.channel.power == 5000);
 
     for (int i = 0; i < 20; i++)
-        qm_move(-1);
+        qm_adjust(-1);
     REQUIRE(state.channel.power == 1000);
 
-    /* ESC leaves the value as it is and stops editing, without closing */
-    qm_cancel();
-    REQUIRE(qm_state.editing == false);
+    /* The cursor did not move while adjusting */
+    REQUIRE(qm_state.selected == power);
+
+    /* Enumerations wrap instead of clamping */
+    int bw = rowOf(qm_state.qm, "BW");
+    qm_select((uint8_t)bw);
+    state.channel.bandwidth = BW_6_25;
+    qm_adjust(+1);
+    REQUIRE(state.channel.bandwidth == BW_12_5);
+    qm_adjust(-1);
+    REQUIRE(state.channel.bandwidth == BW_6_25);
+
+    /* Green never closes the popup, not even on a read-only row */
+    qm_close();
+    openMode(OPMODE_DMR);
+    qm_select(0); /* CC: read only in DMR */
+    qm_enter();
     REQUIRE(qm_state.open == true);
+
+    /* ESC is the only key that closes it */
+    qm_cancel();
+    REQUIRE(qm_state.open == false);
+}
+
+TEST_CASE("Quick menu rows fit their line", "[ui][quickmenu][layout]")
+{
+    /* The reported bug: the selected row's text was drawn on a baseline five
+       pixels above the selection rectangle, so the black-on-white text fell
+       outside it and only a slice was visible. Pin the geometry. */
+    openMode(OPMODE_FM);
+
+    /* The C62 layout: 16 px top bar, 11 px hints. The host build has the same
+       160x128 panel, only layout is not initialised by ui_init() in a test. */
+    layout.top_h = 16;
+
+    const uint8_t rowH = qm_rowHeight();
+    const uint8_t baseline = qm_rowBaseline();
+    const uint16_t capHeight = gfx_getFontHeight(FONT_SIZE_5PT);
+
+    REQUIRE(rowH > 0);
+    REQUIRE(baseline > 0);
+    REQUIRE(capHeight > 0);
+
+    /* TomThumb draws from baseline-capHeight+1 to baseline-1 */
+    REQUIRE((int)baseline - (int)capHeight >= 1);
+    REQUIRE(baseline <= rowH - 1);
+
+    /* Rows do not overlap the header nor the hint bar */
+    uint8_t rows = qm_visibleRows();
+    REQUIRE(rows == 8);
+    for (uint8_t r = 0; r < rows; r++) {
+        int16_t top = qm_rowTop(r);
+        REQUIRE(top >= (int16_t)layout.top_h);
+        REQUIRE(top + rowH <= CONFIG_SCREEN_HEIGHT - UI_HINTS_H);
+    }
+
+    /* Scroll keeps the selection visible on both ends */
+    for (uint8_t i = 0; i < qm_state.qm->count; i++)
+        qm_select(i);
+    qm_select((uint8_t)(qm_state.qm->count - 1));
+    REQUIRE(qm_state.selected >= qm_state.first);
+    REQUIRE(qm_state.selected < qm_state.first + rows);
+}
+
+TEST_CASE("Quick menu labels and values fit the row width", "[ui][quickmenu][layout]")
+{
+    openMode(OPMODE_FM);
+
+    /* 5 pt is 4 px per character: the widest realistic value plus the widest
+       label must leave the row readable, not overflow it. */
+    for (uint8_t i = 0; i < qm_state.qm->count; i++) {
+        const qm_item_t *item = &qm_state.qm->items[i];
+        char value[QM_VALUE_BUF] = "";
+        uint16_t label_w = gfx_getTextWidth(FONT_SIZE_5PT, item->label);
+        REQUIRE(label_w + 4 < CONFIG_SCREEN_WIDTH);
+
+        if (qm_value_text(i, value, sizeof(value)) && value[0] != '\0') {
+            uint16_t value_w = gfx_getTextWidth(FONT_SIZE_5PT, value);
+            REQUIRE(value_w < CONFIG_SCREEN_WIDTH);
+        }
+    }
+}
+
+TEST_CASE("Quick menu latch and timeout", "[ui][quickmenu]")
+{
+    openMode(OPMODE_FM);
+    REQUIRE(qm_state.latched == false);
+
+    /* The timeout only fires after QM_TIMEOUT_MS without keys */
+    REQUIRE(qm_tick(qm_state.lastKeyTick + QM_TIMEOUT_MS - 1) == false);
+    REQUIRE(qm_state.open == true);
+    REQUIRE(qm_tick(qm_state.lastKeyTick + QM_TIMEOUT_MS + 1) == true);
+    REQUIRE(qm_state.open == false);
+
+    /* A latched popup stays */
+    qm_open();
+    qm_toggleLatch();
+    REQUIRE(qm_state.latched == true);
+    REQUIRE(qm_tick(qm_state.lastKeyTick + 10 * QM_TIMEOUT_MS) == false);
+    REQUIRE(qm_state.open == true);
+    qm_close();
 }
 
 TEST_CASE("Quick menu renders the value text of its rows", "[ui][quickmenu]")
