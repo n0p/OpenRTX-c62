@@ -18,9 +18,10 @@
 #include "protocols/NXDN/NxdnStatus.h"
 #include "rtx/OpMode_NXDN.hpp"
 
-/* 40 ms of baseband at 48 kHz: half a frame, so a frame arrives in two blocks
- * and the demodulator never waits more than one block on the stream */
-#define HALF_SAMPLES 1920
+/* 20 ms of baseband at 48 kHz.  The demodulator is streaming and keeps its own
+ * history, so the block only has to be small enough that the rtx thread turns
+ * around often: 20 ms is the AMBE frame period and a quarter of a NXDN frame. */
+#define HALF_SAMPLES 960
 
 /* Samples dropped after starting or retuning: 100 ms */
 #define SETTLE_SAMPLES 4800
