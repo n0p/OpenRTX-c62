@@ -225,6 +225,24 @@ if(C62_SCAN)
   message(STATUS "C62: scan and vigilance enabled")
 endif()
 
+#
+# C62_VFO_SEARCH: carrier search on the VFO with a long press of UP or DOWN
+# (core/vfo_search.c, core/vfo_search_service.c, rtx/ModeReport.c).  The
+# machine is pure and unit tested on the host; the service moves the radio from
+# state_task() and reads the per-mode sync counters through ModeReport.c.
+# See docs/VFO_SEARCH.md.
+#
+option(C62_VFO_SEARCH "VFO carrier search on a long press of UP/DOWN" ON)
+
+if(C62_VFO_SEARCH)
+  target_sources(app PRIVATE
+    ${OPENRTX_ROOT}/openrtx/src/core/vfo_search.c
+    ${OPENRTX_ROOT}/openrtx/src/core/vfo_search_service.c
+    ${OPENRTX_ROOT}/openrtx/src/rtx/ModeReport.c)
+  target_compile_definitions(app PRIVATE CONFIG_VFO_SEARCH)
+  message(STATUS "C62: VFO carrier search enabled")
+endif()
+
 if(CONFIG_C62_APRS)
   target_sources(app PRIVATE
     ${OPENRTX_ROOT}/openrtx/src/protocols/APRS/ax25.c

@@ -77,6 +77,10 @@
 #include "ui/ui_aprs.h"
 #include "core/aprs_service.h"
 #endif
+#ifdef CONFIG_VFO_SEARCH
+#include "core/vfo_search.h"
+#include "core/vfo_search_service.h"
+#endif
 
 /* UI main screen functions, their implementation is in "ui_main.c" */
 extern void _ui_drawMainBackground();
@@ -341,6 +345,24 @@ volatile bool ui_rtxSyncRequest = false;
 
 static bool standby = false;
 static long long last_event_tick = 0;
+
+#ifdef CONFIG_VFO_SEARCH
+/*
+ * Carrier search arming.
+ *
+ * The keypad reports the long press of a key 700 ms after it went down, so
+ * that event is what starts the clock: the sweep begins when UP or DOWN has
+ * been held for three seconds, and letting go before that cancels the arming
+ * silently.  The key stops tuning the moment it is armed, because a long press
+ * of an arrow on the VFO screen is the search and nothing else.
+ */
+#define VFO_SEARCH_HOLD_MS 3000
+
+static keyboard_t searchArmKey;      ///< KEY_UP / KEY_DOWN being held, 0 none
+static long long  searchArmTick;     ///< When that key went down
+static long long  searchRedrawTick;  ///< Last periodic redraw of the screen
+static bool       searchMsgShown;    ///< A stop reason is on screen
+#endif
 
 // UI event queue
 static uint8_t evQueue_rdPos;
@@ -1635,6 +1657,66 @@ static enum vpGPSInfoFlags GetGPSDirectionOrSpeedChanged()
 }
 #endif // CONFIG_GPS
 
+#ifdef CONFIG_VFO_SEARCH
+/**
+ * Periodic part of the VFO carrier search, run from ui_updateFSM() whether or
+ * not a key arrives.
+ *
+ * Three jobs: arm the sweep when an arrow has been held for three seconds,
+ * follow it on screen while it runs (the frequency changes under the operator,
+ * so the screen has to be redrawn even with no event), and take the stop reason
+ * off the screen once it has been there long enough.
+ */
+static void _ui_vfoSearchTick(long long now)
+{
+    if (vfoSearchService_active()) {
+        if ((now - searchRedrawTick) >= 100) {
+            searchRedrawTick = now;
+            redraw_needed = true;
+        }
+        searchMsgShown = false;
+        return;
+    }
+
+    /* The reason a finished search stopped stays up for a moment */
+    struct vfoSearchStatus st;
+    if (vfoSearchService_status(&st) && (st.result != VFOS_RESULT_NONE) &&
+        (st.age < VFO_SEARCH_MESSAGE_MS)) {
+        if ((now - searchRedrawTick) >= 250) {
+            searchRedrawTick = now;
+            redraw_needed = true;
+        }
+        searchMsgShown = true;
+    }
+    else if (searchMsgShown) {
+        /* Expired: one last redraw takes it away */
+        searchMsgShown = false;
+        redraw_needed = true;
+    }
+
+    if (searchArmKey == 0)
+        return;
+
+    /* Let go of the arrow, or added the other one: no search */
+    keyboard_t held = kbd_getKeys() & (KEY_UP | KEY_DOWN);
+    if (held != searchArmKey) {
+        searchArmKey = 0;
+        return;
+    }
+
+    if ((now - searchArmTick) < VFO_SEARCH_HOLD_MS)
+        return;
+
+    uint8_t direction = (searchArmKey == KEY_UP) ? VFOS_UP : VFOS_DOWN;
+    searchArmKey = 0;
+
+    if (vfoSearchService_start(direction)) {
+        searchRedrawTick = now;
+        redraw_needed = true;
+    }
+}
+#endif /* CONFIG_VFO_SEARCH */
+
 void ui_updateFSM(bool *sync_rtx)
 {
     long long now = getTick();
@@ -1666,6 +1748,11 @@ void ui_updateFSM(bool *sync_rtx)
 
     /* Delivery states, received messages and the compose draft */
     ui_msgs_tick(now);
+
+#ifdef CONFIG_VFO_SEARCH
+    /* Carrier search: arm, follow and expire, with or without key events */
+    _ui_vfoSearchTick(now);
+#endif
 
     // Check for events
     if(evQueue_wrPos == evQueue_rdPos) return;
@@ -1708,6 +1795,25 @@ void ui_updateFSM(bool *sync_rtx)
         // unless is the MONI key for the MACRO functions
         if (_ui_exitStandby(now) && !(msg.keys & KEY_MONI))
             return;
+
+#ifdef CONFIG_VFO_SEARCH
+        /*
+         * While a carrier search runs, the keypad belongs to it: any key -- a
+         * second long press, a short one, the red key -- stops the sweep and
+         * does nothing else, which is what the operator expects from a
+         * receiver that is busy.  The PTT is handled by the service, which
+         * sees the transmission from state_task().
+         */
+        if (vfoSearchService_active())
+        {
+            vfoSearchService_stop();
+            searchArmKey  = 0;
+            redraw_needed = true;
+            if (state.settings.vpLevel == vpBeep)
+                vp_beep(BEEP_KEY_GENERIC, SHORT_BEEP);
+            return;
+        }
+#endif
 
         /*
          * Contextual quick menu (P2, KEY_F2). Short press opens the popup on
@@ -1986,6 +2092,21 @@ void ui_updateFSM(bool *sync_rtx)
                 }
                 else
                 {
+#ifdef CONFIG_VFO_SEARCH
+                    /*
+                     * A long press of UP or DOWN on the VFO screen arms the
+                     * carrier search.  It is not a tuning step: the key has to
+                     * be held for three seconds (see _ui_vfoSearchTick()) and
+                     * the sweep starts from the frequency on screen.
+                     */
+                    if((msg.keys & (KEY_UP | KEY_DOWN)) && msg.long_press)
+                    {
+                        searchArmKey  = (msg.keys & KEY_UP) ? KEY_UP : KEY_DOWN;
+                        searchArmTick = now - input_longPressTimeout;
+                        redraw_needed = true;
+                    }
+                    else
+#endif
                     if(msg.keys & KEY_ENTER)
                     {
                         // Save current main state
