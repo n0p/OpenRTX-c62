@@ -57,6 +57,9 @@ struct dstarSlow *dstarStatus_slow(void)
     return &slow;
 }
 
+#ifdef CONFIG_DSTAR_MESSAGING
+/* FNV-1a of the callsign: the message store wants a numeric source address, and
+ * a D-STAR station is identified by its callsign. */
 static uint32_t hashCall(const char *call)
 {
     uint32_t h = 2166136261u;
@@ -66,6 +69,7 @@ static uint32_t hashCall(const char *call)
     }
     return h;
 }
+#endif
 
 /* Create or touch the entry of a station, most recent first. */
 static struct dstarHeardStation *touchStation(const struct dstarHeader *hdr,

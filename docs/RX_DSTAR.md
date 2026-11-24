@@ -321,9 +321,9 @@ equally pending.
 |---|---|---|
 | `CONFIG_C62_DMR_RX=y CONFIG_C62_APRS=y` (baseline) | 518 112 B (49.4 %) | 196 688 B (75.0 %) |
 | + `CONFIG_C62_DSTAR=y -DCONFIG_DSTAR_TX=n` | 524 324 B (50.0 %) | 207 536 B (79.2 %) |
-| + `CONFIG_C62_DSTAR=y` (receive **and** transmit) | 526 304 B (50.2 %) | 208 512 B (79.5 %) |
+| + `CONFIG_C62_DSTAR=y` (receive **and** transmit) | 526 368 B (50.2 %) | 208 512 B (79.5 %) |
 
-So D-STAR costs **+8 192 B of flash (+1.6 %)** and **+11 824 B of RAM
+So D-STAR costs **+8 256 B of flash (+1.6 %)** and **+11 824 B of RAM
 (+4.5 %)**, or +6 212 / +10 848 without the transmitter. The RAM is dominated by
 the 5.7 kB half-duplex audio buffer, the 1 kB of filtered-sample ring, the 660
 soft bits of the header and the heard-station table; receive and transmit share

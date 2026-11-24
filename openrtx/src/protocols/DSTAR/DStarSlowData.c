@@ -331,7 +331,7 @@ static void blockComplete(struct dstarSlow *sd)
         }
     } else if (type == DSTAR_SLOW_HEADER) {
         /* Type 0x5n: five bytes of the 41-byte radio header, 'f' padded. */
-        if (sd->hdrLen + 5 <= sizeof(sd->hdr)) {
+        if ((size_t)sd->hdrLen + 5u <= sizeof(sd->hdr)) {
             memcpy(sd->hdr + sd->hdrLen, payload, 5);
             sd->hdrLen = (uint8_t)(sd->hdrLen + 5);
         }
