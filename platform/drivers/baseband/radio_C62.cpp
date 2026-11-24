@@ -12,6 +12,8 @@
 #include <algorithm>
 
 #include "calibration/calib_C62.h"
+#include "core/agc.h"
+#include "core/airband.h"
 #include "core/state.h"
 #include "drivers/baseband/BK4819.h"
 #include "drivers/audio/csk6_codec.h"
@@ -105,6 +107,30 @@ static constexpr uint8_t TETRA_RX_AUDIO_GAIN1 = 1; // -6 dB
 static constexpr uint8_t TETRA_RX_AUDIO_GAIN2 = 0x3f;
 static constexpr uint8_t TETRA_MIC_GAIN = 0;
 
+/*
+ * C62 BK4819 settings for the airband mode, AM receive only. The AM detector
+ * itself is bk4819_setAmReceive(); what is left here is the AF level it hands
+ * over and the software AGC that holds it.
+ *
+ * REG_48<11:10> (AF Rx Gain1) is the coarse step of that AGC: the chip's own
+ * AGC keeps the IF at a constant level in five coarse steps, but what comes
+ * out of an AM detector is the carrier amplitude, so the AF level still follows
+ * the field strength. The loop in radio_getRssi() moves this step to keep the
+ * codec ADC in range; core/agc.h then does the fine work per sample. AM starts
+ * one step down from FM: a receiver landing on a strong local tower should not
+ * clip the ADC in the 100 ms the loop needs.
+ */
+static constexpr uint8_t AM_RX_AUDIO_GAIN1 = 1; // -6 dB, first step
+static constexpr uint8_t AM_RX_AUDIO_GAIN2 = 0x3f;
+
+/* Codec ADC peak, sample units, that asks for a coarser or a finer AF step */
+static constexpr uint16_t AM_AF_PEAK_HIGH = 28000; // 0.85 of full scale
+static constexpr uint16_t AM_AF_PEAK_LOW = 7000;   // 0.21 of full scale
+
+/* REG_48<11:10> has four steps, 0 dB to -18 dB in 6 dB steps */
+static constexpr uint8_t AM_RX_AUDIO_GAIN1_MAX = 3;
+static constexpr int64_t AM_AF_STEP_MS = 300;
+
 /**
  * Digital modes receive the raw discriminator through the flat audio path:
  * M17, and DMR (which transmits from the same flat path).
@@ -169,6 +195,25 @@ static bool reg43SweepStarted;
 static struct C62Calib calData;  // TX calibration
 static struct C62CalPoint txCal; // TX calibration at the TX frequency
 
+/* Level control of the AM receive path, see the airband settings above */
+static struct agc amAgc;
+static uint8_t amAfGain1 = AM_RX_AUDIO_GAIN1;
+static int64_t amAfGainTime;
+
+/**
+ * Per-sample processing of the AM audio on its way to the speaker: the AGC and
+ * its limiter. Runs in the audio worker (see csk6codec_setRxProcessor()), so it
+ * only touches the sample block it is given.
+ *
+ * @param samples: first sample of the speaker channel.
+ * @param count: samples.
+ * @param stride: distance between samples.
+ */
+static void amAudioProcess(int16_t *samples, size_t count, size_t stride)
+{
+    agc_process(&amAgc, samples, count, stride);
+}
+
 /**
  * Set the TX power control (APC) voltage through the PWM on pin A03. The TX
  * calibration gives the duty cycles of the low and high power settings at the
@@ -230,6 +275,19 @@ void radio_setOpmode(const enum opmode mode)
     // The core calls this before disabling the old mode: unkey first
     radio_disableRtx();
 
+    /*
+     * Only the airband mode receives AM. Every other one goes back to the FM
+     * demodulator profile first, because the AM one changes registers they
+     * would otherwise inherit: the top of the RX AGC gain table (REG_13), the
+     * undocumented REG_4A, the AF de-emphasis (REG_2B<8>) and the AF expander
+     * (REG_28). The audio processing of the AM path is uninstalled at the same
+     * time, while its audio path is closed.
+     */
+    if (mode != OPMODE_AIRBAND) {
+        bk4819_setModulation(&c62_bk4819, true);
+        csk6codec_setRxProcessor(NULL);
+    }
+
     if (mode == OPMODE_M17) {
         bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_BYPASS);
         bk4819_setTxDeviation(&c62_bk4819, true, M17_TX_DEVIATION);
@@ -283,6 +341,21 @@ void radio_setOpmode(const enum opmode mode)
                               TETRA_RX_AUDIO_GAIN2);
         bk4819_setMicGain(&c62_bk4819, TETRA_MIC_GAIN);
         c62_rx_reg43 = 0x7e28;
+    } else if (mode == OPMODE_AIRBAND) {
+        /*
+         * AM receive, DSB with carrier. The IF filter follows the channel
+         * spacing; the rest is the profile of the stock firmware plus the AF
+         * processing of the airband mode: no de-emphasis, no expander, and the
+         * AGC of core/agc.h on the audio on its way to the speaker, installed
+         * here because it is part of the receive path.
+         */
+        bk4819_setAmReceive(&c62_bk4819, (config->bandwidth == BW_25)
+                                             ? BK4819_AM_WIDE
+                                             : BK4819_AM_NARROW);
+        amAfGain1 = AM_RX_AUDIO_GAIN1;
+        bk4819_setRxAudioGain(&c62_bk4819, amAfGain1, AM_RX_AUDIO_GAIN2);
+        agc_init(&amAgc, NULL);
+        csk6codec_setRxProcessor(amAudioProcess);
     } else {
         bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_VOICE);
     }
@@ -299,9 +372,12 @@ void radio_enableAfOutput()
 {
     /*
      * Only the RTX to speaker path opens it: FM demodulated audio for the
-     * analog modes, the raw discriminator for the digital ones.
+     * analog modes, the raw discriminator for the digital ones and the AM
+     * detector for the airband one.
      */
-    if (flatMode(radioMode))
+    if (radioMode == OPMODE_AIRBAND)
+        bk4819_setAfOutput(&c62_bk4819, BK4819_AF_AM);
+    else if (flatMode(radioMode))
         bk4819_setAfOutput(&c62_bk4819, BK4819_AF_BYPASS);
     else
         bk4819_setAfOutput(&c62_bk4819, BK4819_AF_FM);
@@ -385,7 +461,18 @@ void radio_enableRx()
         gpioDev_set(LNA_UHF_EN);
     }
 
-    bk4819_setFrequency(&c62_bk4819, config->rxFrequency + rxTotalOffset());
+    /*
+     * The airband mode tunes to the 8.33 kHz channel raster: its step is a
+     * whole number of hertz (8333), so a frequency reached by stepping can be a
+     * fraction of a hertz off the channel, and a channel entered by its
+     * designator (118.005, whose carrier is 118.00833) is not on it at all.
+     * Snapping is a no-op outside the band.
+     */
+    uint32_t rxFrequency = config->rxFrequency + rxTotalOffset();
+    if (radioMode == OPMODE_AIRBAND)
+        rxFrequency = airband_snap(rxFrequency);
+
+    bk4819_setFrequency(&c62_bk4819, rxFrequency);
 
     if (flatMode(radioMode)) {
         /*
@@ -413,7 +500,7 @@ void radio_enableRx()
         if (radioMode == OPMODE_TETRA)
             bk4819_maskSetRegister(&c62_bk4819, 0x7E, 0x0007, 0x0006);
 #endif
-    } else if (config->rxToneEn) {
+    } else if ((config->rxToneEn) && (radioMode != OPMODE_AIRBAND)) {
         bk4819_enableRxCtcss(&c62_bk4819, config->rxTone);
     }
 
@@ -431,8 +518,9 @@ void radio_enableRx()
 
 void radio_enableTx()
 {
-    // TETRA is receive only on this radio: its modulation needs a linear PA
-    if ((config->txDisable == 1) || (radioMode == OPMODE_TETRA))
+    // Aircraft band AM is receive only, and so is TETRA
+    if ((config->txDisable == 1) || (radioMode == OPMODE_TETRA) ||
+        (radioMode == OPMODE_AIRBAND))
         return;
 
     gpioDev_clear(LNA_VHF_EN);
@@ -519,6 +607,15 @@ void radio_updateConfiguration()
     }
 
     /*
+     * The AM IF filter follows the channel spacing: 1.7 kHz in 12.5 kHz mode
+     * for the 8.33 kHz raster, the 6 kHz of 25 kHz mode for the 25 kHz one.
+     */
+    if (config->opMode == OPMODE_AIRBAND)
+        bk4819_setAmReceive(&c62_bk4819, (config->bandwidth == BW_25)
+                                             ? BK4819_AM_WIDE
+                                             : BK4819_AM_NARROW);
+
+    /*
      * Update VCO frequency and tuning parameters if current operating status
      * is different from OFF.
      * This is done by calling again the corresponding functions, which is safe
@@ -528,6 +625,38 @@ void radio_updateConfiguration()
         radio_enableRx();
     if (radioStatus == TX)
         radio_enableTx();
+}
+
+/**
+ * Coarse AF gain of the AM receive path.
+ *
+ * The chip's AGC holds the IF level in five coarse steps, but an AM detector
+ * hands over the carrier amplitude, so the AF output still swings with the
+ * field strength and the codec ADC is the first thing to clip on a strong
+ * tower. This moves the chip's own AF gain step (REG_48<11:10>, 6 dB per step)
+ * to keep the ADC between a fifth and five sixths of full scale, one step at a
+ * time and no faster than AM_AF_STEP_MS, because the peak of the codec has a
+ * 100 ms hold and reading it twice in that window would take two steps for one
+ * level. Everything between the steps is left to the per-sample AGC.
+ */
+static void amAfGainStep(void)
+{
+    const int64_t now = k_uptime_get();
+    if ((now - amAfGainTime) < AM_AF_STEP_MS)
+        return;
+
+    const uint16_t peak = csk6codec_getRxPeak();
+
+    if ((peak > AM_AF_PEAK_HIGH) && (amAfGain1 < AM_RX_AUDIO_GAIN1_MAX)) {
+        amAfGain1++;
+    } else if ((peak < AM_AF_PEAK_LOW) && (amAfGain1 > 0)) {
+        amAfGain1--;
+    } else {
+        return;
+    }
+
+    amAfGainTime = now;
+    bk4819_setRxAudioGain(&c62_bk4819, amAfGain1, AM_RX_AUDIO_GAIN2);
 }
 
 rssi_t radio_getRssi()
@@ -559,6 +688,11 @@ rssi_t radio_getRssi()
     if (baseband_dump_active())
         dumpSendStats();
 #endif
+
+    /* Called by the rtx thread, in RX: the AM level loop owns REG_48 here */
+    if ((radioMode == OPMODE_AIRBAND) && (radioStatus == RX))
+        amAfGainStep();
+
     return bk4819_getRssi(&c62_bk4819);
 }
 
