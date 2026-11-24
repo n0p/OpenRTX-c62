@@ -192,6 +192,10 @@ TEST_CASE("Quick menu rows fit their line", "[ui][quickmenu][layout]")
        outside it and only a slice was visible. Pin the geometry. */
     openMode(OPMODE_FM);
 
+    /* The C62 layout: 16 px top bar, 11 px hints. The host build has the same
+       160x128 panel, only layout is not initialised by ui_init() in a test. */
+    layout.top_h = 16;
+
     const uint8_t rowH = qm_rowHeight();
     const uint8_t baseline = qm_rowBaseline();
     const uint16_t capHeight = gfx_getFontHeight(FONT_SIZE_5PT);
@@ -206,7 +210,7 @@ TEST_CASE("Quick menu rows fit their line", "[ui][quickmenu][layout]")
 
     /* Rows do not overlap the header nor the hint bar */
     uint8_t rows = qm_visibleRows();
-    REQUIRE(rows >= 8);
+    REQUIRE(rows == 8);
     for (uint8_t r = 0; r < rows; r++) {
         int16_t top = qm_rowTop(r);
         REQUIRE(top >= (int16_t)layout.top_h);
