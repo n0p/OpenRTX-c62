@@ -65,6 +65,23 @@ void baseband_dump_restart(void);
 void baseband_dump_push(const int16_t *samples, size_t count);
 
 /**
+ * Add every stride-th sample of an interleaved frame to the dump: the radio
+ * channel of the DSP's 48 kHz stereo capture, without a gather buffer.
+ *
+ * @param samples: first sample of the first channel of the frame.
+ * @param stride: channels in the frame.
+ * @param count: samples per channel.
+ */
+void baseband_dump_pushChannel(const int16_t *samples, size_t stride,
+                               size_t count);
+
+/**
+ * @return true when the dump was started (boot key combination) and nothing
+ * has paused it.
+ */
+bool baseband_dump_active(void);
+
+/**
  * Check whether samples are being recorded, rather than dropped while a
  * burst is being sent.
  */

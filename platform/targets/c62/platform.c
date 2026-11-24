@@ -6,6 +6,7 @@
 
 #include <interfaces/platform.h>
 #include <interfaces/delays.h>
+#include <interfaces/keyboard.h>
 #include <hwconfig.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
@@ -66,6 +67,19 @@ static bool is_battery_charging = false;
 PINCTRL_DT_DEFINE(DT_NODELABEL(adc0));
 PINCTRL_DT_DEFINE(DT_CHOSEN(zephyr_console));
 
+/*
+ * Raw RX baseband capture at boot.
+ *
+ * The dump is the only way to see what the demodulators actually receive, and
+ * it takes the console UART, mutes the log and allocates a megabyte of PSRAM,
+ * so it is armed only when the operator asks for it: the A/B key (the red one,
+ * KEY_ESC) held while the radio is switched on. The key state is read before
+ * the DSP starts, because the DSP reconfigures the pins it shares.
+ */
+#ifdef C62_BASEBAND_DUMP
+static bool dumpRequested;
+#endif
+
 /**
  * Re-apply what the DSP firmware overwrites when it starts and sets up audio:
  * the battery ADC pins, which also read the power knob, and the console pins
@@ -83,15 +97,19 @@ static void restore_dsp_overwrites(void)
         PINCTRL_STATE_DEFAULT);
     /* The driver keeps its configuration, which the DSP leaves alone */
     int uart = 0;
+    bool restoreUart = true;
 #ifdef C62_BASEBAND_DUMP
-    /* The baseband dump owns the console UART and its baud rate */
-    (void)config;
-    (void)console;
-#else
-    uart = uart_config_get(console, &config);
-    if (uart == 0)
-        uart = uart_configure(console, &config);
+    /* An armed baseband dump owns the console UART and its baud rate */
+    restoreUart = !dumpRequested;
 #endif
+    if (restoreUart) {
+        uart = uart_config_get(console, &config);
+        if (uart == 0)
+            uart = uart_configure(console, &config);
+    } else {
+        (void)config;
+        (void)console;
+    }
     if ((adc != 0) || (pins != 0) || (uart != 0))
         printk("Restore after DSP start failed: adc=%d pins=%d uart=%d\n", adc,
                pins, uart);
@@ -133,6 +151,15 @@ static int battery_init(void)
     return 0;
 }
 
+#ifdef C62_BASEBAND_DUMP
+static bool captureKeyHeld(void)
+{
+    /* Two samples, a few tens of milliseconds apart: the key has to be held,
+     * not caught on a bounce */
+    return ((kbd_getKeys() & KEY_ESC) != 0) && ((kbd_getKeys() & KEY_ESC) != 0);
+}
+#endif
+
 void platform_init_csk6()
 {
     /* Initialise non volatile memory manager */
@@ -156,8 +183,14 @@ void platform_init_csk6()
         sleepFor(0, 10);
     } while (!platform_pwrButtonStatus());
 
-    // Enable keyboard backlight: the UI turns it off later if the setting says so
+    /* Enable keyboard backlight: the UI turns it off later if the setting says so */
     c62_setKeyBacklight(true);
+
+#ifdef C62_BASEBAND_DUMP
+    /* The keypad is scanned here, before the DSP reconfigures its pins */
+    if (captureKeyHeld())
+        dumpRequested = true;
+#endif
 
     /* Initialise BK4819 SPI bus and transceiver */
     spiZephyr_init(c62_bk4819.spi);
@@ -179,14 +212,21 @@ void platform_init_csk6()
     restore_dsp_overwrites();
 
 #ifdef C62_BASEBAND_DUMP
-    /* After the console restore: it sets the dump baud rate on the UART */
-    if (ret == 0)
+    /*
+     * After the console restore, which the dump overrides with its own baud
+     * rate. Only when the A/B key asked for a capture: an idle dump would mute
+     * the log and hold a megabyte of PSRAM for nothing.
+     */
+    if ((ret == 0) && dumpRequested)
         baseband_dump_init();
 #ifdef C62_REMOTE
     /* After the dump: replies are dump control packets */
-    if (ret == 0)
+    if ((ret == 0) && dumpRequested)
         c62_remote_init();
 #endif
+    if (ret == 0)
+        printk("C62: baseband dump %s (hold A/B at power on to record)\n",
+               dumpRequested ? "armed" : "off");
 #endif
 
     if (ret != 0)

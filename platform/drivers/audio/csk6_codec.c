@@ -19,6 +19,9 @@
 #include "AudioSystem.h"
 #include "AudioTrack.h"
 #include "AudioRecord.h"
+#ifdef C62_BASEBAND_DUMP
+#include "baseband_dump_c62.h"
+#endif
 
 /* One worker services the DSP's 48 kHz stereo transport:
  *   capture: microphone left, radio right -> application buffers or FM queues
@@ -150,6 +153,9 @@ static AudioRecord record;
 static AudioTrack playbackTrack;
 static bool captureRunning;
 static uint16_t micPeak;
+static uint16_t rxPeak;
+/* Buffer halves the callers were too late for: samples the demodulators lost */
+static volatile uint32_t streamMisses;
 static bool playbackRunning;
 static int64_t playbackDeadline;
 static uint32_t playbackFraction;
@@ -546,9 +552,14 @@ static void setCapture(AudioRecord *rec, bool enable)
     if (enable) {
         AudioRecord_start(rec);
         disableAdcHpf2();
+#ifdef C62_BASEBAND_DUMP
+        /* A new capture start: mark the discontinuity in the dump */
+        baseband_dump_restart();
+#endif
     } else {
         AudioRecord_stop(rec);
         micPeak = 0;
+        rxPeak = 0;
     }
     captureRunning = enable;
 }
@@ -732,9 +743,25 @@ static void captureFrame(AudioRecord *rec)
         const int16_t *src = &samples[rec->mChannelOutIdx[source]];
         captureToStream(&inputs[source], src, stride, count);
         captureToFmQueues(source, src, stride, count);
-        if (source == SOURCE_MIC)
+        if (source == SOURCE_MIC) {
             micPeak = peakMagnitude(src, stride, count);
+        } else {
+            /* Peak hold, about 100 ms at the DSP's 10 ms frames: a single
+             * frame says nothing about a signal that is mostly silence */
+            uint16_t p = peakMagnitude(src, stride, count);
+            uint16_t held = rxPeak - (rxPeak >> 4);
+            rxPeak = (p > held) ? p : held;
+        }
     }
+
+#ifdef C62_BASEBAND_DUMP
+    /*
+     * Raw 48 kHz radio samples, before the rate selection above and with no
+     * averaging: this is what the demodulator gets when it asks for 48 kHz.
+     */
+    baseband_dump_pushChannel(&samples[rec->mChannelOutIdx[SOURCE_RTX]],
+                              stride, count);
+#endif
 
     int ret = ICStream_Consumer_releaseFrame(ic, frame);
     if (ret == IC_OK)
@@ -1015,6 +1042,21 @@ uint16_t csk6codec_getMicPeak(void)
     return micPeak;
 }
 
+uint16_t csk6codec_getRxPeak(void)
+{
+    return rxPeak;
+}
+
+uint32_t csk6codec_getStreamMisses(void)
+{
+    return streamMisses;
+}
+
+void csk6codec_clearStreamMisses(void)
+{
+    streamMisses = 0;
+}
+
 void csk6codec_setRoute(enum AudioSource source, enum AudioSink sink,
                         bool enabled)
 {
@@ -1200,6 +1242,8 @@ static int csk6codec_sync(struct streamCtx *ctx, uint8_t dirty)
          */
         if (ep->boundaries == ep->observed)
             ret = -EIO;
+        else if ((ep->boundaries - ep->observed) > 1)
+            streamMisses += ep->boundaries - ep->observed - 1;
         ep->observed = ep->boundaries;
     }
     ep->busy = false;

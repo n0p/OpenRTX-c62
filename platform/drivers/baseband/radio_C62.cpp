@@ -14,7 +14,9 @@
 #include "calibration/calib_C62.h"
 #include "core/state.h"
 #include "drivers/baseband/BK4819.h"
+#include "drivers/audio/csk6_codec.h"
 #include "radioUtils.h"
+#include <stdio.h>
 #ifdef C62_BASEBAND_DUMP
 #include "../audio/baseband_dump_c62.h"
 #endif
@@ -290,6 +292,62 @@ void radio_disableAfOutput()
     bk4819_setAfOutput(&c62_bk4819, BK4819_AF_MUTE);
 }
 
+#ifdef C62_BASEBAND_DUMP
+/*
+ * What the baseband dump sends alongside the samples.
+ *
+ * The samples alone do not say whether the radio was configured the way the
+ * code thinks: the BK4819 registers are written by three different modes, by
+ * the bypass entry of the application note and by the vendor init sequence, and
+ * a capture can only be interpreted against what the chip actually holds. These
+ * control packets carry that, read back over SPI, plus the level and
+ * continuity figures the DSP path reports, so a capture file is self-describing.
+ */
+static const uint8_t dumpedRegs[] = {
+    0x10, 0x11, 0x12, 0x13, 0x14, /* RX AGC gains */
+    0x2B, 0x31, 0x47, 0x4B,       /* AF filters, compander, AF output, ALC */
+    0x43, 0x48, 0x73, 0x7E,       /* BW/filters, AF RX gains, AFC, DC filters */
+};
+
+static void dumpSendRegisters()
+{
+    char text[192];
+    int n = snprintf(text, sizeof(text), "regs");
+
+    for (size_t i = 0; (i < ARRAY_SIZE(dumpedRegs)) && (n > 0)
+                       && (n < (int)sizeof(text)); i++) {
+        n += snprintf(text + n, sizeof(text) - (size_t)n, " %02X=%04X",
+                      dumpedRegs[i], bk4819_readReg(&c62_bk4819, dumpedRegs[i]));
+    }
+
+    if ((n > 0) && (n < (int)sizeof(text)))
+        baseband_dump_send_text(text, (size_t)n);
+}
+
+/**
+ * Send the DSP path figures once a second: lost buffer halves and the peak of
+ * the radio channel, which is what says whether the codec ADC is clipping.
+ */
+static void dumpSendStats()
+{
+    static int64_t last;
+    int64_t now = k_uptime_get();
+
+    if ((now - last) < 1000)
+        return;
+    last = now;
+
+    char text[96];
+    int n = snprintf(text, sizeof(text), "stats misses=%u rxpk=%u/32767 rssi=%d",
+                     (unsigned int)csk6codec_getStreamMisses(),
+                     (unsigned int)csk6codec_getRxPeak(),
+                     (int)bk4819_getRssi(&c62_bk4819));
+
+    if ((n > 0) && (n < (int)sizeof(text)))
+        baseband_dump_send_text(text, (size_t)n);
+}
+#endif /* C62_BASEBAND_DUMP */
+
 void radio_enableRx()
 {
     gpioDev_clear(LNA_VHF_EN);
@@ -324,8 +382,15 @@ void radio_enableRx()
          * the IF (16.9 kHz in 25 kHz mode), one-sided: it distorts the +3pi/4
          * symbols much more than the -3pi/4 ones. The wanted signal is centred
          * on the IF, so filtering DC at the IF input does not touch it.
+         *
+         * DMR used to inherit this, and it must not: TETRA decodes phase
+         * differences and needs the IF DC gone, while DMR slices absolute 4FSK
+         * levels and the baseband has to stay flat where the flat path leaves
+         * it, exactly as in M17, which is the mode that works on this radio.
+         * Keeping the two paths identical is what makes a DMR failure mean
+         * something when it is compared against M17.
          */
-        if ((radioMode == OPMODE_TETRA) || (radioMode == OPMODE_DMR))
+        if (radioMode == OPMODE_TETRA)
             bk4819_maskSetRegister(&c62_bk4819, 0x7E, 0x0007, 0x0006);
 #endif
     } else if (config->rxToneEn) {
@@ -334,6 +399,14 @@ void radio_enableRx()
 
     bk4819_enableRx(&c62_bk4819);
     radioStatus = RX;
+
+#ifdef C62_BASEBAND_DUMP
+    /* The chip is configured and owns the bus: say what it really holds */
+    if (baseband_dump_active()) {
+        csk6codec_clearStreamMisses();
+        dumpSendRegisters();
+    }
+#endif
 }
 
 void radio_enableTx()
@@ -460,6 +533,11 @@ rssi_t radio_getRssi()
             bk4819_writeReg(&c62_bk4819, 0x43, c62_rx_reg43);
         }
     }
+#endif
+#ifdef C62_BASEBAND_DUMP
+    /* Once a second: lost buffer halves and the level into the codec ADC */
+    if (baseband_dump_active())
+        dumpSendStats();
 #endif
     return bk4819_getRssi(&c62_bk4819);
 }
