@@ -174,6 +174,34 @@ endif()
 # inbox, states and the flash record, used by APRS, DMR SMS and TETRA SDS.  The
 # messaging screen of the UI talks to this and nothing else.
 #
+#
+# C62_NOISE_SUPPRESS: RNNoise (v0.1.1, BSD-3-Clause, lib/rnnoise) on the analog
+# receive path, behind the "RX Noise" switch of the Audio settings menu. OFF by
+# default: measured 1,90 M instructions per 10 ms frame on this M33 (~70 % of
+# 300 MHz) and 62 KiB of state, which is why the state is placed in PSRAM.
+# See docs/NOISE.md. The DSP-side design (HiFi4, LSF service) is documented
+# there too and is not built by this option.
+#
+if(CONFIG_C62_NOISE_SUPPRESS)
+  add_subdirectory(${OPENRTX_ROOT}/lib/rnnoise ${CMAKE_BINARY_DIR}/rnnoise)
+  target_compile_options(rnnoise PRIVATE
+    $<TARGET_PROPERTY:zephyr_interface,INTERFACE_COMPILE_OPTIONS>)
+  target_compile_definitions(rnnoise PRIVATE
+    $<TARGET_PROPERTY:zephyr_interface,INTERFACE_COMPILE_DEFINITIONS>)
+  target_include_directories(rnnoise PRIVATE
+    $<TARGET_PROPERTY:zephyr_interface,INTERFACE_INCLUDE_DIRECTORIES>)
+  target_include_directories(rnnoise SYSTEM PRIVATE
+    $<TARGET_PROPERTY:zephyr_interface,INTERFACE_SYSTEM_INCLUDE_DIRECTORIES>)
+
+  target_sources(app PRIVATE
+    ${OPENRTX_ROOT}/openrtx/src/core/noise_suppress.c)
+  target_include_directories(app PRIVATE ${OPENRTX_ROOT}/lib/rnnoise/include)
+  target_link_libraries(app PRIVATE rnnoise)
+  target_compile_definitions(app PRIVATE CONFIG_C62_NOISE_SUPPRESS)
+
+  message(STATUS "C62: RNNoise noise suppression on RX (off at run time)")
+endif()
+
 option(CONFIG_MESSAGING "Shared text message store (APRS, DMR SMS, TETRA SDS)" ON)
 
 if(CONFIG_MESSAGING)

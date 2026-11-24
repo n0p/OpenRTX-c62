@@ -143,6 +143,26 @@ config C62_APRS
 
 endmenu
 
+menu "Noise suppression"
+
+config C62_NOISE_SUPPRESS
+	bool "RNNoise noise suppression on the analog RX path"
+	default n
+	help
+	  Builds lib/rnnoise (RNNoise v0.1.1, BSD-3-Clause) and its stage on
+	  the analog FM receive path, behind the "RX Noise" switch of the
+	  Audio menu. Off by default, and off at run time until the switch is
+	  set: while disabled the stage costs one flag test per 10 ms frame
+	  and allocates nothing.
+
+	  The measured cost on this board is the reason it is off by default:
+	  1,90 M instructions per 10 ms frame (about 70 % of the Cortex-M33
+	  at 300 MHz) and 62 KiB of state, which is why the state lives in
+	  PSRAM. See docs/NOISE.md for the numbers, the quality evaluation
+	  and the DSP-side design that this option is a stepping stone to.
+
+endmenu
+
 DT_COMPAT_LSF_SERVICE_CONTROLLER := lsf,service-controller
 
 config LSF_SERVICE_CONTROLLER

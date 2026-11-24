@@ -632,6 +632,13 @@ int _ui_getAudioValueName(char *buf, uint8_t max_len, uint8_t index)
                                           currentLanguage->on :
                                           currentLanguage->off);
             break;
+#ifdef CONFIG_C62_NOISE_SUPPRESS
+        case AU_NOISE:
+            sniprintf(buf, max_len, "%s", last_state.settings.noiseSuppression ?
+                                          currentLanguage->on :
+                                          currentLanguage->off);
+            break;
+#endif
     }
     return 0;
 }

@@ -10,6 +10,9 @@
 #include <stdlib.h>
 #include "core/event.h"
 #include "core/state.h"
+#ifdef CONFIG_C62_NOISE_SUPPRESS
+#include "core/noise_suppress.h"
+#endif
 #include "core/battery.h"
 #include "hwconfig.h"
 #include "interfaces/platform.h"
@@ -85,6 +88,16 @@ void state_init()
     if (nvm_readSettings(&state.settings) < 0) {
         state.settings = default_settings;
     }
+
+#ifdef CONFIG_C62_NOISE_SUPPRESS
+    /*
+     * Arm the noise suppressor from the stored setting. Off is the default and
+     * costs nothing: the stage allocates and initialises only when enabled.
+     */
+    noiseSuppress_init();
+    if (state.settings.noiseSuppression)
+        state.settings.noiseSuppression = noiseSuppress_setEnabled(true);
+#endif
 
     /*
      * Try loading VFO configuration from nonvolatile memory and default to sane
