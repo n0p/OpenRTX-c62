@@ -1238,6 +1238,18 @@ m17_golay_test = executable('m17_golay_test',
                             sources : unit_test_src + ['tests/unit/M17_golay.cpp'],
                             kwargs  : unit_test_opts)
 
+# P25 receive PHY.  The sources are added to the test on their own: nothing else
+# in the Linux build pulls them in, and the test is the only consumer.
+p25_phy_src = ['openrtx/src/protocols/P25/P25Phy.c',
+               'openrtx/src/protocols/P25/P25Fec.c',
+               'openrtx/src/protocols/P25/P25Defs.c',
+               'openrtx/src/protocols/P25/P25Tables.c']
+
+p25_phy_test = executable('p25_phy_test',
+                          sources : unit_test_src + p25_phy_src +
+                                    ['tests/unit/p25_phy.cpp'],
+                          kwargs  : unit_test_opts)
+
 m17_viterbi_test = executable('m17_viterbi_test',
                                sources : unit_test_src + ['tests/unit/M17_viterbi.cpp'],
                                kwargs  : unit_test_opts)
@@ -1420,6 +1432,7 @@ m17_replay_test = executable('m17_replay_test',
                              kwargs  : m17_replay_test_opts)
 
 test('M17 Golay Unit Test',   m17_golay_test)
+test('P25 PHY Test',           p25_phy_test)
 test('M17 Viterbi Unit Test', m17_viterbi_test)
 test('M17 Demodulator Test',  m17_demodulator_test)
 test('M17 RRC Test',          m17_rrc_test)
