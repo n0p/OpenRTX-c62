@@ -49,7 +49,7 @@ static constexpr uint8_t M17_RX_AUDIO_GAIN2 = 0x3f;
 static constexpr uint8_t M17_MIC_GAIN = 0;
 
 /*
- * C62 BK4819 settings for DMR, receive only. DMR channels are 12.5 kHz, but
+ * C62 BK4819 settings for DMR. DMR channels are 12.5 kHz, but
  * the demodulator needs the discriminator flat and wide: as with TETRA, the
  * chip runs in 25 kHz mode with the widest RF filters (REG_43 0x7e28), which
  * is what the host prototype was validated on. The receiver estimates its
@@ -58,7 +58,21 @@ static constexpr uint8_t M17_MIC_GAIN = 0;
  */
 static constexpr uint8_t DMR_RF_BW = 7;      // 4.5 kHz
 static constexpr uint8_t DMR_RF_BW_WEAK = 7; // 4.5 kHz
-static constexpr uint8_t DMR_TX_LPF2_BW = 0; // 3 kHz, unused in RX
+static constexpr uint8_t DMR_TX_LPF2_BW = 0; // 3 kHz: REG_43 AF TX LPF2
+/*
+ * TX deviation tuning word (REG_40 <11:0>).  M17 uses 0x582 for its 4FSK,
+ * whose outer symbols sit at +-2.4 kHz; ETSI DMR puts them at +-1.944 kHz, so
+ * 0x582 * 1944/2400 = 0x476.  It is a starting point, not a calibration: the
+ * BK4819 drives a varactor whose sensitivity differs per band and per PA, and
+ * the C62 stores per-band TX calibration (calib_C62, txDevNarrow/txDevWide,
+ * raw words with no Hz attached).  Measure +3/-3 alternating symbols with an
+ * analyser (or with a second C62 and its level estimates) and put the result
+ * in DMR_TX_DEVIATION, then in the calibration table like the FM values.
+ *
+ * The modulator scales the symbols, not the deviation: DMR_TX_INNER_LEVEL is
+ * the audio amplitude and this word is the FM sensitivity.
+ */
+static constexpr uint16_t DMR_TX_DEVIATION = 0x476;
 static constexpr uint8_t DMR_RX_AUDIO_GAIN1 = 1; // -6 dB
 static constexpr uint8_t DMR_RX_AUDIO_GAIN2 = 0x3f;
 static constexpr uint8_t DMR_MIC_GAIN = 0;
@@ -78,7 +92,7 @@ static constexpr uint8_t TETRA_MIC_GAIN = 0;
 
 /**
  * Digital modes receive the raw discriminator through the flat audio path:
- * M17, and DMR and TETRA (both receive only).
+ * M17, and DMR (which transmits from the same flat path).
  */
 static bool flatMode(enum opmode mode)
 {
@@ -220,8 +234,16 @@ void radio_setOpmode(const enum opmode mode)
                               M17_RX_AUDIO_GAIN2);
         bk4819_setMicGain(&c62_bk4819, M17_MIC_GAIN);
     } else if (mode == OPMODE_DMR) {
-        // Flat, wide receive path, as for TETRA
+        /*
+         * Flat, wide receive path, as for TETRA, and the same flat,
+         * DC-coupled transmit path: AUDIO_BYPASS clears the AF TX filters,
+         * the ALC, the compander and the TX DC filter (REG_2B/31/47/4B/7E),
+         * which is what a 4FSK baseband that starts at DC needs.  The
+         * deviation word sets the FM sensitivity of the varactor, and the
+         * modulator (DmrTx.c) does the pulse shaping.
+         */
         bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_BYPASS);
+        bk4819_setTxDeviation(&c62_bk4819, true, DMR_TX_DEVIATION);
         bk4819_setBandwidth(&c62_bk4819, BK4819_BW_25K);
         bk4819_setRfFilter(&c62_bk4819, DMR_RF_BW, DMR_RF_BW_WEAK);
         bk4819_setTxAudioFilter(&c62_bk4819, DMR_TX_LPF2_BW);
@@ -316,9 +338,8 @@ void radio_enableRx()
 
 void radio_enableTx()
 {
-    // DMR and TETRA are receive only on this radio
-    if ((config->txDisable == 1) || (radioMode == OPMODE_DMR)
-        || (radioMode == OPMODE_TETRA))
+    // TETRA is receive only on this radio: its modulation needs a linear PA
+    if ((config->txDisable == 1) || (radioMode == OPMODE_TETRA))
         return;
 
     gpioDev_clear(LNA_VHF_EN);

@@ -76,15 +76,33 @@ config C62_DMR_VOCODER
 	  See docs/DMR_VOCODER.md.
 
 config C62_DMR_RX
-	bool "DMR receive mode (PHY, AMBE+2 vocoder and UI)"
+	bool "DMR mode (PHY, AMBE+2 vocoder, transmitter and UI)"
 	select C62_DMR_VOCODER
 	default n
 	help
-	  DMR receiver: 4FSK demodulation of the discriminator output, slot
-	  sync, CACH, colour code and timeslot, and voice through the AMBE+2
-	  decoder. Receive only, there is no DMR transmitter. Selects the
-	  vocoder. See docs/DMR_RX.md.
+	  DMR mode: 4FSK demodulation of the discriminator output, slot sync,
+	  CACH, colour code and timeslot, and voice through the AMBE+2
+	  decoder. Selects the vocoder. See docs/DMR_RX.md.
+
+	  It also contains the transmitter (docs/DMR_TX.md), which only keys
+	  the PA when an AMBE+2 encoder is linked in: CONFIG_DMR_TX builds the
+	  chain, but the encoder itself is the HiFi4 service or an optimised
+	  port. Without one, PTT in this mode does nothing.
+
 	  Enable it with west build -b c62 ... -- -DCONFIG_C62_DMR_RX=y
+
+config DMR_TX
+	bool "DMR transmitter (framing, FEC, 4FSK modulator, PTT)"
+	depends on C62_DMR_RX
+	default n
+	help
+	  Transmit chain of the DMR mode: voice LC header, voice bursts,
+	  terminator, CACH, BPTC/RS, 4FSK with a polyphase RRC and the PA
+	  envelope. 117 k instructions per 30 ms timeslot, 4.5 k more for an
+	  LC burst. It is only useful with an AMBE+2 encoder
+	  (dmrVocoder_encode()), see docs/DMR_TX.md. OFF by default: without
+	  an encoder PTT refuses to key, so the option only costs flash.
+	  Enable it with west build -b c62 ... -- -DCONFIG_C62_DMR_RX=y -DCONFIG_DMR_TX=y
 
 endmenu
 

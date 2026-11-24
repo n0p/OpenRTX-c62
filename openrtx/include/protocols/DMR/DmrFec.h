@@ -87,6 +87,33 @@ uint16_t dmr_fec_crc16(const uint8_t *bits, int nbits);
 void dmr_fec_voice_deinterleave(const uint8_t payload[72], uint8_t frame[9]);
 
 /**
+ * Encode a BPTC(196,96) block: the inverse of dmr_fec_bptc_decode().
+ *
+ * @param data: 96 information bits, 0 or 1 per element, in the order the
+ *              decoder returns them.
+ * @param out: destination, 196 bits in on-air order.
+ */
+void dmr_fec_bptc_encode(const uint8_t data[96], uint8_t out[196]);
+
+/**
+ * Add the RS(12,9) parity of a full link control, in place.
+ *
+ * The over-the-air link control is 12 bytes: the 9 bytes of the LC PDU
+ * followed by the three parity bytes of a (12,9) Reed-Solomon code over
+ * GF(2^8) (x^8 + x^4 + x^3 + x^2 + 1, generator (x+a)(x+a^2)(x+a^3) =
+ * x^3 + 0x0E x^2 + 0x38 x + 0x40), as in TS 102 361-1 annex B.  The parity is
+ * transmitted with `dataType`-specific 24-bit masks (0x96 96 96 for a voice LC
+ * header, 0x99 99 99 for a terminator with LC), as every implementation does
+ * and as the LCs of real traffic confirm: with the mask, the recomputed parity
+ * of a captured voice LC header is byte-identical to the one on the air.
+ *
+ * @param lc: 12 bytes; the first 9 hold the LC PDU on entry.
+ * @param dataType: DMR_DT_VOICE_LC_HEADER or DMR_DT_TERMINATOR_LC; any other
+ *                  value leaves the parity unmasked.
+ */
+void dmr_fec_rs129_encode(uint8_t lc[12], uint8_t dataType);
+
+/**
  * Inverse of dmr_fec_voice_deinterleave(), for tests and the bit-exact
  * comparison against the host prototype.
  *

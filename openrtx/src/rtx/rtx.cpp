@@ -65,6 +65,10 @@ void rtx_init(pthread_mutex_t *m)
     rtxStatus.M17_link[0]   = '\0';
     rtxStatus.M17_refl[0]   = '\0';
     rtxStatus.M17_meta_text[0] = '\0';
+    rtxStatus.dmrColourCode = 1;
+    rtxStatus.dmrTimeslot   = 1;
+    rtxStatus.dmrSourceId   = 1234567;
+    rtxStatus.dmrTalkgroup  = 9;
     currMode = &noMode;
 
     /*

@@ -144,10 +144,12 @@ if(CONFIG_C62_DMR_VOCODER)
 endif()
 
 #
-# C62_DMR_RX: DMR receive mode. The PHY, the FEC and the burst handling are the
-# C port of the host prototype in work/dmr-rx (see docs/DMR_RX.md); voice goes
-# through lib/dmr_vocoder, so this option selects C62_DMR_VOCODER.
+# C62_DMR_RX: DMR mode. The PHY, the FEC and the burst handling are the C port
+# of the host prototype in work/dmr-rx (see docs/DMR_RX.md); voice goes through
+# lib/dmr_vocoder, so this option selects C62_DMR_VOCODER.
 #
+# With CONFIG_DMR_TX the same option also builds the transmit chain (DmrTx.c,
+# the encode halves of DmrFec.c and the DmrVocoder.c hook), see docs/DMR_TX.md.
 #
 # C62_APRS: APRS on the analog FM path (messaging, beacon, station list).
 # The decoder is off at run time until it is enabled in the menu: this option
@@ -173,9 +175,18 @@ if(CONFIG_C62_DMR_RX)
     ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrPhy.c
     ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrSpeech.c
     ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrStatus.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrVocoder.c
     ${OPENRTX_ROOT}/openrtx/src/rtx/OpMode_DMR.cpp)
   target_compile_definitions(app PRIVATE CONFIG_DMR)
-  message(STATUS "C62: DMR receive mode enabled")
+  message(STATUS "C62: DMR mode enabled")
+
+  if(CONFIG_DMR_TX)
+    target_sources(app PRIVATE
+      ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrTx.c
+      ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrTxTables.c)
+    target_compile_definitions(app PRIVATE CONFIG_DMR_TX)
+    message(STATUS "C62: DMR transmit chain enabled")
+  endif()
 endif()
 
 if(C62_TETRA)
