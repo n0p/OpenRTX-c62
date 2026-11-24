@@ -90,6 +90,16 @@ option(C62_MODE_STATS "Per-mode RX/TX counters, quality and demodulation cost"
 #   and M17-wide (0x7e28, where the IF filters are doubled to 9 kHz). See
 #   reports/dmr_rx_hw.md.
 option(C62_DMR_12K5 "DMR in the BK4819 12.5 kHz channel mode" OFF)
+# C62_PC_PROTO: binary protocol between the radio and a computer, for a CPS
+#   and for bench work (docs/PC_PROTO.md).  Takes the programming cable's RX
+#   line on the PTT pad, so PTT is not available in these builds, and its
+#   replies and events share the console UART.
+option(C62_PC_PROTO "Binary CPS protocol over the programming cable" OFF)
+# C62_DEBUG_PROTO: the debug namespace of that protocol -- log streaming,
+#   diagnostics, register and memory access, capture, TX trace.  OFF is what a
+#   production build wants: those messages are then not even advertised, and
+#   the code is compiled out.
+option(C62_DEBUG_PROTO "Debug namespace of the CPS protocol" OFF)
 # C62_TETRA: TETRA TMO downlink receive mode ("T" under key 5), decoded with
 #   libtetra, which west fetches to modules/lib/libtetra.
 option(C62_TETRA "TETRA receive mode" ON)
@@ -125,6 +135,19 @@ endif()
 if(C62_REMOTE)
   target_sources(app PRIVATE ${OPENRTX_ROOT}/platform/drivers/audio/c62_remote.c)
   target_compile_definitions(app PRIVATE C62_REMOTE)
+endif()
+if(C62_PC_PROTO)
+  target_sources(app PRIVATE
+    ${OPENRTX_ROOT}/platform/targets/c62/pc_proto_c62.c)
+  target_compile_definitions(app PRIVATE C62_PC_PROTO)
+  if(C62_DEBUG_PROTO)
+    target_compile_definitions(app PRIVATE CONFIG_C62_DEBUG_PROTO)
+    message(STATUS "C62: PC protocol with the debug namespace")
+  else()
+    message(STATUS "C62: PC protocol, debug namespace compiled out")
+  endif()
+elseif(C62_DEBUG_PROTO)
+  message(FATAL_ERROR "C62_DEBUG_PROTO needs C62_PC_PROTO")
 endif()
 if(C62_BASEBAND_DUMP)
   target_sources(app PRIVATE

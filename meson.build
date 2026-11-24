@@ -85,6 +85,13 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/core/msg_service.c',
                'openrtx/src/core/messaging.c',
                'openrtx/src/core/messaging_store_none.c',
+               # Binary protocol between the radio and a computer: framing,
+               # session, the store handlers and the debug namespace. Portable
+               # C, built into the host tests as well as the firmware. See
+               # docs/PC_PROTO.md.
+               'openrtx/src/core/pc_proto.c',
+               'openrtx/src/core/pc_proto_ops.c',
+               'openrtx/src/core/pc_proto_dbg.c',
                'openrtx/src/rtx/rtx.cpp',
                'openrtx/src/rtx/TxGuard.c',
                'openrtx/src/rtx/OpMode_FM.cpp',
@@ -1375,6 +1382,24 @@ channel_store_test = executable('channel_store_test',
                                 sources : unit_test_src + ['tests/unit/channel_store.cpp'],
                                 kwargs  : unit_test_opts)
 
+# Protocolo binario con el PC. Se compila dos veces: la primera con el espacio
+# de nombres de depuracion, la segunda sin el, para que "una build de produccion
+# responde NOT_ALLOWED y no filtra nada" sea un test y no una promesa.
+pc_proto_test = executable('pc_proto_test',
+                           sources : unit_test_src + ['tests/unit/pc_proto.cpp'],
+                           kwargs  : unit_test_opts)
+
+pc_proto_opts_dbg = {'c_args' : linux_c_args + ['-DCONFIG_C62_DEBUG_PROTO'],
+                     'cpp_args' : linux_cpp_args + ['-DCONFIG_C62_DEBUG_PROTO'],
+                     'include_directories' : linux_inc,
+                     'dependencies' : [sdl_dep, threads_dep, codec2_dep,
+                                       catch2_dep],
+                     'link_args' : linux_l_args}
+
+pc_proto_dbg_test = executable('pc_proto_dbg_test',
+                               sources : unit_test_src + ['tests/unit/pc_proto.cpp'],
+                               kwargs  : pc_proto_opts_dbg)
+
 # Zonas: los planes de canales como datos (repetidoras R0-R7 y U0-U100, PMR446)
 zones_test = executable('zones_test',
                         sources : unit_test_src + ['tests/unit/zones.cpp'],
@@ -1579,6 +1604,8 @@ test('M17 Packet Frame Test', m17_packet_test)
 test('M17 Frame Decoder Test', m17_decoder_test)
 test('C62 Calibration Test', c62_calib_test)
 test('Channel Store Test',   channel_store_test)
+test('PC Protocol Test',     pc_proto_test)
+test('PC Protocol Debug Test', pc_proto_dbg_test)
 test('Zones Test',           zones_test)
 test('AGC Test',             agc_test)
 test('Airband Test',         airband_test)

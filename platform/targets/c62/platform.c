@@ -30,6 +30,9 @@
 #endif
 #include "controller.h"
 #include "dsp.h"
+#ifdef C62_PC_PROTO
+void pc_proto_c62_init(void);
+#endif
 #include <string.h>
 #include <stdint.h>
 
@@ -276,6 +279,17 @@ void platform_init_csk6()
 
     if (ret != 0)
         printk("DSP start failed, no audio: %d\n", ret);
+
+#ifdef C62_PC_PROTO
+    /*
+     * The CPS protocol takes the console UART: from here on the log goes into
+     * its ring and still reaches the UART while no client is linked, so a
+     * serial terminal sees the boot exactly as before.  Started after the dump
+     * because it pauses the dump while a client is linked.
+     */
+    if (ret == 0)
+        pc_proto_c62_init();
+#endif
 
     /*
      * Safe state before the watchdog is armed: the PA enable lines are driven
