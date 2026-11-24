@@ -72,6 +72,32 @@ const char *dmrSms_appName(enum dmrSmsApp app)
     return "?";
 }
 
+enum dmrSmsApp dmrSms_appForFormat(uint8_t format)
+{
+    switch (format) {
+        case DMR_SMS_FMT_DD_UTF16BE: return DMR_SMS_APP_DD_UTF16BE;
+        case DMR_SMS_FMT_DD_UTF8:    return DMR_SMS_APP_DD_UTF8;
+        case DMR_SMS_FMT_IP_5016:    return DMR_SMS_APP_IP;
+        case DMR_SMS_FMT_IP_HC:      return DMR_SMS_APP_IP_HC;
+        case DMR_SMS_FMT_ANYTONE:    return DMR_SMS_APP_ANYTONE;
+        case DMR_SMS_FMT_TMS:        return DMR_SMS_APP_TMS;
+        case DMR_SMS_FMT_HYTERA:     return DMR_SMS_APP_HYTERA;
+        case DMR_SMS_FMT_AUTO:
+        default:
+            /*
+             * Auto is what this firmware has always sent, and it is also the
+             * fallback: an out-of-range format (a settings record from another
+             * build) must degrade to a working message, not to silence.
+             */
+            return DMR_SMS_APP_IP_HC;
+    }
+}
+
+bool dmrSms_appIsText(enum dmrSmsApp app)
+{
+    return app != DMR_SMS_APP_RAW;
+}
+
 /* ---------------------------------------------------------------- header --- */
 
 /*

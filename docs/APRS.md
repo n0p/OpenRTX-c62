@@ -346,17 +346,45 @@ so other targets keep their NVM layout:
 | `aprs_interval_s` | 600 | beacon interval, clamped to ≥ 30 s |
 | `aprs_txdelay_ms` | 300 | TXDELAY |
 
-The settings record is stored as a raw blob with a CRC over `sizeof(settings_t)`
-(`platform/drivers/NVM/nvmem_C62.c`), so any change of the struct length
-invalidates the stored record instead of being misread: `nvm_readSettings()`
-fails its CRC check, `state_init()` falls back to `default_settings` and
-writes them back on the next change. The consequence is one settings reset on
-the first boot of a build with a different layout — including this merge,
-because `c62/full` added `rxFineHz` before the APRS block. With `CONFIG_APRS`
-`settings_t` is 156 bytes (88 without), well inside the 256-byte record
-`NVM_RECORD_MAX` allows. Safe defaults matter here: `aprs_decode` and
-`aprs_beaconEn` are off, so a stray settings record can never make the radio
-transmit or spend CPU decoding without being asked.
+The settings record carries the version of the payload
+(`SETTINGS_VERSION`, `core/settings_record.h`), so a record written by a build
+with a different `settings_t` is discarded as a whole instead of being
+reinterpreted: `state_init()` falls back to `default_settings`, writes them
+back on the next change and tells the screen why through
+`state.settings_reset` (`SETTINGS_RESET_VERSION`). One settings reset is the
+expected cost of upgrading across a version bump. With `CONFIG_APRS`
+`settings_t` is 166 bytes with the DMR fields (88 without APRS), and the record
+is 174 bytes, well inside the 256-byte `NVM_RECORD_MAX`. Safe defaults matter
+here: `aprs_decode` and `aprs_beaconEn` are off, so a stray settings record can
+never make the radio transmit or spend CPU decoding without being asked.
+
+#### Validation, and what happens when it fails
+
+Everything that goes on the wire is checked before the frame is built
+(`ax25_addrValid`, `ax25_ssidValid`, `ax25_pathValid` in
+`protocols/APRS/ax25.c`):
+
+| item | rule |
+|---|---|
+| callsign | 1-6 characters, letters and digits, at least one of each; case free, upper-cased on the wire. The SSID is a separate field, `CALL-9` is not a callsign |
+| SSID | 0-15 (0 = no SSID) |
+| path | 0-8 comma-separated aliases, no spaces, no empty items: `WIDEn-N` with n, N in 1..7, or a callsign with an optional `-SSID`. The retired `TRACE`, `RELAY` and `GATE` aliases are refused |
+| symbol table | `/` or `\` |
+| position | latitude -90.0000..90.0000, longitude -180.0000..180.0000 (degrees × 10000) |
+| message addressee | the same form as a digipeater alias (`CALL` or `CALL-SSID`) |
+
+With anything wrong `aprs_configValid()` is false, `aprs_txPending()` and
+`aprs_txPrepare()` refuse to build a packet — so nothing is transmitted — and
+`aprs_configError()` returns one line that names the offending item
+(`"path: WIDE1-1,WIDE2-1 or a callsign"`). The APRS screen shows that string
+instead of a beacon that never appears. `aprs_sendMessage()` refuses a message
+to an address the frame cannot carry, and does so before it is queued.
+
+The rules are tested on the host in `tests/unit/aprs_config.cpp`: valid
+callsigns and paths, every typo the menu can produce (`WIDE1-1,`, spaces,
+`WIDE1` without a count, 9 digipeaters), the retired aliases, and that what
+`ax25_parse_path` puts on the wire after validation is the expected
+`WIDE1`/SSID 1 pair.
 
 ### UI
 
