@@ -21,6 +21,12 @@
 #ifdef UI_MODE_NXDN
 #include "protocols/NXDN/NxdnStatus.h"
 #endif
+#ifdef UI_MODE_P25
+#include "protocols/P25/P25Status.h"
+#endif
+#ifdef UI_MODE_DSTAR
+#include "protocols/DSTAR/DStarStatus.h"
+#endif
 #ifdef CONFIG_DMR
 #include "protocols/DMR/DmrDefs.h"
 #include "protocols/DMR/DmrStatus.h"
@@ -504,6 +510,199 @@ static void _ui_drawAirbandLine1(void)
 }
 #endif
 
+#ifdef UI_MODE_DPMR
+/*
+ * dPMR line 2: whether a call is being followed. The mode's squelch opens with
+ * the frame grid and the CCH CRC, so it is the only "is anyone there" flag the
+ * engine has; dPMR has no per-frame counters published to the UI yet.
+ */
+static void _ui_drawDpmrInfo(void)
+{
+    const uint16_t pad = layout.horizontal_pad;
+    const char *texts[] = { "dPMR RX", "RX", "SRCH" };
+
+    if (rtx_rxSquelchOpen())
+        _ui_printFit(layout.line2_pos, layout.line2_font, pad, texts, 2);
+    else
+        _ui_printFit(layout.line2_pos, layout.line2_font, pad, &texts[2], 1);
+}
+#endif
+
+#ifdef UI_MODE_P25
+/*
+ * P25 line 2: the NAC the receiver locked to and whether it is voice or control
+ * channel, or SRCH while nothing decodes. Line 1 carries the data unit of the
+ * last frame and the group>source of the last link control.
+ */
+static void _ui_drawP25Info(void)
+{
+    struct p25Status st;
+    const uint16_t pad = layout.horizontal_pad;
+    char a[32], b[32], c[24];
+
+    p25Status_get(&st);
+
+    if (!st.sync) {
+        const char *searching[] = { "P25 SRCH", "SRCH" };
+        _ui_printFit(layout.line2_pos, layout.line2_font, pad, searching, 2);
+        return;
+    }
+
+    if (st.nac >= 0) {
+        snprintf(a, sizeof(a), "NAC%03X %s", (unsigned)st.nac,
+                 st.voice ? "VOX" : "CC");
+        snprintf(b, sizeof(b), "NAC%03X", (unsigned)st.nac);
+    } else {
+        snprintf(a, sizeof(a), "P25 %s", st.voice ? "VOX" : "SYNC");
+        snprintf(b, sizeof(b), "P25");
+    }
+    snprintf(c, sizeof(c), "%s", st.voice ? "VOX" : "SYNC");
+
+    const char *texts[] = { a, b, c };
+    _ui_printFit(layout.line2_pos, layout.line2_font, pad, texts, 3);
+}
+
+static void _ui_drawP25Line1(void)
+{
+    struct p25Status st;
+    const uint16_t pad = layout.horizontal_pad;
+    char a[40], b[40], c[24];
+
+    p25Status_get(&st);
+
+    if (!st.sync)
+        return;
+
+    if (st.source >= 0)
+        snprintf(a, sizeof(a), "D%X %ld>%d", (unsigned)(st.duid & 0xF),
+                 (long)st.source, (int)st.talkgroup);
+    else
+        snprintf(a, sizeof(a), "DUID%X", (unsigned)(st.duid & 0xF));
+    snprintf(b, sizeof(b), "DUID%X", (unsigned)(st.duid & 0xF));
+    snprintf(c, sizeof(c), "f%lu", (unsigned long)st.frames);
+
+    const char *texts[] = { a, b, c };
+    _ui_printFit(layout.line1_pos, layout.line1_font, pad, texts, 3);
+}
+#endif
+
+#ifdef UI_MODE_YSF
+/*
+ * System Fusion line 2: the frame layer publishes only "a carrier is being
+ * tracked", so that is what the line says.
+ */
+static void _ui_drawYsfInfo(void)
+{
+    const uint16_t pad = layout.horizontal_pad;
+    const char *texts[] = { "YSF RX", "RX", "SRCH" };
+
+    if (rtx_rxSquelchOpen())
+        _ui_printFit(layout.line2_pos, layout.line2_font, pad, texts, 2);
+    else
+        _ui_printFit(layout.line2_pos, layout.line2_font, pad, &texts[2], 1);
+}
+#endif
+
+#ifdef UI_MODE_DSTAR
+/*
+ * D-STAR line 2: the callsigns of the last header, "MY>UR", or SRCH. Line 1
+ * carries the access repeater and the slow-data text of the last frames.
+ */
+static void _ui_drawDstarInfo(void)
+{
+    struct dstarStatus st;
+    const uint16_t pad = layout.horizontal_pad;
+    char a[40], b[40], c[24];
+
+    dstar_getStatus(&st);
+
+    if (!st.sync) {
+        const char *searching[] = { "DSTAR SRCH", "SRCH" };
+        _ui_printFit(layout.line2_pos, layout.line2_font, pad, searching, 2);
+        return;
+    }
+
+    snprintf(a, sizeof(a), "%s>%s", st.my, st.ur);
+    snprintf(b, sizeof(b), "%s", st.my);
+    snprintf(c, sizeof(c), "%s", st.voice ? "VOX" : "DV");
+
+    const char *texts[] = { a, b, c };
+    _ui_printFit(layout.line2_pos, layout.line2_font, pad, texts, 3);
+}
+
+static void _ui_drawDstarLine1(void)
+{
+    struct dstarStatus st;
+    const uint16_t pad = layout.horizontal_pad;
+    char a[48], b[40], c[24];
+
+    dstar_getStatus(&st);
+
+    if (!st.sync)
+        return;
+
+    if (st.text[0] != '\0')
+        snprintf(a, sizeof(a), "%s %s", st.rpt1, st.text);
+    else
+        snprintf(a, sizeof(a), "%s", st.rpt1);
+    snprintf(b, sizeof(b), "%s", st.rpt1);
+    snprintf(c, sizeof(c), "f%lu", (unsigned long)st.frames);
+
+    const char *texts[] = { a, b, c };
+    _ui_printFit(layout.line1_pos, layout.line1_font, pad, texts, 3);
+}
+#endif
+
+#ifdef UI_MODE_WFM
+/*
+ * Broadcast FM line 2: the stereo state of the tuner and the channel designator
+ * ("101.1"). Line 1 carries the level in dBuV and the chip's own SNR estimate.
+ * There is no RDS on this hardware, so nothing else can be shown.
+ */
+static void _ui_drawWfmInfo(void)
+{
+    const uint16_t pad = layout.horizontal_pad;
+    char label[16] = "";
+    char a[40], b[40], c[24];
+    const char *mode;
+
+    if (!last_state.wfm.tuned)
+        mode = "SRCH";
+    else if (last_state.wfm.stereoSync)
+        mode = "STEREO";
+    else if (last_state.wfm.stereo)
+        mode = "PILOT";
+    else
+        mode = "MONO";
+
+    wfm_formatFreq(last_state.channel.rx_frequency, label, sizeof(label));
+
+    snprintf(a, sizeof(a), "%s %s", mode, label);
+    snprintf(b, sizeof(b), "%s", mode);
+    snprintf(c, sizeof(c), "%s", label);
+
+    const char *texts[] = { a, b, c };
+    _ui_printFit(layout.line2_pos, layout.line2_font, pad, texts, 3);
+}
+
+static void _ui_drawWfmLine1(void)
+{
+    const uint16_t pad = layout.horizontal_pad;
+    char a[32], b[24], c[16];
+
+    if (!last_state.wfm.tuned)
+        return;
+
+    snprintf(a, sizeof(a), "%udBuV snr%u", (unsigned)last_state.wfm.rssi,
+             (unsigned)last_state.wfm.snr);
+    snprintf(b, sizeof(b), "%udBuV", (unsigned)last_state.wfm.rssi);
+    snprintf(c, sizeof(c), "snr%u", (unsigned)last_state.wfm.snr);
+
+    const char *texts[] = { a, b, c };
+    _ui_printFit(layout.line1_pos, layout.line1_font, pad, texts, 3);
+}
+#endif
+
 void _ui_drawModeInfo(ui_state_t* ui_state)
 {
     char bw_str[8] = { 0 };
@@ -661,10 +860,45 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
             break;
         #endif
 
+        #ifdef UI_MODE_DPMR
+        case OPMODE_DPMR:
+            (void) ui_state;
+            _ui_drawDpmrInfo();
+            break;
+        #endif
+
+        #ifdef UI_MODE_P25
+        case OPMODE_P25:
+            (void) ui_state;
+            _ui_drawP25Info();
+            break;
+        #endif
+
+        #ifdef UI_MODE_YSF
+        case OPMODE_YSF:
+            (void) ui_state;
+            _ui_drawYsfInfo();
+            break;
+        #endif
+
+        #ifdef UI_MODE_DSTAR
+        case OPMODE_DSTAR:
+            (void) ui_state;
+            _ui_drawDstarInfo();
+            break;
+        #endif
+
         #ifdef UI_MODE_AIRBAND
         case OPMODE_AIRBAND:
             (void) ui_state;
             _ui_drawAirbandInfo();
+            break;
+        #endif
+
+        #ifdef UI_MODE_WFM
+        case OPMODE_WFM_BC:
+            (void) ui_state;
+            _ui_drawWfmInfo();
             break;
         #endif
 
@@ -865,6 +1099,21 @@ void _ui_drawMainVFO(ui_state_t* ui_state)
     #ifdef UI_MODE_NXDN
     if(last_state.channel.mode == OPMODE_NXDN)
         _ui_drawNxdnLine1();
+    #endif
+
+    #ifdef UI_MODE_P25
+    if(last_state.channel.mode == OPMODE_P25)
+        _ui_drawP25Line1();
+    #endif
+
+    #ifdef UI_MODE_DSTAR
+    if(last_state.channel.mode == OPMODE_DSTAR)
+        _ui_drawDstarLine1();
+    #endif
+
+    #ifdef UI_MODE_WFM
+    if(last_state.channel.mode == OPMODE_WFM_BC)
+        _ui_drawWfmLine1();
     #endif
 
     #ifdef UI_MODE_AIRBAND

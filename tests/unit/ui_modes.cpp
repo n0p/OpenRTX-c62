@@ -31,6 +31,12 @@ extern "C" {
 #include "ui/ui_quickmenu.h"
 #include "ui/ui_layout.h"
 #include "core/graphics.h"
+#if defined(UI_MODE_P25)
+#include "protocols/P25/P25Status.h"
+#endif
+#if defined(UI_MODE_DSTAR)
+#include "protocols/DSTAR/DStarStatus.h"
+#endif
 }
 
 extern "C" state_t state;
@@ -75,12 +81,29 @@ TEST_CASE("Every compiled mode is in the registry", "[ui][modes]")
 #if defined(UI_MODE_NXDN)
     REQUIRE(ui_mode_find(OPMODE_NXDN) != NULL);
 #endif
+#if defined(UI_MODE_DPMR)
+    REQUIRE(ui_mode_find(OPMODE_DPMR) != NULL);
+#endif
+#if defined(UI_MODE_P25)
+    REQUIRE(ui_mode_find(OPMODE_P25) != NULL);
+#endif
+#if defined(UI_MODE_YSF)
+    REQUIRE(ui_mode_find(OPMODE_YSF) != NULL);
+#endif
+#if defined(UI_MODE_DSTAR)
+    REQUIRE(ui_mode_find(OPMODE_DSTAR) != NULL);
+#endif
 #if defined(UI_MODE_AIRBAND)
     REQUIRE(ui_mode_find(OPMODE_AIRBAND) != NULL);
 #endif
+#if defined(UI_MODE_WFM)
+    REQUIRE(ui_mode_find(OPMODE_WFM_BC) != NULL);
+#endif
 
     /* A mode this build does not have is not invented */
+#if !defined(UI_MODE_YSF)
     REQUIRE(ui_mode_find(OPMODE_YSF) == NULL);
+#endif
     REQUIRE(ui_mode_find(0x7f) == NULL);
 
     for (uint8_t i = 0; i < ui_mode_count(); i++) {
@@ -106,7 +129,7 @@ TEST_CASE("Mode labels fit the header of the main screens", "[ui][modes][layout]
      * This is the check that keeps a future mode from being called something
      * that does not fit ("D-STAR" does not, "DSTAR" does).
      */
-    for (uint8_t id = OPMODE_NONE; id <= OPMODE_AIRBAND; id++) {
+    for (uint8_t id = OPMODE_NONE; id <= OPMODE_WFM_BC; id++) {
         const char *label = ui_mode_label(id);
 
         INFO("label of mode " << (int)id << ": " << label);
@@ -468,3 +491,123 @@ TEST_CASE("A mode page never leaves the screen or the popup in a bad state",
     qm_close();
     qm_page_close();
 }
+
+/*
+ * The modes that were merged into the image but were not in the registry: dPMR,
+ * P25, YSF, D-STAR and broadcast FM. Each one gets the same three checks: the
+ * table exists and is the mode's, the reported rows are there, and the table
+ * has no PWR row because none of them can transmit.
+ */
+#if defined(UI_MODE_DPMR)
+TEST_CASE("dPMR has its rows in the quick menu", "[ui][modes][quickmenu]")
+{
+    const qm_menu_t *qm = qm_findMenu(OPMODE_DPMR);
+
+    REQUIRE(qm != NULL);
+    REQUIRE(qm->mode == OPMODE_DPMR);
+    REQUIRE(rowOf(qm, "SYNC") == 0);
+    REQUIRE(rowOf(qm, "MSGS") > 0);
+    REQUIRE(rowOf(qm, "MSG") > 0);
+    REQUIRE(rowOf(qm, "PWR") == -1);
+}
+#endif
+
+#if defined(UI_MODE_P25)
+TEST_CASE("P25 has its rows in the quick menu", "[ui][modes][quickmenu]")
+{
+    const qm_menu_t *qm = qm_findMenu(OPMODE_P25);
+
+    REQUIRE(qm != NULL);
+    REQUIRE(qm->mode == OPMODE_P25);
+    REQUIRE(rowOf(qm, "SYNC") == 0);
+    REQUIRE(rowOf(qm, "NAC") > 0);
+    REQUIRE(rowOf(qm, "TYPE") > 0);
+    REQUIRE(rowOf(qm, "CALL") > 0);
+    REQUIRE(rowOf(qm, "PWR") == -1);
+}
+
+TEST_CASE("P25 reports nothing as a zero", "[ui][modes]")
+{
+    struct p25Status st;
+
+    p25Status_clear();
+    p25Status_get(&st);
+    REQUIRE(!st.sync);
+    REQUIRE(st.nac < 0);
+    REQUIRE(st.duid < 0);
+
+    /* The formatters of the popup rows say so instead of printing a value */
+    char buf[24];
+
+    qm_p25_fmt_sync(buf, sizeof(buf));
+    REQUIRE(strcmp(buf, "SRCH") == 0);
+    qm_p25_fmt_nac(buf, sizeof(buf));
+    REQUIRE(strcmp(buf, "---") == 0);
+    qm_p25_fmt_type(buf, sizeof(buf));
+    REQUIRE(strcmp(buf, "---") == 0);
+    qm_p25_fmt_call(buf, sizeof(buf));
+    REQUIRE(strcmp(buf, "---") == 0);
+}
+#endif
+
+#if defined(UI_MODE_YSF)
+TEST_CASE("YSF has its rows in the quick menu", "[ui][modes][quickmenu]")
+{
+    const qm_menu_t *qm = qm_findMenu(OPMODE_YSF);
+
+    REQUIRE(qm != NULL);
+    REQUIRE(qm->mode == OPMODE_YSF);
+    REQUIRE(rowOf(qm, "SYNC") == 0);
+    REQUIRE(rowOf(qm, "MSG") > 0);
+    REQUIRE(rowOf(qm, "PWR") == -1);
+}
+#endif
+
+#if defined(UI_MODE_DSTAR)
+TEST_CASE("D-STAR has its rows in the quick menu", "[ui][modes][quickmenu]")
+{
+    const qm_menu_t *qm = qm_findMenu(OPMODE_DSTAR);
+
+    REQUIRE(qm != NULL);
+    REQUIRE(qm->mode == OPMODE_DSTAR);
+    /* The callsigns are the mode: MY, UR, RPT and the slow-data text */
+    REQUIRE(rowOf(qm, "SYNC") == 0);
+    REQUIRE(rowOf(qm, "MY") > 0);
+    REQUIRE(rowOf(qm, "UR") > 0);
+    REQUIRE(rowOf(qm, "RPT") > 0);
+    REQUIRE(rowOf(qm, "TXT") > 0);
+    REQUIRE(rowOf(qm, "PWR") == -1);
+}
+
+TEST_CASE("D-STAR shows no callsign before one arrives", "[ui][modes]")
+{
+    char buf[24];
+
+    dstarStatus_clear();
+    qm_dstar_fmt_sync(buf, sizeof(buf));
+    REQUIRE(strcmp(buf, "SRCH") == 0);
+    qm_dstar_fmt_my(buf, sizeof(buf));
+    REQUIRE(strcmp(buf, "---") == 0);
+    qm_dstar_fmt_ur(buf, sizeof(buf));
+    REQUIRE(strcmp(buf, "---") == 0);
+    qm_dstar_fmt_rpt(buf, sizeof(buf));
+    REQUIRE(strcmp(buf, "---") == 0);
+}
+#endif
+
+#if defined(UI_MODE_WFM)
+TEST_CASE("Broadcast FM has its rows in the quick menu", "[ui][modes][quickmenu]")
+{
+    const qm_menu_t *qm = qm_findMenu(OPMODE_WFM_BC);
+
+    REQUIRE(qm != NULL);
+    REQUIRE(qm->mode == OPMODE_WFM_BC);
+    /* What the BK1080 reports, and nothing to set: no squelch, no power */
+    REQUIRE(rowOf(qm, "ST") == 0);
+    REQUIRE(rowOf(qm, "LVL") > 0);
+    REQUIRE(rowOf(qm, "SNR") > 0);
+    REQUIRE(rowOf(qm, "CH") > 0);
+    REQUIRE(rowOf(qm, "PWR") == -1);
+    REQUIRE(rowOf(qm, "SQL") == -1);
+}
+#endif

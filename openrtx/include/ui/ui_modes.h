@@ -56,11 +56,34 @@ extern "C" {
 #define UI_MODE_NXDN 1
 #endif
 
+#if defined(CONFIG_DPMR) || defined(UI_TEST_DPMR)
+#define UI_MODE_DPMR 1
+#endif
+
+#if defined(CONFIG_P25) || defined(UI_TEST_P25)
+#define UI_MODE_P25 1
+#endif
+
+#if defined(CONFIG_YSF) || defined(UI_TEST_YSF)
+#define UI_MODE_YSF 1
+#endif
+
+#if defined(CONFIG_DSTAR) || defined(UI_TEST_DSTAR)
+#define UI_MODE_DSTAR 1
+#endif
+
 /*
  * Airband AM has no build option: the mode, the BK4819 AM path and its AGC are
  * always in the image, so a build that can tune 118-137 MHz can receive it.
  */
 #define UI_MODE_AIRBAND 1
+
+/*
+ * Broadcast FM is the BK1080 tuner and its analog path, and it is always in the
+ * image as well (radio_C62.cpp powers the tuner, core/wfm.c holds the band).
+ * Letting the side key reach it costs a table, not a kilobyte.
+ */
+#define UI_MODE_WFM 1
 
 /**
  * Where a mode shows up, as the flags of its registry entry.
@@ -170,13 +193,46 @@ const qm_item_t *ui_mode_rows(uint8_t id, uint8_t *count);
 #define UI_MODE_PAGE_NXDN(X)
 #endif
 
+#ifdef UI_MODE_DPMR
+#define UI_MODE_PAGE_DPMR(X) X(OPMODE_DPMR, "dPMR")
+#else
+#define UI_MODE_PAGE_DPMR(X)
+#endif
+
+#ifdef UI_MODE_P25
+#define UI_MODE_PAGE_P25(X) X(OPMODE_P25, "P25")
+#else
+#define UI_MODE_PAGE_P25(X)
+#endif
+
+#ifdef UI_MODE_YSF
+#define UI_MODE_PAGE_YSF(X) X(OPMODE_YSF, "YSF")
+#else
+#define UI_MODE_PAGE_YSF(X)
+#endif
+
+#ifdef UI_MODE_DSTAR
+#define UI_MODE_PAGE_DSTAR(X) X(OPMODE_DSTAR, "DSTAR")
+#else
+#define UI_MODE_PAGE_DSTAR(X)
+#endif
+
 #ifdef UI_MODE_AIRBAND
 #define UI_MODE_PAGE_AIRBAND(X) X(OPMODE_AIRBAND, "AM")
 #else
 #define UI_MODE_PAGE_AIRBAND(X)
 #endif
 
-#define UI_MODE_PAGES(X) UI_MODE_PAGE_NXDN(X) UI_MODE_PAGE_AIRBAND(X)
+#ifdef UI_MODE_WFM
+#define UI_MODE_PAGE_WFM(X) X(OPMODE_WFM_BC, "WFM")
+#else
+#define UI_MODE_PAGE_WFM(X)
+#endif
+
+#define UI_MODE_PAGES(X)                                                      \
+    UI_MODE_PAGE_NXDN(X) UI_MODE_PAGE_DPMR(X) UI_MODE_PAGE_P25(X)             \
+    UI_MODE_PAGE_YSF(X) UI_MODE_PAGE_DSTAR(X) UI_MODE_PAGE_AIRBAND(X)         \
+    UI_MODE_PAGE_WFM(X)
 
 /*
  * Row accessors of the modes that have their own controls.
@@ -205,6 +261,34 @@ int  qm_am_get_snap(void);
 void qm_am_set_snap(int on);
 int  qm_am_get_if(void);
 void qm_am_set_if(int wide);
+#endif
+
+/*
+ * Formatters of the receive-only digital modes. They are the rows' own, so a
+ * test can check what a screen would print (and that nothing prints a zero
+ * where there is no data) without opening the popup.
+ */
+#ifdef UI_MODE_DPMR
+void qm_dpmr_fmt_sync(char *buf, int len);
+#endif
+
+#ifdef UI_MODE_P25
+void qm_p25_fmt_sync(char *buf, int len);
+void qm_p25_fmt_nac(char *buf, int len);
+void qm_p25_fmt_type(char *buf, int len);
+void qm_p25_fmt_call(char *buf, int len);
+#endif
+
+#ifdef UI_MODE_YSF
+void qm_ysf_fmt_sync(char *buf, int len);
+#endif
+
+#ifdef UI_MODE_DSTAR
+void qm_dstar_fmt_sync(char *buf, int len);
+void qm_dstar_fmt_my(char *buf, int len);
+void qm_dstar_fmt_ur(char *buf, int len);
+void qm_dstar_fmt_rpt(char *buf, int len);
+void qm_dstar_fmt_text(char *buf, int len);
 #endif
 
 #ifdef __cplusplus

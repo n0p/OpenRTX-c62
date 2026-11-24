@@ -72,6 +72,11 @@ openrtx_src = ['openrtx/src/core/state.c',
                # testable without the radio.
                'openrtx/src/protocols/NXDN/NxdnStatus.c',
                'openrtx/src/protocols/NXDN/NxdnFec.c',
+               # The P25 and D-STAR status blocks, for the same reason: the mode
+               # screens read them and they are portable C. See docs/UI.md.
+               'openrtx/src/protocols/P25/P25Status.c',
+               'openrtx/src/protocols/DSTAR/DStarStatus.c',
+               'openrtx/src/protocols/DSTAR/DStarSlowData.c',
                'openrtx/src/core/slot_store.c',
                'openrtx/src/core/contact_store.c',
                'openrtx/src/core/msg_service.c',
@@ -419,7 +424,9 @@ linux_default_src = linux_src + ui_src_default
 # UI only needs the status module (NxdnStatus.c, above), so the screens are
 # tested here and the mode itself on the radio.
 linux_default_def = linux_def + {'CONFIG_SCREEN_WIDTH': '160', 'CONFIG_SCREEN_HEIGHT': '128', 'CONFIG_PIX_FMT_RGB565': '',
-                                 'CONFIG_GPS': '', 'CONFIG_RTC': '', 'UI_TEST_NXDN': ''}
+                                 'CONFIG_GPS': '', 'CONFIG_RTC': '', 'UI_TEST_NXDN': '',
+                                 'UI_TEST_DPMR': '', 'UI_TEST_P25': '',
+                                 'UI_TEST_YSF': '', 'UI_TEST_DSTAR': ''}
 linux_small_def   = linux_def + {'CONFIG_SCREEN_WIDTH': '128', 'CONFIG_SCREEN_HEIGHT': '64', 'CONFIG_PIX_FMT_BW': '',
                                  'CONFIG_GPS': '', 'CONFIG_RTC': ''}
 

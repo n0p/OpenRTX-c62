@@ -445,6 +445,14 @@ rssi_t rtx_getRssi()
 
 bool rtx_rxSquelchOpen()
 {
+    /*
+     * currMode is set by rtx_init(); before it runs — and in the host builds,
+     * where the RTX thread is never started — there is no handler to ask, and
+     * "no mode" means the squelch is closed.
+     */
+    if (currMode == nullptr)
+        return false;
+
     return currMode->rxSquelchOpen();
 }
 

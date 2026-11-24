@@ -81,9 +81,29 @@ static uint8_t allTables(tableRef *out)
     out[n].mode = OPMODE_NXDN;
     out[n++].qm = qm_findMenu(OPMODE_NXDN);
 #endif
+#ifdef UI_MODE_DPMR
+    out[n].mode = OPMODE_DPMR;
+    out[n++].qm = qm_findMenu(OPMODE_DPMR);
+#endif
+#ifdef UI_MODE_P25
+    out[n].mode = OPMODE_P25;
+    out[n++].qm = qm_findMenu(OPMODE_P25);
+#endif
+#ifdef UI_MODE_YSF
+    out[n].mode = OPMODE_YSF;
+    out[n++].qm = qm_findMenu(OPMODE_YSF);
+#endif
+#ifdef UI_MODE_DSTAR
+    out[n].mode = OPMODE_DSTAR;
+    out[n++].qm = qm_findMenu(OPMODE_DSTAR);
+#endif
 #ifdef UI_MODE_AIRBAND
     out[n].mode = OPMODE_AIRBAND;
     out[n++].qm = qm_findMenu(OPMODE_AIRBAND);
+#endif
+#ifdef UI_MODE_WFM
+    out[n].mode = OPMODE_WFM_BC;
+    out[n++].qm = qm_findMenu(OPMODE_WFM_BC);
 #endif
     return n;
 }
@@ -103,7 +123,7 @@ TEST_CASE("Quick menu has a table per operating mode", "[ui][quickmenu]")
     REQUIRE(rowOf(fm, "MODE") == -1);
 
     /* Sending a message is reachable from every mode's table */
-    tableRef tables[8];
+    tableRef tables[16];
     uint8_t n = allTables(tables);
 
     for (uint8_t t = 0; t < n; t++) {
@@ -329,7 +349,7 @@ TEST_CASE("Quick menu rows fit their line", "[ui][quickmenu][layout]")
 TEST_CASE("Quick menu labels and values fit the row width",
           "[ui][quickmenu][layout]")
 {
-    tableRef tables[8];
+    tableRef tables[16];
     uint8_t n = allTables(tables);
 
     openMode(OPMODE_FM);
@@ -467,7 +487,7 @@ TEST_CASE("Quick menu walks every row of every table",
      * change each value both ways, close, open again. Three rounds, because
      * the failure mode was a state that only showed up on the second pass.
      */
-    tableRef tables[8];
+    tableRef tables[16];
     uint8_t n = allTables(tables);
 
     for (uint8_t t = 0; t < n; t++) {

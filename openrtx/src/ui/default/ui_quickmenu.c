@@ -51,6 +51,12 @@
 #ifdef UI_MODE_NXDN
 #include "protocols/NXDN/NxdnStatus.h"
 #endif
+#ifdef UI_MODE_P25
+#include "protocols/P25/P25Status.h"
+#endif
+#ifdef UI_MODE_DSTAR
+#include "protocols/DSTAR/DStarStatus.h"
+#endif
 
 #define QM_TOP_Y (layout.top_h)
 #define QM_ROW_Y(i) (QM_TOP_Y + QM_HEADER_H + (i) * QM_ROW_H)
@@ -1016,6 +1022,267 @@ static const qm_item_t qm_items_airband[] =
 };
 #endif /* UI_MODE_AIRBAND */
 
+#ifdef UI_MODE_DPMR
+/*
+ * dPMR, receive only. The mode has no knob of its own: dPMR is one 6.25 kHz
+ * carrier with no timeslots and no channel spacing to pick, and the frame grid
+ * either locks or does not. What the operator needs on this screen is whether a
+ * call is being followed, and the shared tail.
+ */
+void qm_dpmr_fmt_sync(char *buf, int len)
+{
+    snprintf(buf, len, "%s", rtx_rxSquelchOpen() ? "RX" : "SRCH");
+}
+
+static const qm_item_t qm_items_dpmr[] =
+{
+    QM_ITEM_INFO("SYNC", qm_dpmr_fmt_sync),
+#ifdef CONFIG_RX_FINE_OFFSET
+    QM_ITEM_INT_FF("FINE", -500, 500, 10, 100, qm_get_rx_fine,
+                   qm_set_rx_fine, qm_fmt_fine),
+#endif
+    QM_ITEM_INT("BKL", 5, 100, 5, qm_get_brightness, qm_set_brightness),
+#ifdef CONFIG_KEY_BACKLIGHT
+    QM_ITEM_TOGGLE("KEYLIT", qm_get_keylight, qm_set_keylight),
+#endif
+    QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
+    QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
+    QM_ITEM_MSG()
+};
+#endif /* UI_MODE_DPMR */
+
+#ifdef UI_MODE_P25
+/*
+ * P25 Phase 1, receive only. The first rows are what the receiver reports: the
+ * sync state, the NAC it locked to, the data unit of the last frame and the
+ * group and source of the last link control. "SRCH" and "---" while nothing
+ * decodes, never a zero that would read as a real identifier.
+ */
+void qm_p25_fmt_sync(char *buf, int len)
+{
+    struct p25Status st;
+
+    p25Status_get(&st);
+    snprintf(buf, len, "%s", st.sync ? (st.voice ? "VOX" : "SYNC") : "SRCH");
+}
+
+void qm_p25_fmt_nac(char *buf, int len)
+{
+    struct p25Status st;
+
+    p25Status_get(&st);
+    if (st.nac < 0)
+        snprintf(buf, len, "---");
+    else
+        snprintf(buf, len, "%03X", (unsigned)st.nac);
+}
+
+void qm_p25_fmt_type(char *buf, int len)
+{
+    struct p25Status st;
+
+    p25Status_get(&st);
+    if (st.duid < 0)
+        snprintf(buf, len, "---");
+    else
+        snprintf(buf, len, "DUID %X", (unsigned)st.duid);
+}
+
+void qm_p25_fmt_call(char *buf, int len)
+{
+    struct p25Status st;
+
+    p25Status_get(&st);
+    if ((st.source < 0) && (st.talkgroup < 0))
+        snprintf(buf, len, "---");
+    else
+        snprintf(buf, len, "%ld>%d", (long)st.source, (int)st.talkgroup);
+}
+
+static const qm_item_t qm_items_p25[] =
+{
+    QM_ITEM_INFO("SYNC", qm_p25_fmt_sync),
+    QM_ITEM_INFO("NAC", qm_p25_fmt_nac),
+    QM_ITEM_INFO("TYPE", qm_p25_fmt_type),
+    QM_ITEM_INFO("CALL", qm_p25_fmt_call),
+#ifdef CONFIG_RX_FINE_OFFSET
+    QM_ITEM_INT_FF("FINE", -500, 500, 10, 100, qm_get_rx_fine,
+                   qm_set_rx_fine, qm_fmt_fine),
+#endif
+    QM_ITEM_INT("BKL", 5, 100, 5, qm_get_brightness, qm_set_brightness),
+#ifdef CONFIG_KEY_BACKLIGHT
+    QM_ITEM_TOGGLE("KEYLIT", qm_get_keylight, qm_set_keylight),
+#endif
+    QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
+    QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
+    QM_ITEM_MSG()
+};
+#endif /* UI_MODE_P25 */
+
+#ifdef UI_MODE_YSF
+/*
+ * System Fusion, receive only. The frame layer publishes nothing to the UI yet
+ * beyond "a carrier is being tracked", which is what the squelch of the mode
+ * says, so the table is that row and the shared tail.
+ */
+void qm_ysf_fmt_sync(char *buf, int len)
+{
+    snprintf(buf, len, "%s", rtx_rxSquelchOpen() ? "RX" : "SRCH");
+}
+
+static const qm_item_t qm_items_ysf[] =
+{
+    QM_ITEM_INFO("SYNC", qm_ysf_fmt_sync),
+#ifdef CONFIG_RX_FINE_OFFSET
+    QM_ITEM_INT_FF("FINE", -500, 500, 10, 100, qm_get_rx_fine,
+                   qm_set_rx_fine, qm_fmt_fine),
+#endif
+    QM_ITEM_INT("BKL", 5, 100, 5, qm_get_brightness, qm_set_brightness),
+#ifdef CONFIG_KEY_BACKLIGHT
+    QM_ITEM_TOGGLE("KEYLIT", qm_get_keylight, qm_set_keylight),
+#endif
+    QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
+    QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
+    QM_ITEM_MSG()
+};
+#endif /* UI_MODE_YSF */
+
+#ifdef UI_MODE_DSTAR
+/*
+ * D-STAR DV, receive. The callsigns are the mode: the header carries who is
+ * talking, to whom and through which repeater, and the slow data carries a
+ * 20-character message. The rows show the last header's MY/UR/RPT and the last
+ * message; "---" until one arrives.
+ */
+void qm_dstar_fmt_sync(char *buf, int len)
+{
+    struct dstarStatus st;
+
+    dstar_getStatus(&st);
+    snprintf(buf, len, "%s", st.sync ? (st.voice ? "VOX" : "SYNC") : "SRCH");
+}
+
+void qm_dstar_fmt_my(char *buf, int len)
+{
+    struct dstarStatus st;
+
+    dstar_getStatus(&st);
+    if ((st.my[0] == '\0') || (!st.sync))
+        snprintf(buf, len, "---");
+    else if (st.sfx[0] != '\0')
+        snprintf(buf, len, "%s/%s", st.my, st.sfx);
+    else
+        snprintf(buf, len, "%s", st.my);
+}
+
+void qm_dstar_fmt_ur(char *buf, int len)
+{
+    struct dstarStatus st;
+
+    dstar_getStatus(&st);
+    if ((st.ur[0] == '\0') || (!st.sync))
+        snprintf(buf, len, "---");
+    else
+        snprintf(buf, len, "%s", st.ur);
+}
+
+void qm_dstar_fmt_rpt(char *buf, int len)
+{
+    struct dstarStatus st;
+
+    dstar_getStatus(&st);
+    if ((st.rpt1[0] == '\0') || (!st.sync))
+        snprintf(buf, len, "---");
+    else
+        snprintf(buf, len, "%s", st.rpt1);
+}
+
+void qm_dstar_fmt_text(char *buf, int len)
+{
+    struct dstarStatus st;
+
+    dstar_getStatus(&st);
+    if (st.text[0] == '\0')
+        snprintf(buf, len, "---");
+    else
+        snprintf(buf, len, "%s", st.text);
+}
+
+static const qm_item_t qm_items_dstar[] =
+{
+    QM_ITEM_INFO("SYNC", qm_dstar_fmt_sync),
+    QM_ITEM_INFO("MY", qm_dstar_fmt_my),
+    QM_ITEM_INFO("UR", qm_dstar_fmt_ur),
+    QM_ITEM_INFO("RPT", qm_dstar_fmt_rpt),
+    QM_ITEM_INFO("TXT", qm_dstar_fmt_text),
+#ifdef CONFIG_RX_FINE_OFFSET
+    QM_ITEM_INT_FF("FINE", -500, 500, 10, 100, qm_get_rx_fine,
+                   qm_set_rx_fine, qm_fmt_fine),
+#endif
+    QM_ITEM_INT("BKL", 5, 100, 5, qm_get_brightness, qm_set_brightness),
+#ifdef CONFIG_KEY_BACKLIGHT
+    QM_ITEM_TOGGLE("KEYLIT", qm_get_keylight, qm_set_keylight),
+#endif
+    QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
+    QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
+    QM_ITEM_MSG()
+};
+#endif /* UI_MODE_DSTAR */
+
+#ifdef UI_MODE_WFM
+/*
+ * Broadcast FM, receive only. Everything here is what the BK1080 reports about
+ * the channel it is on: the stereo pilot and decoder state, the level in dBuV,
+ * its own SNR estimate and the channel index of the CCIR raster. There is no
+ * PWR row and no squelch to set: the tuner's AFC says whether there is a
+ * station, and the analog volume pot is the volume.
+ */
+void qm_wfm_fmt_level(char *buf, int len)
+{
+    snprintf(buf, len, "%u dBuV", (unsigned)state.wfm.rssi);
+}
+
+void qm_wfm_fmt_snr(char *buf, int len)
+{
+    snprintf(buf, len, "%u/15", (unsigned)state.wfm.snr);
+}
+
+void qm_wfm_fmt_stereo(char *buf, int len)
+{
+    if (!state.wfm.tuned)
+        snprintf(buf, len, "SRCH");
+    else if (state.wfm.stereoSync)
+        snprintf(buf, len, "STEREO");
+    else if (state.wfm.stereo)
+        snprintf(buf, len, "PILOT");
+    else
+        snprintf(buf, len, "MONO");
+}
+
+void qm_wfm_fmt_chan(char *buf, int len)
+{
+    if (!state.wfm.tuned)
+        snprintf(buf, len, "---");
+    else
+        snprintf(buf, len, "CH %u", (unsigned)state.wfm.chan);
+}
+
+static const qm_item_t qm_items_wfm[] =
+{
+    QM_ITEM_INFO("ST", qm_wfm_fmt_stereo),
+    QM_ITEM_INFO("LVL", qm_wfm_fmt_level),
+    QM_ITEM_INFO("SNR", qm_wfm_fmt_snr),
+    QM_ITEM_INFO("CH", qm_wfm_fmt_chan),
+    QM_ITEM_INT("BKL", 5, 100, 5, qm_get_brightness, qm_set_brightness),
+#ifdef CONFIG_KEY_BACKLIGHT
+    QM_ITEM_TOGGLE("KEYLIT", qm_get_keylight, qm_set_keylight),
+#endif
+    QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
+    QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
+    QM_ITEM_MSG()
+};
+#endif /* UI_MODE_WFM */
+
 /*
  * The mode registry: one entry per operating mode this build has, in the order
  * the side key and every list walk them. This is the only list of modes in the
@@ -1045,8 +1312,28 @@ static const qm_menu_t uiModes[] =
     QM_MODE(OPMODE_NXDN, "NXDN", qm_items_nxdn,
             UI_MODE_CHANNEL | UI_MODE_SELECT | UI_MODE_PAGE),
 #endif
+#ifdef UI_MODE_DPMR
+    QM_MODE(OPMODE_DPMR, "dPMR", qm_items_dpmr,
+            UI_MODE_CHANNEL | UI_MODE_SELECT | UI_MODE_PAGE),
+#endif
+#ifdef UI_MODE_P25
+    QM_MODE(OPMODE_P25, "P25", qm_items_p25,
+            UI_MODE_CHANNEL | UI_MODE_SELECT | UI_MODE_PAGE),
+#endif
+#ifdef UI_MODE_YSF
+    QM_MODE(OPMODE_YSF, "YSF", qm_items_ysf,
+            UI_MODE_CHANNEL | UI_MODE_SELECT | UI_MODE_PAGE),
+#endif
+#ifdef UI_MODE_DSTAR
+    QM_MODE(OPMODE_DSTAR, "DSTAR", qm_items_dstar,
+            UI_MODE_CHANNEL | UI_MODE_SELECT | UI_MODE_PAGE),
+#endif
 #ifdef UI_MODE_AIRBAND
     QM_MODE(OPMODE_AIRBAND, "AM", qm_items_airband,
+            UI_MODE_CHANNEL | UI_MODE_SELECT | UI_MODE_PAGE),
+#endif
+#ifdef UI_MODE_WFM
+    QM_MODE(OPMODE_WFM_BC, "WFM", qm_items_wfm,
             UI_MODE_CHANNEL | UI_MODE_SELECT | UI_MODE_PAGE),
 #endif
 };
