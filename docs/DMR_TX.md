@@ -171,6 +171,34 @@ RX ─────────────────────────�
 * The slot cadence is the blocking write to the 48 kHz output stream: 1440
   samples are exactly 30 ms and the stream is double buffered.
 
+### The data call: a second machine, same rules
+
+A short message is not a voice call: there is no PTT to release, no vocoder and
+a fixed amount to send. It has its own pure function in the same header,
+`dmrTxData_next()`, walked by the same host test:
+
+```
+TX_DATA_HEADER ──► TX_DATA_BLOCKS (n) ──► TX_DATA_END ──► TX_DATA_TAIL ──► (done)
+   1 burst            n bursts               1 burst        1 empty slot
+                                            (TD_LC)
+```
+
+* One burst every other slot, in the timeslot of the mode: the same TDMA phase
+  and the same cadence as voice, so a message never tramples the other slot.
+* The header is `dmrSms_packetBurst(pkt, 0)`, each block `pkt, 1..blockCount`,
+  and `TX_DATA_END` is the Terminator Data Link Control built by
+  `dmrTx_dataTerminator()` and sent as `DMR_DT_TERMINATOR_LC`. Both go through
+  `dmrTx_dataSlot()`, not through the voice modulator.
+* `DMR_TX_DATA_MAX_SLOTS` (68) cuts the call even if a phase were to repeat: a
+  transmission that cannot end is a keyed PA, and the voice machine is bounded
+  for exactly the same reason.
+* `stopTx()` is still the only exit, and it also resets this machine.
+  `startDataTx()` starts from `messaging_begin()`, so a message that cannot be
+  encoded ends in `messaging_done(id, false)` and back to receive, never in a
+  keyed carrier.
+* A delivery response and a TMS acknowledgement are the same machine with one
+  block or none; `txAcking` marks them so they never touch a message's state.
+
 ### Leaving transmit: one exit, two timeouts
 
 Leaving is decided by the slot counter first, **not** by the stage: a stage that

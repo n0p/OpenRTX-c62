@@ -1,10 +1,16 @@
 # Mensajería: SMS de DMR, TETRA SDS y APRS en una sola cola
 
 **Ámbito:** firmware de la C62 (OpenRTX, Zephyr, Cortex-M33). Este documento
-cubre la capa de mensajería (`core/messaging.*`), el SMS de DMR
+cubre la capa de mensajería —**un solo almacén y una sola cola** para APRS, DMR
+SMS y TETRA SDS (`core/messaging.*`)—, el SMS de DMR
 (`protocols/DMR/DmrSms.*`), el encolado del SDS de TETRA
-(`protocols/TETRA/TetraSdsEnc.*`) y el enganche con APRS. La pantalla de
-mensajería de la UI es otro trabajo: aquí está lo que tiene que llamar.
+(`protocols/TETRA/TetraSdsEnc.*`), el enganche con APRS y la capa fina que usa
+la pantalla (`core/msg_service.*`). La pantalla en sí está en `docs/UI.md`.
+
+Nada más guarda mensajes: el antiguo `core/msg_store.*` (inbox, enviados y
+dos borradores en `0x10000` de la partición de canales) ya no existe, y con él
+se fueron los hooks débiles `msg_dmr_sms_*` / `msg_tetra_sds_*`. DMR SMS y
+TETRA SDS hablan con `core/messaging` **directamente**.
 
 ---
 
@@ -15,7 +21,8 @@ mensajería de la UI es otro trabajo: aquí está lo que tiene que llamar.
 | SMS de DMR | `include/protocols/DMR/DmrSms.h`, `src/protocols/DMR/DmrSms.c`, `src/protocols/DMR/DmrSmsApp.c` (`DmrSmsApp.h` privado) | codificador y decodificador de las **siete variantes** que se ven en el aire, cabecera de datos, CRC-16 y CRC-32, reensamblado por timeslot y respuesta de entrega |
 | ráfaga de datos | `DmrTx.c` (`dmrTx_dataSlot`, `dmrTx_dataTerminator`) | 96 bits de información + tipo de dato → 144 símbolos → 1440 muestras a 48 kHz, con la cadencia TDMA de siempre |
 | integración en el modo | `src/rtx/OpMode_DMR.cpp` | datos recibidos → reensamblador del timeslot; mensaje recibido → cola + ACK; mensaje en cola → transmisión ráfaga a ráfaga cuando no hay voz |
-| cola común | `include/core/messaging.h`, `src/core/messaging.c`, `src/core/messaging_store_zephyr.c` | modelo de mensaje, outbox de 8, inbox de 8, estados, registro en flash en un segundo par de sectores |
+| cola común | `include/core/messaging.h`, `src/core/messaging.c`, `src/core/messaging_store_zephyr.c` | **el único** modelo de mensaje: outbox de 6, inbox de 6, estados, reintentos, borrador y registro en flash en su par de sectores |
+| capa de la pantalla | `include/core/msg_service.h`, `src/core/msg_service.c` | qué transporte puede enviar en el modo actual, límites de texto, traducción destinatario → dirección (contacto o dígitos) y el enganche de APRS con su buzón |
 | APRS | `src/core/messaging_aprs.c` | mueve lo encolado para APRS al buzón de `aprs_service` (llamado desde `OpMode_FM`) |
 | SDS de TETRA | `include/protocols/TETRA/TetraSdsEnc.h`, `src/protocols/TETRA/TetraSdsEnc.c` + `tetraSds_prepareQueued()` en `TetraSds.c` | codificador de uplink (U-SDS-DATA, GSM 7 bits / UCS-2) probado contra libtetra; el mensaje queda **encolado y codificado**, no se emite (no hay cadena de TX de TETRA) |
 | pruebas | `tests/platform/c62_sms_host.c`, `tests/platform/c62_messaging_host.c`, `tests/platform/c62_sms_cost.c`, `tests/unit/assets/dmr_sms_ref.txt` | ida y vuelta, vectores de referencia, lazo TX→RX por la PHY real, coste en el M33 |
@@ -26,7 +33,7 @@ Opciones de compilación (todas ON por defecto en la C62):
 -DCONFIG_C62_DMR_RX=y   modo DMR (necesario para el SMS)
 -DCONFIG_DMR_TX=y       cadena de transmisión (voz y datos)
 -DCONFIG_DMR_SMS=y      SMS de DMR (DmrSms.c); necesita CONFIG_MESSAGING
--DCONFIG_MESSAGING=y    cola común (messaging.c + registro en flash)
+-DCONFIG_MESSAGING=y    cola y almacén únicos (messaging.c + registro en flash)
 -DCONFIG_C62_APRS=y     APRS en FM (y su enganche con la cola)
 ```
 
@@ -99,8 +106,15 @@ struct message {
 ```
 
 * `transport`: `MSG_TRANSPORT_APRS`, `MSG_TRANSPORT_DMR`, `MSG_TRANSPORT_TETRA`.
-* `state`: `FREE`, `QUEUED`, `SENDING`, `SENT`, `DELIVERED`, `FAILED`.
+* `state`: `FREE`, `QUEUED`, `SENDING`, `SENT`, `DELIVERED`, `FAILED`,
+  `CANCELLED`.
 * `flags`: `UNREAD`, `CONFIRM` (se pidió confirmación), `INBOUND`, `TRUNCATED`.
+
+Dos formas de encolar: `messaging_send(transporte, dst, texto, confirmar, now)`
+para quien ya tiene la dirección (DMR: ID de radio o talkgroup; TETRA: SSI) y
+`messaging_sendAddr(transporte, dst, peer, texto, ...)` para añadir además el
+nombre que se pinta en pantalla. APRS usa `messaging_sendToText()`, que guarda
+el indicativo y deja un hash en el campo numérico.
 
 Cada transporte bombea su propia cola:
 
@@ -117,44 +131,91 @@ messaging_confirmed(id, peer, now)                      /* ACK que llega despué
 * Un mensaje con `CONFIRM` queda en `SENDING` hasta que llega la confirmación;
   `messaging_task(now)` lo devuelve a la cola a los 30 s sin respuesta (y lo
   da por fallido si ya agotó los intentos).
-* **Persistencia**: registro empaquetado con magic `MSG1` y CRC-16 en dos
-  sectores alternos de la partición de almacenamiento (`0x4000` y `0x5000`;
-  ajustes en `0x0000`, VFO en `0x1000`, SDS de TETRA en `0x2000`/`0x3000`).
-  Un corte de luz durante la escritura deja la copia anterior intacta. Un
-  mensaje que estaba en el aire se reencola al arrancar: su resultado no se
-  conoce.
+* `MSG_STATE_CANCELLED`: lo cancela el operador y **mantiene** ese estado
+  aunque el transporte termine la ráfaga que ya tenía empezada (su resultado
+  llega tarde y se ignora). Una entrada cancelada no vuelve a elegirse.
+* **Persistencia**: registro empaquetado con magic `MSG1`, versión 2, y CRC-16
+  en dos sectores alternos de la partición de almacenamiento (`0x4000` y
+  `0x5000`, mapa completo en §3.2). Un corte de luz durante la escritura deja
+  la copia anterior intacta. Un mensaje que estaba en el aire se reencola al
+  arrancar: su resultado no se conoce.
 
-### 3.1 Lo que tiene que hacer la UI
+### 3.1 La capa de la pantalla (`core/msg_service.*`)
+
+La pantalla no habla con los transportes ni con direcciones numéricas: llama a
+`msg_service`, que traduce y encola.
 
 ```c
-/* enviar (DMR: ID de radio o talkgroup; TETRA: SSI) */
-int id = messaging_send(MSG_TRANSPORT_DMR, dst, texto_utf8, confirmar, getTick());
+/* destinatario tal y como está en pantalla + texto -> cola */
+int id = msg_service_queue(MSG_TRANSPORT_DMR, "EA5ABC-7", texto_utf8, true,
+                           (uint32_t)getTick());
 
-/* enviar por APRS: la dirección es un indicativo */
-int id = messaging_sendToText(MSG_TRANSPORT_APRS, "EA5XXX-9", texto_utf8,
-                              false, getTick());
+/*   APRS: el indicativo, tal cual (la dirección es texto).
+     DMR y TETRA: el nombre se resuelve a número: primero en la agenda de
+     contactos (campo `dmr_id`), y si no está, los dígitos escritos a mano.
+     Devuelve -1 si el transporte no puede enviar en este modo, si el nombre no
+     es un contacto ni un número, o si el texto no cabe. */
 
-/* lista de recibidos, el 0 es el más nuevo */
-int n = messaging_unread();
-const struct message *m = messaging_inbox(0);   /* -> src, text, time, transport */
-messaging_markRead();
+bool ok = msg_service_cancel(id, (uint32_t)getTick());  /* deja de reintentar */
 
-/* enviados: incluye los terminados, para pintar cola/enviado/entregado/fallido */
-const struct message *o = messaging_outbox(i);  /* NULL cuando no hay más */
-
-messaging_transportName(m->transport);          /* "DMR", "APRS", "TETRA SDS" */
-messaging_stateName(o->state);                  /* "queued", "sent", ... */
+msg_service_statusText(m->state);   /* "QUEUED","TX","SENT","ACK","FAIL","CANC" */
 ```
 
+Y para pintar las listas, directamente el almacén:
+
+```c
+/* recibidos: el 0 es el más nuevo; NULL pasada la lista */
+const struct message *m = messaging_inbox(0);
+int unread = messaging_unread();
+messaging_markReadId(m->id);        /* al abrir un mensaje */
+
+/* enviados: i-ésimo en uso, 0 el más antiguo; la pantalla pinta el último
+   arriba, así que recorre de messaging_outCount() - 1 hacia abajo */
+int n = messaging_outCount();
+const struct message *o = messaging_outbox(n - 1);
+
+/* borrador: una entrada más del registro, no un segundo almacén */
+struct message *d = messaging_draft();   /* d->transport, d->peer, d->text */
+messaging_draftTouch();                  /* lo escribe la tarea, con debounce */
+messaging_draftClear();
+```
+
+* `msg_service_poll(getTick())` lo llama la pantalla (cada 500 ms): mueve lo
+  encolado para APRS al buzón del servicio, copia al inbox lo que el servicio
+  recibe por FM y trae de vuelta el resultado de sus reintentos. DMR y TETRA no
+  necesitan nada: bombean la cola ellos mismos.
 * Los punteros son válidos **hasta el siguiente `messaging_send`,
   `messaging_received` o `messaging_clear`**: copiad el texto si lo vais a
   guardar (misma regla que `dmr_getStatus`).
-* `messaging_task(getTick())` y `messaging_init()` ya están llamados desde
-  `state.c` (tarea de estado, 100 ms): la UI no tiene que bombear la
-  persistencia.
-* Un mensaje nuevo recibido sube `messaging_unread()`: para avisar en la
-  pantalla principal basta con mirar ese contador (o `ui_pushEvent` desde el
-  hilo de UI cuando cambie).
+* `messaging_task()` y `messaging_init()` ya están llamados desde `state.c`
+  (tarea de estado, 100 ms): nadie más bombea la persistencia.
+  `messaging_ready()` dice si el almacén ya está construido: abrir la pantalla
+  **no** lo reconstruye, porque reconstruirlo relee el registro y perdería lo
+  que la radio acaba de recibir.
+* El contador de no leídos (`messaging_unread()`) es el que pinta el menú y la
+  fila `MSGS` del menú rápido.
+
+### 3.2 Mapa de flash
+
+Nada se solapa. Son dos particiones del devicetree de la C62
+(`platform/targets/c62/c62.dts`):
+
+| Partición | Offset | Tamaño | Dueño |
+|---|---|---|---|
+| `channels_partition` (256 KiB, `0x3C0000`) | `0x00000`-`0x03FFF` | 16 KiB | banco de canales (`chstore`), dos slots de 8 KiB |
+| | `0x08000`-`0x0BFFF` | 16 KiB | agenda de contactos (`cstore`), dos slots de 8 KiB |
+| | `0x0C000`-`0x3FFFF` | 240 KiB | libre |
+| `storage_partition` (640 KiB) | `0x00000`-`0x000FF` | 256 B | ajustes (`nvmem_C62.c`) |
+| | `0x01000`-`0x01FFF` | 4 KiB | VFO |
+| | `0x02000`-`0x03FFF` | 8 KiB | historial SDS de TETRA (`TetraSds.c`), dos sectores |
+| | `0x04000`-`0x05FFF` | 8 KiB | **mensajes** (`messaging_store_zephyr.c`), dos sectores |
+
+Los mensajes guían el registro con su propio `sequence`: se escribe siempre en
+el sector que **no** tiene la copia buena, y al arrancar gana el número mayor
+con CRC-16 correcto. Un corte a mitad de escritura cuesta la escritura, nunca
+las dos copias. El registro (magic `MSG1`, versión 2) lleva cabecera de 8 B,
+los mensajes de la outbox, los del inbox, un byte de marca y el borrador, y
+CRC-16 al final.
 
 ---
 
@@ -189,6 +250,11 @@ reintentos, timeout de confirmación, orden, cola llena, truncado UTF-8 y el
 registro de flash (ida y vuelta, registro corrupto rechazado, escritura
 debounced).
 
+En la suite de host de OpenRTX (`meson test`) hay además dos casos de la
+pantalla (`UI Messages Test`) y siete del almacén y de la agenda
+(`User Stores Test`), incluidos el borrador y los estados en el registro
+(versión 2), la cancelación y la marca de leído por mensaje.
+
 ### 4.3 Coste en el M33 (QEMU mps2-an505, plugin de instrucciones)
 
 | operación | -O2 | -Os |
@@ -203,20 +269,30 @@ del 0,1 % del slot. El modulador ya lo pagaba la voz (117 669 por ráfaga).
 
 ### 4.4 Tamaño de la imagen completa
 
-`west build -b c62` con `-DCONFIG_C62_DMR_RX=y -DCONFIG_DMR_TX=y
--DCONFIG_C62_APRS=y` (y `CONFIG_DMR_SMS`, `CONFIG_MESSAGING` por defecto ON):
+`c62/next`, cuatro combinaciones, con `-DCONFIG_C62_DMR_RX=y` en todas y
+`CONFIG_DMR_SMS` / `CONFIG_MESSAGING` en su valor por defecto (ON). El volcado
+de banda base está **apagado** en las cuatro:
 
-| | referencia | con SMS + mensajería | diferencia |
+| `CONFIG_DMR_TX` | `CONFIG_C62_APRS` | FLASH | RAM |
 |---|---|---|---|
-| FLASH | 547 596 B (52,22 %) | **558 272 B** (53,24 %) | **+10 676 B** (+2,0 %) |
-| RAM | 192 296 B (73,36 %) | **203 360 B** (77,58 %) | **+11 064 B** (+5,8 %) |
-| ITCM / PSRAMAP | 8 468 / 1 427 640 B | iguales | 0 |
+| on | on | **568 832 B** (54,25 %) | **208 624 B** (79,58 %) |
+| on | off | 540 600 B (51,56 %) | 196 104 B (74,81 %) |
+| off | on | 508 124 B (48,46 %) | 195 672 B (74,64 %) |
+| off | off | 479 644 B (45,74 %) | 183 152 B (69,87 %) |
 
-Referencia: `master` (`e4f6f6a2`) con las mismas tres opciones. Lo que ocupa:
-dos reensambladores (uno por timeslot, ~460 B cada uno) y el paquete en
-transmisión (420 B), la cola (8 + 8 mensajes de ~200 B = 3,2 KiB), el registro
-empaquetado (3 100 B) y el PDU de TETRA preparado (400 B). El grueso del
-código nuevo son ~4,5 KiB de FLASH.
+PSRAMAP 379 064 B (20,66 %) en las cuatro: sin volcado de banda base.
+Con `-DC62_BASEBAND_DUMP=ON` (imagen de captura, no la de uso normal) la misma
+combinación sube a 212 928 B de RAM (81,23 %) y 1 427 640 B de PSRAMAP
+(77,80 %): por eso el volcado va apagado por defecto.
+
+El peor caso son 79,58 %: por debajo del 80 % con ~1,1 KiB de margen. Lo que
+ocupa la mensajería: dos reensambladores (uno por timeslot, ~460 B cada uno),
+el paquete en transmisión (420 B), las dos colas (6 + 6 mensajes de 196 B =
+2,3 KiB), el registro empaquetado (2 500 B) y el PDU de TETRA preparado
+(400 B). Para llegar ahí se recortaron las colas de 8+8 a 6+6, el registro de
+3 400 a 2 500 B y la agenda de 64 a 32 contactos, y se quitó la tercera copia
+del registro que el backend de flash y el backend de reserva mantenían cada
+uno por su lado (6,8 KiB).
 
 ---
 
@@ -277,11 +353,15 @@ cc -O2 -std=gnu17 -I openrtx/include tests/platform/c62_sms_host.c \
 cc -O2 -std=gnu17 -I openrtx/include tests/platform/c62_messaging_host.c \
    openrtx/src/core/messaging.c -o c62_messaging_host && ./c62_messaging_host
 
+# pantalla y almacén en la suite de host
+meson setup build_linux && meson test -C build_linux ui_messages_test \
+    user_stores_test
+
 # coste en el M33 (necesita arm-none-eabi y qemu-system-arm)
 work/sms-cost/build.sh        # -O2;  OPT=Os work/sms-cost/build.sh
 
-# imagen completa
-west build -b c62 -d build_c62 . -- -DCONFIG_C62_DMR_RX=y -DCONFIG_DMR_TX=y \
+# imagen completa (las cuatro combinaciones de la tabla de §4.4)
+west build -b c62 -d build_tx_aprs . -- -DCONFIG_C62_DMR_RX=y -DCONFIG_DMR_TX=y \
      -DCONFIG_C62_APRS=y
 ```
 

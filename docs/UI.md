@@ -174,7 +174,8 @@ by LEFT/RIGHT, which this keypad does not have.
 ## Contacts
 
 Menu → Contacts opens the in-radio book (`ui_contacts.c`, `core/contact_store.c`),
-not the CPS contact list. The list shows callsign and preferred transport;
+not the CPS contact list. It holds 32 entries; a contact is what gives a
+message its address, so the book is what the composer walks. The list shows callsign and preferred transport;
 green or P2 edits, P1 adds, P2 long deletes after a confirmation, red goes back
 to the menu.
 
@@ -241,7 +242,7 @@ keeps the `CANC` state even if the transport finishes the burst it already
 started.
 
 Everything is persistent, and all of it is the one record of the shared store
-(`docs/MESSAGING.md`): inbox (8), outbox with its terminal states (8), the
+(`docs/MESSAGING.md`): inbox (6), outbox with its terminal states (6), the
 unread flags and the compose draft, in the two alternating sectors at
 0x4000/0x5000 of the storage partition. The store flushes a change a few
 seconds after it happens, so a battery pull does not lose the draft or the
