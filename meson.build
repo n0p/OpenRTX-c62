@@ -1338,6 +1338,38 @@ ui_vfo_search_test = executable('ui_vfo_search_test',
                                 sources : unit_test_src + ['tests/unit/ui_vfo_search.cpp'],
                                 kwargs : unit_test_opts)
 
+# Regresiones de la interfaz, por sintoma: el despacho de teclas se prueba a
+# traves del FSM real (ui_updateFSM), con eventos como los que encola el teclado.
+#
+# Se compila dos veces. La primera, con CONFIG_APRS y las fuentes de APRS, es la
+# misma configuracion de despacho que lleva la radio (la build mega tiene APRS).
+# La segunda, sin APRS, es la que demuestra que las pantallas de mensajes,
+# contactos y zonas siguen despachandose: su bloque vivia dentro de
+# `#ifdef CONFIG_APRS`, asi que en esa configuracion no habia menu de mensajes.
+ui_regressions_src = ['tests/unit/ui_regressions.cpp']
+ui_regressions_aprs_src = ['openrtx/src/ui/default/ui_aprs.c',
+                           'openrtx/src/core/aprs_service.c',
+                           'openrtx/src/core/messaging_aprs.c',
+                           'openrtx/src/protocols/APRS/ax25.c',
+                           'openrtx/src/protocols/APRS/hdlc.c',
+                           'openrtx/src/protocols/APRS/afsk.c',
+                           'openrtx/src/protocols/APRS/aprs.c',
+                           'openrtx/src/protocols/APRS/aprs_msg.c']
+
+ui_regressions_opts = unit_test_opts + {
+    'c_args'   : linux_c_args + ['-DCONFIG_APRS'],
+    'cpp_args' : linux_cpp_args + ['-DCONFIG_APRS'],
+}
+
+ui_regressions_test = executable('ui_regressions_test',
+                                 sources : unit_test_src + ui_regressions_aprs_src +
+                                           ui_regressions_src,
+                                 kwargs  : ui_regressions_opts)
+
+ui_regressions_noaprs_test = executable('ui_regressions_noaprs_test',
+                                        sources : unit_test_src + ui_regressions_src,
+                                        kwargs  : unit_test_opts)
+
 ui_quickmenu_test = executable('ui_quickmenu_test',
                                sources : unit_test_src + ['tests/unit/ui_quickmenu.cpp'],
                                kwargs  : unit_test_opts)
@@ -1574,6 +1606,8 @@ test('minmea conversion Test', minmea_conversion_test)
 test('UI Check Standby Test', ui_check_standby_test)
 test('UI VFO Input Test', ui_vfo_input_test)
 test('UI VFO Search Test', ui_vfo_search_test, timeout : 120)
+test('UI Regressions Test', ui_regressions_test, timeout : 120)
+test('UI Regressions Test (no APRS)', ui_regressions_noaprs_test, timeout : 120)
 test('UI Quick Menu Test', ui_quickmenu_test)
 test('M17 Packet Frame Test', m17_packet_test)
 test('M17 Frame Decoder Test', m17_decoder_test)
