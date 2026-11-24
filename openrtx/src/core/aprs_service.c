@@ -71,11 +71,16 @@ static struct
 
 static void ownCallsign(char *out, size_t cap)
 {
-    /* The AX.25 source is the plaintext callsign from the settings plus the
+    /*
+     * The AX.25 source is the plaintext callsign from the settings plus the
      * APRS SSID, which is separate so that the FM/menu path keeps working
-     * with a bare callsign. */
-    snprintf(out, cap, "%s-%u", state.settings.callsign,
-             (unsigned)state.settings.aprs_ssid);
+     * with a bare callsign. The base callsign is six characters in AX.25, and
+     * ax25_addr_set() keeps exactly those, so the string is cut to the same
+     * length here: a longer callsign in the settings would otherwise produce
+     * an address that does not match what is transmitted.
+     */
+    snprintf(out, cap, "%.6s-%u", state.settings.callsign,
+             (unsigned)(state.settings.aprs_ssid & 0x0Fu));
 }
 
 static aprs_pos_t localPosition(void)

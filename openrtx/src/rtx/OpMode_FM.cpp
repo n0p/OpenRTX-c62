@@ -270,8 +270,10 @@ void OpMode_FM::aprsSendPacket(const char *info)
     /* Build the frame: our callsign and SSID, APRS as destination, the
      * digipeater path from the settings. */
     char src[12];
-    snprintf(src, sizeof(src), "%s-%u", state.settings.callsign,
-             (unsigned)state.settings.aprs_ssid);
+    /* Six characters of base callsign and two of SSID: the AX.25 limit, the
+     * same cut ax25_addr_set() makes. */
+    snprintf(src, sizeof(src), "%.6s-%u", state.settings.callsign,
+             (unsigned)(state.settings.aprs_ssid & 0x0Fu));
 
     ax25_frame_t f;
     memset(&f, 0, sizeof(f));
