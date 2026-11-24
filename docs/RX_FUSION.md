@@ -244,6 +244,15 @@ is an independent decoder of the voice payload, so:
 with a strong pitch period. That is speech-shaped, and it is consistent with
 the fixed-bit and FEC evidence, but "intelligible" is not claimed here.
 
+The text message path was exercised the other way round, because no public
+capture carries one: `tests/host/ysf_host/txmodel.c` builds a V/D mode 2 frame
+with the published encoder (CRC-16, Golay(24,12), rate-1/2 K=5, dibit
+interleave, PN(9,5)) and the harness decodes it with the same
+`ysfFrame_decode()` the radio runs. Two blocks, `bn = 2`, `fn` 0 and 1 of `ft`
+1, reassemble into `"HELLO FROM THE C62"`. That proves the reassembler and the
+whole block chain; it does not prove that a real Yaesu puts a text message in
+`bn = 2`.
+
 No capture with a text message, no V/D mode 1 and no voice FR transmission was
 found in public sources (sigidwiki carries one YSF file). Those paths are
 implemented to the specification and tested structurally, not on air — §7.
@@ -290,18 +299,20 @@ capture, per-instruction counters:
 
 | | instructions | per 100 ms frame | share |
 |---|---|---|---|
-| total (PHY + frame layer) | 34 546 128 / 9.3 s | 416 000 | 100 % |
-| Viterbi (FICH + DCH, 2 per frame) | 15 939 351 | 192 000 | 46 % |
-| ring fill | 5 695 466 | 68 600 | 16 % |
-| symbol interpolation | 5 564 700 | 67 000 | 16 % |
-| level estimate and slicing | 3 774 903 | 45 500 | 11 % |
-| FICH/DCH/DG-ID/text | 1 496 821 | 18 000 | 4 % |
-| Golay(24,12) | 61 376 | 740 | 0.2 % |
+| total (PHY + frame layer) | 43 569 155 / 9.3 s | 524 900 | 100 % |
+| Viterbi (FICH + DCH, 2 per frame) | 15 939 351 | 192 000 | 36.6 % |
+| symbol interpolation | 11 917 300 | 143 600 | 27.4 % |
+| ring fill and frame clock | 8 366 684 | 100 800 | 19.2 % |
+| level estimate and slicing | 3 774 903 | 45 500 | 8.7 % |
+| FICH/DCH/DG-ID/text | 1 496 821 | 18 000 | 3.4 % |
+| Golay(24,12) | 61 376 | 740 | 0.1 % |
 
-3.84 M instructions per second of audio, i.e. **1.5-1.9 % of the M33** at
-200-250 MHz. The vocoder adds 113 370 instructions per 20 ms frame (5.7 M/s,
-2.3-3.0 %), so a full System Fusion receive costs **about 5 % of the core**,
-and the audio work runs in its own thread.
+4.68 M instructions per second of audio, i.e. **1.9-2.3 % of the M33** at
+200-250 MHz, and that figure includes acquiring the carrier from cold (about
+7 M of the total are the scan that finds the first sync; a receiver already
+locked runs at 3.9 M/s).  The vocoder adds 113 370 instructions per 20 ms
+frame (5.7 M/s, 2.3-3.0 %), so a full System Fusion receive costs **about
+5 % of the core**, with the voice in its own thread.
 
 The Viterbi is the one place with obvious headroom: it is written as a plain
 16-state add-compare-select and the two predecessor branches of each state
@@ -315,20 +326,28 @@ Measured on the C62 firmware, `west build -b c62`, same tree:
 
 | Build | FLASH | RAM |
 |---|---|---|
-| DMR RX + vocoder (baseline) | 518 104 B | 196 688 B |
-| **System Fusion + vocoder** | **…** | **…** |
-| both | … | … |
+| DMR RX + vocoder (baseline, `-DCONFIG_C62_DMR_RX=y`) | 518 104 B | 196 688 B |
+| **System Fusion + vocoder** (`-DCONFIG_C62_YSF=y`) | **509 096 B** | **223 232 B** |
+| DMR RX + System Fusion + vocoder | 524 380 B | 237 088 B |
 
-(filled from the build log, see §4.4)
+Against the DMR-RX baseline, System Fusion costs **+6 276 B of flash and
++40 400 B of RAM**.  The combined build sits at 90.4 % of RAM with 25 KB free,
+which is inside the region but is the tightest build in the tree: the two big
+residents are the 19.2 KB baseband stream buffer (one 100 ms frame per half,
+against DMR's 5.8 KB) and the 14.7 KB sample ring.
 
 ### 4.4 Where the bytes go
 
 * The Golay(24,12) syndrome table (4 KiB) is **not** duplicated: `YsfFrame.c`
   calls `dmr_golay24_correct()`, which lives next to the table in
-  `lib/dmr_vocoder`. The FICH code is the P25 code the vocoder already carried.
-* New .bss: 3 KiB of Viterbi history (200 steps × 16 states), 8 KiB of sample
-  ring, 7 KiB of decoded frame and voice slots, 1.6 KiB of voice queue, 1.3 KiB
-  of baseband stream buffer.
+  `lib/dmr_vocoder`. The FICH uses the P25 code the vocoder already carried, so
+  the shared corrector costs 200 B of code and no table.
+* Flash, measured per object: PHY 2 336 B, frame layer 2 170 B, speech 878 B,
+  mode 550 B — 5.8 KB of the +6.3 KB; the rest is the extra `enum opmode` case,
+  the Kconfig string and alignment.
+* RAM: 19.2 KB baseband stream buffer, 14.7 KB sample ring, 3.2 KB of Viterbi
+  history (200 steps × 16 states), 1.5 KB voice queue, 0.6 KB PCM, 0.5 KB
+  decoded frame, plus the RTX-side bookkeeping.
 
 ## 5. UI hooks
 
