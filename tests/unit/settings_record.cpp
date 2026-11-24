@@ -52,6 +52,7 @@ TEST_CASE("Settings round-trip through the record", "[settings]")
     s.dmr_dest_type = DMR_DEST_USER;
     s.dmr_dest_id = 1234567;
     s.sms_format = DMR_SMS_FMT_DD_UTF8;
+    s.dmr_timeslot = 2;
     s.m17_can = 3;
 
     uint8_t rec[SETTINGS_RECORD_SIZE];
@@ -71,6 +72,7 @@ TEST_CASE("Settings round-trip through the record", "[settings]")
     REQUIRE(out.dmr_dest_type == DMR_DEST_USER);
     REQUIRE(out.dmr_dest_id == 1234567);
     REQUIRE(out.sms_format == DMR_SMS_FMT_DD_UTF8);
+    REQUIRE(out.dmr_timeslot == 2);
     REQUIRE(out.m17_can == 3);
     REQUIRE(memcmp(&out, &s, sizeof(s)) == 0);
 }
@@ -179,8 +181,18 @@ TEST_CASE("DMR identifiers and SMS formats are validated", "[settings]")
     REQUIRE(std::string(settings_smsFormatName(DMR_SMS_FMT_AUTO)) == "auto");
     REQUIRE(std::string(settings_smsFormatName(DMR_SMS_FMT_TMS)) == "TMS");
 
+    /* The timeslot is 1 or 2, and the menu names it the way radios do */
+    REQUIRE(settings_dmrTimeslotValid(1));
+    REQUIRE(settings_dmrTimeslotValid(2));
+    REQUIRE_FALSE(settings_dmrTimeslotValid(0));
+    REQUIRE_FALSE(settings_dmrTimeslotValid(3));
+    REQUIRE(std::string(settings_dmrTimeslotName(1)) == "TS1");
+    REQUIRE(std::string(settings_dmrTimeslotName(2)) == "TS2");
+
     /* The defaults are themselves valid: a reset leaves a usable radio */
     REQUIRE(settings_dmrDestValid(dflt().dmr_dest_type, dflt().dmr_dest_id));
     REQUIRE(settings_smsFormatValid(dflt().sms_format));
+    REQUIRE(settings_dmrTimeslotValid(dflt().dmr_timeslot));
+    REQUIRE(dflt().dmr_timeslot == 1);
     REQUIRE(dflt().dmr_id == 0);  /* no ID until the operator sets one */
 }

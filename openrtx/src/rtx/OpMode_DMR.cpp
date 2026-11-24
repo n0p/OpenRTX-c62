@@ -391,7 +391,12 @@ bool OpMode_DMR::startTx(const rtxStatus_t *status)
 
     frameHead = 0;
     frameCount = 0;
-    dmrTxFsm_init(&fsm);
+    /*
+     * The call is announced and carried in the timeslot the operator chose:
+     * on slot 2 the first 30 ms of the frame are silence, so the header and
+     * the end of the call also start one slot later.
+     */
+    dmrTxFsm_initSlot(&fsm, status->dmrTimeslot);
     txIsData = false;
     txAcking = false;
     txMsgId = 0;
@@ -608,7 +613,7 @@ bool OpMode_DMR::startDataTx(const rtxStatus_t *status)
     }
 
     txIsData = true;
-    dmrTxData_init(&dataFsm, blocks);
+    dmrTxData_initSlot(&dataFsm, blocks, status->dmrTimeslot);
     txRunning = true;
 
     radio_enableTx();

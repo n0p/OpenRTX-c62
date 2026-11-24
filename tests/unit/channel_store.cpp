@@ -686,4 +686,27 @@ TEST_CASE("A stored channel fills the RTX configuration, DMR included",
     REQUIRE(rtx.txDisable == 0);
 
     REQUIRE(chstore_applyRtx(9, &rtx) < 0);
+
+    /*
+     * Selecting the channel copies its DMR destination and timeslot into the
+     * settings, which is where the transmitter reads them from.
+     */
+    settings_t st = default_settings;
+    st.dmr_dest_type = DMR_DEST_USER;
+    st.dmr_dest_id = 42;
+    st.dmr_timeslot = 1;
+
+    REQUIRE(chstore_applySettings(0, &st) == 0);
+    REQUIRE(st.dmr_dest_type == DMR_DEST_GROUP);
+    REQUIRE(st.dmr_dest_id == 91);
+    REQUIRE(st.dmr_timeslot == 2);
+
+    /* An FM channel leaves the DMR settings alone */
+    chstore_channel_t fm = makeChannel("FM-ONLY", 145500000, 145500000);
+    REQUIRE(chstore_add(&fm) == 1);
+    REQUIRE(chstore_applySettings(1, &st) == 0);
+    REQUIRE(st.dmr_dest_id == 91);
+    REQUIRE(st.dmr_timeslot == 2);
+
+    REQUIRE(chstore_applySettings(9, &st) < 0);
 }

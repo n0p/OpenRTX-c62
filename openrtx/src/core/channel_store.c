@@ -523,6 +523,23 @@ int chstore_toChannel(uint16_t idx, channel_t *out)
     return 0;
 }
 
+int chstore_applySettings(uint16_t idx, settings_t *settings)
+{
+    if (settings == NULL || idx >= nbChannels)
+        return -EINVAL;
+
+    const chstore_channel_t *ch = &bank[idx];
+
+    if (ch->mode != OPMODE_DMR)
+        return 0;
+
+    settings->dmr_dest_type = ch->dmr_dest_type;
+    settings->dmr_dest_id = ch->dmr_dest_id;
+    settings->dmr_timeslot = (ch->dmr_ts == 0) ? 1 : 2;
+
+    return 0;
+}
+
 int chstore_applyRtx(uint16_t idx, rtxStatus_t *rtx)
 {
     if (rtx == NULL || idx >= nbChannels)

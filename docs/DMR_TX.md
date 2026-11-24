@@ -129,6 +129,53 @@ gated one ramps down inside the guard.
 The modulator is integer end to end: Q14 tables, no floating point, no
 `exp()`/`cos()`, 180 bytes of RRC table and 96 bytes of ramp.
 
+## The timeslot: which half of the 60 ms frame
+
+A DMR carrier is a 60 ms frame with two 30 ms timeslots, and a call owns one of
+them. The transmitter renders exactly one 30 ms slot per call to
+`dmrTx_slot()`; the slot in between is silence, not a shorter burst (a handheld
+that keys the other slot would trample the station that owns it).
+
+Which of the two it is, is a setting: `settings.dmr_timeslot` (**1** by
+default, or **2**), visible in the quick menu as `TS1`/`TS2` and carried to the
+radio in `rtxStatus.dmrTimeslot`. `dmrTxFsm_initSlot()` and
+`dmrTxData_initSlot()` set the phase, and **every** burst of a call falls in
+that slot: the voice LC header, each voice burst and the terminator. This was
+not true before the setting existed — the header was announced one slot before
+the voice phase (so it went out in the *other* timeslot) and the terminator was
+emitted in whichever slot the PTT release happened to land on. Both are fixed
+and tested (`tests/unit/dmr_tx_fsm.cpp`: one parity for the whole call, TS1 and
+TS2).
+
+What choosing TS2 means, plainly:
+
+* **It starts one slot later.** On TS2 the first 30 ms of the frame are
+  silence, so the header — and every control burst of a data call — goes out
+  30 ms after the PA is keyed, and the terminator/tail are delayed the same. In
+  voice that is a 30 ms longer call setup; nothing else changes, a burst still
+  carries 60 ms of speech and the payload rate is the same.
+* **The other slot's traffic is lost while you transmit.** The BK4819 is half
+  duplex: transmitting in TS1 means not receiving TS2 (and vice versa) for the
+  whole transmission. On a repeater with two busy slots, a long voice call in
+  one slot costs you every burst in the other one — the subscriber in the other
+  slot also has to wait, because the repeater is busy with us.
+* **Receiving is not slot-selective.** The receiver does not filter by
+  timeslot: it locks the 30 ms grid, decodes whatever burst is there and labels
+  it (`timeslot2` only picks which SMS reassembler it goes to). So changing the
+  transmit slot does not change what the radio hears or which calls it opens.
+* **The CACH TC bit follows the setting** (`cfg.timeslot`), but it only exists
+  in the `DMR_TX_LAYOUT_BS` layout: the handheld layout has no CACH, the CACH
+  on the inbound channel belongs to the base station.
+* **Alignment is open loop.** The radio starts a 60 ms frame when it keys the
+  PA; it does not recover the repeater's frame from the received CACH, so
+  whether the burst lands in the repeater's TS1 or TS2 depends on the repeater
+  re-timing the call (most do not) or on the operator selecting the slot the
+  repeater announces. Doing it closed loop needs downlink frame/timing recovery
+  (the CACH and the sync word give the frame phase; the current PHY already
+  tracks the 30 ms grid for RX) and starting the TX ramp on that boundary —
+  the modulator and the state machines are ready for it, the alignment is the
+  work left.
+
 ## The PTT state machine
 
 The stages live in a pure function, `openrtx/include/protocols/DMR/DmrTxFsm.h`

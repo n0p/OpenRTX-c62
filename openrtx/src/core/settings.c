@@ -37,3 +37,8 @@ const char *settings_smsFormatName(uint8_t format)
         default:                    return "----";
     }
 }
+
+const char *settings_dmrTimeslotName(uint8_t timeslot)
+{
+    return (timeslot == 2) ? "TS2" : "TS1";
+}

@@ -20,10 +20,12 @@
  * instead of being reinterpreted with fields landing at the wrong offset.  The
  * radio tells the operator through state.settings_reset (docs/SETTINGS.md).
  *
- *  - 1: the original record (no version in the header, 156 B with APRS).
+*  - 1: the original record (no version in the header, 156 B with APRS).
  *  - 2: DMR destination, own DMR ID and SMS format appended.
+ *  - 3: DMR timeslot appended (1 or 2), so the quick menu can move the call
+ *       between the two slots of the 60 ms frame.
  */
-#define SETTINGS_VERSION 2
+#define SETTINGS_VERSION 3
 
 typedef enum
 {
@@ -111,6 +113,7 @@ typedef struct
     uint32_t dmr_dest_id;         // Default call destination, 1..16777215
     uint8_t  dmr_dest_type;       // enum dmrDestType
     uint8_t  sms_format;          // enum dmrSmsFormat
+    uint8_t  dmr_timeslot;        // 1 or 2: the slot of the 60 ms TDMA frame
 }
 __attribute__((packed)) settings_t;
 
@@ -161,6 +164,7 @@ static const settings_t default_settings =
     9,                            // Default talkgroup, as the RTX starts with
     DMR_DEST_GROUP,               // Group call by default
     DMR_SMS_FMT_AUTO,             // The format this firmware always sent
+    1,                            // Timeslot 1, the one every network uses
 };
 
 /**
@@ -188,6 +192,15 @@ static inline bool settings_dmrDestValid(uint8_t type, uint32_t id)
     return settings_dmrIdValid(id);
 }
 
+/**
+ * True if slot is a DMR timeslot: 1 or 2.  Anything else would make the
+ * transmitter key a slot the frame does not have.
+ */
+static inline bool settings_dmrTimeslotValid(uint8_t slot)
+{
+    return (slot == 1) || (slot == 2);
+}
+
 /** True if f names one of the SMS payload formats. */
 static inline bool settings_smsFormatValid(uint8_t f)
 {
@@ -199,6 +212,9 @@ const char *settings_dmrDestName(uint8_t type);
 
 /** "auto", "DD UTF-16BE", ...: short name of an SMS format, for menus. */
 const char *settings_smsFormatName(uint8_t format);
+
+/** "TS1" or "TS2": short name of a timeslot, for menus. */
+const char *settings_dmrTimeslotName(uint8_t timeslot);
 
 /** Value of the settings reset cause, as reported by state.settings_reset. */
 enum settingsReset {

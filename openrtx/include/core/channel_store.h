@@ -12,6 +12,7 @@
 #include <stddef.h>
 #include "core/datatypes.h"
 #include "core/cps.h"
+#include "core/settings.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -310,6 +311,20 @@ void chstore_fromChannel(const channel_t *in, chstore_channel_t *out);
  * @return 0 on success, negative on a bad index.
  */
 int chstore_applyRtx(uint16_t idx, rtxStatus_t *rtx);
+
+/**
+ * Copy the DMR settings a stored channel carries into the settings: the call
+ * destination (type and identifier) and the timeslot.  This is what the UI
+ * calls when the operator selects a channel, so that the quick menu edits the
+ * values of the channel in use, and what keeps one of them from disagreeing
+ * with the other: the RTX takes the destination and the slot from the settings
+ * and the colour code from the channel.
+ *
+ * A channel that is not a DMR one leaves the settings as they are.
+ *
+ * @return 0 on success, -EINVAL on a bad index.
+ */
+int chstore_applySettings(uint16_t idx, settings_t *settings);
 
 /**
  * Short mode name for the display ("FM", "M17", "DMR", "TETRA").

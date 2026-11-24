@@ -111,11 +111,19 @@ void *ui_threadFunc(void *arg)
                                 ? state.settings.dmr_id : 0;
             rtx_cfg.dmrDestType = state.settings.dmr_dest_type;
             rtx_cfg.dmrDestId = state.settings.dmr_dest_id;
+            rtx_cfg.dmrTimeslot = settings_dmrTimeslotValid(
+                                      state.settings.dmr_timeslot)
+                                ? state.settings.dmr_timeslot : 1;
 
-            if (state.channel.mode == OPMODE_DMR) {
+            /*
+             * The colour code is a channel property and the UI shows it read
+             * only.  The timeslot is not: it comes from the settings (the
+             * quick menu changes it), and a stored channel's own slot reaches
+             * there through chstore_applySettings() when the channel is
+             * selected.  One source of truth, so the menu always wins.
+             */
+            if (state.channel.mode == OPMODE_DMR)
                 rtx_cfg.dmrColourCode = state.channel.dmr.rxColorCode;
-                rtx_cfg.dmrTimeslot = state.channel.dmr.dmr_timeslot;
-            }
 
             pthread_mutex_unlock(&rtx_mutex);
 

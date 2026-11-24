@@ -55,7 +55,12 @@ typedef struct
     char     M17_meta_text[53];        /**< M17 Meta Text              */
 
     uint8_t  dmrColourCode;            /**< DMR colour code, 0..15     */
-    uint8_t  dmrTimeslot;              /**< DMR timeslot, 1 or 2       */
+    uint8_t  dmrTimeslot;              /**< DMR timeslot, 1 or 2.  Comes from
+                                        *   the settings (quick menu) and a
+                                        *   stored channel can override it.  The
+                                        *   transmitter emits the whole call --
+                                        *   header, voice, terminator -- in this
+                                        *   slot and leaves the other silent. */
     uint32_t dmrSourceId;              /**< DMR radio ID, 24 bit       */
     uint32_t dmrDestId;                /**< Call destination, 24 bit   */
     uint8_t  dmrDestType;              /**< enum dmrDestType: NONE, GROUP or USER */
