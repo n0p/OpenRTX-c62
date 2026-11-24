@@ -10,6 +10,7 @@
 #include "core/datatypes.h"
 #include <stdint.h>
 #include "core/cps.h"
+#include "rtx/TxGuard.h"
 #include <pthread.h>
 
 #ifdef __cplusplus
@@ -129,6 +130,27 @@ rtxStatus_t rtx_getCurrentStatus();
  * contains all the RTX management functionalities.
  */
 void rtx_task();
+
+/**
+ * Supervise the transmit lifecycle. Must be called periodically (every few
+ * milliseconds) by a thread that is *not* the RTX thread: its whole purpose is
+ * to unkey a transmitter whose owning thread is blocked in a stream or in the
+ * DSP, so it cannot live in that thread.
+ *
+ * It checks the phase deadlines of the transmission and, at the first overrun,
+ * forces the PA off and cancels the transmit streams, which is also what
+ * releases the RTX thread from the blocking call. The mode then unwinds through
+ * its own exit path.
+ */
+void rtx_supervise();
+
+/**
+ * Get the transmit lifecycle guard, for the modes to report their phases and
+ * for the diagnostics to print the trace of the last transmission.
+ *
+ * @return the guard, never NULL.
+ */
+struct txGuard *rtx_getTxGuard();
 
 /**
  * Get current RSSI in dBm.

@@ -14,10 +14,12 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/drivers/uart.h>
 #include <zephyr/drivers/pinctrl.h>
+#include <zephyr/drivers/watchdog.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/reboot.h>
 #include <interfaces/audio.h>
 #include <interfaces/nvmem.h>
+#include <interfaces/radio.h>
 #include "drivers/SPI/spi_zephyr.h"
 #include "drivers/audio/csk6_codec.h"
 #ifdef C62_BASEBAND_DUMP
@@ -241,6 +243,23 @@ void platform_init_csk6()
 
     if (ret != 0)
         printk("DSP start failed, no audio: %d\n", ret);
+
+    /*
+     * Safe state before the watchdog is armed: the PA enable lines are driven
+     * low and the transceiver is out of transmit, so a reset -- the watchdog's,
+     * or any other -- cannot leave the radio transmitting. The GPIOs come up as
+     * inputs at reset, which is already off; this also covers a warm reset that
+     * did not reload the pin configuration.
+     */
+    radio_disableRtx();
+
+    /* Last: from here a stuck firmware resets instead of transmitting for ever */
+    int wdtRet = platform_wdtStart(2000);
+    if (wdtRet != 0)
+        printk("C62: watchdog unavailable (%d): a stuck TX cannot reset\n",
+               wdtRet);
+    else
+        printk("C62: watchdog armed, 2 s\n");
 }
 
 void platform_terminate()
@@ -326,13 +345,75 @@ int8_t platform_getChSelector()
     return 0;
 }
 
+/*
+ * Application watchdog, see platform_wdtStart().
+ *
+ * CONFIG_WATCHDOG and the ap_wdt node in c62.dts arm it; the driver quantises
+ * the window to its own table (0.5 s, 1 s, 4 s). Nothing else in the firmware
+ * touches it: it is only ever refreshed by the main thread, so a firmware that
+ * stops scheduling that thread -- or stops reaching it, because everything is
+ * stuck behind a wedged lock -- reboots instead of sitting there with the PA
+ * keyed.
+ */
+static const struct device *const wdt_dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(ap_wdt));
+static bool wdtArmed;
+static int wdtChannel;
+
+int platform_wdtStart(uint32_t windowMs)
+{
+    if ((wdt_dev == NULL) || !device_is_ready(wdt_dev))
+        return -ENODEV;
+
+    struct wdt_timeout_cfg cfg = {
+        .window =
+            {
+                .min = 0,
+                .max = windowMs,
+            },
+        .callback = NULL,
+        .flags = WDT_FLAG_RESET_SOC,
+    };
+
+    int channel = wdt_install_timeout(wdt_dev, &cfg);
+    if (channel < 0)
+        return channel;
+
+    int ret = wdt_setup(wdt_dev, WDT_OPT_PAUSE_IN_SLEEP);
+    if (ret < 0)
+        return ret;
+
+    wdtChannel = channel;
+    wdtArmed = true;
+    wdt_feed(wdt_dev, wdtChannel);
+    return 0;
+}
+
+void platform_wdtFeed(void)
+{
+    if (wdtArmed)
+        wdt_feed(wdt_dev, wdtChannel);
+}
+
+#ifdef C62_REMOTE
+/* Forced PTT for the remote control: -1 uses the pad, which has no button */
+static volatile int pttOverride = -1;
+
+void platform_pttOverride(int state)
+{
+    pttOverride = state;
+}
+#endif
+
 bool platform_getPttStatus()
 {
 #ifdef C62_REMOTE
     /* The PTT pad carries the remote control's UART RX */
+    if (pttOverride >= 0)
+        return pttOverride != 0;
     return false;
-#endif
+#else
     return gpio_pin_get_dt(&button_ptt);
+#endif
 }
 
 bool platform_pwrButtonStatus()

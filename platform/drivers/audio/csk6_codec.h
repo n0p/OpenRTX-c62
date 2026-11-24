@@ -94,6 +94,34 @@ uint32_t csk6codec_getStreamMisses(void);
  */
 void csk6codec_clearStreamMisses(void);
 
+/**
+ * Peak magnitude played to the radio (SINK_RTX) since the last clear, with a
+ * peak hold of about 100 ms.
+ *
+ * A keyed transmitter that sends nothing and one that sends silence cannot be
+ * told apart from the outside; this is the number that separates them. Zero
+ * while a transmission is running means the mode is not producing baseband.
+ *
+ * @return peak from 0 to 32768.
+ */
+uint16_t csk6codec_getTxPeak(void);
+
+/**
+ * Reset the transmit peak.
+ */
+void csk6codec_clearTxPeak(void);
+
+/**
+ * Milliseconds since the audio worker last went round its loop.
+ *
+ * The worker is expected to run every millisecond or two while audio is
+ * running. A large value means it is stuck -- typically inside a DSP call --
+ * and every stream is starving. Reported in the transmit trace.
+ *
+ * @return age in milliseconds, -1 if the worker never ran.
+ */
+int32_t csk6codec_getWorkerAge(void);
+
 #ifdef __cplusplus
 }
 #endif

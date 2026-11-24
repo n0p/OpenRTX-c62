@@ -27,8 +27,8 @@ extern mod17Calib_t mod17CalData;
 using namespace std;
 using namespace M17;
 
-OpMode_M17::OpMode_M17() : startRx(false), startTx(false), locked(false),
-                           dataValid(false), extendedCall(false),
+OpMode_M17::OpMode_M17() : startRx(false), startTx(false), txBlocked(false),
+                           locked(false), dataValid(false), extendedCall(false),
                            invertTxPhase(false), invertRxPhase(false),
                            rxAudioPath(-1), txAudioPath(-1), gpsTimer(0)
 {
@@ -50,6 +50,7 @@ void OpMode_M17::enable()
     extendedCall = false;
     startRx      = true;
     startTx      = false;
+    txBlocked    = false;
 }
 
 void OpMode_M17::disable()
@@ -72,6 +73,9 @@ void OpMode_M17::disable()
     rxAudioPath = -1;
     txAudioPath = -1;
 
+    /* Leaving the mode ends whatever transmission was open */
+    txg_exit(rtx_getTxGuard(), (uint32_t)getTick(), TXG_REASON_MODE);
+
     codec_terminate();
     radio_disableRtx();
     modulator.terminate();
@@ -81,6 +85,10 @@ void OpMode_M17::disable()
 void OpMode_M17::update(rtxStatus_t *const status, const bool newCfg)
 {
     (void) newCfg;
+
+    /* An aborted over does not key again until the operator lets go of the PTT */
+    if(platform_getPttStatus() == false)
+        txBlocked = false;
     #if defined(PLATFORM_MD3x0) || defined(PLATFORM_MDUV3x0)
     //
     // Invert TX phase for all MDx models.
@@ -152,6 +160,9 @@ void OpMode_M17::offState(rtxStatus_t *const status)
 {
     radio_disableRtx();
 
+    /* Covers every way into OFF: this is where a transmission ends */
+    txg_exit(rtx_getTxGuard(), (uint32_t)getTick(), TXG_REASON_MODE);
+
     codec_stop(txAudioPath);
     audioPath_release(txAudioPath);
 
@@ -161,7 +172,7 @@ void OpMode_M17::offState(rtxStatus_t *const status)
         return;
     }
 
-    if(platform_getPttStatus() && (status->txDisable == 0))
+    if(platform_getPttStatus() && (status->txDisable == 0) && (txBlocked == false))
     {
         startTx = true;
         status->opStatus = TX;
@@ -292,7 +303,7 @@ void OpMode_M17::rxState(rtxStatus_t *const status)
 
     locked = lock;
 
-    if(platform_getPttStatus())
+    if(platform_getPttStatus() && (txBlocked == false))
     {
         demodulator.stopBasebandSampling();
         locked = false;
@@ -337,13 +348,31 @@ bool OpMode_M17::popFrame(uint8_t *dst)
     return false;
 }
 
+/**
+ * Force the end of the over, from the supervisor thread.
+ *
+ * Only the two things that are safe from another thread: cancel the baseband
+ * output stream -- which is what wakes this thread if it is blocked in it --
+ * and stop the encoder, whose thread would otherwise keep filling a queue
+ * nobody reads.  The audio paths and the modulator belong to the RTX thread and
+ * are released by offState() when it leaves transmit.
+ */
+void OpMode_M17::abortTx()
+{
+    txBlocked = true;
+    codec_abort();
+    modulator.abort();
+}
+
 void OpMode_M17::txState(rtxStatus_t *const status)
 {
     frame_t m17Frame;
+    struct txGuard *tx = rtx_getTxGuard();
 
     if(startTx)
     {
         startTx = false;
+        txg_enter(tx, (uint32_t)getTick());
 
         LinkSetupFrame lsf;
 
@@ -382,6 +411,7 @@ void OpMode_M17::txState(rtxStatus_t *const status)
             audioPath_release(txAudioPath);
             txAudioPath = -1;
             radio_disableRtx();
+            txg_streamsFailed(tx, (uint32_t)getTick());
             startRx = true;
             status->opStatus = OFF;
             return;
@@ -398,19 +428,29 @@ void OpMode_M17::txState(rtxStatus_t *const status)
             audioPath_release(txAudioPath);
             txAudioPath = -1;
             radio_disableRtx();
+            txg_streamsFailed(tx, (uint32_t)getTick());
             startRx = true;
             status->opStatus = OFF;
             return;
         }
 
+        /* Both streams are up: the encoder reads the microphone, the modulator
+         * writes the baseband. From here the supervisor expects samples. */
+        txg_streamsOpen(tx, (uint32_t)getTick());
+
         radio_enableTx();
+        txg_note(tx, TXG_EV_KEYED, (uint32_t)getTick());
 
         modulator.invertPhase(invertTxPhase);
         modulator.sendPreamble();
+        /* The preamble is on the air: the sink has consumed its first block */
+        txg_firstBlock(tx, (uint32_t)getTick());
         modulator.sendFrame(m17Frame);
+        txg_block(tx, (uint32_t)getTick());
     }
     payload_t dataFrame;
     bool      lastFrame = false;
+    bool      encoderDead = false;
 
     // Wait until there are 16 bytes of compressed speech, then send them
     if(!popFrame(dataFrame.data()) || !popFrame(dataFrame.data() + 8))
@@ -420,9 +460,11 @@ void OpMode_M17::txState(rtxStatus_t *const status)
          * condition that will never be signalled: the radio would stay keyed.
          */
         memset(dataFrame.data(), 0x00, dataFrame.size());
-        lastFrame = true;
-        startRx   = true;
+        lastFrame   = true;
+        encoderDead = true;
+        startRx     = true;
         status->opStatus = OFF;
+        txg_note(tx, TXG_EV_ENCODER, (uint32_t)getTick());
     }
 
     if(platform_getPttStatus() == false)
@@ -432,8 +474,13 @@ void OpMode_M17::txState(rtxStatus_t *const status)
         status->opStatus = OFF;
     }
 
+    /* From here the tail is on the air: it has a deadline of its own */
+    if(lastFrame)
+        txg_finishing(tx, (uint32_t)getTick());
+
     encoder.encodeStreamFrame(dataFrame, m17Frame, lastFrame);
     modulator.sendFrame(m17Frame);
+    txg_block(tx, (uint32_t)getTick());
 
     // After encoding a stream frame the encoder advances its LICH counter.
     // When it wraps back to zero a new superframe begins and the encoder
@@ -465,6 +512,9 @@ void OpMode_M17::txState(rtxStatus_t *const status)
         encoder.encodeEotFrame(m17Frame);
         modulator.sendFrame(m17Frame);
         modulator.stop();
+
+        txg_exit(tx, (uint32_t)getTick(),
+                 encoderDead ? TXG_REASON_ENCODER : TXG_REASON_PTT);
     }
 }
 

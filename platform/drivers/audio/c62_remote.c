@@ -28,6 +28,11 @@
  *                        okHold ctxMu ctxSpan
  *   r [0|1]              restart the TETRA receiver; 1 (default) starts
  *                        the equalizer from the measured taps, 0 not
+ *   tx                   transmit lifecycle: phases, deadlines, blocks, the
+ *                        level of the baseband sent to the BK4819 and how long
+ *                        ago the audio worker ran
+ *   ptt 0|1|-1           force the PTT (this build has no PTT button); -1
+ *                        returns to the pad
  *   d 0|1                stop or resume recording baseband samples
  *   v <0-15>             set the volume (OpenRTX 0-255 scale, 17 per step)
  *   fo [hz]              read or set the fine RX tuning offset
@@ -54,6 +59,7 @@
 #include "rtx/rtx.h"
 #include <hwconfig.h>
 #include "drivers/baseband/BK4819.h"
+#include "drivers/audio/csk6_codec.h"
 #include "baseband_dump_c62.h"
 #include "c62_remote.h"
 #ifdef CONFIG_TETRA
@@ -107,12 +113,13 @@ static void status(void)
     char text[CTRL_TEXT_MAX];
     /* No %lld: newlib-nano's printf fails on long long */
     int n = snprintf(text, sizeof(text),
-                     "S t=%lu m=%u f=%lu rssi=%d sv=%lu fo=%ld",
+                     "S t=%lu m=%u f=%lu rssi=%d sv=%lu fo=%ld txp=%u",
                      (unsigned long)k_uptime_get_32(), mode,
                      (unsigned long)freq, (int)rtx_getRssi(),
                      /* Saves are debounced in the nvmem driver: no counter *
                       * survives the merge with upstream, report zero.       */
-                     0UL, (long)c62_getRxOffset());
+                     0UL, (long)c62_getRxOffset(),
+                     (unsigned int)csk6codec_getTxPeak());
 #ifdef CONFIG_TETRA
     if (mode == OPMODE_TETRA && n > 0 && (size_t)n < sizeof(text)) {
         struct tetraDiag dg;
@@ -331,6 +338,25 @@ static void execute(char *cmd)
         reply("afc %d stored=%d", !state.settings.tetraAfcOff,
               (int)state.settings.tetraAfcOffset);
 #endif
+    } else if (!strcmp(argv[0], "tx") && argc == 1) {
+        /*
+         * The transmit trace: where the last over got to and how it ended.
+         * Everything the operator needs to see when a PTT produces nothing or
+         * hangs, in one line, over the cable that is already connected.
+         */
+        struct txGuard *guard = rtx_getTxGuard();
+        char trace[110];
+        char summary[130];
+        txg_formatTrace(guard, trace, sizeof(trace));
+        txg_format(guard, summary, sizeof(summary));
+        reply("tx %s | %s | pk=%u wa=%d", trace, summary,
+              (unsigned int)csk6codec_getTxPeak(),
+              (int)csk6codec_getWorkerAge());
+    } else if (!strcmp(argv[0], "ptt") && argc == 2) {
+        /* This build has no PTT button: the pad is the UART RX */
+        long v = strtol(argv[1], NULL, 0);
+        platform_pttOverride(v < 0 ? -1 : (v != 0 ? 1 : 0));
+        reply("ptt %d", platform_getPttStatus() ? 1 : 0);
     } else if (!strcmp(argv[0], "d") && argc == 2) {
         baseband_dump_pause(argv[1][0] == '0');
         reply("d %d", !baseband_dump_paused());

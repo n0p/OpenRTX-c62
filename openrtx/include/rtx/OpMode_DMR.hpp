@@ -70,6 +70,14 @@ public:
     virtual void disable() override;
     virtual void update(rtxStatus_t *const status, const bool newCfg) override;
 
+    /**
+     * Force the end of the call from the transmit supervisor: cancel the
+     * baseband and microphone streams, which is what releases the RTX thread if
+     * it is waiting for one of their boundaries. The PA is already off; the RTX
+     * thread releases the audio paths as it leaves transmit.
+     */
+    virtual void abortTx() override;
+
     virtual opmode getID() override
     {
         return OPMODE_DMR;
@@ -128,9 +136,14 @@ private:
     bool startTx(const rtxStatus_t *status);
     void stopTx();
     bool txSlot(const rtxStatus_t *status);
+    bool putSlot();
     unsigned dequeueFrames(uint8_t frames[DMR_FRAMES_PER_BURST][DMR_AMBE_BYTES]);
 
     bool txRunning;
+    /// Set by abortTx(): no new call until the PTT has been released
+    volatile bool txBlocked;
+    /// Set once the first slot of the call has been handed to the sink
+    bool txFirstBlock;
     pathId micPath;      // MIC -> MCU, raw 8 kHz PCM
     streamId micId;
     pathId txPath;       // MCU -> RTX, 48 kHz baseband

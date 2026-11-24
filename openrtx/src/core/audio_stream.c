@@ -6,10 +6,18 @@
 
 #include "core/audio_stream.h"
 #include <errno.h>
+#include <pthread.h>
 
 #define MAX_NUM_STREAMS 3
 #define MAX_NUM_DEVICES 3
 
+/*
+ * The table is shared: the thread that owns a stream starts and stops it, but a
+ * supervisor may cancel it from another thread when the owner is blocked, which
+ * is how a blocked caller is released. Every access to the table goes through
+ * this lock. It is never held while a driver call waits for data -- see below:
+ * the driver waits happen outside it, or in calls that are bounded.
+ */
 struct streamState
 {
     const struct audioDevice *dev;
@@ -18,6 +26,17 @@ struct streamState
 };
 
 static struct streamState streams[MAX_NUM_STREAMS] = {0};
+static pthread_mutex_t streamsLock = PTHREAD_MUTEX_INITIALIZER;
+
+static void lockStreams(void)
+{
+    pthread_mutex_lock(&streamsLock);
+}
+
+static void unlockStreams(void)
+{
+    pthread_mutex_unlock(&streamsLock);
+}
 
 
 /**
@@ -80,6 +99,8 @@ streamId audioStream_start(const pathId path, stream_sample_t * const buf,
     if(pathInfo.status != PATH_OPEN)
         return -EPERM;
 
+    lockStreams();
+
     // Search for an audio device serving the correct output endpoint.
     const struct audioDevice *dev  = NULL;
     const struct audioDevice *devs = inputDevices;
@@ -101,7 +122,10 @@ streamId audioStream_start(const pathId path, stream_sample_t * const buf,
 
     // No audio device found
     if((dev == NULL) || (dev->driver == NULL))
+    {
+        unlockStreams();
         return -ENODEV;
+    }
 
     // Search for an empty audio stream slot
     streamId id = -1;
@@ -124,7 +148,10 @@ streamId audioStream_start(const pathId path, stream_sample_t * const buf,
 
     // No stream slots available
     if(id < 0)
+    {
+        unlockStreams();
         return -EBUSY;
+    }
 
     // Setup new stream and start it
     streams[id].path           = path;
@@ -139,9 +166,13 @@ streamId audioStream_start(const pathId path, stream_sample_t * const buf,
     {
         int ret = startStream(id);
         if(ret < 0)
+        {
+            unlockStreams();
             return ret;
+        }
     }
 
+    unlockStreams();
     return id;
 }
 
@@ -150,12 +181,14 @@ void audioStream_stop(const streamId id)
     if((id < 0) || (id >= MAX_NUM_STREAMS))
         return;
 
-    if(streams[id].path == 0)
-        return;
-
-    streams[id].dev->driver->stop(&(streams[id].ctx));
-    streams[id].dev->driver->sync(&(streams[id].ctx), false);
-    streams[id].path = 0;
+    lockStreams();
+    if(streams[id].path != 0)
+    {
+        streams[id].dev->driver->stop(&(streams[id].ctx));
+        streams[id].dev->driver->sync(&(streams[id].ctx), false);
+        streams[id].path = 0;
+    }
+    unlockStreams();
 }
 
 void audioStream_terminate(const streamId id)
@@ -163,21 +196,38 @@ void audioStream_terminate(const streamId id)
     if((id < 0) || (id >= MAX_NUM_STREAMS))
         return;
 
-    if(streams[id].path == 0)
-        return;
-
-    streams[id].dev->driver->terminate(&(streams[id].ctx));
-    streams[id].path = 0;
+    /*
+     * Held across the driver call on purpose: the slot can be reused as soon as
+     * path goes to zero, and a terminate that arrived late would then cancel the
+     * new stream. The driver's terminate is the non-blocking one, by contract.
+     */
+    lockStreams();
+    if(streams[id].path != 0)
+    {
+        streams[id].dev->driver->terminate(&(streams[id].ctx));
+        streams[id].path = 0;
+    }
+    unlockStreams();
 }
 
 dataBlock_t inputStream_getData(streamId id)
 {
-    const struct audioDevice *dev = streams[id].dev;
     dataBlock_t block = {NULL, 0};
     int ret;
 
+    /*
+     * The waits below can take a whole buffer period, and on a stalled device
+     * longer: they must not hold the table lock, or a cancel from another
+     * thread could not release this call. The device and context are stable for
+     * the lifetime of the stream, and the driver checks that the context is
+     * still the one attached to it.
+     */
+    lockStreams();
     if(validateStream(id) == false)
+    {
+        unlockStreams();
         return block;
+    }
 
     if(streams[id].ctx.bufMode == BUF_LINEAR)
     {
@@ -186,15 +236,20 @@ dataBlock_t inputStream_getData(streamId id)
         {
             streams[id].ctx.running = 0;
             streams[id].path = 0;
+            unlockStreams();
             return block;
         }
     }
 
-    ret = dev->driver->sync(&(streams[id].ctx), false);
+    const struct audioDevice *dev = streams[id].dev;
+    struct streamCtx *ctx = &(streams[id].ctx);
+    unlockStreams();
+
+    ret = dev->driver->sync(ctx, false);
     if(ret < 0)
         return block;
 
-    ret = dev->driver->data(&(streams[id].ctx), &block.data);
+    ret = dev->driver->data(ctx, &block.data);
     if(ret < 0)
     {
         block.data = NULL;
@@ -207,11 +262,18 @@ dataBlock_t inputStream_getData(streamId id)
 
 stream_sample_t *outputStream_getIdleBuffer(const streamId id)
 {
+    lockStreams();
     if(validateStream(id) == false)
+    {
+        unlockStreams();
         return NULL;
+    }
+    const struct audioDevice *dev = streams[id].dev;
+    struct streamCtx *ctx = &(streams[id].ctx);
+    unlockStreams();
 
     stream_sample_t *buf;
-    int ret = streams[id].dev->driver->data(&(streams[id].ctx), &buf);
+    int ret = dev->driver->data(ctx, &buf);
     if(ret < 0)
         return NULL;
 
@@ -220,10 +282,17 @@ stream_sample_t *outputStream_getIdleBuffer(const streamId id)
 
 bool outputStream_sync(const streamId id, const bool bufChanged)
 {
+    lockStreams();
     if(validateStream(id) == false)
+    {
+        unlockStreams();
         return false;
+    }
+    const struct audioDevice *dev = streams[id].dev;
+    struct streamCtx *ctx = &(streams[id].ctx);
+    unlockStreams();
 
-    int ret = streams[id].dev->driver->sync(&(streams[id].ctx), bufChanged);
+    int ret = dev->driver->sync(ctx, bufChanged);
     if(ret < 0)
         return false;
 

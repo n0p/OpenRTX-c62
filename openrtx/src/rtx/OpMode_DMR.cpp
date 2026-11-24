@@ -14,6 +14,7 @@
 #include "protocols/DMR/DmrSpeech.h"
 #include "protocols/DMR/DmrStatus.h"
 #include "rtx/OpMode_DMR.hpp"
+#include "core/utils.h"
 
 #ifdef CONFIG_DMR_SMS
 #include "core/messaging.h"
@@ -207,6 +208,8 @@ OpMode_DMR::OpMode_DMR()
 #endif
 #ifdef CONFIG_DMR_TX
     , txRunning(false)
+    , txBlocked(false)
+    , txFirstBlock(false)
     , micPath(-1)
     , micId(-1)
     , txPath(-1)
@@ -255,6 +258,7 @@ void OpMode_DMR::enable()
     reset();
     dmrSpeech_start();
     startRx = true;
+    txBlocked = false;
 }
 
 void OpMode_DMR::disable()
@@ -263,6 +267,8 @@ void OpMode_DMR::disable()
 #ifdef CONFIG_DMR_TX
     stopTx();
 #endif
+    /* Leaving the mode ends whatever transmission was open */
+    txg_exit(rtx_getTxGuard(), (uint32_t)getTick(), TXG_REASON_MODE);
     stopSampling();
     dmrSpeech_stop();
     radio_disableRtx();
@@ -349,10 +355,18 @@ bool OpMode_DMR::startBaseband(const rtxStatus_t *status)
 
 bool OpMode_DMR::startTx(const rtxStatus_t *status)
 {
-    if (!dmrVocoder_available())
+    struct txGuard *tx = rtx_getTxGuard();
+
+    txg_enter(tx, (uint32_t)getTick());
+
+    if (!dmrVocoder_available()) {
+        /* No encoder: the chain would send three silent frames per burst */
+        txg_streamsFailed(tx, (uint32_t)getTick());
         return false;
+    }
 
     if (!startBaseband(status)) {
+        txg_streamsFailed(tx, (uint32_t)getTick());
         stopTx();
         return false;
     }
@@ -376,10 +390,15 @@ bool OpMode_DMR::startTx(const rtxStatus_t *status)
     txIsData = false;
     txAcking = false;
     txMsgId = 0;
+    txFirstBlock = false;
     txRunning = true;
+
+    /* Both streams are up: from here the supervisor expects slots */
+    txg_streamsOpen(tx, (uint32_t)getTick());
 
     /* Last: the PA, the ramps of the first slot need it settled */
     radio_enableTx();
+    txg_note(tx, TXG_EV_KEYED, (uint32_t)getTick());
     return true;
 }
 
@@ -400,6 +419,7 @@ void OpMode_DMR::stopTx()
     const bool wasRunning = txRunning;
 
     txRunning = false;
+    txFirstBlock = false;
     dmrTxFsm_init(&fsm);
 #ifdef CONFIG_DMR_SMS
     dmrTxData_init(&dataFsm, 0);
@@ -423,6 +443,68 @@ void OpMode_DMR::stopTx()
     /* radio_disableRtx() clears the PA, the TX LED and the BK4819 TX path */
     if (wasRunning)
         radio_disableRtx();
+
+    /*
+     * Unconditional: stopTx() is the only way out of a transmission, so this is
+     * where every reason to end one lands, including the paths that failed
+     * before the PA was ever keyed.
+     */
+    txg_exit(rtx_getTxGuard(), (uint32_t)getTick(), TXG_REASON_MODE);
+}
+
+/**
+ * Force the end of the call, from the supervisor thread.
+ *
+ * Cancels both streams: the baseband one is what the RTX thread waits on, and
+ * cancelling it is what makes it return. No audio path is released here -- the
+ * RTX thread owns those and does it in stopTx() -- and no attempt is made to
+ * stop the vocoder, which has no thread of its own.
+ */
+void OpMode_DMR::abortTx()
+{
+    txBlocked = true;
+
+    if (txId >= 0)
+        audioStream_terminate(txId);
+    if (micId >= 0)
+        audioStream_terminate(micId);
+}
+
+/**
+ * Hand the rendered slot to the baseband stream and wait for it to be played.
+ *
+ * The blocking sync is what keeps the slot cadence: 1440 samples at 48 kHz are
+ * exactly 30 ms and the stream has two buffers, so the caller cannot get ahead
+ * of the air. The first slot that makes it through is the moment samples are
+ * on the air, and the supervisor's first-block deadline is measured from it.
+ *
+ * @return false if the stream is gone: cancelled by the supervisor, or failed.
+ */
+bool OpMode_DMR::putSlot()
+{
+    struct txGuard *tx = rtx_getTxGuard();
+
+    stream_sample_t *idle = outputStream_getIdleBuffer(txId);
+    if (idle == NULL)
+        return false;
+
+    /* One half of the stream buffer is exactly one slot */
+    memcpy(idle, txSamples, DMR_TX_SLOT_SAMPLES * sizeof(stream_sample_t));
+
+    /*
+     * A failed sync is a slot that slipped, not a stream that died: the guard
+     * counts it as a cadence slip and the call carries on.
+     */
+    outputStream_sync(txId, true);
+
+    if (!txFirstBlock) {
+        txFirstBlock = true;
+        txg_firstBlock(tx, (uint32_t)getTick());
+    } else {
+        txg_block(tx, (uint32_t)getTick());
+    }
+
+    return true;
 }
 
 /**
@@ -472,13 +554,9 @@ bool OpMode_DMR::txSlot(const rtxStatus_t *status)
     dmrTx_slot(&tx, step.kind, (const uint8_t (*)[DMR_AMBE_BYTES])frames,
                txSamples);
 
-    stream_sample_t *idle = outputStream_getIdleBuffer(txId);
-
-    if (idle != NULL) {
-        /* One half of the stream buffer is exactly one slot */
-        memcpy(idle, txSamples, DMR_TX_SLOT_SAMPLES * sizeof(stream_sample_t));
-        outputStream_sync(txId, true);
-    }
+    /* A stream that is gone ends the call: nothing more can go on the air */
+    if (!putSlot())
+        return true;
 
     return step.finished;
 }
@@ -494,6 +572,8 @@ bool OpMode_DMR::txSlot(const rtxStatus_t *status)
 bool OpMode_DMR::needDataTx(const rtxStatus_t *status) const
 {
     if (status->txDisable != 0)
+        return false;
+    if (txBlocked)
         return false;
     if (platform_getPttStatus())
         return false;
@@ -642,6 +722,10 @@ bool OpMode_DMR::dataTxSlot(int16_t *out)
 
 void OpMode_DMR::update(rtxStatus_t *const rtx, const bool newCfg)
 {
+    /* An aborted call does not key again until the operator lets go of the PTT */
+    if (platform_getPttStatus() == false)
+        txBlocked = false;
+
     switch (rtx->opStatus) {
         case OFF:
 #ifdef CONFIG_DMR_TX
@@ -663,18 +747,19 @@ void OpMode_DMR::update(rtxStatus_t *const rtx, const bool newCfg)
              * microphone, its own stage machine.
              */
             bool finished;
+            struct txGuard *guard = rtx_getTxGuard();
+
+            /*
+             * The over is over when the operator says so: from here the tail
+             * (terminator, tail slot, DSP drain) has a deadline of its own, and
+             * the safety exit of the stage machine bounds it too.
+             */
+            if (platform_getPttStatus() == false)
+                txg_finishing(guard, (uint32_t)getTick());
 
 #ifdef CONFIG_DMR_SMS
             if (txIsData) {
-                finished = dataTxSlot(txSamples);
-
-                stream_sample_t *idle = outputStream_getIdleBuffer(txId);
-
-                if (idle != NULL) {
-                    memcpy(idle, txSamples,
-                           DMR_TX_SLOT_SAMPLES * sizeof(stream_sample_t));
-                    outputStream_sync(txId, true);
-                }
+                finished = dataTxSlot(txSamples) || !putSlot();
             } else
 #endif
                 finished = txSlot(rtx);
@@ -734,7 +819,7 @@ void OpMode_DMR::update(rtxStatus_t *const rtx, const bool newCfg)
      * AMBE+2 encoder linked in.  The receiver has to be stopped first: the
      * BK4819 is half duplex and both use the same audio path.
      */
-    if (platform_getPttStatus() && (rtx->txDisable == 0)) {
+    if (platform_getPttStatus() && (rtx->txDisable == 0) && (txBlocked == false)) {
         /*
          * Key the transmitter even if a station is being received: with PTT
          * pressed the operator wants to talk, and the receiver is stopped

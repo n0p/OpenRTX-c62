@@ -126,6 +126,41 @@ int32_t c62_getRxOffset(void);
  */
 void c62_setKeyBacklight(bool on);
 
+/**
+ * Arm the application watchdog.
+ *
+ * The AP watchdog resets the SoC when it is not refreshed for the window. It is
+ * the last line of defence of the transmit supervisor: a thread stuck in a way
+ * that cannot be unwound -- inside a DSP call, inside a driver -- cannot be
+ * unkeyed from software any more, and the only remaining safe state is a reset,
+ * which leaves the PA enable lines low because they come up as inputs.
+ *
+ * Call it once, after the GPIOs that drive the PA have been configured, and feed
+ * it from a thread that has to be alive for the radio to be usable (the main
+ * thread).
+ *
+ * @param windowMs: reset window, in milliseconds. The hardware quantises it to
+ *                  the next value of its table, about 0.5 s, 1 s or 4 s.
+ * @return zero on success, a negative error code if there is no watchdog.
+ */
+int platform_wdtStart(uint32_t windowMs);
+
+/**
+ * Refresh the watchdog. Call it at least twice per window.
+ */
+void platform_wdtFeed(void);
+
+/**
+ * Force the PTT state, for automated tests over the programming cable.
+ *
+ * Only exists in C62_REMOTE builds, where the PTT pad carries the remote's
+ * UART and there is no button to press. With an override set, this is what
+ * platform_getPttStatus() returns; clearing it (-1) returns the pad.
+ *
+ * @param state: -1 to use the pad, 0 for released, 1 for pressed.
+ */
+void platform_pttOverride(int state);
+
 extern const struct BK1080 c62_bk1080;
 
 extern const struct gpio_dt_spec speaker_enable;

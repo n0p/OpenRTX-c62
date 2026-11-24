@@ -158,6 +158,20 @@ void *main_thread(void *arg)
         // Run state update task
         state_task();
 
+        /*
+         * Supervise the transmitter: unkey a PA whose owning thread is stuck in
+         * a stream or in the DSP. It runs here, and not in the RTX thread, for
+         * the same reason a watchdog does not live in the task it watches.
+         */
+        rtx_supervise();
+
+        #if defined(PLATFORM_C62)
+        /* The watchdog is refreshed by this thread and nobody else: if the main
+         * thread stops running, the radio is not usable and a reset is the safe
+         * state (the PA enable lines are off until a transmission keys them). */
+        platform_wdtFeed();
+        #endif
+
         // Run this loop once every 5ms
         time += 5;
         sleepUntil(time);

@@ -77,6 +77,14 @@ public:
     void stop();
 
     /**
+     * Cancel the baseband stream from another thread, without touching the
+     * audio path or the buffer: the RTX thread still owns those and releases
+     * them as it leaves transmit. This is what wakes a thread blocked in
+     * outputStream_sync() when the sink has stopped consuming.
+     */
+    void abort();
+
+    /**
      * Invert baseband signal phase before output.
      *
      * @param status: if set to true signal phase is inverted.

@@ -86,6 +86,9 @@ void OpMode_FM::disable()
     platform_ledOff(RED);
     audioPath_release(rxAudioPath);
     audioPath_release(txAudioPath);
+
+    /* Leaving the mode ends whatever transmission was open */
+    txg_exit(rtx_getTxGuard(), (uint32_t)getTick(), TXG_REASON_MODE);
     radio_disableRtx();
     rfSqlOpen = false;
     sqlOpen   = false;
@@ -191,6 +194,17 @@ void OpMode_FM::update(rtxStatus_t *const status, const bool newCfg)
         txAudioPath = audioPath_request(SOURCE_MIC, SINK_RTX, PRIO_TX);
         radio_enableTx();
 
+        /*
+         * FM has no stream of its own -- the codec worker moves the microphone
+         * into the transmitter -- so the lifecycle only needs to record that the
+         * PA is up: the absolute cap of the guard is then the only deadline,
+         * and it is what unkeys a radio whose RTX thread is stuck in this mode.
+         */
+        struct txGuard *tx = rtx_getTxGuard();
+        txg_enter(tx, (uint32_t)getTick());
+        txg_streamsOpen(tx, (uint32_t)getTick());
+        txg_firstBlock(tx, (uint32_t)getTick());
+
         status->opStatus = TX;
     }
 
@@ -198,6 +212,8 @@ void OpMode_FM::update(rtxStatus_t *const status, const bool newCfg)
     {
         audioPath_release(txAudioPath);
         radio_disableRtx();
+
+        txg_exit(rtx_getTxGuard(), (uint32_t)getTick(), TXG_REASON_PTT);
 
         status->opStatus = OFF;
         enterRx = true;
