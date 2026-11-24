@@ -25,6 +25,10 @@ Added
 - core: transmit trace (phases, first block, blocks, reason) in the log and over
   the C62 remote control, plus the transmit baseband level and the audio
   worker's age
+- C62: DMR transmit on a repeater (docs/DMR_REPEATER.md): BS_Dwn_Act activation
+  with retries and a policy when nobody answers, downlink frame phase recovery
+  with a ppm drift fit and slot alignment, colour code / timeslot / busy gate,
+  and a calibration pass that measures the audio path through a parrot
 
 v0.4.5 - 2026-09-25
 ===================

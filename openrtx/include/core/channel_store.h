@@ -82,8 +82,11 @@ extern "C" {
 /** Channel flags. */
 enum chstoreFlags
 {
-    CHSTORE_FLAG_RX_ONLY = 0x01, /**< TX disabled on this channel */
-    CHSTORE_FLAG_SIMPLEX = 0x02  /**< TX frequency follows RX */
+    CHSTORE_FLAG_RX_ONLY  = 0x01, /**< TX disabled on this channel */
+    CHSTORE_FLAG_SIMPLEX  = 0x02, /**< TX frequency follows RX */
+    CHSTORE_FLAG_REPEATER = 0x04  /**< The channel is a repeater: wake it, gate
+                                   *   on its colour code and align to its
+                                   *   downlink frame (docs/DMR_REPEATER.md) */
 };
 
 /**

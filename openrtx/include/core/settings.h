@@ -9,6 +9,7 @@
 
 #include "hwconfig.h"
 #include "core/datatypes.h"
+#include "protocols/DMR/DmrRpt.h" /* repeater options and their defaults */
 #include <stdbool.h>
 
 /**
@@ -24,8 +25,11 @@
  *  - 2: DMR destination, own DMR ID and SMS format appended.
  *  - 3: DMR timeslot appended (1 or 2), so the quick menu can move the call
  *       between the two slots of the 60 ms frame.
+ *  - 4: DMR repeater options appended (repeater, timeslot follows, what to do
+ *       when the repeater does not answer) plus the audio path latency the
+ *       transmit alignment needs (value and uncertainty, microseconds).
  */
-#define SETTINGS_VERSION 3
+#define SETTINGS_VERSION 4
 
 typedef enum
 {
@@ -114,6 +118,30 @@ typedef struct
     uint8_t  dmr_dest_type;       // enum dmrDestType
     uint8_t  sms_format;          // enum dmrSmsFormat
     uint8_t  dmr_timeslot;        // 1 or 2: the slot of the 60 ms TDMA frame
+
+    /*
+     * Repeater operation (docs/DMR_REPEATER.md).  A channel that is marked as
+     * a repeater is woken with a BS_Dwn_Act before the call, is gated on its
+     * colour code, and its downlink frame is what the transmitter aligns to.
+     * The three bits are one byte so the record stays simple.
+     */
+    uint8_t  dmr_repeater  : 1,   // 1: the channel is a repeater
+             dmr_ts_follow : 1,   // 1: the timeslot follows the repeater
+             dmr_noanswer  : 2,   // enum dmrRptNoAnswer when it does not answer
+             _dmr_rpt_rsv  : 4;
+
+    /*
+     * Delay of the audio path, microseconds, and how well it is known.
+     *
+     * The transmit alignment has to know how long a baseband sample takes to
+     * reach the air, and that depends on the DSP image the radio runs (the
+     * stock one at 16 kHz is not the LSF one this firmware needs), so it is a
+     * measurement and not a constant.  Spread 0 would mean "exact"; the
+     * default carries the uncertainty of the placeholder so that an
+     * uncalibrated radio says so instead of pretending to be aligned.
+     */
+    int32_t  audio_latency_us;        // hardware path delay, microseconds
+    int16_t  audio_latency_spread_us; // its uncertainty, microseconds
 }
 __attribute__((packed)) settings_t;
 
@@ -165,6 +193,12 @@ static const settings_t default_settings =
     DMR_DEST_GROUP,               // Group call by default
     DMR_SMS_FMT_AUTO,             // The format this firmware always sent
     1,                            // Timeslot 1, the one every network uses
+    0,                            // Not a repeater channel by default
+    0,                            // ... and no opinion on the timeslot
+    DMR_RPT_NOANSWER_FREERUN,     // A repeater that does not answer: try anyway
+    0,                            // reserved
+    DMR_RPT_HW_LATENCY_US_DEFAULT,        // Audio path delay, placeholder
+    DMR_RPT_HW_LATENCY_SPREAD_US_DEFAULT, // ... with its uncertainty
 };
 
 /**

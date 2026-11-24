@@ -45,6 +45,8 @@ extern "C" {
 /** What one decoded burst carries. */
 struct dmrBurst {
     long symbol;        ///< Symbol index of the sync, for traces
+    long slotSample;    ///< 48 kHz sample index of the start of its timeslot,
+                        ///<   the timing reference of the downlink frame
     enum dmrSync sync;  ///< Sync word found
     bool voice;         ///< Voice burst (BS/MS voice sync)
     int syncErrors;     ///< Sign errors in the 24 sync symbols
@@ -60,6 +62,7 @@ struct dmrBurst {
     bool slotTypeValid; ///< Colour code and data type are valid
     uint8_t colourCode; ///< Colour code of the burst
     uint8_t dataType;   ///< Burst data type (data bursts only)
+    uint8_t csbkOp;     ///< CSBK bursts: the CSBKO, 0 if not a control block
     bool crcChecked;    ///< Data burst with a known CRC mask
     bool crcOk;         ///< ... and it passed
     uint8_t frameCount; ///< AMBE+2 frames (voice bursts), 0..3

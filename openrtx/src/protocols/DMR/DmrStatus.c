@@ -40,9 +40,40 @@ void dmrStatus_clear(void)
     pthread_mutex_unlock(&statusMutex);
 }
 
+void dmrStatus_repeater(int8_t state, int16_t ppm, uint8_t quality,
+                        uint16_t shift)
+{
+    pthread_mutex_lock(&statusMutex);
+    status.rptState = state;
+    status.rptPpm = ppm;
+    status.rptQuality = quality;
+    status.rptShift = shift;
+    pthread_mutex_unlock(&statusMutex);
+}
+
+void dmrStatus_repeaterGate(int8_t gate)
+{
+    pthread_mutex_lock(&statusMutex);
+    status.rptGate = gate;
+    pthread_mutex_unlock(&statusMutex);
+}
+
+void dmrStatus_repeaterCal(int valid, int16_t offset, int16_t spread)
+{
+    pthread_mutex_lock(&statusMutex);
+    status.rptCalValid = (int8_t)valid;
+    status.rptCalOffset = offset;
+    status.rptCalSpread = spread;
+    pthread_mutex_unlock(&statusMutex);
+}
+
 void dmrStatus_reset(void)
 {
     pthread_mutex_lock(&statusMutex);
+    status.rptState = 0;
+    status.rptPpm = 0;
+    status.rptQuality = 0;
+    status.rptShift = 0;
     status.sync = false;
     status.voice = false;
     status.colourCode = -1;
@@ -103,6 +134,22 @@ void dmr_getStatus(struct dmrStatus *out)
 
 void dmrStatus_clear(void)
 {
+}
+
+void dmrStatus_repeaterGate(int8_t gate)
+{
+    pthread_mutex_lock(&statusMutex);
+    status.rptGate = gate;
+    pthread_mutex_unlock(&statusMutex);
+}
+
+void dmrStatus_repeaterCal(int valid, int16_t offset, int16_t spread)
+{
+    pthread_mutex_lock(&statusMutex);
+    status.rptCalValid = (int8_t)valid;
+    status.rptCalOffset = offset;
+    status.rptCalSpread = spread;
+    pthread_mutex_unlock(&statusMutex);
 }
 
 void dmrStatus_reset(void)

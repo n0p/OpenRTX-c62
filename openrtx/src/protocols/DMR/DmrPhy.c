@@ -896,6 +896,20 @@ static bool decode_burst(const struct dmrCandidate *c, struct dmrBurst *out,
     out->sync = inverted ? swap_voice_data(c->sync) : c->sync;
     out->voice = dmr_sync_is_voice(out->sync);
 
+    /*
+     * Where the timeslot this burst belongs to starts, in 48 kHz samples of the
+     * receive stream: the timing reference a mobile station derives its
+     * inbound bursts from (TS 102 361-1 clause 4.4.1).  The sync sits 66
+     * symbols after the boundary in the BS layout -- 12 of CACH and 54 of the
+     * first half -- and 60 in the MS one, where a 6 symbol guard takes the
+     * place of the CACH.  The fractional timing of the burst refines the
+     * position to a sample.
+     */
+    const int lead = dmr_sync_is_bs(out->sync) ? 66 : 60;
+
+    out->slotSample = ((long)c->symbol - (long)lead) * 10 + (long)phy.phase
+                    + (long)lroundf(d);
+
     if (inverted) {
         for (int i = 0; i < DMR_BURST_BITS; i++)
             bits[i] ^= 1u;
@@ -984,6 +998,16 @@ static bool decode_burst(const struct dmrCandidate *c, struct dmrBurst *out,
         if (data[i] != 0)
             out->lc[i >> 3] |= (uint8_t)(0x80u >> (i & 7));
     }
+
+    /*
+     * Control signalling blocks carry their opcode in the low six bits of the
+     * first octet (LB and PF take the other two), which is what tells a
+     * BS activation from a channel grant.  It is exposed even when the CRC
+     * fails: the wake machine only needs to know that the outbound channel is
+     * talking again.
+     */
+    if (out->dataType == DMR_DT_CSBK)
+        out->csbkOp = (uint8_t)(out->lc[0] & 0x3F);
 
     /*
      * CRC-16 over the 96-bit block, masked per data type (TS 102 361-1

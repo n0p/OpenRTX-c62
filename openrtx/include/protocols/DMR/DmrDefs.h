@@ -42,6 +42,7 @@ enum dmrAir {
     DMR_HALF_BITS = 108,      ///< Payload bits on either side of the sync
     DMR_PAYLOAD_BITS = 216,   ///< Three 72-bit AMBE+2 frames
     DMR_INFO_BITS = 196,      ///< Two 98-bit halves, BPTC(196,96) input
+    DMR_CSBK_BITS = 96,       ///< CSBK PDU: 80 bits of content + CRC-16
     DMR_AMBE_BITS = 72,       ///< One AMBE+2 voice frame
     DMR_AMBE_BYTES = 9,       ///< Same frame, packed
     DMR_FRAMES_PER_BURST = 3, ///< AMBE+2 frames carried by a voice burst
@@ -103,6 +104,12 @@ extern const uint16_t dmr_golay_basis[8];
 
 /** @return true if the sync word announces a voice burst. */
 bool dmr_sync_is_voice(enum dmrSync sync);
+
+/**
+ * @return true if the sync word is a base station one: an outbound burst, the
+ *         only kind that carries a CACH and therefore a timeslot.
+ */
+bool dmr_sync_is_bs(enum dmrSync sync);
 
 /**
  * Expand a sync word to its 24 symbol values: the field only carries the two

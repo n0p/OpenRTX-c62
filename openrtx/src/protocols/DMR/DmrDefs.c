@@ -60,6 +60,11 @@ bool dmr_sync_is_voice(enum dmrSync sync)
     return (sync == DMR_SYNC_BS_VOICE) || (sync == DMR_SYNC_MS_VOICE);
 }
 
+bool dmr_sync_is_bs(enum dmrSync sync)
+{
+    return (sync == DMR_SYNC_BS_VOICE) || (sync == DMR_SYNC_BS_DATA);
+}
+
 void dmr_sync_symbols(enum dmrSync sync, int8_t out[DMR_SYNC_SYMBOLS])
 {
     uint64_t word;

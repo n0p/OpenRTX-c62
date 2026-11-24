@@ -512,6 +512,7 @@ int chstore_toChannel(uint16_t idx, channel_t *out)
         out->dmr.rxColorCode = ch->dmr_cc;
         out->dmr.txColorCode = ch->dmr_cc;
         out->dmr.dmr_timeslot = (ch->dmr_ts == 0) ? 1 : 2;
+        out->dmr.dmr_repeater = (ch->flags & CHSTORE_FLAG_REPEATER) ? 1 : 0;
         out->dmr.contact_index = 0;
     } else {
         out->fm.rxToneEn = ch->rx_tone_en;
@@ -536,6 +537,7 @@ int chstore_applySettings(uint16_t idx, settings_t *settings)
     settings->dmr_dest_type = ch->dmr_dest_type;
     settings->dmr_dest_id = ch->dmr_dest_id;
     settings->dmr_timeslot = (ch->dmr_ts == 0) ? 1 : 2;
+    settings->dmr_repeater = (ch->flags & CHSTORE_FLAG_REPEATER) ? 1 : 0;
 
     return 0;
 }
@@ -565,6 +567,7 @@ int chstore_applyRtx(uint16_t idx, rtxStatus_t *rtx)
         rtx->dmrTimeslot = (ch->dmr_ts == 0) ? 1 : 2;
         rtx->dmrDestType = ch->dmr_dest_type;
         rtx->dmrDestId = ch->dmr_dest_id;
+        rtx->dmrRepeater = (ch->flags & CHSTORE_FLAG_REPEATER) ? 1 : 0;
     }
 
     return 0;
@@ -595,6 +598,9 @@ void chstore_fromChannel(const channel_t *in, chstore_channel_t *out)
 
     if (in->rx_frequency == in->tx_frequency)
         out->flags |= CHSTORE_FLAG_SIMPLEX;
+
+    if (in->dmr.dmr_repeater)
+        out->flags |= CHSTORE_FLAG_REPEATER;
 }
 
 const char *chstore_modeName(uint8_t mode)

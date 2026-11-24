@@ -21,6 +21,8 @@
 #endif
 
 #ifdef CONFIG_DMR_TX
+#include "core/audio_latency.h"
+#include "protocols/DMR/DmrRpt.h"
 #include "protocols/DMR/DmrTx.h"
 #include "protocols/DMR/DmrVocoder.h"
 #endif
@@ -65,6 +67,16 @@ void OpMode_DMR::burstTrampoline(const struct dmrBurst *burst, void *user)
 void OpMode_DMR::onBurst(const struct dmrBurst *burst)
 {
     dmrStatus_burst(burst);
+
+#ifdef CONFIG_DMR_TX
+    /*
+     * Repeater bookkeeping, before anything is handed to the decoder: the
+     * colour code and the timeslot of the last outbound burst feed the gate,
+     * the position of its timeslot feeds the frame phase, and a burst while
+     * the activation machine is listening is the answer it was waiting for.
+     */
+    rptObserve(burst);
+#endif
 
     if (burst->voice) {
         if (burst->frameCount > 0)
@@ -239,6 +251,15 @@ OpMode_DMR::OpMode_DMR()
     dmrTxData_init(&dataFsm, 0);
 #endif
     dmrTxFsm_init(&fsm);
+
+    dmrRpt_phaseReset(&rptPhase);
+    memset(&rptPlan, 0, sizeof(rptPlan));
+    memset(&rptWake, 0, sizeof(rptWake));
+    memset(&rptSeen, 0, sizeof(rptSeen));
+    rptSeen.colourCode = DMR_RPT_CC_UNKNOWN;
+    memset(&rptCal, 0, sizeof(rptCal));
+    rptGate = DMR_RPT_GATE_OK;
+    rptState = 0;
 #endif
 }
 
@@ -362,6 +383,570 @@ bool OpMode_DMR::startBaseband(const rtxStatus_t *status)
     return (txId >= 0);
 }
 
+/* ---------------------------------------------------------------- repeater --- */
+
+/*
+ * Repeater operation, the four pieces of it that need the radio:
+ *
+ *   rptObserve()      what the outbound bursts say (colour code, timeslot,
+ *                     frame phase, echo)
+ *   rptAccessStep()   the wake machine: gate, BS_Dwn_Act, listen, decide
+ *   rptCallTiming()   the plan: which slot parity and which sub-slot delay
+ *   putSlot()         the delay line that turns the plan into the stream
+ *
+ * Everything that decides is in DmrRpt.c and host-tested; this is the glue,
+ * and it is written so that every exit leaves the radio receiving.
+ */
+
+/**
+ * The audio calibration does not have buffers of its own: it runs from
+ * receive, with the receiver stopped and the PA cold, so it borrows the two
+ * arrays the mode already has.  480 samples are 10 ms at 48 kHz and exactly one
+ * marker; the capture is 50 ms, which holds the stream latency (30 ms), the
+ * hardware one and a few milliseconds of acoustic path with room to spare.
+ */
+#define CAL_BLOCK_SAMPLES DMR_LAT_MARKER_SAMPLES
+#define CAL_CAPTURE_SAMPLES 2400
+
+/** Repeater states, for the UI and the traces. */
+enum rptUiState {
+    RPT_UI_IDLE = 0,   ///< Nothing going on
+    RPT_UI_WAKING,     ///< BS_Dwn_Act sent, waiting for the outbound
+    RPT_UI_ALIGNED,    ///< Call on the repeater's grid
+    RPT_UI_FREE,       ///< Call without alignment
+    RPT_UI_REFUSED,    ///< Colour code, timeslot or no answer: no call
+    RPT_UI_UNFIT,      ///< The latency is not known well enough to align
+    RPT_UI_CAL,        ///< Calibration pass running
+    RPT_UI_CAL_DONE,   ///< ... and it found a value
+    RPT_UI_CAL_FAIL    ///< ... and it did not
+};
+
+/** Samples of delay between the baseband stream and the air. */
+static int32_t rptLatencySamples(const rtxStatus_t *status)
+{
+    int32_t us = status->audioLatencyUs;
+
+    if (us < 0)
+        us = 0;
+
+    return DMR_RPT_STREAM_LATENCY + DMR_RPT_US_TO_SAMPLES(us);
+}
+
+uint8_t OpMode_DMR::rptTimeslot(const rtxStatus_t *status) const
+{
+    /* A channel that follows the repeater takes the slot it last heard */
+    if (status->dmrTsFollow && (rptSeen.timeslot != 0))
+        return rptSeen.timeslot;
+
+    return (status->dmrTimeslot == 2) ? 2 : 1;
+}
+
+void OpMode_DMR::rptSetState(uint8_t state)
+{
+    rptState = state;
+    dmrStatus_repeater((int8_t)state, rptPhase.ppm, rptPhase.quality,
+                       rptAligned ? rptShift : 0);
+}
+
+/** Publish the gate verdict, which the quick menu and the remote show. */
+void OpMode_DMR::rptSetGate(int8_t gate)
+{
+    rptGate = gate;
+    dmrStatus_repeaterGate(gate);
+}
+
+int16_t *OpMode_DMR::rptRenderTarget(void)
+{
+    return txSamples + (rptRenderHigh ? DMR_TX_SLOT_SAMPLES : 0);
+}
+
+/**
+ * Hand one rendered slot to the baseband stream without touching the transmit
+ * guard: the activation burst and the calibration bursts are short, bounded
+ * and driven by a state machine of their own.
+ */
+bool OpMode_DMR::pushSlot(const int16_t *slot)
+{
+    stream_sample_t *idle = outputStream_getIdleBuffer(txId);
+
+    if ((idle == NULL) || (slot == NULL))
+        return false;
+
+    memcpy(idle, slot, DMR_TX_SLOT_SAMPLES * sizeof(stream_sample_t));
+    outputStream_sync(txId, true);
+
+    return true;
+}
+
+void OpMode_DMR::rptObserve(const struct dmrBurst *burst)
+{
+    if (burst->slotTypeValid) {
+        rptSeen.colourCode = burst->colourCode;
+
+        if (burst->cachValid) {
+            rptSeen.timeslot = burst->timeslot2 ? 2 : 1;
+            rptSeen.busy = burst->accessType != 0;
+        }
+    }
+
+    const uint32_t now = (uint32_t)getTick();
+
+    /*
+     * The frame phase comes from outbound bursts only: the CACH of a base
+     * station tells which of the two slots the burst sits in, and a coasted
+     * burst has no independent timing of its own (it was decoded on the grid,
+     * so feeding it back would just confirm the grid).
+     */
+    if (rptTracking && dmr_sync_is_bs(burst->sync) && burst->cachValid
+        && (!burst->coasted) && burst->slotTypeValid) {
+        const int32_t ts1 = (int32_t)burst->slotSample
+                          - (burst->timeslot2 ? DMR_RPT_SLOT_SAMPLES : 0);
+
+        dmrRpt_phaseFeed(&rptPhase, ts1, now);
+    }
+
+    /* The activation machine listens for the outbound channel to come up */
+    if (dmrRptWake_active(&rptWake) && dmr_sync_is_bs(burst->sync)
+        && burst->slotTypeValid)
+        dmrRptWake_answer(&rptWake);
+
+    /* The calibration pass listens for its own echo */
+    if (dmrRptCal_active(&rptCal) && dmr_sync_is_bs(burst->sync)
+        && burst->slotTypeValid)
+        dmrRptCal_heard(&rptCal, (uint32_t)burst->slotSample,
+                        burst->crcChecked && burst->crcOk);
+}
+
+/**
+ * Transmit the BS_Dwn_Act burst: a slot of PA settle, the CSBK in the slot of
+ * the mode, a slot of tail.  Leaves the radio receiving.
+ */
+bool OpMode_DMR::rptTransmitWake(const rtxStatus_t *status)
+{
+    uint8_t info[DMR_CSBK_BITS];
+    const uint8_t ts = rptTimeslot(status);
+    const int at = (ts == 2) ? 1 : 0;
+
+    stopSampling();
+    radio_disableRtx();
+
+    if (!startBaseband(status)) {
+        stopTx();
+        startRx = true;
+        return false;
+    }
+
+    dmrRpt_csbkDownlinkActivity(info, DMR_RPT_ADDR_ANY, status->dmrSourceId);
+
+    rptRenderHigh = false;
+    rptShift = 0;
+
+    for (int i = 0; i < 4; i++) {
+        int16_t *out = rptRenderTarget();
+
+        if (i == at)
+            dmrTx_dataSlot(&tx, (uint8_t)DMR_DT_CSBK, info, out);
+        else
+            dmrTx_slot(&tx, DMR_TXB_EMPTY, NULL, out);
+        pushSlot(out);
+    }
+
+    stopTx();        /* unkey, release the paths, back to half duplex */
+    startRx = true;  /* the caller's common path reopens the receiver */
+    dmrRptWake_sent(&rptWake, (uint32_t)getTick());
+    rptSetState(RPT_UI_WAKING);
+
+    return true;
+}
+
+/**
+ * One pass of the repeater access: the gate, then the wake machine, then the
+ * call.  Called once per receive block while the PTT is down on a repeater
+ * channel.
+ *
+ * @return true when the radio has been taken (transmitting or refused), false
+ *         to let the caller keep receiving.
+ */
+bool OpMode_DMR::rptAccessStep(rtxStatus_t *rtx)
+{
+    const uint32_t now = (uint32_t)getTick();
+
+    struct dmrRptChannel ch;
+
+    ch.colourCode = rtx->dmrColourCode;
+    ch.timeslot = rtx->dmrTsFollow ? 0 : rtx->dmrTimeslot;
+    ch.polite = true;
+
+    if (!rptAccess) {
+        /*
+         * First pass with the PTT down.  The gate comes first: a repeater that
+         * speaks another colour code is not ours, and keying at it is
+         * interference whatever the rest of the plan says.
+         */
+        rptAccess = true;
+        rptSetGate((int8_t)dmrRpt_gate(&ch, &rptSeen));
+
+        if (rptGate != DMR_RPT_GATE_OK) {
+            rptSetState(RPT_UI_REFUSED);
+            txBlocked = true; /* not before the PTT is released */
+            return true;
+        }
+
+        /*
+         * A repeater that is already transmitting, with our colour code, and
+         * that the receiver is locked to does not need to be woken
+         * (TS 102 361-1 clause 5.2.1.3).
+         */
+        if (dmrPhy_synced() && (rptSeen.colourCode == rtx->dmrColourCode))
+            dmrRptWake_skip(&rptWake);
+        else
+            dmrRptWake_start(&rptWake, DMR_RPT_WAKE_RETRIES, now);
+    }
+
+    switch (dmrRptWake_next(&rptWake, now, (enum dmrRptNoAnswer)rtx->dmrNoAnswer)) {
+        case DMR_RPT_WAKE_SEND:
+            rptTransmitWake(rtx);
+            return false;
+
+        case DMR_RPT_WAKE_CALL:
+        case DMR_RPT_WAKE_FREERUN: {
+            /* The answer may come from another colour code: gate again */
+            rptSetGate((int8_t)dmrRpt_gate(&ch, &rptSeen));
+
+            if (rptGate != DMR_RPT_GATE_OK) {
+                rptSetState(RPT_UI_REFUSED);
+                txBlocked = true;
+                rptAccess = false;
+                return true;
+            }
+
+            stopSampling();
+            radio_disableRtx();
+
+            if (startTx(rtx)) {
+                rtx->opStatus = TX;
+                return true;
+            }
+
+            startRx = true;
+            rptAccess = false;
+            return true;
+        }
+
+        case DMR_RPT_WAKE_ABORT:
+            rptSetState(RPT_UI_REFUSED);
+            txBlocked = true;
+            rptAccess = false;
+            return true;
+
+        default:
+            return false; /* still listening */
+    }
+}
+
+/**
+ * Fill the plan of a call and configure the stage machine with it.
+ *
+ * The plan is what turns "the repeater's TS1 is at sample p" into "start the
+ * burst in the first (or second) slot rendered, delayed by n samples".
+ */
+void OpMode_DMR::rptCallTiming(const rtxStatus_t *status, uint8_t timeslot)
+{
+    memset(&rptPlan, 0, sizeof(rptPlan));
+    rptPlan.burstFirst = (timeslot == 2) ? 2 : 1;
+    rptPlan.leadPairs = (DMR_RPT_LEAD_SLOTS + 1) / 2;
+
+    rptAligned = false;
+
+    if (status->dmrRepeater) {
+        const int32_t spread = DMR_RPT_US_TO_SAMPLES(
+                                   status->audioLatencySpreadUs);
+        int32_t margin = 0;
+
+        /*
+         * Refuse to pretend: if the latency is not known well enough for the
+         * drift of the transmission, the burst would land outside the slot and
+         * the call would fail on the air for a reason nobody can see.
+         */
+        if (!dmrRpt_fits(spread, 60000, rptPhase.ppm, &margin)) {
+            rptSetState(RPT_UI_UNFIT);
+        } else {
+            dmrRpt_plan(&rptPhase, timeslot, (uint32_t)getTick(),
+                        rptLatencySamples(status), DMR_RPT_LEAD_SLOTS,
+                        &rptPlan);
+            rptAligned = rptPlan.aligned;
+        }
+    }
+
+    rptShiftBase = rptPlan.aligned ? (uint8_t)rptPlan.shift : 0;
+    rptShift = rptShiftBase;
+    rptPreSlots = (uint8_t)(rptPlan.leadPairs * 2);
+    rptRenderHigh = false;
+    rptCallTick = (uint32_t)getTick();
+
+    /* The previous "slot" the delay line would read is silence, not garbage */
+    memset(txSamples + DMR_TX_SLOT_SAMPLES, 0,
+           DMR_TX_SLOT_SAMPLES * sizeof(stream_sample_t));
+
+    if (!status->dmrRepeater)
+        rptSetState(RPT_UI_IDLE);
+    else if (rptAligned)
+        rptSetState(RPT_UI_ALIGNED);
+    else if (rptState != RPT_UI_UNFIT)
+        rptSetState(RPT_UI_FREE);
+}
+
+/**
+ * Track the drift during the call: the delay moves one sample at a time
+ * towards what the fitted ppm asks for.
+ */
+void OpMode_DMR::rptDriftSlew(void)
+{
+    if (!rptAligned)
+        return;
+
+    const int32_t elapsed = (int32_t)((uint32_t)getTick() - rptCallTick);
+    int32_t target = rptShiftBase
+                   - (int32_t)(((int64_t)rptPhase.ppm * elapsed
+                                * DMR_RPT_SAMPLES_PER_MS) / 1000000);
+
+    if (target < 0)
+        target += DMR_RPT_SLOT_SAMPLES;
+    if (target > DMR_RPT_SLOT_SAMPLES - 1)
+        target = DMR_RPT_SLOT_SAMPLES - 1;
+
+    rptShift = (uint8_t)dmrRpt_txShiftStep(rptShift, target, 1);
+    dmrStatus_repeater((int8_t)rptState, rptPhase.ppm, rptPhase.quality, rptShift);
+}
+
+/**
+ * Transmit the synthetic call of one calibration attempt: the voice LC header
+ * and two bursts of digital silence, at the offset of this attempt.  Nothing
+ * of it comes from the microphone, so two attempts are the same on the air.
+ */
+bool OpMode_DMR::rptTransmitCal(const rtxStatus_t *status)
+{
+    static const uint8_t silence[DMR_FRAMES_PER_BURST][DMR_AMBE_BYTES] = { { 0 } };
+    const uint8_t ts = rptTimeslot(status);
+
+    stopSampling();
+    radio_disableRtx();
+
+    if (!startBaseband(status)) {
+        stopTx();
+        startRx = true;
+        return false;
+    }
+
+    rptCallTiming(status, ts);
+
+    /* the attempt's offset is an extra delay, folded into the plan's shift */
+    rptShift = (uint8_t)((rptShiftBase + dmrRptCal_offset(&rptCal)
+                          + DMR_RPT_SLOT_SAMPLES) % DMR_RPT_SLOT_SAMPLES);
+    rptShiftBase = rptShift;
+    rptAligned = true;
+
+    for (int i = 0; i < DMR_RPT_CAL_SLOTS; i++) {
+        int16_t *out = rptRenderTarget();
+
+        if (i == ((ts == 2) ? 1 : 0))
+            dmrTx_slot(&tx, DMR_TXB_VOICE_LC, silence, out);
+        else if (i > ((ts == 2) ? 1 : 0))
+            dmrTx_slot(&tx, DMR_TXB_VOICE, silence, out);
+        else
+            dmrTx_slot(&tx, DMR_TXB_EMPTY, NULL, out);
+        pushSlot(out);
+    }
+
+    stopTx();
+    startRx = true;
+
+    /*
+     * Where the echo should appear: the repeater's own grid for the slot we
+     * use.  A parrot re-times to it, so the delay comes out near zero; a
+     * repeater that relays with a fixed turnaround shows the alignment error
+     * plus that turnaround, which is what the trace reports.
+     */
+    const uint32_t now = (uint32_t)getTick();
+    int32_t grid = dmrRpt_phaseAt(&rptPhase, now);
+    uint32_t expected = 0;
+
+    /*
+     * Both sides of the comparison are reduced to one 60 ms frame -- the grid
+     * comes out of the tracker modulo the frame and the machine reduces the
+     * difference again -- so the delay the pass reports is the sub-slot
+     * residual of the echo against the repeater's own timing.
+     */
+    if (grid >= 0)
+        expected = (uint32_t)grid
+                 + ((ts == 2) ? DMR_RPT_SLOT_SAMPLES : 0);
+
+    dmrRptCal_sent(&rptCal, now, expected);
+    rptSetState(RPT_UI_CAL);
+
+    return true;
+}
+
+/** Apply the result of a finished calibration pass (or keep what there was). */
+void OpMode_DMR::rptCalFinish(rtxStatus_t *rtx)
+{
+    struct dmrRptCalResult res;
+
+    rtx->rptCalRequest = 0;
+
+    if (!dmrRptCal_result(&rptCal, &res) || (!res.store)) {
+        if (dmrRptCal_result(&rptCal, &res))
+            dmrStatus_repeaterCal((int)res.valid, res.offset, res.spread);
+        rptSetState(RPT_UI_CAL_FAIL);
+        return;
+    }
+
+    /*
+     * The winning offset is a delay, so it adds to the latency the plan
+     * assumed.  One persistent number, in microseconds, exactly the one the
+     * laboratory measurement writes.
+     */
+    const int32_t us = DMR_RPT_SAMPLES_TO_US(res.offset);
+    int32_t latency = rtx->audioLatencyUs + us;
+
+    if (latency < 0)
+        latency = 0;
+
+    rtx->audioLatencyUs = latency;
+    rtx->audioLatencySpreadUs = (int16_t)DMR_RPT_SAMPLES_TO_US(res.spread + 1);
+
+    pthread_mutex_lock(&state_mutex);
+    state.settings.audio_latency_us = rtx->audioLatencyUs;
+    state.settings.audio_latency_spread_us = rtx->audioLatencySpreadUs;
+    pthread_mutex_unlock(&state_mutex);
+
+    dmrStatus_repeaterCal((int)res.valid, res.offset, res.spread);
+    rptSetState(RPT_UI_CAL_DONE);
+}
+
+/** One step of the calibration pass; @return true if it took the radio. */
+bool OpMode_DMR::rptCalStep(rtxStatus_t *rtx)
+{
+    switch (dmrRptCal_next(&rptCal, (uint32_t)getTick())) {
+        case DMR_RPT_CAL_SEND:
+            rptTransmitCal(rtx);
+            return false;
+
+        case DMR_RPT_CAL_FINISH:
+            rptCalFinish(rtx);
+            return false;
+
+        case DMR_RPT_CAL_ABORT:
+            rtx->rptCalRequest = 0;
+            rptSetState(RPT_UI_CAL_FAIL);
+            return false;
+
+        default:
+            return false;
+    }
+}
+
+/**
+ * Measure the audio path delay of this radio: play the chirp into the
+ * loudspeaker and capture it with the microphone.  Needs a cable between the
+ * two (or a quiet room with the radio on a table), which is what the menu
+ * asks for.
+ *
+ * No buffer of its own: the transmit and receive baseband arrays are idle here
+ * (receiver stopped, PA cold), and lending them keeps a 10 KiB measurement from
+ * costing 10 KiB of .bss for the whole life of the radio.
+ */
+bool OpMode_DMR::audioCalibrate(rtxStatus_t *rtx)
+{
+    int16_t *out = txSamples;                       /* 2 * 480 samples */
+    int16_t *in = txSamples + 2 * CAL_BLOCK_SAMPLES;
+    int16_t *capture = baseband;                    /* 2400 of 2880 */
+
+    rtx->audioCalRequest = 0;
+
+    audioLatency_marker(out, 48000);
+    memset(out + DMR_LAT_MARKER_SAMPLES, 0,
+           CAL_BLOCK_SAMPLES * sizeof(int16_t));
+
+    stopSampling();
+    radio_disableRtx();
+
+    pathId spkPath = audioPath_request(SOURCE_MCU, SINK_SPK, PRIO_TX);
+    if (spkPath < 0) {
+        startRx = true;
+        return false;
+    }
+
+    streamId spk = audioStream_start(spkPath, (stream_sample_t *)out,
+                                     2 * CAL_BLOCK_SAMPLES, 48000,
+                                     STREAM_OUTPUT | BUF_CIRC_DOUBLE);
+    pathId micPath = audioPath_request(SOURCE_MIC, SINK_MCU, PRIO_RX);
+    streamId mic = (micPath < 0) ? -1
+                                 : audioStream_start(micPath,
+                                                     (stream_sample_t *)in,
+                                                     2 * CAL_BLOCK_SAMPLES,
+                                                     48000,
+                                                     STREAM_INPUT
+                                                     | BUF_CIRC_DOUBLE);
+
+    bool done = false;
+
+    if ((spk >= 0) && (mic >= 0)) {
+        size_t got = 0;
+
+        /* one block of marker out, everything the microphone gives back in */
+        stream_sample_t *idle = outputStream_getIdleBuffer(spk);
+        if (idle != NULL) {
+            memcpy(idle, out, CAL_BLOCK_SAMPLES * sizeof(stream_sample_t));
+            outputStream_sync(spk, true);
+        }
+
+        for (int i = 0; (i < 40) && (got < CAL_CAPTURE_SAMPLES); i++) {
+            dataBlock_t block = inputStream_getData(mic);
+
+            if ((block.data == NULL) || (block.len == 0))
+                continue;
+
+            size_t n = block.len;
+
+            if (n > CAL_CAPTURE_SAMPLES - got)
+                n = CAL_CAPTURE_SAMPLES - got;
+            memcpy(capture + got, block.data, n * sizeof(int16_t));
+            got += n;
+        }
+
+        int32_t us = 0;
+        int32_t spread = 0;
+
+        if ((got >= CAL_CAPTURE_SAMPLES)
+            && audioLatency_measure(capture, CAL_CAPTURE_SAMPLES, 0, 48000,
+                                   &us, &spread)) {
+            rtx->audioLatencyUs = us;
+            rtx->audioLatencySpreadUs = (int16_t)spread;
+
+            pthread_mutex_lock(&state_mutex);
+            state.settings.audio_latency_us = us;
+            state.settings.audio_latency_spread_us = (int16_t)spread;
+            pthread_mutex_unlock(&state_mutex);
+
+            done = true;
+        }
+    }
+
+    if (spk >= 0)
+        audioStream_stop(spk);
+    if (mic >= 0)
+        audioStream_terminate(mic);
+    audioPath_release(spkPath);
+    if (micPath >= 0)
+        audioPath_release(micPath);
+
+    startRx = true;
+    rptSetState(done ? RPT_UI_CAL_DONE : RPT_UI_CAL_FAIL);
+
+    return done;
+}
+
 bool OpMode_DMR::startTx(const rtxStatus_t *status)
 {
     struct txGuard *tx = rtx_getTxGuard();
@@ -407,11 +992,16 @@ bool OpMode_DMR::startTx(const rtxStatus_t *status)
     frameHead = 0;
     frameCount = 0;
     /*
-     * The call is announced and carried in the timeslot the operator chose:
-     * on slot 2 the first 30 ms of the frame are silence, so the header and
-     * the end of the call also start one slot later.
+     * Where the call starts: on a plain channel, the timeslot the operator
+     * chose, counted from the moment the PA is keyed.  On a repeater channel,
+     * the plan of DmrRpt.h decides instead -- which slot parity puts the burst
+     * on the repeater's grid and by how many samples the baseband has to be
+     * delayed to land inside it -- and the stage machine starts from that.
      */
-    dmrTxFsm_initSlot(&fsm, status->dmrTimeslot);
+    const uint8_t ts = rptTimeslot(status);
+
+    rptCallTiming(status, ts);
+    dmrTxFsm_initSlot(&fsm, rptPlan.burstFirst);
     txIsData = false;
     txAcking = false;
     txMsgId = 0;
@@ -495,8 +1085,22 @@ bool OpMode_DMR::putSlot()
     if (idle == NULL)
         return false;
 
-    /* One half of the stream buffer is exactly one slot */
-    memcpy(idle, txSamples, DMR_TX_SLOT_SAMPLES * sizeof(stream_sample_t));
+    /*
+     * One half of the stream buffer is exactly one slot.  The two halves of
+     * txSamples alternate as the rendering target, so the half that is not
+     * being rendered holds the slot before this one: that is what the sample
+     * delay of the repeater alignment is built from (DmrRpt.h).  A delay of
+     * zero is a plain copy, which is what every non repeater call does.
+     */
+    const int16_t *cur = txSamples + (rptRenderHigh ? DMR_TX_SLOT_SAMPLES : 0);
+    const int16_t *prev = txSamples + (rptRenderHigh ? 0 : DMR_TX_SLOT_SAMPLES);
+
+    if (rptShift == 0)
+        memcpy(idle, cur, DMR_TX_SLOT_SAMPLES * sizeof(stream_sample_t));
+    else
+        dmrRpt_txShift(prev, cur, rptShift, idle, DMR_TX_SLOT_SAMPLES);
+
+    rptRenderHigh = !rptRenderHigh;
 
     /*
      * A failed sync is a slot that slipped, not a stream that died: the guard
@@ -526,6 +1130,24 @@ bool OpMode_DMR::txSlot(const rtxStatus_t *status)
     struct dmrTxStep step;
 
     (void)status;
+
+    /*
+     * Slots of lead the alignment asked for: silence on the slot clock, which
+     * is what lets the PA settle and still keeps the parity of the frame the
+     * plan counted on.  They come before the vocoder is read, so a call that
+     * spends them does not eat the first frames of speech.
+     */
+    if (rptPreSlots > 0) {
+        int16_t *out = rptRenderTarget();
+
+        dmrTx_slot(&tx, DMR_TXB_EMPTY, NULL, out);
+        rptPreSlots--;
+        if (!putSlot())
+            return true;
+        return false;
+    }
+
+    rptDriftSlew();
 
     /*
      * Keep the queue topped up: the microphone delivers a block every 20 ms and
@@ -559,7 +1181,7 @@ bool OpMode_DMR::txSlot(const rtxStatus_t *status)
     if (step.kind == DMR_TXB_VOICE)
         dequeueFrames(frames);
     dmrTx_slot(&tx, step.kind, (const uint8_t (*)[DMR_AMBE_BYTES])frames,
-               txSamples);
+               rptRenderTarget());
 
     /* A stream that is gone ends the call: nothing more can go on the air */
     if (!putSlot())
@@ -676,7 +1298,15 @@ bool OpMode_DMR::startDataTx(const rtxStatus_t *status)
     }
 
     txIsData = true;
-    dmrTxData_initSlot(&dataFsm, blocks, status->dmrTimeslot);
+
+    /*
+     * A message on a repeater channel aligns to the downlink frame with the
+     * same plan as a voice call.  It does not wake the repeater first: a
+     * message goes out when the channel is free and the wake would be a second
+     * transmission with its own timing.  Documented in docs/DMR_REPEATER.md.
+     */
+    rptCallTiming(status, rptTimeslot(status));
+    dmrTxData_initSlot(&dataFsm, blocks, rptPlan.burstFirst);
     txRunning = true;
 
     radio_enableTx();
@@ -691,6 +1321,14 @@ bool OpMode_DMR::startDataTx(const rtxStatus_t *status)
  */
 bool OpMode_DMR::dataTxSlot(int16_t *out)
 {
+    if (rptPreSlots > 0) {
+        rptPreSlots--;
+        dmrTx_slot(&tx, DMR_TXB_EMPTY, NULL, out);
+        return false;
+    }
+
+    rptDriftSlew();
+
     struct dmrTxStep step = dmrTxData_next(&dataFsm);
 
     if (step.kind == DMR_TXB_DATA) {
@@ -797,7 +1435,7 @@ void OpMode_DMR::update(rtxStatus_t *const rtx, const bool newCfg)
 
 #ifdef CONFIG_DMR_SMS
             if (txIsData) {
-                finished = dataTxSlot(txSamples) || !putSlot();
+                finished = dataTxSlot(rptRenderTarget()) || !putSlot();
             } else
 #endif
                 finished = txSlot(rtx);
@@ -843,6 +1481,54 @@ void OpMode_DMR::update(rtxStatus_t *const rtx, const bool newCfg)
             /* The address our answers go out from, whatever the TX options */
             selfId = rtx->dmrSourceId;
 #endif
+#ifdef CONFIG_DMR_TX
+            /* The downlink grid is only worth tracking on a repeater channel */
+            rptTracking = (rtx->dmrRepeater != 0);
+#endif
+#ifdef CONFIG_DMR_TX
+            /*
+             * The measurement and calibration requests come from the menu and
+             * run here, because this thread owns the audio paths and the
+             * transmitter.  They only ever start from receive, never on top of
+             * a call.
+             */
+            if (rtx->audioCalRequest) {
+                audioCalibrate(rtx);
+                return;
+            }
+            if (rtx->rptCalRequest && (!platform_getPttStatus())
+                && (!txRunning)) {
+                if (!dmrRptCal_active(&rptCal))
+                    dmrRptCal_start(&rptCal, (uint32_t)getTick());
+            }
+
+            if (dmrRptCal_active(&rptCal)) {
+                if (platform_getPttStatus() || rtx->txDisable) {
+                    /* The operator wants the radio back: stop transmitting */
+                    dmrRptCal_cancel(&rptCal);
+                }
+                rptCalStep(rtx);
+                break;
+            }
+
+            /*
+             * A repeater channel owns the PTT: the gate, the activation and
+             * the alignment all have to happen before the PA is keyed, and
+             * they need the receiver, so this runs while the mode is still
+             * receiving.
+             */
+            if (platform_getPttStatus() && (rtx->txDisable == 0)
+                && (txBlocked == false) && rtx->dmrRepeater) {
+                if (rptAccessStep(rtx))
+                    return;
+                break;
+            }
+            if (!platform_getPttStatus()) {
+                rptAccess = false;
+                if (rptWake.stage != DMR_RPT_WAKE_IDLE)
+                    rptWake.stage = DMR_RPT_WAKE_IDLE;
+            }
+#endif
             break;
 
         default:
@@ -857,11 +1543,14 @@ void OpMode_DMR::update(rtxStatus_t *const rtx, const bool newCfg)
      * AMBE+2 encoder linked in.  The receiver has to be stopped first: the
      * BK4819 is half duplex and both use the same audio path.
      */
-    if (platform_getPttStatus() && (rtx->txDisable == 0) && (txBlocked == false)) {
+    if (platform_getPttStatus() && (rtx->txDisable == 0)
+        && (txBlocked == false) && (!rtx->dmrRepeater)) {
         /*
          * Key the transmitter even if a station is being received: with PTT
          * pressed the operator wants to talk, and the receiver is stopped
-         * first because the BK4819 is half duplex.
+         * first because the BK4819 is half duplex.  A repeater channel never
+         * gets here: rptAccessStep() owns its PTT, because the gate and the
+         * activation come before the PA.
          */
         stopSampling();
         radio_disableRtx();

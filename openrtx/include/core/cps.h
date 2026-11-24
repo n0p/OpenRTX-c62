@@ -115,7 +115,10 @@ typedef struct
     uint8_t  rxColorCode : 4,      //< Color code for RX squelch opening
              txColorCode : 4;      //< Color code sent during transmission
 
-    uint8_t  dmr_timeslot;         //< DMR timeslot, either 1 or 2
+    uint8_t  dmr_timeslot : 2,     //< DMR timeslot, either 1 or 2
+             dmr_repeater : 1,     //< The channel is a repeater (wake, gate,
+                                   //<   align: docs/DMR_REPEATER.md)
+             _dmr_rsv     : 5;
     uint16_t contact_index;        //< Index to retrieve contact from list
 }
 __attribute__((packed)) dmrInfo_t; // 4B

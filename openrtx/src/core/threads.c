@@ -125,6 +125,37 @@ void *ui_threadFunc(void *arg)
             if (state.channel.mode == OPMODE_DMR)
                 rtx_cfg.dmrColourCode = state.channel.dmr.rxColorCode;
 
+            /*
+             * Repeater operation: whether the channel is one, whether its
+             * timeslot wins over the menu, what to do when it does not
+             * answer, and the audio path delay the alignment is built on.
+             * All of it comes from the settings; a stored channel overrides
+             * the repeater flag and the timeslot through chstore_applyRtx().
+             */
+            rtx_cfg.dmrRepeater = state.settings.dmr_repeater;
+            rtx_cfg.dmrTsFollow = state.settings.dmr_ts_follow;
+            rtx_cfg.dmrNoAnswer = state.settings.dmr_noanswer;
+            /*
+             * The audio path delay is a measurement, so it is clamped to
+             * something a radio could actually have: a record written by
+             * another build, or a corrupted one, must not become a delay of
+             * seconds.  A negative uncertainty is not a measurement either.
+             */
+            int32_t lat = state.settings.audio_latency_us;
+            int32_t spread = state.settings.audio_latency_spread_us;
+
+            if (lat < 0)
+                lat = 0;
+            if (lat > DMR_RPT_HW_LATENCY_US_MAX)
+                lat = DMR_RPT_HW_LATENCY_US_MAX;
+            if (spread < 0)
+                spread = 0;
+            if (spread > DMR_RPT_HW_LATENCY_US_MAX)
+                spread = DMR_RPT_HW_LATENCY_US_MAX;
+
+            rtx_cfg.audioLatencyUs = lat;
+            rtx_cfg.audioLatencySpreadUs = (int16_t)spread;
+
             pthread_mutex_unlock(&rtx_mutex);
 
             rtx_configure(&rtx_cfg);

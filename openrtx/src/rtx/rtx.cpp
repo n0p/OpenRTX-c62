@@ -19,6 +19,7 @@
 #ifdef CONFIG_DMR
 #include "rtx/OpMode_DMR.hpp"
 #endif
+#include "protocols/DMR/DmrRpt.h" /* repeater options and their defaults */
 #ifdef CONFIG_TETRA
 #include "rtx/OpMode_TETRA.hpp"
 #endif
@@ -96,6 +97,13 @@ void rtx_init(pthread_mutex_t *m)
     rtxStatus.dmrSourceId   = 0;   /* set from settings.dmr_id on the first sync */
     rtxStatus.dmrDestId     = 9;   /* matches default_settings */
     rtxStatus.dmrDestType   = DMR_DEST_GROUP;
+    rtxStatus.dmrRepeater   = 0;
+    rtxStatus.dmrTsFollow   = 0;
+    rtxStatus.dmrNoAnswer   = DMR_RPT_NOANSWER_FREERUN;
+    rtxStatus.audioLatencyUs = DMR_RPT_HW_LATENCY_US_DEFAULT;
+    rtxStatus.audioLatencySpreadUs = DMR_RPT_HW_LATENCY_SPREAD_US_DEFAULT;
+    rtxStatus.audioCalRequest = 0;
+    rtxStatus.rptCalRequest = 0;
     currMode = &noMode;
 
     pthread_mutex_lock(&txMutex);

@@ -42,6 +42,16 @@
  *   afc [0|1]            read or set the TETRA frequency correction (a
  *                        setting, saved like one); also shows the stored
  *                        correction
+ *   rpt                  repeater operation: the colour code and timeslot the
+ *                        receiver last saw, the downlink phase (ppm, offset,
+ *                        quality, delay applied), the gate verdict, the audio
+ *                        latency setting and the calibration table
+ *   rcal                 start the parrot calibration pass (five short
+ *                        transmissions).  It needs the PTT free and a repeater
+ *                        that repeats; watch it with rpt
+ *   lcal                 start the audio path measurement (chirp through the
+ *                        loudspeaker, captured with the microphone: a cable
+ *                        between them, or a quiet room)
  */
 
 #include <stdarg.h>
@@ -357,6 +367,39 @@ static void execute(char *cmd)
         long v = strtol(argv[1], NULL, 0);
         platform_pttOverride(v < 0 ? -1 : (v != 0 ? 1 : 0));
         reply("ptt %d", platform_getPttStatus() ? 1 : 0);
+    } else if (!strcmp(argv[0], "rpt") && argc == 1) {
+        /*
+         * Repeater operation in one line: what the receiver last heard, how
+         * well the downlink grid is known, what the transmitter would do with
+         * it and what the last calibration pass found.
+         */
+        struct dmrStatus st;
+        const rtxStatus_t rt = rtx_getCurrentStatus();
+
+        dmr_getStatus(&st);
+        reply("rpt cc=%d ts=%d state=%d gate=%d ppm=%d q=%u sh=%u "
+              "lat=%ld+%ldus cal=%d off=%d sp=%d",
+              (int)st.colourCode, (int)st.timeslot, (int)st.rptState,
+              (int)st.rptGate, (int)st.rptPpm, (unsigned)st.rptQuality,
+              (unsigned)st.rptShift, (long)rt.audioLatencyUs,
+              (long)rt.audioLatencySpreadUs, (int)st.rptCalValid,
+              (int)st.rptCalOffset, (int)st.rptCalSpread);
+    } else if (!strcmp(argv[0], "rcal") && argc == 1) {
+        rtxStatus_t rt = rtx_getCurrentStatus();
+
+        if (rt.dmrRepeater == 0) {
+            reply("E not a repeater channel");
+        } else {
+            rt.rptCalRequest = 1;
+            rtx_configure(&rt);
+            reply("rcal");
+        }
+    } else if (!strcmp(argv[0], "lcal") && argc == 1) {
+        rtxStatus_t rt = rtx_getCurrentStatus();
+
+        rt.audioCalRequest = 1;
+        rtx_configure(&rt);
+        reply("lcal");
     } else if (!strcmp(argv[0], "d") && argc == 2) {
         baseband_dump_pause(argv[1][0] == '0');
         reply("d %d", !baseband_dump_paused());

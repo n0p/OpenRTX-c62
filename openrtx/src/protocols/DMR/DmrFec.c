@@ -229,6 +229,29 @@ uint16_t dmr_fec_crc16(const uint8_t *bits, int nbits)
     return (uint16_t)((crc ^ 0xFFFFu) & 0xFFFFu);
 }
 
+uint16_t dmr_fec_crc16_append(const uint8_t *bits, int nbits)
+{
+    const uint32_t poly = (1u << 12) + (1u << 5) + 1u;
+    uint32_t crc = 0;
+
+    /*
+     * The 16 bits to append are the ones that make the block leave a zero
+     * residue in dmr_fec_crc16().  Feeding the message and then sixteen zeros
+     * leaves the remainder of P(x)*x^16; appending b(x) adds b, so the block
+     * closes when b is the complement of that remainder (subtraction and
+     * addition are the same XOR in GF(2)).
+     */
+    for (int i = 0; i < nbits + 16; i++) {
+        crc = (crc << 1) & 0x1FFFFu;
+        if (i < nbits)
+            crc |= (uint32_t)(bits[i] & 1u);
+        if ((crc & 0x10000u) != 0)
+            crc = (crc & 0xFFFFu) ^ poly;
+    }
+
+    return (uint16_t)(crc ^ 0xFFFFu);
+}
+
 void dmr_fec_voice_deinterleave(const uint8_t payload[72], uint8_t frame[9])
 {
     int8_t planes[4][24];

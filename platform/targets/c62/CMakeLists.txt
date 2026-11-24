@@ -237,7 +237,12 @@ if(CONFIG_C62_DMR_RX)
   if(CONFIG_DMR_TX)
     target_sources(app PRIVATE
       ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrTx.c
-      ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrTxTables.c)
+      ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrTxTables.c
+      # Repeater operation: BS activation, downlink frame phase and drift, the
+      # colour code gate and the parrot calibration (docs/DMR_REPEATER.md),
+      # plus the audio path measurement the slot alignment is built on.
+      ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrRpt.c
+      ${OPENRTX_ROOT}/openrtx/src/core/audio_latency.c)
     target_compile_definitions(app PRIVATE CONFIG_DMR_TX)
     message(STATUS "C62: DMR transmit chain enabled")
 

@@ -21,11 +21,21 @@ struct dmrBurst;
  * does nothing at all instead of failing at link time.
  */
 #ifdef CONFIG_DMR_TX
+#include "protocols/DMR/DmrRpt.h"
 #include "protocols/DMR/DmrTx.h"
 #include "protocols/DMR/DmrTxFsm.h"
 
 /** AMBE+2 frames queued for transmission: four voice bursts of margin. */
 #define DMR_TX_QUEUE_FRAMES 12
+
+/** Slots of lead the plan is asked for before the first burst, so that the PA
+ *  settles before the voice LC header goes out (the plan rounds it up to a
+ *  whole 60 ms frame to keep the slot parity). */
+#define DMR_RPT_LEAD_SLOTS 1
+
+/** Samples of the synthetic call the calibration transmits: one empty slot,
+ *  the voice LC header and two voice bursts of digital silence. */
+#define DMR_RPT_CAL_SLOTS 4
 #endif
 
 #ifdef CONFIG_DMR_SMS
@@ -170,6 +180,41 @@ private:
     unsigned frameCount;
 
     struct dmrTxFsm fsm; // voice stage machine, see DmrTxFsm.h
+
+    /* ---- repeater operation (DmrRpt.h) ---------------------------------- */
+    struct dmrRptPhase rptPhase; ///< Downlink frame phase and drift
+    struct dmrRptPlan rptPlan;   ///< The plan the running call uses
+    struct dmrRptWake rptWake;   ///< BS activation machine
+    struct dmrRptSeen rptSeen;   ///< What the last outbound burst said
+    struct dmrRptCal rptCal;     ///< Parrot calibration pass
+    uint8_t rptShift;            ///< Baseband delay applied now, samples
+    uint8_t rptShiftBase;        ///< ... and the one the plan asked for
+    uint8_t rptPreSlots;         ///< Slots of lead still to render
+    uint32_t rptCallTick;        ///< Tick the running call started
+    bool rptAligned;             ///< The call is on the repeater's grid
+    bool rptRenderHigh;          ///< Half of txSamples holding the newest slot
+    bool rptAccess;              ///< The wake machine was started for this PTT
+    bool rptTracking;            ///< The channel is a repeater: track the grid
+    int8_t rptGate;              ///< Last gate verdict (enum dmrRptGate)
+    uint8_t rptState;            ///< Last repeater state, for the UI
+    uint32_t rxTick;             ///< Tick of the last receive block pushed
+    uint32_t rxIndex;            ///< ... and the sample count of the phy at it
+
+    uint8_t rptTimeslot(const rtxStatus_t *status) const;
+    int32_t rptLatency(void) const;
+    void rptObserve(const struct dmrBurst *burst);
+    bool rptAccessStep(rtxStatus_t *rtx);
+    bool rptTransmitWake(const rtxStatus_t *status);
+    bool rptTransmitCal(const rtxStatus_t *status);
+    void rptCallTiming(const rtxStatus_t *status, uint8_t timeslot);
+    void rptDriftSlew(void);
+    bool rptCalStep(rtxStatus_t *rtx);
+    void rptCalFinish(rtxStatus_t *rtx);
+    int16_t *rptRenderTarget(void);
+    bool pushSlot(const int16_t *slot);
+    void rptSetState(uint8_t state);
+    void rptSetGate(int8_t gate);
+    bool audioCalibrate(rtxStatus_t *rtx);
 
 #ifdef CONFIG_DMR_SMS
     bool startDataTx(const rtxStatus_t *status);

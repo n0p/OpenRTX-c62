@@ -180,6 +180,10 @@ What choosing TS2 means, plainly:
   boundary; the modulator and both state machines take the phase as a
   parameter already, the alignment is the work left.
 
+  *(Done, see `docs/DMR_REPEATER.md`: the CACH and the sync word carry the frame
+  phase, the receiver measures it per outbound burst, and the modulator takes
+  the sub-slot delay the plan computes from it.)*
+
 ## The PTT state machine
 
 The stages live in a pure function, `openrtx/include/protocols/DMR/DmrTxFsm.h`
@@ -817,6 +821,10 @@ of the 9 KiB `RTX_THREAD_STKSIZE`; the codec worker peaks at 136 +
   value, and the resulting peak deviation (3306 Hz) exceeds the 2.5 kHz the
   standard allows.
 * **No adjacent channel power measurement.** See above; the bench decides.
+* **Repeater operation is `docs/DMR_REPEATER.md`.** On a channel marked as a
+  repeater, the transmitter wakes it with a BS_Dwn_Act, gates on its colour code
+  and aligns its bursts to the repeater's downlink frame; that document has the
+  timing budget, the calibration and half duplex's limits.
 * **TX only, no talkaround.** The mode transmits in the selected timeslot and
   does not listen to the other one: a handheld cannot hear itself or another
   station while it is keyed (the BK4819 is half duplex anyway).

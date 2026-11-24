@@ -78,6 +78,16 @@ bool dmr_fec_bptc_decode(const uint8_t in[196], uint8_t data[96]);
 uint16_t dmr_fec_crc16(const uint8_t *bits, int nbits);
 
 /**
+ * The 16 bits to append to a block so that its CRC closes.
+ *
+ * @param bits: bits of the message, 0 or 1 per element.
+ * @param nbits: number of message bits (80 for a CSBK PDU).
+ * @return the 16 bit field, MSB first, that leaves a zero residue in
+ *         dmr_fec_crc16(); the CRC mask of annex B is applied on top.
+ */
+uint16_t dmr_fec_crc16_append(const uint8_t *bits, int nbits);
+
+/**
  * Undo the over-the-air interleaving of one 72-bit voice frame and pack it in
  * the canonical A|B|C order dmr_vocoder_decode() expects.
  *

@@ -509,6 +509,50 @@ void qm_dmr_fmt_ts(char *buf, int len)
         snprintf(buf, len, "TS%u", (unsigned)st.timeslot);
 }
 
+void qm_dmr_fmt_rpt(char *buf, int len)
+{
+    struct dmrStatus st;
+    dmr_getStatus(&st);
+
+    switch (st.rptState) {
+        case 0:
+            snprintf(buf, len, "OFF");
+            break;
+        case 1:
+            snprintf(buf, len, "WAKE");
+            break;
+        case 2:
+            snprintf(buf, len, "SYNC s%u", (unsigned)st.rptShift);
+            break;
+        case 3:
+            snprintf(buf, len, "FREE");
+            break;
+        case 4:
+            snprintf(buf, len, "NO CC");   /* refused: colour code, slot, ... */
+            break;
+        case 5:
+            snprintf(buf, len, "LAT?");    /* not enough latency certainty */
+            break;
+        case 6:
+            snprintf(buf, len, "CAL..");
+            break;
+        case 7:
+            snprintf(buf, len, "CAL OK");
+            break;
+        default:
+            snprintf(buf, len, "CAL NO");
+            break;
+    }
+}
+
+void qm_dmr_fmt_ppm(char *buf, int len)
+{
+    struct dmrStatus st;
+    dmr_getStatus(&st);
+
+    snprintf(buf, len, "%dppm %u%%", (int)st.rptPpm, (unsigned)st.rptQuality);
+}
+
 void qm_dmr_fmt_sync(char *buf, int len)
 {
     struct dmrStatus st;
@@ -641,6 +685,9 @@ static const qm_item_t qm_items_dmr[] =
     QM_ITEM_INFO("CC", qm_dmr_fmt_cc),
     QM_ITEM_INFO("TS", qm_dmr_fmt_ts),
     QM_ITEM_INFO("SYNC", qm_dmr_fmt_sync),
+    /* Repeater operation: state of the access and drift of the downlink */
+    QM_ITEM_INFO("RPT", qm_dmr_fmt_rpt),
+    QM_ITEM_INFO("DRIFT", qm_dmr_fmt_ppm),
     QM_ITEM_DMR_DEST()
 #ifdef CONFIG_RX_FINE_OFFSET
     QM_ITEM_INT_FF("FINE", -500, 500, 10, 100, qm_get_rx_fine,

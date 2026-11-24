@@ -40,6 +40,7 @@ versión, para poder distinguir «escrito por otra versión» de «corrupto».
 | 1 | registro original, sin campo de versión en la cabecera (el hueco era relleno a 0) |
 | 2 | destino DMR (`dmr_dest_type`, `dmr_dest_id`), DMRID propio (`dmr_id`) y formato de SMS (`sms_format`) |
 | 3 | timeslot de DMR (`dmr_timeslot`, 1 o 2) para el menú rápido |
+| 4 | operación en repetidora (`dmr_repeater`, `dmr_ts_follow`, `dmr_noanswer`) y el retardo del camino de audio (`audio_latency_us` y su incertidumbre), ver `docs/DMR_REPEATER.md` |
 
 Un registro de la versión 1 tiene el campo de versión a 0, así que se descarta
 solo: no hace falta código de migración y no hay forma de leerlo mal.

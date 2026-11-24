@@ -65,6 +65,22 @@ typedef struct
     uint32_t dmrSourceId;              /**< DMR radio ID, 24 bit       */
     uint32_t dmrDestId;                /**< Call destination, 24 bit   */
     uint8_t  dmrDestType;              /**< enum dmrDestType: NONE, GROUP or USER */
+
+    uint8_t  dmrRepeater;              /**< 1: the channel is a repeater, wake it
+                                        *   and align to its downlink frame */
+    uint8_t  dmrTsFollow;              /**< 1: the timeslot follows the repeater
+                                        *   instead of being fixed by the channel */
+    uint8_t  dmrNoAnswer;              /**< enum dmrRptNoAnswer: what to do when
+                                        *   the repeater does not answer */
+    int32_t  audioLatencyUs;           /**< Audio path delay, microseconds: the
+                                        *   measured hardware part of the delay
+                                        *   between the baseband stream and the
+                                        *   air, see DmrRpt.h */
+    int16_t  audioLatencySpreadUs;     /**< ... and its uncertainty */
+    uint8_t  audioCalRequest;          /**< 1: measure the audio path delay now
+                                        *   (set by the UI, cleared by the mode) */
+    uint8_t  rptCalRequest;            /**< 1: run the repeater calibration pass
+                                        *   (set by the UI, cleared by the mode) */
 }
 rtxStatus_t;
 
