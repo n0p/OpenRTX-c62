@@ -37,10 +37,14 @@ west build -b c62 -d build_stats . -- -DC62_MODE_STATS=ON \
 With the option off the hooks expand to `((void)sizeof(x))`: no call, no
 argument evaluation, no symbol. `tests/mode_stats_off.sh` compiles a probe that
 calls all of them and checks that the object references nothing of the layer
-and that the function is a single return instruction. The firmware build was
-checked the same way, by comparing images: **the image of this branch with the
-option off is byte for byte the master image** (same sha256, same symbol
-table, same sizes).
+and that the function is a single return instruction.
+
+On the firmware the same thing was checked against `master`: the image built
+with the option off has the same symbol table (no symbol added, removed or
+resized), the same `.text`, `.data` and `.bss` (574 524, 4 612 and 576 632
+bytes) and the same FLASH and RAM figures. The only bytes that differ are the
+embedded git version string and the order of the 31 linker veneers, 8-byte
+trampolines no function's address depends on.
 
 With the option on, a hook is a handful of integer adds on the thread that
 already has the data, plus two reads of the cycle counter per block. There is
