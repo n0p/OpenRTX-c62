@@ -244,7 +244,8 @@ sigue corriendo y hace la vuelta en el primer tick después del PTT.
 modo que no se guarde como canal del operador el canal por el que iba el scan.
 
 **Detección de señal.** `rtx_rxSquelchOpen()`, que es el squelch analógico en FM,
-el sincronismo de DMR (`dmrPhy_synced`) y el LSF válido en M17. TETRA no publica
+el sincronismo de DMR (`dmrSpeech_playing()`, la voz del paquete sonando) y el LSF
+válido en M17. TETRA no publica
 detector de portadora (`rxSquelchOpen()` devuelve siempre `false`), así que en
 ese modo se usa el RSSI contra el nivel de squelch del operador: es una
 aproximación —no comprueba el canal— y por eso un scan de TETRA puede pararse en

@@ -7,6 +7,8 @@
 #ifndef OPENRTX_YSF_MEM_H
 #define OPENRTX_YSF_MEM_H
 
+#include "core/psram_state.h"
+
 /**
  * @file YsfMem.h
  * @brief Where the System Fusion receive buffers live.
@@ -26,10 +28,11 @@
  * screen drawn before the mode is enabled cannot read uninitialised memory.
  */
 
-#ifdef PLATFORM_C62
-#define YSF_EXT_RAM __attribute__((section(".psram_section")))
-#else
-#define YSF_EXT_RAM
-#endif
+/*
+ * The attribute is the one every other mode uses (core/psram_state.h): this
+ * header keeps its own name so the YSF sources read as they did, but there is
+ * a single definition of "state that lives in PSRAM" in the tree.
+ */
+#define YSF_EXT_RAM PSRAM_STATE
 
 #endif /* OPENRTX_YSF_MEM_H */

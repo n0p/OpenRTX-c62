@@ -141,7 +141,8 @@ interleaved streams of 18, canonical bit 18j + k leaving as transmitted bit
 That claim is not taken on trust:
 
 * `dpmrFec_voiceFrame()` and the DMR path's
-  `dmr_fec_voice_deinterleave()` produce **the same 9 bytes for 2000 random
+  reference de-interleaver of the test (the DMR four-block rule) produce **the
+  same 9 bytes for 2000 random
   72 bit payloads** (unit test). The DMR path is validated against the
   modulator that generated its synthetic capture (300/300 frames identical,
   `docs/DMR_RX.md`), so this is a bit-level identity with a reference, not a

@@ -20,8 +20,23 @@
 #include "dmr_vocoder.h"
 #include "dmr_decoder.h"
 
-/** The one decoder instance of the firmware: ~8.5 KiB of .bss, no initialisers. */
-static dmr_vocoder_t dmr_instance;
+/*
+ * Where the instance lives.  In the C62 firmware the C62 CMake sets
+ * DMR_VOCODER_STATE_ATTR to .psram_section: 8 540 B written and read once per
+ * 20 ms frame, never inside a sample loop, which the 256 KB of SRAM cannot
+ * spare (the D-STAR decoder's own 14 KB state lives there too).  Everywhere
+ * else -- the host tests that link this file directly -- it stays in .bss.
+ *
+ * The section is NOLOAD and nothing zeroes it, so the instance is initialised
+ * on first use: `dmr_ready` stays in ordinary .bss, which the kernel does
+ * zero, and no state is read before that flag says so.
+ */
+#ifndef DMR_VOCODER_STATE_ATTR
+#define DMR_VOCODER_STATE_ATTR
+#endif
+
+/** The one decoder instance of the firmware, ~8.5 KiB, no initialisers. */
+static dmr_vocoder_t dmr_instance DMR_VOCODER_STATE_ATTR;
 
 static unsigned int dmr_last_errors;
 static int dmr_ready;

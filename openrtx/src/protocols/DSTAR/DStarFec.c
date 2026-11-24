@@ -22,6 +22,7 @@
  */
 
 #include "protocols/DSTAR/DStarFec.h"
+#include "core/psram_state.h"
 
 #include <string.h>
 
@@ -193,12 +194,18 @@ void dstarHeaderEncode(const uint8_t hdr[DSTAR_HEADER_BYTES],
         bits[map[i]] = (uint8_t)(coded[i] ^ pn[map[i]]);
 }
 
+/*
+ * Path memory of the header Viterbi: one predecessor per trellis step and
+ * state, 1 320 B.  It lives in PSRAM because it is the largest thing the
+ * D-STAR receive chain keeps, and every entry is written before it is read on
+ * each call (each of the four states gets at least one candidate per step).
+ */
+static uint8_t path[330][4] PSRAM_STATE;
+
 bool dstarHeaderDecode(const int8_t soft[DSTAR_CODED_BITS], struct dstarHeader *hdr)
 {
     uint16_t map[DSTAR_CODED_BITS];
     uint8_t pn[DSTAR_CODED_BITS];
-    /* Path memory: one predecessor per trellis step and state. */
-    static uint8_t path[330][4];
     int32_t metric[4];
     int32_t next[4];
     uint8_t byte[DSTAR_HEADER_BYTES];

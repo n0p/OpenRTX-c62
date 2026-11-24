@@ -1,5 +1,15 @@
 # Mensajería: SMS de DMR, TETRA SDS y APRS en una sola cola
 
+> **El SMS de DMR ya no es `DmrSms.c`.** La capa de mensajes cortos de DMR es la
+> del paquete de protocolo (`protocols/DMR/dmr_sms.c`, `dmr_data.c`,
+> `dmr_lrrp.c`) desde la fusión de `c62/dmr-pkg`; lo único nuestro que queda es
+> el puente a `core/messaging` en `OpMode_DMR.cpp` (`smsPoll`,
+> `smsStartTx`) y el mapeo de formatos de `dmr_glue.c`. Lo que este documento
+> cuenta del almacén común (`core/messaging.*`), de la pantalla
+> (`core/msg_service.*`) y del SDS de TETRA sigue vigente; las secciones sobre
+> `DmrSms.c`/`DmrSmsApp.c`, `DmrTx.c` y `tests/platform/c62_sms_*.c` describen la
+> cadena anterior y se conservan por sus medidas. Ver `docs/DMR_PKG.md`.
+
 **Ámbito:** firmware de la C62 (OpenRTX, Zephyr, Cortex-M33). Este documento
 cubre la capa de mensajería —**un solo almacén y una sola cola** para APRS, DMR
 SMS y TETRA SDS (`core/messaging.*`)—, el SMS de DMR
@@ -18,8 +28,8 @@ TETRA SDS hablan con `core/messaging` **directamente**.
 
 | pieza | ficheros | qué hace |
 |---|---|---|
-| SMS de DMR | `include/protocols/DMR/DmrSms.h`, `src/protocols/DMR/DmrSms.c`, `src/protocols/DMR/DmrSmsApp.c` (`DmrSmsApp.h` privado) | codificador y decodificador de las **siete variantes** que se ven en el aire, cabecera de datos, CRC-16 y CRC-32, reensamblado por timeslot y respuesta de entrega |
-| ráfaga de datos | `DmrTx.c` (`dmrTx_dataSlot`, `dmrTx_dataTerminator`) | 96 bits de información + tipo de dato → 144 símbolos → 1440 muestras a 48 kHz, con la cadencia TDMA de siempre |
+| SMS de DMR | `include/protocols/DMR/dmr_sms.h`, `src/protocols/DMR/dmr_sms.c` (+ `dmr_data.c`, `dmr_lrrp.c`), con el puente en `src/rtx/OpMode_DMR.cpp` | el paquete: codificador y decodificador de las variantes que se ven en el aire, cabecera de datos, CRC-16 y CRC-32, reensamblado por timeslot y respuesta de entrega. *(Antes: `DmrSms.c`/`DmrSmsApp.c`.)* |
+| ráfaga de datos | `dmr_tx.c` (`dmr_tx_block`), con la cadencia en `OpMode_DMR::dataTxSlot` | 96 bits de información + tipo de dato → 144 símbolos → 1440 muestras a 48 kHz. *(Antes: `DmrTx.c`.)* |
 | integración en el modo | `src/rtx/OpMode_DMR.cpp` | datos recibidos → reensamblador del timeslot; mensaje recibido → cola + ACK; mensaje en cola → transmisión ráfaga a ráfaga cuando no hay voz |
 | cola común | `include/core/messaging.h`, `src/core/messaging.c`, `src/core/messaging_store_zephyr.c` | **el único** modelo de mensaje: outbox de 6, inbox de 6, estados, reintentos, borrador y registro en flash en su par de sectores |
 | capa de la pantalla | `include/core/msg_service.h`, `src/core/msg_service.c` | qué transporte puede enviar en el modo actual, límites de texto, traducción destinatario → dirección (contacto o dígitos) y el enganche de APRS con su buzón |

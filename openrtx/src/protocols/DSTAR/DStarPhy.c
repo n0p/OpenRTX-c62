@@ -35,6 +35,7 @@
  */
 
 #include "protocols/DSTAR/DStarPhy.h"
+#include "core/psram_state.h"
 
 #include <string.h>
 
@@ -64,7 +65,15 @@ static unsigned decPhase;
 
 /* --- 24 kHz stream ------------------------------------------------------- */
 #define YRING 512u
-static int16_t yRing[YRING];
+/*
+ * The two largest buffers of the D-STAR front end go to PSRAM: the 24 kHz
+ * matched-filter ring (written per sample block, read per symbol) and the 660
+ * soft bits of the header (written once per header, read once).  The 5 760 B
+ * audioBuffer of the mode stays in SRAM: it is the one handed to
+ * audioStream_start(), so it is DMA.  dstarPhy_reset() memsets both of these
+ * when the mode opens; the section is NOLOAD (core/psram_state.h).
+ */
+static int16_t yRing[YRING] PSRAM_STATE;
 static uint32_t yTotal;      /* filtered samples produced so far */
 static int32_t symPosQ8;     /* absolute Q8 position of the next symbol */
 
@@ -72,7 +81,7 @@ static int32_t symPosQ8;     /* absolute Q8 position of the next symbol */
 static enum rxState state;
 static uint32_t bitHist;     /* last bits, newest in bit 0 */
 static uint16_t headerBit;
-static int8_t headerSoft[DSTAR_CODED_BITS];
+static int8_t headerSoft[DSTAR_CODED_BITS] PSRAM_STATE;
 static uint16_t frameBit;
 static uint8_t frameVoice[DSTAR_VOICE_BYTES];
 static uint8_t frameSlow[DSTAR_SLOW_BYTES];

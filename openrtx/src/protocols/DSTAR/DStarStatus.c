@@ -18,6 +18,7 @@
  */
 
 #include "protocols/DSTAR/DStarStatus.h"
+#include "core/psram_state.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -28,7 +29,13 @@
 
 static struct dstarStatus status;
 static struct dstarSlow slow;
-static struct dstarHeardStation heard[DSTAR_HEARD_MAX];
+/*
+ * The list of stations heard: 544 B, written when a header arrives and read by
+ * the screen.  PSRAM, and safe there because heardCount (in .bss, zeroed at
+ * boot) is the only thing that decides how much of it is read; the list is
+ * cleared when the mode closes (dstarStatus_clear).
+ */
+static struct dstarHeardStation heard[DSTAR_HEARD_MAX] PSRAM_STATE;
 static unsigned heardCount;
 static char lastText[DSTAR_TEXT_LEN + 1];
 static char lastTextCall[DSTAR_CALL_LEN + 1];

@@ -4,6 +4,12 @@
 > (DmrPhy/DmrFec/DmrSpeech) was replaced by the protocol package in
 > `protocols/DMR/`; see `docs/DMR_PKG.md`. The measurements and the reasoning
 > here remain valid for the vocoder and for what the package had to reproduce.
+>
+> The harnesses it names are gone with that chain: `tests/host/dmr_phy_host/`,
+> `tests/platform/c62_dmr_host.c` and `tests/platform/c62_dmr_phy_cost.c` were
+> removed with `DmrPhy.c`/`DmrFec.c` (they do not compile without them). Their
+> replacements are `tests/host/dmr_pkg_host/` and `tests/host/dmr_pkg_qemu/`;
+> the old ones are in git history before the merge of `c62/dmr-pkg`.
 
 DMR (ETSI TS 102 361-1) receiver for the Retevis C62: 4FSK demodulation of the
 radio's discriminator output, slot synchronisation, CACH, colour code and

@@ -170,7 +170,7 @@ so the only difference is *where the 36 dibits come from*:
 | | DMR | NXDN |
 |---|---|---|
 | 72-bit frame | 1/3 of the burst payload, interleaved over the 30 ms slot | one VCH, contiguous |
-| bit order into the vocoder | `dmr_fec_voice_deinterleave()` | `nxdnFecVchToAmbe()`, same tables |
+| bit order into the vocoder | `protocols/DMR/DmrFec.c` (before the package: now the tables are private to `NxdnFec.c`) | `nxdnFecVchToAmbe()`, same tables |
 | vocoder | `dmr_vocoder_decode()` | `dmr_vocoder_decode()`, same code |
 
 There is no second copy of the vocoder in the image: `CONFIG_C62_NXDN_RX`

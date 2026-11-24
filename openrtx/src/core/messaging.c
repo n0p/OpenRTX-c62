@@ -25,6 +25,7 @@
 #include <string.h>
 
 #include "core/messaging.h"
+#include "core/psram_state.h"
 #include "core/messaging_store.h"
 
 /*
@@ -48,9 +49,13 @@ static struct k_mutex msgLock;
 #define MSG_RECORD_MAGIC 0x3147534dU /* "MSG1" */
 #define MSG_RECORD_VERSION 2
 
-/** The packed record, shared by the load and the write: 3,3 kB, not on a
- *  stack and not duplicated. */
-static uint8_t recordBuf[MSG_STORE_MAX];
+/**
+ * The packed record, shared by the load and the write: 2.5 kB, not on a stack
+ * and not duplicated.  PSRAM: it is only touched when the store is loaded at
+ * boot and when a debounced write happens, never in the per-message path, and
+ * both uses fill it before they read it (core/psram_state.h).
+ */
+static uint8_t recordBuf[MSG_STORE_MAX] PSRAM_STATE;
 
 static struct message outbox[MSG_OUTBOX_LEN];
 static struct message inbox[MSG_INBOX_LEN];

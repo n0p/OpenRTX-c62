@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "protocols/NXDN/NxdnPhy.h"
+#include "core/psram_state.h"
 
 /* ------------------------------------------------------------------ */
 /* Constants                                                          */
@@ -142,7 +143,14 @@ struct nxdnPhy {
     float win[NXDN_FRAME_SYMBOLS]; ///< The frame being decoded
 };
 
-static struct nxdnPhy phy;
+/*
+ * The demodulator's whole state -- the 48 kHz history, the 24 kHz matched
+ * filter ring and the frame being decoded -- lives in PSRAM: ~10 KB written
+ * once per sample block and read once per frame, never inside the inner
+ * symbol loop.  nxdnPhy_reset() memsets it when the mode opens, which is what
+ * makes it deterministic (the section is NOLOAD, see core/psram_state.h).
+ */
+static struct nxdnPhy phy PSRAM_STATE;
 
 
 /* ------------------------------------------------------------------ */

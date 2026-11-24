@@ -25,9 +25,12 @@ encima fusiona, en este orden:
 | `c62/rx-wfm` | FM de radiodifusión con el sintonizador BK1080, fuera del códec | `OPMODE_WFM_BC`, `BK1080.*`, `core/wfm.*`, `docs/RX_WFM.md` |
 | `c62/rx-dpmr` | dPMR (TS 102 490): 4FSK 2400 Bd en 6,25 kHz, CCH, datos cortos y voz AMBE+2 | `OPMODE_DPMR`, `protocols/DPMR/**`, `docs/RX_DPMR.md` |
 | `c62/dstar-voice` | D-STAR DV: cabecera con FEC convolucional, tramas de 96 bits, datos lentos y voz AMBE 3600x2400 (`lib/dstar_vocoder`) | `OPMODE_DSTAR`, `protocols/DSTAR/**`, `docs/RX_DSTAR.md` |
+| `c62/dmr-pkg` | el paquete de protocolo de DMR completo, en lugar de la cadena DMR propia: demodulador con valores soft, FEC (BPTC, Golay, QR, Reed-Solomon, trellis), protocolo y máquina de slots, voz, TX, datos, SMS, LRRP, cifrado y Tier III | `protocols/DMR/**`, `OpMode_DMR`, `docs/DMR_PKG.md` |
 
 Una compilación con todo encendido tiene, por tanto, **once modos**: FM, M17,
-DMR, TETRA, NXDN, dPMR, P25, YSF, D-STAR, AM aéreo y WFM.
+DMR, TETRA, NXDN, dPMR, P25, YSF, D-STAR, AM aéreo y WFM. Los once están en el
+enumerado, y el DMR de esa lista ya no es la cadena de `c62/next`: es el paquete
+de la tercera pasada (§3.2).
 
 ## 2. Reglas de numeración (no se tocan)
 
@@ -64,6 +67,16 @@ Los once valores están vivos en este árbol: cada uno tiene su `OpMode_*`, su
   el mismo orden. Un bloque nuevo se añade detrás del último y el contador sube.
 - El registro tiene un techo de 256 B; el bloque de scan está dimensionado para
   no gastar más de lo que necesita (ver el comentario de `settings.h`).
+- **Tercera pasada**: el paquete de DMR apenda `int16_t dmr_tx_air_delay_us`
+  (retardo de aire del camino de audio, 0 = el valor medido por defecto, ver
+  `docs/DMR_PKG.md`) **detrás del bloque de scan**, o sea al final del todo. La
+  versión **no sube**: el árbol es una sola línea de desarrollo y ningún campo
+  se reinterpreta, pero el registro creció dos bytes, así que un registro de la
+  pasada anterior (misma versión 5, dos bytes más corto) falla el CRC y se
+  descarta entero en vez de leerse con el retardo a medias. El operador pierde
+  los ajustes una vez, que es el precio documentado del apendido; lo prueba
+  `tests/unit/settings_record.cpp` («A record from before the air delay is
+  refused, not half-read»).
 
 ### 2.3 Zonas (`openrtx/include/core/zones.h`)
 
@@ -177,77 +190,192 @@ variable de caché CMake que empiece por `CONFIG_` como una asignación de Kconf
 (`cmake/modules/kconfig.cmake`): en el primer `configure` no existen todavía y
 no pasa nada, pero quedan en `CMakeCache.txt` y el siguiente aborta con
 *«attempt to assign the value 'ON' to the undefined symbol»*. Ahora se llaman
-`C62_MESSAGING`, `C62_SCAN` y `C62_DMR_SMS`; el macro que ven las fuentes sigue
-siendo `CONFIG_*` y lo emite `target_compile_definitions`.
+`C62_MESSAGING` y `C62_SCAN`. Con la tercera pasada el SMS de DMR deja de ser una
+opción de CMake: pasa a ser el símbolo de Kconfig `DMR_SMS` del paquete, que el
+CMake lee como variable (`CONFIG_DMR_SMS`), y eso no es una entrada de caché. El
+macro que ven las fuentes sigue siendo `CONFIG_*`.
+
+### 3.2 Tercera pasada: el paquete de DMR
+
+`c62/dmr-pkg` (base `44ece688`, cerrada en `090be87a`) no sustituye una rama
+pequeña: reemplaza **toda** la capa DMR de este árbol por el paquete de
+protocolo de otra C62 (≈12 100 líneas de C) y se queda con lo nuestro que había
+alrededor. La fusión fue de 111 ficheros; esto es lo que chocó y cómo se quedó.
+
+**Lo que se va con el paquete.** Se borran `DmrPhy.c`, `DmrFec.c`, `DmrSms.c`,
+`DmrSmsApp.c`, `DmrTx.c`, `DmrTxTables.c`, `DmrVocoder.c`,
+`DmrVocoderEncoder.c` y las cabeceras `DmrFec.h`, `DmrPhy.h`, `DmrSms.h`,
+`DmrTx.h`, `DmrTxFsm.h`, `DmrVocoder.h`. Antes de borrarlas se sacó de ellas lo
+que otros modos usaban:
+
+- **NXDN** tomaba de `DmrDefs.h` el horario de dibits del frame de voz
+  (`dmr_rw/dmr_rx/dmr_ry/dmr_rz`) y `dmr_ambe_layout`. Ahora son tablas privadas
+  de `NxdnFec.c`: NXDN era su único usuario, y el `DmrDefs.h` del paquete solo
+  lleva ya los nombres de tipo de ráfaga que pinta la pantalla.
+- **El test de dPMR** comparaba su desentrelazado con
+  `dmr_fec_voice_deinterleave()`. El paquete deja el horario de cuatro bloques
+  de TS 102 361-1 privado en `dmr_voice.c`, así que la referencia vive ahora en
+  el propio test, con la regla escrita al lado (bit canónico `c` → bit de aire
+  `4*(c mod 18) + c/18`).
+- **Los arneses del camino viejo** no compilan sin esos ficheros y se borran:
+  `tests/host/dmr_phy_host/`, `tests/platform/c62_dmr_host.c`,
+  `c62_dmr_phy_cost.c`, `c62_sms_host.c`, `c62_sms_cost.c` y
+  `tests/unit/dmr_tx_fsm.cpp` (este último ya lo quitaba la rama). Sus
+  sustitutos son `tests/host/dmr_pkg_host/`, `tests/host/dmr_pkg_qemu/` y
+  `tests/host/dmr_enc_qemu/`. `docs/DMR_RX.md`, `docs/DMR_TX.md` y
+  `docs/MESSAGING.md` siguen describiéndolos por sus medidas, con un aviso
+  arriba.
+
+**Lo que se conserva de nuestro lado.** Los vocoders. El paquete trae mbelib
+(decoder) y OpenDMR (encoder) y los deja **apagados**: no caben en el M33
+(mbelib 9,36 M instrucciones por trama de 20 ms, OpenDMR 4,10 M; los nuestros
+113 402 y 1,427 M). `C62_DMR_VOICE=ON` y `DMR_ENC=ON` siguen ahí para poder
+volver a medirlos. `lib/dmr_vocoder` y `lib/dmr_encoder` no cambian de API: el
+paquete los llama a través de `dmr_voice.c`/`dmr_enc.c`.
+
+**Los conflictos, uno a uno.**
+
+- **`lib/dmr_vocoder/dmr_decoder.c/.h`**: las dos ramas añadieron funciones a la
+  misma API. El paquete parte `dmr_vocoder_decode_frame()` en
+  `dmr_vocoder_unpack()` (FEC, deja los 49 bits todavía cifrados) +
+  `dmr_vocoder_decode_data()` (síntesis sin FEC), que es lo que necesita el
+  descifrado de DMR; este árbol había añadido `dmr_vocoder_decode_ambe_params()`
+  (el atajo de YSF, que ya trae los 49 bits) y `dmr_golay24_correct()` (el Golay
+  del FICH de YSF). Se quedan **las cuatro**: `decode_data()` se implementa
+  encima del `decode_params()` estático que ya existía, así que no hay una
+  segunda copia de la síntesis; `decode_frame()` sigue llamando a
+  `decode_params(v, d, pcm, nerr, errs)` y mantiene el comportamiento
+  bit-exacto de antes.
+- **`OpMode_DMR.cpp`**: se toma el del paquete entero (es otro modo: no decodifica
+  nada, alimenta `dmr_demod_feed_disc()` y lee lo que el paquete publica), y se
+  le devuelven los enganches de estadísticas de `c62/rx-stats` que el paquete no
+  tiene: `modeStats_*` sobre los contadores del propio paquete
+  (`dmr_proto_get_stats()` para tramas/válidas/CRC, `dmr_demod_get_status()`
+  para las pérdidas, `radio_getRssi()` para el nivel), en `feed()`, y
+  `txKey/txBlock/txStarve/txEnd` en el camino de TX. `core/mode_stats.h` entra
+  como *include* y el estado de los deltas (3 × `uint32_t`) va en el `.hpp`.
+- **`DmrDefs`/`DmrStatus`**: se quedan los del paquete (`dmr_data_type_name()`
+  es lo único que la UI usa). `DmrStatus.c` del paquete sustituye al nuestro con
+  los mismos nombres que esperan `ui_main.c` y el modo.
+- **`Kconfig.board`**: se conserva la estructura de este árbol (menús NXDN, DMR,
+  System Fusion, D-STAR, dPMR, APRS, P25) y dentro del menú DMR entran los
+  símbolos del paquete `DMR_TRUNK` y `DMR_SMS` (los dos `default y`), más
+  `C62_DMR_VOCODER` como símbolo compartido (lo seleccionan NXDN, YSF y dPMR; el
+  modo DMR construye la biblioteca por su cuenta). **`DMR_TX_ENC` desaparece**:
+  en el paquete `dmr_enc.c` no tiene hook débil, siempre es `lib/dmr_encoder`
+  (o OpenDMR con `DMR_ENC=ON`), así que la opción ya no decidía nada.
+- **`CMakeLists.txt`**: `lib/dmr_vocoder` se construye **una vez**, en un bloque
+  propio que se dispara con `CONFIG_C62_DMR_RX` *o* `CONFIG_C62_DMR_VOCODER`,
+  porque ahora lo piden cuatro modos y un segundo `add_subdirectory()` sobre el
+  mismo directorio de binarios es un error de CMake. El bloque del DMR del
+  paquete trae su parte de voz (mbelib opcional), SMS, Tier III, TX y encoder,
+  sin volver a añadir la biblioteca. El dPMR ya no la enlaza él: la enlaza el
+  bloque común.
+- **`settings`**: versión 5 y el campo del paquete apendido al final (§2.2).
+- **`meson.build`**: los tests de DMR del paquete (`dmr_lc_dest`, `dmr_sms_format`
+  con `dmr_fec.c`/`dmr_data.c`/`dmr_lrrp.c`/`dmr_glue.c`, y el nuevo
+  `dmr_glue_test`) conviven con los de dPMR; el `dmr_tx_fsm_test` desaparece y
+  la suite sigue en 43 entradas. `dpmr_rx_test` deja de compilar `DmrFec.c` y
+  `DmrDefs.c` (ver arriba).
 
 ## 4. Compilación y medidas
 
-Todo encendido:
+Todo encendido, con el paquete de DMR y su transmisor:
 
 ```
 cd /home/n0p/src/c62/build/c62-ws-mega
 sudo docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/work openrtx-c62 \
     c62-build -DCONFIG_C62_DMR_RX=y -DCONFIG_C62_APRS=y \
                -DCONFIG_C62_NXDN_RX=y -DCONFIG_C62_YSF=y -DCONFIG_C62_P25=y \
-               -DCONFIG_C62_DPMR_RX=y -DCONFIG_C62_DSTAR=y
+               -DCONFIG_C62_DPMR_RX=y -DCONFIG_C62_DSTAR=y \
+               -DCONFIG_DMR_TX=y
 ```
 
 `CONFIG_C62_DSTAR` arrastra `C62_DSTAR_VOCODER` (por defecto `y`) y
-`DSTAR_TX` (por defecto `y`). El símbolo de dPMR es `CONFIG_C62_DPMR_RX`, y el
-de D-STAR `CONFIG_C62_DSTAR`; los dos existen en `Kconfig.board` y el resultado
+`DSTAR_TX` (por defecto `y`); `CONFIG_C62_DMR_RX` arrastra a su vez
+`DMR_TRUNK` y `DMR_SMS` (los dos `default y`), y construye el vocoder y, con
+`CONFIG_DMR_TX`, el codificador. El símbolo de dPMR es `CONFIG_C62_DPMR_RX` y el
+de D-STAR `CONFIG_C62_DSTAR`: los dos existen en `Kconfig.board` y el resultado
 se comprueba en `zephyr/include/generated/autoconf.h`, no en la línea de
-órdenes.
+órdenes. La instrumentación por modo sigue siendo la opción de CMake
+`C62_MODE_STATS` (apagada; con ella encendida compila y suma 552 B de RAM, ver
+abajo).
 
-Uso de memoria del enlazado (Cortex-M33, Zephyr 3.4, TETRA, wide RX, DMR TX y
-las dos ramas de esta pasada y sus pantallas también encendidos), `zephyr.bin`
-de 614 740 B:
+### 4.1 Memoria
 
-| Región | Usado | Tamaño | % |
-|---|---|---|---|
-| FLASH | 614 740 B | 1 MB | 58,63 % |
-| RAM | 226 736 B | 256 KB | 86,49 % |
-| ITCM | 8 468 B | 16 KB | 51,68 % |
-| DTCM | 0 B | 16 KB | 0,00 % |
-| PSRAMAP | 487 046 B | 1 792 KB | 26,54 % |
+Dos variantes del mismo árbol, Cortex-M33, Zephyr 3.4, TETRA, wide RX y las
+pantallas encendidas; la única diferencia es el transmisor de DMR:
 
-**Cabe**: quedan 433 836 B de flash, 35 408 B de RAM (34,6 KB) y 1 307 962 B de
-PSRAM. La RAM es la región justa otra vez: pasa del 80 % que el banco de TX se
-puso como techo (209 715 B) por 17 021 B.
+| build | FLASH | RAM | ITCM | DTCM | PSRAMAP |
+|---|---|---|---|---|---|
+| todo RX, **sin** `CONFIG_DMR_TX` | 648 184 B (61,82 %) | **195 056 B (74,41 %)** | 8 468 B (51,68 %) | 12 640 B (77,15 %) | 566 354 B (30,86 %) |
+| todo RX **+ `CONFIG_DMR_TX`** | 709 400 B (67,65 %) | **208 136 B (79,40 %)** | 8 468 B (51,68 %) | 12 640 B (77,15 %) | 566 354 B (30,86 %) |
+| `C62_MODE_STATS=ON`, todo RX | 649 660 B (61,96 %) | 195 608 B (74,62 %) | 8 468 B | 12 640 B | 566 354 B |
 
-Lo que costó esta pasada, medido contra la misma compilación sin dPMR ni D-STAR
-(556 904 B / 213 880 B / 462 166 B):
+Las dos caben. La de TX queda **1 579 B por debajo del techo del 80 %**
+(209 715 B) y le sobran 339 176 B de flash, 3 744 B de DTCM y 1 268 654 B de
+PSRAM. La variante sin transmisor queda a 14 659 B del techo (67 088 B libres de
+RAM en total).
 
-| | FLASH | RAM | PSRAM |
-|---|---|---|---|
-| dPMR + D-STAR + UI | +57 836 B | +12 856 B | +24 880 B |
+El precio del DMR, medido con la misma línea de órdenes sin
+`-DCONFIG_C62_DMR_RX` ni `-DCONFIG_DMR_TX` (diez modos, 599 888 B de flash,
+182 400 B de RAM, 0 B de DTCM, 517 530 B de PSRAM):
 
-El reparto de esa RAM, por símbolos (`.bss`/`.data`):
+| | FLASH | RAM | DTCM | PSRAM |
+|---|---|---|---|---|
+| DMR RX + TX sobre los otros diez modos | +109 512 B | +25 736 B | +12 640 B | +48 824 B |
 
-- **D-STAR, 10,4 KB**: `dstarMode` son 5 788 B, y 5 760 de ellos son el
-  `audioBuffer[2*1440]` que comparten RX y TX (es el búfer que se le pasa a
-  `audioStream_start()`, o sea DMA: no puede ir a PSRAM). Encima, el anillo del
-  PHY (1 KB), los 660 bits blandos de la cabecera y sus 660 de trabajo (1,3 KB),
-  la lista de estaciones oídas (544 B) y el estado de datos lentos (316 B).
-  Los **+8 B** que documenta `docs/RX_DSTAR.md` son del *vocoder* (su estado de
-  14 096 B está en PSRAM), no del modo entero.
-- **dPMR, 128 B** (`dpmrMode`): sus 10 784 B de anillos y buffers están en
-  `.psram_section`, como decía su rama.
-- Las tablas de la UI son `const`: 4 008 B de flash y 24 B de RAM (el estado
-  del menú rápido no cambia).
-- El resto es alineación y los símbolos pequeños de los dos PHY.
+Los dos últimos coinciden casi exactamente con lo que su rama midió en su propio
+árbol (200 000 B de RAM y 12 640 B de DTCM con RX+TX, frente a 464 100 B de
+flash y 174 288 B de RAM sin DMR: +25 712 B de RAM y +48 824 B de PSRAM). El
+flash no es comparable uno a uno porque los árboles no llevan los mismos modos.
 
-Si hiciera falta bajar del 80 % (hay que quitar 17 021 B), por este orden y sin
-tocar nada medido en el aire:
+### 4.2 Cómo se bajó del 86,5 % al 79,4 %
 
-1. `-DCONFIG_DSTAR_TX=n`: −5,7 KB de golpe (el `audioBuffer` y el estado del
-   transmisor); PTT queda inerte en D-STAR y la recepción no cambia.
-2. Mover a `.psram_section` lo que no es DMA de D-STAR: cabecera (1,3 KB), lista
-   de oídos (544 B) y anillo del PHY (1 KB) → −2,9 KB. Hay que darles su
-   `reset()` porque la sección es NOLOAD.
-3. El vocoder AMBE+2 (`CONFIG_C62_DMR_VOCODER`, compartido por DMR, NXDN, YSF y
-   dPMR) sigue siendo el mayor: apagarlo cuesta la voz de cuatro modos.
-4. Y después los modos de recepción que menos se usen (`CONFIG_C62_P25`,
-   `CONFIG_C62_YSF`, `CONFIG_C62_DPMR_RX`).
+La fusión del paquete dejó la RAM en **238 616 B (91,02 %)** — el DMR del paquete
+solo cuesta 11 880 B más que la cadena propia, pero la cadena propia ya iba por
+226 736 B. Se bajó **30 480 B** moviendo a PSRAM estado que se toca una vez por
+trama o por ráfaga, nunca por muestra. Nada de lo que sigue es DMA, y nada
+cambia lo que el modo hace; el mapa está en `core/psram_state.h`:
+
+| qué | dónde | B |
+|---|---|---|
+| estado del demodulador de NXDN (historia 48 kHz, anillo 24 kHz, trama) | `NxdnPhy.c`, `nxdnPhy_reset()` lo limpia al abrir | 10 016 |
+| instancia única del vocoder AMBE+2 (la que usan NXDN, YSF y dPMR) | `lib/dmr_vocoder/dmr_vocoder.c`, con `dmr_ready` en `.bss` | 8 540 |
+| anillo del PHY de D-STAR (1 024) + 660 bits blandos de cabecera + 1 320 de memoria de camino del Viterbi + 544 de la lista de estaciones oídas | `DStarPhy.c`, `DStarFec.c`, `DStarStatus.c` | 3 548 |
+| lista de estaciones y buzón de APRS | `aprs_service.c`, inicializados en `aprs_service_init()` | 5 588 |
+| cola de reproducción de NXDN | `NxdnSpeech.c`, como la de YSF | 1 460 |
+| registro empaquetado del store de mensajes | `messaging.c`, escrito antes de leerse en carga y guardado | 2 500 |
+
+`lib/dmr_vocoder` recibe el atributo por CMake (`DMR_VOCODER_STATE_ATTR`), igual
+que ya hacía el vocoder de D-STAR (`DSTAR_VOCODER_STATE_ATTR`); `YsfMem.h`
+mantiene su macro `YSF_EXT_RAM` pero ahora es la misma definición
+(`core/psram_state.h`), no una segunda copia a mano.
+
+**Lo que no se movió, y por qué:**
+
+- El `audioBuffer` de D-STAR (5 760 B) y los `rxSamples`/`txSamples` de DMR
+  (5 760 B cada uno), los `baseband[]` de NXDN y dPMR, el `pcm` de NXDN y el
+  `buf` de APRS: son los búferes que recibe `audioStream_start()`, o sea DMA.
+- El estado de los modos que se midieron en el aire (TETRA `tmo`/`demod`, los
+  anillos de P25 y del DMR del paquete) se queda donde estaba: los dos primeros
+  no se han vuelto a medir en esta pasada y el del DMR ya vive en `.psram_dmr`
+  por decisión de su paquete.
+- DTCM sigue en 12 640 B (77,15 %): ahí van el estado del vocoder de DMR
+  (`DMR_FAST_BSS`) y la pila del hilo de voz, que es donde el paquete los puso.
+
+Si una pasada futura vuelve a acercarse al techo, lo siguiente por este orden,
+sin tocar nada medido: `-DCONFIG_DSTAR_TX=n` (−5,7 KB: el `audioBuffer` y el
+estado del transmisor; PTT queda inerte en D-STAR), los `headerBits`/
+`slowBlocks`/`modAcc` del transmisor de D-STAR (932 B), el estado del `tmo` y
+del `demod` de TETRA (11,9 KB, pero están medidos en el aire y habría que
+repetir la medida), y por último apagar modos de recepción
+(`CONFIG_C62_P25`, `CONFIG_C62_YSF`, `CONFIG_C62_DPMR_RX`).
+
+Las dos secciones de PSRAM no se confunden: `.psram_dmr` (NOLOAD, la limpia
+`platform_init_csk6()` con `psram_dmr_clear()`) es del paquete de DMR;
+`.psram_section` (también NOLOAD, compartida con el heap de 300 KB del CSK6, no
+se limpia) es donde va lo de arriba, y cada módulo se reinicia al abrir su modo.
 
 ## 5. Tests de host
 
@@ -260,7 +388,19 @@ meson test -C build_host --suite OpenRTX --print-errorlogs --no-rebuild
 sigue excluido porque ya estaba roto antes de esta integración: no está
 registrado en `meson.build` y no se construye.
 
-Lo que añade esta pasada a la suite: las cinco tablas nuevas entran en el
+Lo que añade la tercera pasada: el `dmr_tx_fsm_test` se va con su máquina de
+estados y entra `dmr_glue_test` (los *records* que lee el paquete, el retardo de
+aire y su pre-roll), así que la cuenta no cambia; `dmr_lc_dest_test` y
+`dmr_sms_format_test` pasan a compilar los ficheros del paquete
+(`dmr_fec.c`, `dmr_data.c`, `dmr_lrrp.c`, `dmr_glue.c`) con
+`openrtx/include/protocols/DMR` y su `trunk/` en la ruta de includes;
+`dpmr_rx_test` deja de arrastrar `DmrFec.c`/`DmrDefs.c` y compara contra la
+referencia de cuatro bloques que lleva dentro; `settings_record_test` cambia el
+caso de migración por el del registro dos bytes más corto (§2.2). Los ficheros
+que se movieron a `.psram_section` compilan igual en el host: el atributo solo
+existe con `PLATFORM_C62` (`core/psram_state.h`).
+
+Lo que añadió la segunda: las cinco tablas nuevas entran en el
 recorrido compartido de `ui_quickmenu_test` (todas las filas de todos los modos,
 formateadas y ajustadas a su límite), y `ui_modes_test` comprueba modo a modo
 que la etiqueta cabe en la cabecera, que la tecla lateral pasa por los once y
@@ -287,10 +427,19 @@ de fondo, no de registro:
 - **Voz de D-STAR**: el transmisor manda la trama nula de AMBE (no hay encoder
   3600x2400); la recepción sí decodifica voz.
 - **P25/YSF/D-STAR en el aire**: su perfil de RF (discriminador plano, 12,5 kHz,
-  `REG_43 = 0x7e48`) está sin medir en la radio.
-- **DMR empaquetado** (`c62/dmr-pkg`): el paquete de cambios de DMR que quedó
-  fuera de esta fusión (modulación y detalles de RX/TX que no entraron en
-  `c62/next`).
+  `REG_43 = 0x7e48`) está sin medir en la radio. El DMR usa su propio perfil
+  (`radio_C62.cpp`, `C62_DMR_12K5`).
+- **DMR del paquete en el aire**: el demodulador, el TX y el retardo de aire
+  del paquete están medidos en su árbol (37,1 M instr/s = 14,8 % en recepción)
+  pero **no en la C62**: falta la captura con repetidor real, el ajuste fino de
+  `dmr_tx_air_delay_us` en el banco (por defecto 0 = 40 ms calculados) y la
+  comprobación de la desviación del modulador.
+- **Cifrado y Tier III de DMR**: BP/EP (ARC4), AES-128/256, DES y Hytera, y el
+  motor Tier III de RadioFoundry, compilan y están en el modo, pero solo se han
+  probado con los vectores del paquete (`tests/host/dmr_pkg_host`,
+  `t3_probe`). No hay clave en la UI ni sistema Tier III en el banco.
+- **LRRP**: las posiciones se decodifican y se ven en el registro de llamadas;
+  no se dibujan en el mapa ni entran en el store de posiciones.
 - **dPMR ↔ mensajes**: los datos cortos de dPMR (5.9.1 y 5.9.2) se decodifican,
   pero no hay transporte de dPMR en `core/messaging` (`docs/RX_DPMR.md`).
 - **Voz del P25 y del YSF en modo 2** y el resto de lo que cada `docs/RX_*.md`

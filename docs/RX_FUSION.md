@@ -275,7 +275,7 @@ tools/ysf/ysf_proto.py                  Python model of the chain
 ### 4.1 PHY
 
 48 kHz in, 10 samples per symbol exactly. No matched filter: the radio's IF
-filter already shapes the eye, and DmrPhy takes the same shortcut.
+filter already shapes the eye, and the DMR demodulator takes the same shortcut.
 
 * Ring of 7360 raw samples (one frame, plus one block of the audio
   stream, plus a sync of margin), in PSRAM — §4.5.

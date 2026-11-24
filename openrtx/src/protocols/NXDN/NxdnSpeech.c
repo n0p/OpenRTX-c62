@@ -23,6 +23,7 @@
 #include <string.h>
 
 #include "core/audio_path.h"
+#include "core/psram_state.h"
 #include "core/audio_stream.h"
 #include "dmr_vocoder.h"
 #include "interfaces/delays.h"
@@ -36,7 +37,13 @@
 #define THREAD_STACK 8192
 
 static pthread_mutex_t queueMutex = PTHREAD_MUTEX_INITIALIZER;
-static uint8_t queue[QUEUE_FRAMES][NXDN_AMBE_BYTES];
+/*
+ * The playout queue: 2.2 KB of AMBE frames, written by the RTX thread and
+ * popped by the playback thread once per 20 ms slot.  PSRAM, as the YSF
+ * playout queue already is; the PCM buffer handed to audioStream_start()
+ * stays in SRAM.
+ */
+static uint8_t queue[QUEUE_FRAMES][NXDN_AMBE_BYTES] PSRAM_STATE;
 static unsigned queueHead;
 static unsigned queueCount;
 

@@ -5,6 +5,10 @@
 > `protocols/DMR/`; `lib/dmr_encoder` is still the encoder. See
 > `docs/DMR_PKG.md` for the current chain, the air delay and the interleave
 > that `dmr_enc.c` applies to the canonical frames.
+>
+> `tests/unit/dmr_tx_fsm.cpp` went with the stage machine it tested. The
+> transmit path is covered by `tests/unit/dmr_lc_dest.cpp` and
+> `tests/unit/dmr_sms_format.cpp`, which now drive the package's builders.
 
 DMR (ETSI TS 102 361-1) transmitter for the Retevis C62: link control, CACH,
 FEC, burst framing, the 4FSK modulator and the PTT state machine, on the same

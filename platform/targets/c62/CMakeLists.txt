@@ -194,6 +194,12 @@ if(CONFIG_C62_DMR_RX OR CONFIG_C62_DMR_VOCODER)
     target_compile_definitions(app PRIVATE CONFIG_DMR_VOCODER)
   endif()
 
+  # The library's single instance (8 540 B, one decode per 20 ms frame) goes
+  # to PSRAM: see the comment on dmr_instance in dmr_vocoder.c.  The .bss flag
+  # that guards its first initialisation stays in SRAM.
+  target_compile_definitions(dmr_vocoder PRIVATE
+    "DMR_VOCODER_STATE_ATTR=__attribute__((section(\".psram_section\")))")
+
   # A measurement aid, off by default: an unreferenced static library is
   # dropped by the linker, and this forces the symbol in so its cost can be
   # read off the real image.

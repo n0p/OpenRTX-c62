@@ -18,6 +18,7 @@
  *     APRS_TX_MIN_GAP_MS.
  */
 #include "core/aprs_service.h"
+#include "core/psram_state.h"
 #include "protocols/APRS/afsk.h"
 #include "protocols/APRS/hdlc.h"
 #include "core/state.h"
@@ -43,8 +44,6 @@ static struct
 
     afsk_demod_t    demod;
     hdlc_deframer_t deframer;
-    aprs_station_list_t stations;
-    aprs_mbox_t     mbox;
 
     /* Pending acknowledgements: a short FIFO, because a station that has just
      * sent us a message is the only thing we owe an answer to. */
@@ -66,6 +65,18 @@ static struct
     /* The message whose packet is currently being transmitted */
     aprs_out_msg_t *txMsg;
 } svc;
+
+/*
+ * The two big tables of the service, in PSRAM: the list of stations heard
+ * (32 entries with their comments) and the message mailbox, about 6 KB
+ * together.  They are not part of `svc` because the struct also holds the
+ * 20 ms audio block handed to audioStream_start(), which is DMA and has to
+ * stay in SRAM.  Both are reset by aprs_service_init() every time the service
+ * opens, which is what makes them deterministic in a NOLOAD section
+ * (core/psram_state.h).
+ */
+static aprs_station_list_t stations PSRAM_STATE;
+static aprs_mbox_t mbox PSRAM_STATE;
 
 /* ------------------------------------------------------------- helpers --- */
 
@@ -188,7 +199,7 @@ static void onFrame(const uint8_t *frame, size_t len, void *user)
     if ((state.settings.aprs_lat_e4 != 0) || (state.settings.aprs_lon_e4 != 0))
         lp = &local;
 
-    aprs_station_update(&svc.stations, &f, &info,
+    aprs_station_update(&stations, &f, &info,
                         lp != NULL, local.lat, local.lon, nowMs());
 
     svc.rxCount++;
@@ -209,7 +220,7 @@ static void onFrame(const uint8_t *frame, size_t len, void *user)
             if (strcmp(info.addressee, own) != 0)
                 break;
 
-            if (aprs_mbox_onMessage(&svc.mbox, src, info.text, info.msgNo,
+            if (aprs_mbox_onMessage(&mbox, src, info.text, info.msgNo,
                                     nowMs()))
             {
                 if (state.settings.aprs_msgAck)
@@ -224,7 +235,7 @@ static void onFrame(const uint8_t *frame, size_t len, void *user)
 
         case APRS_INFO_ACK:
         case APRS_INFO_REJ:
-            aprs_mbox_onAck(&svc.mbox, src, info.msgNo,
+            aprs_mbox_onAck(&mbox, src, info.msgNo,
                             info.type == APRS_INFO_REJ);
             break;
 
@@ -239,8 +250,8 @@ void aprs_service_init(void)
 {
     memset(&svc, 0, sizeof(svc));
     hdlc_deframer_init(&svc.deframer);
-    aprs_station_list_init(&svc.stations);
-    aprs_mbox_init(&svc.mbox);
+    aprs_station_list_init(&stations);
+    aprs_mbox_init(&mbox);
     svc.path = -1;
     svc.stream = -1;
 }
@@ -350,7 +361,7 @@ bool aprs_sendMessage(const char *to, const char *text, uint32_t now)
     if (!ax25_digiValid(to))
         return false;
 
-    return aprs_mbox_queue(&svc.mbox, to, text, now);
+    return aprs_mbox_queue(&mbox, to, text, now);
 }
 
 static bool beaconDue(uint32_t now)
@@ -396,7 +407,7 @@ bool aprs_txPending(uint32_t now)
             return true;
     }
 
-    return aprs_mbox_nextTx(&svc.mbox, now) != NULL;
+    return aprs_mbox_nextTx(&mbox, now) != NULL;
 }
 
 bool aprs_txPrepare(char *info, size_t cap, aprs_pkt_t *kind, uint32_t now)
@@ -426,7 +437,7 @@ bool aprs_txPrepare(char *info, size_t cap, aprs_pkt_t *kind, uint32_t now)
         return true;
     }
 
-    aprs_out_msg_t *o = aprs_mbox_nextTx(&svc.mbox, now);
+    aprs_out_msg_t *o = aprs_mbox_nextTx(&mbox, now);
     if (o != NULL)
     {
         if (aprs_build_message(info, cap, o->peer, o->text, o->msgNo) == 0)
@@ -482,7 +493,7 @@ void aprs_txDone(aprs_pkt_t kind, uint32_t now)
         case APRS_PKT_MESSAGE:
             if (svc.txMsg != NULL)
             {
-                aprs_mbox_markTx(&svc.mbox, svc.txMsg, now);
+                aprs_mbox_markTx(&mbox, svc.txMsg, now);
                 svc.txMsg = NULL;
             }
             break;
@@ -497,24 +508,24 @@ void aprs_txDone(aprs_pkt_t kind, uint32_t now)
             break;
     }
 
-    aprs_mbox_tick(&svc.mbox, now);
+    aprs_mbox_tick(&mbox, now);
 }
 
 /* -------------------------------------------------------------- status --- */
 
 const aprs_station_list_t *aprs_stations(void)
 {
-    return &svc.stations;
+    return &stations;
 }
 
 aprs_mbox_t *aprs_mailbox(void)
 {
-    return &svc.mbox;
+    return &mbox;
 }
 
 void aprs_clearStations(void)
 {
-    aprs_station_list_init(&svc.stations);
+    aprs_station_list_init(&stations);
 }
 
 bool aprs_beaconEnabled(void)
@@ -534,5 +545,5 @@ uint32_t aprs_lastRxMs(void)
 
 bool aprs_hasUnread(void)
 {
-    return aprs_mbox_unread(&svc.mbox) > 0;
+    return aprs_mbox_unread(&mbox) > 0;
 }
