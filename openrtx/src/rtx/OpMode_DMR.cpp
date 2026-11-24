@@ -757,6 +757,10 @@ void OpMode_DMR::update(rtxStatus_t *const rtx, const bool newCfg)
 #endif
 
         case RX:
+#ifdef CONFIG_DMR_SMS
+            /* The address our answers go out from, whatever the TX options */
+            selfId = rtx->dmrSourceId;
+#endif
             break;
 
         default:
