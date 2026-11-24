@@ -61,6 +61,7 @@ enum msgTransport {
     MSG_TRANSPORT_APRS = 0, ///< APRS on the FM path
     MSG_TRANSPORT_DMR = 1,  ///< DMR short message (data call)
     MSG_TRANSPORT_TETRA = 2,///< TETRA SDS
+    MSG_TRANSPORT_DSTAR = 3,///< D-STAR DV slow-data text (20 characters)
     MSG_TRANSPORT_COUNT
 };
 

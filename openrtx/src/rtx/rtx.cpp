@@ -372,6 +372,9 @@ void rtx_task()
                 #ifdef CONFIG_YSF
                 case OPMODE_YSF:   currMode = &ysfMode;   break;
                 #endif
+                #ifdef CONFIG_DSTAR
+                case OPMODE_DSTAR: currMode = &dstarMode; break;
+                #endif
                 default:   currMode = &noMode;
             }
 
@@ -463,11 +466,18 @@ bool opmode_canTransmit(uint8_t mode)
         case OPMODE_TETRA:
             /* Receive only: OpMode_TETRA forces the status back to RX */
             return false;
+        case OPMODE_DSTAR:
+#ifdef CONFIG_DSTAR_TX
+            /* The transmit chain and its stage machine are compiled in */
+            return true;
+#else
+            /* Receive only: nothing keys the carrier in this build */
+            return false;
+#endif
         case OPMODE_NXDN:
         case OPMODE_DPMR:
         case OPMODE_P25:
         case OPMODE_YSF:
-        case OPMODE_DSTAR:
         case OPMODE_AIRBAND:
         case OPMODE_WFM_BC:
             /* Receive only: there is no transmitter for these modes yet */
