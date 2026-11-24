@@ -208,7 +208,7 @@ del 0,1 % del slot. El modulador ya lo pagaba la voz (117 669 por ráfaga).
 
 | | referencia | con SMS + mensajería | diferencia |
 |---|---|---|---|
-| FLASH | 547 596 B (52,22 %) | **558 264 B** (53,24 %) | **+10 668 B** (+2,0 %) |
+| FLASH | 547 596 B (52,22 %) | **558 272 B** (53,24 %) | **+10 676 B** (+2,0 %) |
 | RAM | 192 296 B (73,36 %) | **203 360 B** (77,58 %) | **+11 064 B** (+5,8 %) |
 | ITCM / PSRAMAP | 8 468 / 1 427 640 B | iguales | 0 |
 
