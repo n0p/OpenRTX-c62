@@ -13,7 +13,7 @@
 | ¿Cabe en el HiFi4? | **No.** 833 MMAC/s = **69 % del pico de MACs** del DSP (1,2 GMAC/s); con eficiencia realista de convolución (30–50 %) → **140–230 %** de un núcleo que además lleva la cadena de audio. |
 | ¿Cabe en el NPU? | **El tiempo sí, la memoria no.** ~70 ms por segundo de audio (≈7 % del NPU, 10–15 GMAC/s medidos por el vendor), pero **0,9–1,0 MiB de activaciones int8** frente a los ~640 KiB de SRAM que ve el motor, y el tensor mayor (512 KiB) ya no cabe. El de fábrica (`model-cmlp.bin`, 429 KB) es 4,4× más pequeño. |
 | ¿Latencia? | **1,03 s de bloque** más el tiempo de inferencia. Estructural: `amplitude_to_db(ref=max)` necesita el parche completo antes de normalizar. Inaceptable para PTT/voz. |
-| ¿Calidad (PoC medido)? | Sobre 33 bloques de voz DMR real: **RNNoise gana o empata** en SNR, segSNR y STOI en 11 de 12 condiciones; la UNet solo gana en PESQ a 0 dB SNR. La UNet **atenúa siempre ~17 dB** (el `*10` del repo es el parche), **rompe la transparencia** (STOI 0,690 vs 0,724 del ruidoso a 20 dB) y sobre voz limpia la deja a **SNR 1,2 dB**. |
+| ¿Calidad (PoC medido)? | Sobre 33 bloques de voz DMR real: **RNNoise gana SNR, segSNR y STOI en las 12 condiciones**; en PESQ la UNet gana 5 de 12 (hiss y viento a 0–10 dB) y pierde las 4 de 20 dB. La UNet **atenúa siempre ~17 dB** (el `*10` del repo es el parche), **rompe la transparencia** (STOI 0,690 vs 0,724 del ruidoso a 20 dB) y sobre voz limpia la deja a **SNR 1,2 dB**. |
 | ¿Merece la pena? | **No.** Por 96× los MACs y 22× la memoria de RNNoise no se gana calidad medible, y no cabe en el SoC sin recortarla a una variante que ya no es esta. Lo que sí tiene sentido: la **clase** de modelo (CNN sobre espectrograma) ya está en el chip de fábrica (CMLP/`anker_unet`, 429 KB) y en RNNoise. |
 
 ---
@@ -221,13 +221,13 @@ Métricas: SNR, SNR con ganancia óptima (SNR*, para separar error de nivel de d
 
 Tabla completa (12 condiciones) en `work/poc/sweep.txt`. Resumen:
 
-* **RNNoise gana en SNR, SNR\*, segSNR y STOI en 11 de 12 condiciones**; la UNet solo gana PESQ a 0 dB (1,96 vs 1,84) y empata a 20 dB.
+* **RNNoise gana SNR, SNR\*, segSNR y STOI en las 12 condiciones** (una, viento a 0 dB, por 0,1 dB). En PESQ la UNet gana 5 de 12 —hiss y viento a 0–10 dB, p. ej. 1,96 vs 1,84 a 0 dB— y pierde las cuatro de 20 dB (3,22 vs 3,63 en motor).
 * **La UNet nunca es transparente**: STOI a 20 dB baja de 0,724 (ruidoso) a 0,690. RNNoise lo sube a 0,734.
-* Ventaja de la UNet a 0 dB SNR: +7,4 dB de SNR con ganancia corregida (RNNoise +8,9). Es un empate técnico con 96× menos MACs en el otro lado.
+* A 0 dB de SNR de entrada, la UNet saca 7,4 dB con ganancia corregida y RNNoise 8,9 dB (el ruidoso, con su ganancia óptima, ya da 3,0 dB). Es decir: la UNet mejora +4,4 dB sobre el ruidoso, RNNoise +5,9 dB — y RNNoise hace eso con 96× menos MACs.
 
 ### 3.4 Tres defectos medidos, no opinados
 
-**(a) Atenuación fija de −17 dB.** La ganancia óptima UNet→limpio es **g = 6,7–7,5 en las 12 condiciones y en los 33 bloques**. El modelo "estima ruido" siempre de más, también sobre voz limpia: pasando **voz limpia** por la red, la salida queda a **SNR 1,2 dB y 0,136 de amplitud** (−17 dB). El `*10` del repo es exactamente ese parche. Un denoiser que necesita un factor 6,9 fijo no es un denoiser: es un compresor con forma espectral.
+**(a) Atenuación fija de −17 dB.** La ganancia óptima UNet→limpio es **g = 6,66–7,47 en las 12 condiciones** (y estable dentro de cada una, 33 bloques de 1 s). El modelo "estima ruido" siempre de más, también sobre voz limpia: pasando **voz limpia** por la red, la salida queda a **SNR 1,2 dB y 0,136 de amplitud** (−17 dB). El `*10` del repo es exactamente ese parche. Un denoiser que necesita un factor 6,9 fijo no es un denoiser: es un compresor con forma espectral.
 
 **(b) No reconoce cualquier voz.** Sobre `voice_shihao_8k.wav` (voz masculina, f0 ≈ 151 Hz) los **11 bloques** colapsan: la red predice **+42…+51 dB** en los bins de voz y la borra. Sobre `osr.wav` (f0 ≈ 211 Hz) funcionan 26/33 bloques y 7 colapsan a +38…+47 dB. Es el comportamiento típico de un modelo de 2019 entrenado con 10 épocas sobre audiolibros ingleses: se sabe la distribución y nada más. Con voz española y ruido de radio no hay ninguna garantía.
 
@@ -266,10 +266,10 @@ Es decir: el techo del algoritmo es +15 dB a 0 dB de SNR (hiss) y **+5…+7 dB c
 | Licencia | MIT, **con el copyright upstream borrado** | BSD-3, limpia |
 | Pesos | sí, upstream, inglés 8 kHz | sí, en el repo, + conversión int8 de Arm |
 | Formato de entrenamiento | TF/Keras (hay que portar a PyTorch) | C con pesos en tablas / TFLite int8 de Arm |
-| Calidad medida (mismo arnés, 33 bloques) | igual o **peor** en SNR/segSNR/STOI | igual o **mejor** |
+| Calidad medida (mismo arnés, 33 bloques) | peor en SNR/segSNR/STOI (0/12); mejor en PESQ en 5/12 | **mejor** en SNR/segSNR/STOI (12/12) |
 | Esfuerzo de integración | reescribir en PyTorch + QAT + rediseño de upsampling + memoria | reexpresar el grafo (ya hecho por Arm) + QAT |
 
-**La UNet no compra nada**: 96× los MACs de la red, 22× la memoria, 100× la latencia, para perder en todas las métricas salvo PESQ a 0 dB. Y no cabe.
+**La UNet no compra nada**: 96× los MACs de la red, 22× la memoria, 50–100× la latencia, para perder en todas las métricas salvo PESQ a 0 dB. Y no cabe.
 
 ---
 
@@ -324,7 +324,7 @@ Cambios mínimos si se insistiera:
 
 **Quedarse con RNNoise v0.1.1** (o con la CNN de fábrica) para el camino de voz:
 
-* **Precisión**: medido en el mismo arnés con voz real de 8 kHz, RNNoise gana en SNR, segSNR y STOI en 11 de 12 condiciones; la UNet solo gana PESQ a 0 dB SNR. La UNet además **no es transparente** (rompe el STOI a 20 dB) y **no reconoce voces fuera de su distribución** (colapsa con una voz masculina de 151 Hz).
+* **Precisión**: medido en el mismo arnés con voz real de 8 kHz, RNNoise gana en SNR, segSNR y STOI en las 12 condiciones. La UNet solo gana PESQ en 5 de 12 (hiss y viento a 0–10 dB, donde el ruido es más molesto que la distorsión) y además **no es transparente** (baja el STOI de 0,724 a 0,690 a 20 dB) y **no reconoce voces fuera de su distribución** (colapsa en los 11 bloques de una voz masculina de 151 Hz).
 * **Latencia**: 10–20 ms frente a 1 100 ms.
 * **Memoria**: 85,5 KiB frente a 1,85 MiB de pesos + 1 MiB de activaciones.
 * **Esfuerzo**: RNNoise cabe entero en el HiFi4 al 4–8 % (informe del otro subagente) y su conversión a int8 ya existe (Arm ML-zoo, Apache-2.0); la UNet exige port a PyTorch, QAT, cambio de upsampling y rediseño de memoria.
@@ -341,7 +341,7 @@ Todo en la rama `c62/nr-unet`, sin tocar otras ramas ni servidores:
 | Fichero | Qué hace |
 |---|---|
 | `scripts/model_cost.py` | params/MACs/MB por capa desde la arquitectura literal |
-| `scripts/unet_np_forward.py` | grafo numpy + planificador de memoria greedy + tiempo en host (`--time`: 58,2 ms/parche a 1 hilo, 29,5 GFLOP/s) |
+| `scripts/unet_np_forward.py` | grafo numpy + planificador de memoria greedy + tiempo en host (`--time`: 58–65 ms/parche a 1 hilo según carga del host, ~27–30 GFLOP/s efectivos) |
 | `scripts/unet_variants.py` | tabla de variantes (params, MACs, tasa, activaciones, ventana) |
 | `scripts/pipeline_audit.py` | geometría del STFT, techo del algoritmo, sensibilidad a errores del estimador |
 | `scripts/unet_infer.py` | inferencia real con los pesos del upstream, comparación UNet vs RNNoise (PESQ/STOI/SNR/segSNR), WAVs en `work/poc/` |
