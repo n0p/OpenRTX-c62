@@ -80,3 +80,9 @@ scripts/get_demod_log
 
 # OpenRTX Codeplugs
 *.rtxc
+
+# nr-unet (evaluacion UNet-Audio-Denoiser)
+vendor/
+.venv/
+work/
+model_cost.json
