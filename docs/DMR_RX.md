@@ -34,6 +34,7 @@ openrtx/src/protocols/DMR/
 openrtx/src/rtx/OpMode_DMR.cpp
 openrtx/include/rtx/OpMode_DMR.hpp
 tests/platform/c62_dmr_host.c        host harness (PHY + vocoder + PCM out)
+tests/unit/assets/dmr_air_bursts.wav two real voice bursts, for the air test
 ```
 
 The protocol layer is C, like `protocols/TETRA`: the prototype was C++17 for
@@ -108,37 +109,37 @@ anything ever moves to the DSP it is the per-sample RRC, which SIMD likes.
 
 ## Memory
 
-Measured on `c62/dmr-rx` with `-DCONFIG_C62_DMR_RX=y`, against the same tree
-with the option off (394 968 B flash / 143 144 B RAM) and against the vocoder
-alone (436 444 / 195 248, the measurement of `docs/DMR_VOCODER.md`):
+Measured on this branch with `-DCONFIG_C62_DMR_RX=y`, against the same tree
+with the option off, with the build used for the 440 332 B figure below:
 
 | build | FLASH | RAM |
 |---|---|---|
 | no DMR | 394 968 B (37.67 %) | 143 144 B (54.61 %) |
-| vocoder only | 436 444 B | 195 248 B |
-| **DMR RX** | **443 112 B (42.26 %)** | **198 600 B (75.76 %)** |
+| **DMR RX** | **440 332 B (41.99 %)** | **163 176 B (62.25 %)** |
 
-zephyr.bin 443 112 B, sha256 `8c1d1cb512ee7c597c78282e532cfee2737f7a4c7294e6c3e097c5356873d5ee`.
+zephyr.bin 440 332 B. The image embeds `git describe`, so its contents depend on
+the commit it is built from; the figures above are from the build of the commit
+that carries this paragraph.
 
-The mode costs **+6 668 B of flash** (PHY, FEC, speech, status, handler) and
-**+3 352 B of RAM** over the vocoder alone, **+48 144 B of flash** and
-**+55 456 B of RAM** over a firmware without DMR. The RAM is:
+`-DCONFIG_C62_DMR_VOCODER=y` on its own is not a measurable configuration: the
+option builds `lib/dmr_vocoder` but nothing references it, so `--gc-sections`
+drops every object and the image is the no-DMR one, byte for byte. The vocoder
+is only paid for when the mode links it, which is what the DMR RX row shows.
+
+The mode costs **+45 364 B of flash** (vocoder, PHY, FEC, speech, status,
+handler) and **+20 032 B of RAM** over a firmware without DMR. The RAM is:
 
 | object | bytes | note |
 |---|---|---|
-| vocoder DCT cache | 23 656 | `.bss`, belongs in flash (see below) |
-| vocoder arena | 12 288 | was 20 480; sized to the measured 11 200 B high-water |
-| vocoder state | 7 824 | three AMBE parameter sets |
-| baseband double buffer | 5 760 | 2 × 1440 samples of 48 kHz, the audio stream |
-| matched filter ring | 4 096 | 1024 samples at 24 kHz, 205 symbols |
-| everything else in the mode | ~1 200 | input history, speech queue, status |
+| vocoder instance | 8 540 | `.bss.dmr_instance`: AMBE parameter sets, arena and DCT cache |
+| PHY state | 4 648 | `.bss.phy`: 1 024-sample 24 kHz ring plus the 48 kHz history |
+| playback buffer and queue | 928 | 2 × 160 samples of PCM, 32 frames of AMBE |
+| everything else in the mode | ~5 900 | thread stacks, audio path, status, handlers |
 
-The vocoder arena was trimmed as part of this work: 20 480 → 12 288 B, 8 KiB
-back, on the strength of the measured high-water mark. The next 23 KiB is the
-AMBE DCT cosine cache, a constant table that is built at run time and only
-1 785 of whose 5 832 floats are read; turning it into a build-time table in
-flash is a change to the OpenDMR sources (the vocoder submodule), so it is not
-done here.
+The vocoder is a single 8 540 B object: its arena was trimmed to the measured
+high-water mark and the 23 KiB AMBE DCT cosine cache, a constant table that was
+built at run time, now lives in flash. That is the whole difference between the
+198 600 B / 75.76 % of the first port and today's 163 176 B / 62.25 %.
 
 ## What the screen shows
 
@@ -162,13 +163,41 @@ the playback thread releases the speaker after a second of silence.
   the prototype's own discriminator dump): **43 voice bursts, 43 decoded**, EVM
   0.020–0.027 throughout, colour code 13 from the slot types, a VoiceLC header
   and a Terminator at the end of the transmission, and the four data bursts at
-  the start of the capture. The prototype found the same 43 voice bursts but
-  its last 20 decode with EVM 0.19–0.39.
+  the start of the capture. The host prototype's current build decodes 42 of
+  the 43 (all but the last burst) at EVM 0.041–0.124; it extracts the same
+  frames from them (see below), the 2× decimated matched filter and the running
+  timing of point 3 above are what the firmware adds.
+* **De-interleaving, against the reference receiver.** On that capture the
+  chain produces 129 frames; 42 of its bursts also decode in the host prototype
+  (`work/dmr-rx/build/dmr_rx --ambe-out`) and **123 of those 126 frames are
+  byte-identical**, 113 bit differences in 9 072 (BER 1.3 %) confined to three
+  bursts the prototype itself decodes at EVM 0.19–0.39. **123 of the 129 frames
+  pass the AMBE+2 Golay parity with no corrections at all**, which is an
+  independent check of the whole path 216 bits → 3 × 72 bits: a wrong slot
+  order, rW/rX/rY/rZ schedule, EMB/LC position or `dmr_ambe_layout` permutation
+  fails that parity on every frame, not on three. The tables are DSD's and
+  op25's, checked line by line against `work/dmr-rx/ref`.
+* **Air regression.** `c62_dmr_host -s tests/unit/assets/dmr_air_bursts.wav`
+  decodes two real voice bursts of that capture and requires all six frames to
+  be the reference receiver's frames and to be accepted by the Golay parity
+  (no network, no prototype build needed). This is the check the synthetic loop
+  cannot do, because the test generator and the de-interleaver share the same
+  tables: swapping the dibit or the MSB order in
+  `dmr_fec_voice_deinterleave()` still gives 300/300 on the synthetic capture
+  and 0/6 here.
 * **Vocoder.** `dmr_vocoder_decode()` and OpenDMR's `opendmr_decode()` produce
   byte-identical PCM for the same frames (checked frame by frame).
-* **Audio.** `tests/platform/c62_dmr_host.c` writes 28.6 s of 8 kHz PCM from
-  that capture; 89 % of the energy of the loudest 200 ms is below 1 kHz, the
-  spectral signature of speech the prototype report used.
+* **Audio level.** `tests/platform/c62_dmr_host.c` writes 28.6 s of 8 kHz PCM
+  from that capture and reports the level of the decoded frames next to the
+  file totals: **RMS 2 598, peak 28 907** (prototype: 3 273 / 31 128, and the
+  same 41 of 42 common bursts give a per-frame RMS ratio of 1.00). 89 % of the
+  energy of the loudest 200 ms is below 1 kHz, the spectral signature of speech
+  the prototype report used. The decoder is stateful, so the harness keeps it
+  warm across gaps in the same way `DmrSpeech` does: 26.0 s of the 28.6 s are
+  silence where the capture has no burst (one voice burst every 360 ms), and
+  resetting the decoder at each of those gaps - which is what the harness did
+  before, and what 1 s of silence or more still does (`DMR_NEW_CALL_FRAMES`) -
+  drops the level to RMS 641 / peak 9 245 for exactly the same 129 frames.
 * **Firmware.** Builds with the Zephyr flow, no warnings from the new files;
   the TETRA and M17 modes are untouched apart from sharing the flat RX path.
 
@@ -179,7 +208,14 @@ cmake -S lib/dmr_vocoder -B build_dmr_vocoder && cmake --build build_dmr_vocoder
 cc -O2 -I openrtx/include -I lib/dmr_vocoder tests/platform/c62_dmr_host.c \
    openrtx/src/protocols/DMR/{DmrDefs,DmrFec,DmrPhy}.c \
    build_dmr_vocoder/libdmr_vocoder.a -lm -o c62_dmr_host
-./c62_dmr_host -o out.wav -c bursts.csv work/dmr-rx/out/discr_sigidwiki.wav
+
+# real-air regression (what CI would run if this had a CI)
+./c62_dmr_host -s tests/unit/assets/dmr_air_bursts.wav
+
+# whole capture: PCM, per-burst metrics, and the frames for an A/B against
+# work/dmr-rx/build/dmr_rx --ambe-out
+./c62_dmr_host -o out.wav -c bursts.csv -a frames.txt \
+   work/dmr-rx/out/discr_sigidwiki.wav
 ```
 
 ## Limitations
