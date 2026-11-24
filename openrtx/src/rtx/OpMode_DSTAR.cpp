@@ -26,7 +26,9 @@
 #include "protocols/DSTAR/DStarPhy.h"
 #include "protocols/DSTAR/DStarSpeech.h"
 #include "protocols/DSTAR/DStarStatus.h"
+#ifdef CONFIG_DSTAR_TX
 #include "protocols/DSTAR/DStarTx.h"
+#endif
 #include "rtx/OpMode_DSTAR.hpp"
 
 #ifdef CONFIG_DSTAR_MESSAGING
@@ -121,6 +123,8 @@ void OpMode_DSTAR::stopSampling()
 
 /* ------------------------------------------------------------------- tx --- */
 
+#ifdef CONFIG_DSTAR_TX
+
 bool OpMode_DSTAR::startTx(const rtxStatus_t *status)
 {
     struct dstarTxConfig cfg;
@@ -203,6 +207,31 @@ bool OpMode_DSTAR::txSlot()
     return false;
 }
 
+#else /* !CONFIG_DSTAR_TX: PTT does nothing in this mode */
+
+bool OpMode_DSTAR::startTx(const rtxStatus_t *status)
+{
+    (void)status;
+    return false;
+}
+
+void OpMode_DSTAR::stopTx()
+{
+    if (txId >= 0)
+        audioStream_terminate(txId);
+    if (txPath >= 0)
+        audioPath_release(txPath);
+    txId = -1;
+    txPath = -1;
+}
+
+bool OpMode_DSTAR::txSlot()
+{
+    return true;
+}
+
+#endif /* CONFIG_DSTAR_TX */
+
 /* --------------------------------------------------------------- opmode --- */
 
 void OpMode_DSTAR::enable()
@@ -264,6 +293,7 @@ void OpMode_DSTAR::update(rtxStatus_t *const rtx, const bool newCfg)
         return;
 
     case TX:
+#ifdef CONFIG_DSTAR_TX
         if (platform_getPttStatus() == false && txEnded == false) {
             /* PTT released: send the end pattern and stop */
             dstarTx_end();
@@ -273,6 +303,11 @@ void OpMode_DSTAR::update(rtxStatus_t *const rtx, const bool newCfg)
             rtx->opStatus = OFF;
             startRx = true;
         }
+#else
+        stopTx();
+        rtx->opStatus = OFF;
+        startRx = true;
+#endif
         return;
 
     case RX: {

@@ -18,7 +18,9 @@
 #endif
 #ifdef CONFIG_DMR
 #include "rtx/OpMode_DMR.hpp"
+#ifdef CONFIG_DSTAR
 #include "rtx/OpMode_DSTAR.hpp"
+#endif
 #endif
 #ifdef CONFIG_TETRA
 #include "rtx/OpMode_TETRA.hpp"
@@ -61,6 +63,8 @@ static OpMode_TETRA tetraMode;          // TETRA mode handler
 #endif
 #ifdef CONFIG_DMR
 static OpMode_DMR dmrMode;              // DMR mode handler
+#endif
+#ifdef CONFIG_DSTAR
 static OpMode_DSTAR dstarMode;          // D-STAR DV mode handler
 #endif
 
