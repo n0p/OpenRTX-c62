@@ -9,7 +9,7 @@ Hardware: SoC **ListenAI CSK6011B** (Cortex-M33 a 300 MHz + HiFi4 + NPU), transc
 160x128 y códec de audio de 48 kHz servido por el DSP.
 
 ```
-Estado: uso diario en FM y M17; TETRA y DMR en recepción; APRS en pruebas
+Estado: uso diario en FM, M17 y DMR; el resto de modos digitales en recepción
 Licencia: GPLv3 (ver LICENSE)
 ```
 
@@ -22,6 +22,13 @@ Licencia: GPLv3 (ver LICENSE)
 | TETRA TMO | si | no | voz ACELP, AFC, MCC/MNC y celda en pantalla, SDS con historial |
 | TETRA DMO | en pruebas | no | llamadas directas entre radios |
 | DMR Tier II/III | si | en pruebas | vocoder AMBE+2 propio, CC/slot/tipo de ráfaga en pantalla |
+| NXDN | si | no | RAN, 6,25/12,5 kHz, llamada y tipo de mensaje en pantalla |
+| dPMR (TS 102 490) | si | no | 4FSK en 6,25 kHz, datos cortos y voz AMBE+2 |
+| P25 Fase 1 | si (sin voz) | no | NAC, DUID y llamada en pantalla; falta el decodificador IMBE |
+| System Fusion (YSF) | si (sin voz FR) | no | C4FM; la voz de tasa completa es IMBE y no se decodifica |
+| D-STAR DV | si | en pruebas | indicativos, datos lentos y voz AMBE 3600x2400; TX con trama nula |
+| AM aéreo (118-137 MHz) | si | no | AGC, ráster de 25 / 8,33 kHz, designador de canal |
+| FM de radiodifusión (85-108 MHz) | si | no | sintonizador BK1080 propio, estéreo; sin RDS (el chip no lo tiene) |
 | APRS sobre FM | si | si | mensajería (SMS con ACK) como función principal |
 
 **Canales y manejo**
@@ -86,20 +93,30 @@ Lo más simple es usar la imagen de Docker que trae Zephyr y el SDK del CSK6:
 ```sh
 docker build -t openrtx-c62 .
 docker run --rm -v "$PWD":/work openrtx-c62 c62-build \
-    -DCONFIG_C62_DMR_RX=y -DCONFIG_C62_APRS=y
+    -DCONFIG_C62_DMR_RX=y -DCONFIG_C62_APRS=y \
+    -DCONFIG_C62_NXDN_RX=y -DCONFIG_C62_YSF=y -DCONFIG_C62_P25=y \
+    -DCONFIG_C62_DPMR_RX=y -DCONFIG_C62_DSTAR=y
 ```
 
 Los binarios quedan en `build_c62/zephyr/`:
 
 | Fichero | Destino | Tamaño actual |
 |---|---|---|
-| `zephyr.bin` | `0x000000` | 488.712 B (46,6 % de la partición de 1 MiB) |
+| `zephyr.bin` | `0x000000` | 614.740 B (58,6 % de la partición de 1 MiB) |
 | `dsp_firmware.bin` | `0x100000` | 466.832 B |
 
-Opciones de compilación relevantes:
+Opciones de compilación relevantes (todas apagadas por defecto salvo que se diga
+lo contrario; con las siete de arriba, RAM al 86,5 % — ver
+`docs/INTEGRATION.md`):
 
 - `CONFIG_C62_DMR_RX` — receptor DMR con vocoder AMBE+2 propio.
 - `CONFIG_C62_APRS` — APRS sobre FM (mensajería, baliza y decoding).
+- `CONFIG_C62_NXDN_RX` — NXDN de recepción.
+- `CONFIG_C62_DPMR_RX` — dPMR de recepción (TS 102 490).
+- `CONFIG_C62_YSF` — System Fusion de recepción.
+- `CONFIG_C62_P25` — P25 Fase 1 de recepción (sin decodificador IMBE).
+- `CONFIG_C62_DSTAR` — D-STAR DV; arrastra la voz AMBE 3600x2400
+  (`CONFIG_C62_DSTAR_VOCODER`) y el transmisor (`CONFIG_DSTAR_TX`).
 - `CONFIG_DMR_TX` — cadena de transmisión DMR. **Apagada por defecto**: sin encoder
   AMBE+2 el PTT se niega a transmitir.
 - `CONFIG_C62_UNLOCKED_TUNING` — rango completo del BK4819 (activa por defecto).

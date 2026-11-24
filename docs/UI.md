@@ -92,7 +92,7 @@ Per screen:
 | Main VFO / MEM | cursor (FM: step) | menu | replay prompt (long: channels) | quick menu (long: macro grid; FM: APRS) | — (S-meter) |
 | Menu (top, banks, settings, backup, info, about) | previous / next | open | — | — | back |
 | Settings pages | previous / next | edit | — | — | back (leaves edit first) |
-| Settings page of a mode (NXDN, AM) | previous / next row | cycle the value | value − (long: coarse) | value + (long: coarse) | back |
+| Settings page of a mode (NXDN, dPMR, P25, YSF, D-STAR, AM, WFM) | previous / next row | cycle the value | value − (long: coarse) | value + (long: coarse) | back |
 | Settings page, editing | change value | confirm | — | — | leave edit |
 | Default settings | — | Reset, then Reset again | — | — | back |
 | Quick menu | previous / next row | cycle value / open screen | value − (long: coarse) | value + (long: latch) | close |
@@ -250,9 +250,12 @@ underlying screen is still `MAIN_VFO`/`MAIN_MEM`, so `qm_open()` is gated on
 The editor holds every mode the registry marks as a channel mode
 (`UI_MODE_CHANNEL`): FM, M17 with `CONFIG_M17`, DMR with `CONFIG_DMR`
 (`CONFIG_C62_DMR_RX`), TETRA with `CONFIG_TETRA`, NXDN with `CONFIG_NXDN`
-(`CONFIG_C62_NXDN_RX`) and airband AM always. There is no list here any more:
-NXDN and AM were reachable from the keypad and not from a channel precisely
-because this file had its own copy of the modes.
+(`CONFIG_C62_NXDN_RX`), dPMR with `CONFIG_DPMR` (`CONFIG_C62_DPMR_RX`), P25
+with `CONFIG_P25` (`CONFIG_C62_P25`), YSF with `CONFIG_YSF` (`CONFIG_C62_YSF`),
+D-STAR with `CONFIG_DSTAR` (`CONFIG_C62_DSTAR`), and airband AM and broadcast
+FM always (neither has a build option). There is no list here any more: NXDN and
+AM were reachable from the keypad and not from a channel precisely because this
+file had its own copy of the modes.
 
 `BW` is per mode, not a plain 12.5/25 toggle: FM walks 12.5 / 25 / 6.25, NXDN
 12.5 / 6.25 (its channel spacing) and AM 25 / 12.5 (the wide or narrow IF of the
@@ -422,6 +425,43 @@ demodulator reports: `SYNC` (sync state and EVM, or `SRCH`), `CALL` (source >
 destination of the last layer 3 message the SACCH carried) and `TYPE` (`VCALL`,
 `TXREL`, `DISC`). Then `FINE`, `BKL`, `KEYLIT`, `LOCK`, `MSGS`, `MSG`.
 
+### dPMR, receive only (7–8 rows)
+
+`SYNC` is the whole table's own row: `RX` while the mode is following a call
+(its squelch opens with the frame grid and the CCH CRC), `SRCH` otherwise. dPMR
+is one 6.25 kHz carrier with no timeslots and no channel spacing to choose, and
+its PHY publishes no counters to the UI yet, so there is nothing else to put
+there. Then `FINE`, `BKL`, `KEYLIT`, `LOCK`, `MSGS`, `MSG`.
+
+### P25 Phase 1, receive only (10–11 rows)
+
+What the receiver reports: `SYNC` (`VOX`, `SYNC` or `SRCH`), `NAC` (three hex
+digits, `---` until one decodes), `TYPE` (the data unit of the last frame) and
+`CALL` (source > talkgroup of the last link control). Then `FINE`, `BKL`,
+`KEYLIT`, `LOCK`, `MSGS`, `MSG`.
+
+### YSF, receive only (7–8 rows)
+
+`SYNC` only, for now: `RX` while the mode tracks a carrier, `SRCH` otherwise.
+The frame layer does not publish a status block yet (`docs/RX_FUSION.md`), so
+the table is that row plus `FINE`, `BKL`, `KEYLIT`, `LOCK`, `MSGS`, `MSG`.
+
+### D-STAR, receive only (11–12 rows)
+
+The callsigns are the mode: `SYNC`, `MY` (own callsign and suffix), `UR`
+(destination), `RPT` (access repeater) and `TXT` (the last 20-character
+slow-data message). All of them read `---` until a header with a good P_FCS
+arrives, so nothing on the screen can be mistaken for a real call. Then `FINE`,
+`BKL`, `KEYLIT`, `LOCK`, `MSGS`, `MSG`.
+
+### WFM, broadcast FM, receive only (9 rows)
+
+Everything here is what the BK1080 reports: `ST` (`STEREO`, `PILOT`, `MONO` or
+`SRCH`), `LVL` (dBuV), `SNR` (the chip's 0..15 estimate) and `CH` (the CCIR
+channel index). There is no `SQL` and no `PWR` row: the tuner's AFC says whether
+there is a station, there is no transmitter, and the volume is the analog pot. Then
+`BKL`, `KEYLIT`, `LOCK`, `MSGS`, `MSG`.
+
 ### AM, airband, receive only (11–12 rows)
 
 `SQL` is the **carrier** squelch: the same level as FM, but in AM the audio
@@ -467,7 +507,7 @@ from it:
 | Channel editor, `MODE` field | `ui_mode_inChannelList()` — `UI_MODE_CHANNEL` |
 | Side key, mode cycle | `ui_mode_next()` — `UI_MODE_SELECT`, in table order |
 | Quick menu | `qm_findMenu()` → the entry's rows; FM if the mode has none |
-| Settings → `<mode>` | every entry with `UI_MODE_PAGE`, in table order |
+| Settings → `<mode>` | every entry with `UI_MODE_PAGE`, in table order (NXDN, dPMR, P25, YSF, DSTAR, AM, WFM in this build) |
 | Header of the main screens | `ui_mode_label()` → `chstore_modeName()` |
 | Channel records, channel list | `chstore_modeName()` — the only place a mode is spelled |
 

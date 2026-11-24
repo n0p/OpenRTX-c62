@@ -23,9 +23,11 @@ encima fusiona, en este orden:
 | `c62/rx-p25` | P25 Fase 1: C4FM, NID/BCH, TSBK, IMBE encuadrado | `OPMODE_P25`, `docs/RX_P25.md` |
 | `c62/rx-fusion` | System Fusion (C4FM) con el vocoder AMBE+2 de DMR | `OPMODE_YSF`, `docs/RX_FUSION.md` |
 | `c62/rx-wfm` | FM de radiodifusión con el sintonizador BK1080, fuera del códec | `OPMODE_WFM_BC`, `BK1080.*`, `core/wfm.*`, `docs/RX_WFM.md` |
+| `c62/rx-dpmr` | dPMR (TS 102 490): 4FSK 2400 Bd en 6,25 kHz, CCH, datos cortos y voz AMBE+2 | `OPMODE_DPMR`, `protocols/DPMR/**`, `docs/RX_DPMR.md` |
+| `c62/dstar-voice` | D-STAR DV: cabecera con FEC convolucional, tramas de 96 bits, datos lentos y voz AMBE 3600x2400 (`lib/dstar_vocoder`) | `OPMODE_DSTAR`, `protocols/DSTAR/**`, `docs/RX_DSTAR.md` |
 
-Una compilación con todo encendido tiene, por tanto, nueve modos: FM, M17, DMR,
-TETRA, NXDN, P25, YSF, AM aéreo y WFM.
+Una compilación con todo encendido tiene, por tanto, **once modos**: FM, M17,
+DMR, TETRA, NXDN, dPMR, P25, YSF, D-STAR, AM aéreo y WFM.
 
 ## 2. Reglas de numeración (no se tocan)
 
@@ -42,16 +44,15 @@ mueve ni se reutiliza: viaja en los registros de canal y en los ajustes.
 | 3 | `OPMODE_M17` | sí |
 | 4 | `OPMODE_TETRA` | no |
 | 5 | `OPMODE_NXDN` | no |
-| 6 | `OPMODE_DPMR` | no (sin implementar, ver §6) |
+| 6 | `OPMODE_DPMR` | no |
 | 7 | `OPMODE_P25` | no |
 | 8 | `OPMODE_YSF` | no |
-| 9 | `OPMODE_DSTAR` | no (sin implementar, ver §6) |
+| 9 | `OPMODE_DSTAR` | sí, con `CONFIG_DSTAR_TX` (voz = trama nula: no hay encoder 3600x2400) |
 | 10 | `OPMODE_AIRBAND` | no |
 | 11 | `OPMODE_WFM_BC` | no |
 
-Los valores 6 y 9 están reservados por sus ramas: existen en el enumerado y en
-las listas de modos válidos, pero este árbol no tiene su `OpMode_*` ni su
-`OPMODE_*` en el `switch` de `rtx.cpp`, así que no se pueden seleccionar.
+Los once valores están vivos en este árbol: cada uno tiene su `OpMode_*`, su
+`case` en `rtx_rxSquelchOpen`/`rtx.cpp` y su entrada en el registro de la UI.
 
 ### 2.2 Ajustes (`openrtx/include/core/settings.h`)
 
@@ -118,6 +119,56 @@ WFM (BK1080). Ninguna se descartó:
   duplicado dentro y fuera, con un `#ifdef` sin cerrar.
 - **`meson.build`**: airband, agc y wfm se compilan y se prueban a la vez.
 
+### 3.0 Segunda pasada: dPMR y D-STAR
+
+Las dos ramas son aditivas y se resolvieron conservando todo, ordenando por modo
+y apendiendo lo que va a los ajustes (esta rama ya estaba en `SETTINGS_VERSION`
+5 y ninguna de las dos trae campos nuevos: dPMR y D-STAR no guardan nada propio,
+así que no hubo renumeración ni subida de versión).
+
+Lo que chocó y cómo se resolvió:
+
+- **`rtx.h`**: las dos ramas reañadían su valor al enumerado. Se quedó la tabla
+  única (0..11) que ya tenía `c62/mega`; `OPMODE_DPMR = 6` y `OPMODE_DSTAR = 9`
+  ya estaban ahí con el mismo valor que traían las ramas.
+- **`channel_store.c`, `zones.c` (listas de modos válidos) y
+  `voicePromptUtils.c`**: las ramas añadían su modo a listas que aquí ya lo
+  tenían. Se conservó la lista completa y se añadieron los anuncios de voz que
+  faltaban (`dPMR`, `P25`, `YSF`, `D STAR`, `F M`).
+- **`rtx.cpp`**: la rama de dPMR metía un `case OPMODE_DPMR` delante de
+  `OPMODE_DMR` en `opmode_canTransmit()` y el árbol ya tenía otro más abajo — un
+  `case` duplicado que no compila; se quitó el de la rama. En las listas de
+  `#include` y de instancias, la inclusión de D-STAR había quedado **dentro** del
+  `#ifdef CONFIG_DMR` (la rama la puso detrás del include de DMR y el `#endif` de
+  DMR la absorbió): se sacó a su propio `#ifdef CONFIG_DSTAR`. D-STAR entra en
+  `opmode_canTransmit()` con `CONFIG_DSTAR_TX`, como en su rama.
+- **`radio_C62.cpp`**: se conservaron los dos juegos de constantes (AM/WFM de la
+  primera pasada, dPMR de la segunda) y los dos bloques del `if/else if` de
+  `radio_setOpmode()`, en orden de modo (NXDN, DPMR, P25/YSF/DSTAR, TETRA,
+  AIRBAND, WFM_BC). La vuelta atrás de los perfiles especiales (modulación FM y
+  salida del sintonizador) sigue **antes** del cambio de modo, como estaba.
+- **`flatMode()`**: P25, YSF y D-STAR no estaban, así que recibían el perfil de
+  voz FM (de-énfasis, compresor y REG_7E con el paso alto) en vez del
+  discriminador plano. Los tres son baseband de envolvente constante (C4FM a
+  4800 sym/s y GMSK de D-STAR), así que ahora entran en `flatMode()` y en
+  `radio_setOpmode()` con el perfil de NXDN: `AUDIO_BYPASS`, canal de 12,5 kHz,
+  filtro 7,7 y `REG_43 = 0x7e48`. **No medido en el aire todavía**: es el perfil
+  con el que se desarrollaron sus demods en el host.
+- **`CMakeLists.txt`**: los bloques de NXDN, dPMR, YSF, P25, DMR SMS y D-STAR
+  conviven; el registro de `-ffp-contract=off` de `DpmrPhy.c` se conserva.
+- **`Kconfig.board`**: dPMR entra como `C62_DPMR_RX` (selecciona
+  `C62_DMR_VOCODER` si no hay DMR RX) y D-STAR como `C62_DSTAR` + sus dos
+  subopciones `C62_DSTAR_VOCODER` y `DSTAR_TX`. La rama de D-STAR traía
+  `select MESSAGING`, que en este árbol no existe como símbolo de Kconfig (el
+  store es la opción CMake `C62_MESSAGING`, y la macro `CONFIG_MESSAGING` la
+  emite `target_compile_definitions`): se quitó el `select` y el `if` del CMake
+  pasa a `if(C62_MESSAGING)` para definir `CONFIG_DSTAR_MESSAGING`. Con el
+  `if(CONFIG_MESSAGING)` de la rama, ese macro nunca se definía.
+- **`rtx.cpp`, `rtx_rxSquelchOpen()`**: las filas `SYNC` de dPMR y YSF preguntan
+  por el squelch del modo, y en el host `currMode` es `NULL` hasta `rtx_init()`
+  (el hilo del RTX no se arranca), así que la primera pasada de tests se caía con
+  SIGSEGV en `ui_modes_test`. La función devuelve `false` sin modo.
+
 ### 3.1 Trampa de Kconfig (arreglada)
 
 `platform/targets/c62/CMakeLists.txt` declaraba `option(CONFIG_MESSAGING)`,
@@ -137,52 +188,110 @@ Todo encendido:
 cd /home/n0p/src/c62/build/c62-ws-mega
 sudo docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/work openrtx-c62 \
     c62-build -DCONFIG_C62_DMR_RX=y -DCONFIG_C62_APRS=y \
-               -DCONFIG_C62_NXDN_RX=y -DCONFIG_C62_YSF=y -DCONFIG_C62_P25=y
+               -DCONFIG_C62_NXDN_RX=y -DCONFIG_C62_YSF=y -DCONFIG_C62_P25=y \
+               -DCONFIG_C62_DPMR_RX=y -DCONFIG_C62_DSTAR=y
 ```
 
-Uso de memoria del enlazado (Cortex-M33, Zephyr 3.4, TETRA y wide RX también
-encendidos):
+`CONFIG_C62_DSTAR` arrastra `C62_DSTAR_VOCODER` (por defecto `y`) y
+`DSTAR_TX` (por defecto `y`). El símbolo de dPMR es `CONFIG_C62_DPMR_RX`, y el
+de D-STAR `CONFIG_C62_DSTAR`; los dos existen en `Kconfig.board` y el resultado
+se comprueba en `zephyr/include/generated/autoconf.h`, no en la línea de
+órdenes.
+
+Uso de memoria del enlazado (Cortex-M33, Zephyr 3.4, TETRA, wide RX, DMR TX y
+las dos ramas de esta pasada y sus pantallas también encendidos), `zephyr.bin`
+de 614 740 B:
 
 | Región | Usado | Tamaño | % |
 |---|---|---|---|
-| FLASH | 556 752 B | 1 MB | 53,10 % |
-| RAM | 213 880 B | 256 KB | 81,59 % |
+| FLASH | 614 740 B | 1 MB | 58,63 % |
+| RAM | 226 736 B | 256 KB | 86,49 % |
 | ITCM | 8 468 B | 16 KB | 51,68 % |
 | DTCM | 0 B | 16 KB | 0,00 % |
-| PSRAMAP | 462 166 B | 1 792 KB | 25,19 % |
+| PSRAMAP | 487 046 B | 1 792 KB | 26,54 % |
 
-Cabe, con el margen más justo en RAM (unas 42 KB libres sobre 256 KB) y mucha
-holgura en flash y PSRAM. Lo que se recortaría primero si hiciera falta: el
-vocoder AMBE+2 (`CONFIG_C62_DMR_VOCODER`, 41 KiB de flash y 52 KiB de RAM,
-compartido por DMR, NXDN y YSF), y después los modos de recepción que menos se
-usen (`CONFIG_C62_P25`, `CONFIG_C62_YSF`).
+**Cabe**: quedan 433 836 B de flash, 35 408 B de RAM (34,6 KB) y 1 307 962 B de
+PSRAM. La RAM es la región justa otra vez: pasa del 80 % que el banco de TX se
+puso como techo (209 715 B) por 17 021 B.
+
+Lo que costó esta pasada, medido contra la misma compilación sin dPMR ni D-STAR
+(556 904 B / 213 880 B / 462 166 B):
+
+| | FLASH | RAM | PSRAM |
+|---|---|---|---|
+| dPMR + D-STAR + UI | +57 836 B | +12 856 B | +24 880 B |
+
+El reparto de esa RAM, por símbolos (`.bss`/`.data`):
+
+- **D-STAR, 10,4 KB**: `dstarMode` son 5 788 B, y 5 760 de ellos son el
+  `audioBuffer[2*1440]` que comparten RX y TX (es el búfer que se le pasa a
+  `audioStream_start()`, o sea DMA: no puede ir a PSRAM). Encima, el anillo del
+  PHY (1 KB), los 660 bits blandos de la cabecera y sus 660 de trabajo (1,3 KB),
+  la lista de estaciones oídas (544 B) y el estado de datos lentos (316 B).
+  Los **+8 B** que documenta `docs/RX_DSTAR.md` son del *vocoder* (su estado de
+  14 096 B está en PSRAM), no del modo entero.
+- **dPMR, 128 B** (`dpmrMode`): sus 10 784 B de anillos y buffers están en
+  `.psram_section`, como decía su rama.
+- Las tablas de la UI son `const`: 4 008 B de flash y 24 B de RAM (el estado
+  del menú rápido no cambia).
+- El resto es alineación y los símbolos pequeños de los dos PHY.
+
+Si hiciera falta bajar del 80 % (hay que quitar 17 021 B), por este orden y sin
+tocar nada medido en el aire:
+
+1. `-DCONFIG_DSTAR_TX=n`: −5,7 KB de golpe (el `audioBuffer` y el estado del
+   transmisor); PTT queda inerte en D-STAR y la recepción no cambia.
+2. Mover a `.psram_section` lo que no es DMA de D-STAR: cabecera (1,3 KB), lista
+   de oídos (544 B) y anillo del PHY (1 KB) → −2,9 KB. Hay que darles su
+   `reset()` porque la sección es NOLOAD.
+3. El vocoder AMBE+2 (`CONFIG_C62_DMR_VOCODER`, compartido por DMR, NXDN, YSF y
+   dPMR) sigue siendo el mayor: apagarlo cuesta la voz de cuatro modos.
+4. Y después los modos de recepción que menos se usen (`CONFIG_C62_P25`,
+   `CONFIG_C62_YSF`, `CONFIG_C62_DPMR_RX`).
 
 ## 5. Tests de host
 
 ```
-meson setup build_host
-meson test -C build_host --print-errorlogs
+meson setup build_host -Dcpp_args=-fpermissive
+meson test -C build_host --suite OpenRTX --print-errorlogs --no-rebuild
 ```
 
-41 entradas, **41 en verde** (40 del proyecto más el `SelfTest` de Catch2), con
-`linux_inputStream_test` excluido porque ya estaba roto antes de esta
-integración: no está registrado en `meson.build` y no se construye.
+**43 entradas, 43 en verde** (`SelfTest` de Catch2 aparte). `linux_inputStream_test`
+sigue excluido porque ya estaba roto antes de esta integración: no está
+registrado en `meson.build` y no se construye.
 
-## 6. Qué falta
+Lo que añade esta pasada a la suite: las cinco tablas nuevas entran en el
+recorrido compartido de `ui_quickmenu_test` (todas las filas de todos los modos,
+formateadas y ajustadas a su límite), y `ui_modes_test` comprueba modo a modo
+que la etiqueta cabe en la cabecera, que la tecla lateral pasa por los once y
+vuelve, que cada página de ajustes es la misma tabla que el menú rápido y que un
+modo sin datos no imprime un cero (`SRCH`/`---`). Para poder hacerlo en el host,
+`meson.build` compila en el binario de test los tres módulos de estado
+portables que leen las pantallas: `P25Status.c`, `DStarStatus.c` y
+`DStarSlowData.c`, y define `UI_TEST_DPMR/P25/YSF/DSTAR` (no los `CONFIG_*`,
+que arrastrarían los demods y el vocoder a todos los binarios).
 
-- **dPMR** (`c62/rx-dpmr`): el valor 6 del enumerado está reservado y las listas
-  lo aceptan, pero no hay `OpMode_DPMR`, ni PHY, ni entrada en el `switch` de
-  `rtx.cpp`.
-- **DMR empaquetado** (`c62/dmr-pkg`): el paquete de cambios de DMR que quedó
-  fuera de esta fusión (modulación y detalles de RX/TX que no entraron en
-  `c62/next`).
-- **D-STAR** (`c62/dstar-voice`): el valor 9 está reservado, sin decodificador de
-  voz ni `OpMode_DSTAR`.
-- **Pantallas de P25, YSF y WFM**: los tres modos compilan y se enlazan, y se
-  llega a ellos por un canal o una zona, pero no están en el registro de modos
-  de la UI (`uiModes[]` en `ui_quickmenu.c`): no salen en el ciclo de la tecla
-  lateral ni en el editor de canales, y no tienen línea de estado propia.
+## 6. Qué queda (y qué no)
+
+Los once modos están en la UI: ciclo de la tecla lateral, editor de canales y
+página de ajustes propia, con sus filas de menú rápido y su línea de estado en
+la pantalla principal (`docs/UI.md`, «Mode registry»). Lo que sigue pendiente es
+de fondo, no de registro:
+
 - **Voz de P25**: hace falta un decodificador IMBE (`CONFIG_C62_P25_VOCODER`,
   ver `docs/RX_P25.md`); sin él el modo cuenta las tramas y no suena.
 - **Voz FR de YSF**: el modo de voz de tasa completa lleva IMBE a 7200 bit/s y
-  no hay decodificador; se cuenta y se salta (`docs/RX_FUSION.md`).
+  no hay decodificador; se cuenta y se salta (`docs/RX_FUSION.md`). Las filas
+  del menú de YSF son, por eso, `SYNC` y la cola común: el frame layer todavía
+  no publica un bloque de estado que la UI pueda leer.
+- **Voz de D-STAR**: el transmisor manda la trama nula de AMBE (no hay encoder
+  3600x2400); la recepción sí decodifica voz.
+- **P25/YSF/D-STAR en el aire**: su perfil de RF (discriminador plano, 12,5 kHz,
+  `REG_43 = 0x7e48`) está sin medir en la radio.
+- **DMR empaquetado** (`c62/dmr-pkg`): el paquete de cambios de DMR que quedó
+  fuera de esta fusión (modulación y detalles de RX/TX que no entraron en
+  `c62/next`).
+- **dPMR ↔ mensajes**: los datos cortos de dPMR (5.9.1 y 5.9.2) se decodifican,
+  pero no hay transporte de dPMR en `core/messaging` (`docs/RX_DPMR.md`).
+- **Voz del P25 y del YSF en modo 2** y el resto de lo que cada `docs/RX_*.md`
+  deja escrito en su última sección.
