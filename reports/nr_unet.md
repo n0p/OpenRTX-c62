@@ -181,7 +181,7 @@ Comparación: RNNoise procesa **tramas de 10 ms** con ~10–20 ms de retardo. La
 | `Dropout` | n/a | no-op en inferencia, se elimina |
 | Formato | **NCHW, batch 1, int8 puro** | la red es TF/Keras ⇒ **hay que reescribirla en PyTorch**: `linger` solo admite PyTorch |
 
-Conclusión de operadores: **no hay bloqueo conceptual**, pero la conversión no es "exportar y empaquetar": hay que (1) reimplementar en PyTorch, (2) cambiar la salida `tanh` por una formulación compatible, (3) reentrenar por el cambio de upsampling, (4) QAT con `linger` (int8 puro en Venus, sin fp16). Es un trabajo de **2–3 días** más la vuelta de tuerca de calibración.
+Conclusión de operadores: **no hay bloqueo conceptual**, pero la conversión no es "exportar y empaquetar": hay que (1) reimplementar en PyTorch, (2) cambiar la salida `tanh` (que mapea 164 dB en [-1,1]) por una máscara `sigmoid` acotada, mucho mejor condicionada para int8, (3) reentrenar por el cambio de upsampling, (4) QAT con `linger` (int8 puro en Venus, sin fp16). Es un trabajo de **2–3 días** más la vuelta de tuerca de calibración.
 
 ---
 
@@ -195,7 +195,7 @@ Caveat importante: son pesos entrenados con **audiolibros en inglés a 8 kHz** y
 
 ### 3.2 Montaje
 
-`scripts/unet_infer.py`: reimplementación numpy del grafo (validada, §1.4) + pipeline completo (bloques de 8064 → STFT → dB → red → resta → ISTFT) sobre **`opendmr-port/audio/osr.wav`**, 33,3 s de voz real decodificada por el path DMR (misma clase de señal que la C62). Ruidos **sintéticos** con la forma espectral del caso (hiss de FM estrecha 250–3200 Hz, motor 47 Hz con AM, viento paso bajo modulado) a 0/5/10/20 dB de SNR. Se comparan: ruidoso, UNet y **RNNoise v0.1.1** (`rnnoise_demo` del árbol de RNNoise, camino 8k→48k→8k con `resample_poly`, cuyo *null test* da 34,7 dB de SNR).
+`scripts/unet_infer.py`: reimplementación numpy del grafo (validada, §1.4) + pipeline completo (bloques de 8064 → STFT → dB → red → resta → ISTFT) sobre **`opendmr-port/audio/osr.wav`**, 33,3 s de voz real a 8 kHz del árbol de OpenDMR (misma tasa y banda que la C62: 0–4 kHz). Ruidos **sintéticos** con la forma espectral del caso (hiss de FM estrecha 250–3200 Hz, motor 47 Hz con AM, viento paso bajo modulado) a 0/5/10/20 dB de SNR. Se comparan: ruidoso, UNet y **RNNoise v0.1.1** (`rnnoise_demo` del árbol de RNNoise, camino 8k→48k→8k con `resample_poly`, cuyo *null test* da 34,7 dB de SNR).
 
 Métricas: SNR, SNR con ganancia óptima (SNR*, para separar error de nivel de distorsión), segSNR 20 ms, **PESQ-NB** (`pesq` 8 kHz) y **STOI**. POLQA no es libre; PESQ-NB es el estándar equivalente a 8 kHz.
 
