@@ -5,14 +5,15 @@
  */
 
 #include "core/zones.h"
+#include "core/airband.h"
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
 
 /*
- * The three plans of this build.  Frequencies are the channel the radio
- * listens on (the repeater output); the shift takes it to the repeater input.
- * See docs/ZONES.md for the sources.
+ * The plans of this build.  Frequencies are the channel the radio listens on
+ * (the repeater output); the shift takes it to the repeater input.  See
+ * docs/ZONES.md for the sources.
  */
 static const zone_t zones[ZONE_COUNT] =
 {
@@ -59,6 +60,21 @@ static const zone_t zones[ZONE_COUNT] =
         .bandwidth= BW_12_5,
         .power    = 500,          /* 500 mW, fixed by the standard    */
         .flags    = ZONE_FLAG_PMR | ZONE_FLAG_FIXED_POWER | ZONE_FLAG_SIMPLEX,
+        .planEvery= 1,
+    },
+    {
+        .id       = ZONE_AIRBAND,
+        .prefix   = "A",
+        .descr    = "Airband AM 118-137",
+        .base     = 118000000U,   /* 118.000 MHz, A0 = channel 118.000 */
+        .step     =   25000,      /* the 25 kHz raster                */
+        .shift    =        0,     /* receive only, no TX frequency    */
+        .count    = AIRBAND_CHANNELS_25K,
+        .first    = 0,
+        .mode     = OPMODE_AIRBAND,
+        .bandwidth= BW_12_5,      /* 8.33 kHz spacing: narrow IF      */
+        .power    = 5000,         /* unused: the channel is RX only   */
+        .flags    = ZONE_FLAG_AIRBAND | ZONE_FLAG_RX_ONLY | ZONE_FLAG_SIMPLEX,
         .planEvery= 1,
     },
 };
@@ -111,6 +127,12 @@ const char *zones_channelName(uint8_t id, uint16_t index, char *buf,
     if (z == NULL || index >= z->count) {
         buf[0] = '\0';
         return buf;
+    }
+
+    /* An airband channel is called by its frequency, "118.025" */
+    if ((z->flags & ZONE_FLAG_AIRBAND) != 0) {
+        freq_t freq = z->base + (freq_t)z->step * index;
+        return airband_channelName(freq, buf, cap);
     }
 
     snprintf(buf, cap, "%s%u", z->prefix, (unsigned)(z->first + index));
@@ -176,7 +198,8 @@ bool zones_channelValid(const zone_channel_t *zc)
         return false;
 
     if (zc->mode != OPMODE_FM && zc->mode != OPMODE_M17 &&
-        zc->mode != OPMODE_DMR && zc->mode != OPMODE_TETRA)
+        zc->mode != OPMODE_DMR && zc->mode != OPMODE_TETRA &&
+        zc->mode != OPMODE_AIRBAND)
         return false;
 
     return true;
