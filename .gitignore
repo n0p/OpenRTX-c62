@@ -85,3 +85,8 @@ scripts/get_demod_log
 /build-host/
 /build-qemu/
 /build-lt-*/
+
+# dPMR working material: the ETSI PDFs, the DSDcc and dsd-neo checkouts used as
+# references and the captures the receiver was developed against.  Sources and
+# copyrights are their own; nothing of it is distributed with the firmware.
+/dpmr_spec/

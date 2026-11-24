@@ -357,6 +357,9 @@ void rtx_task()
                 #ifdef CONFIG_DMR
                 case OPMODE_DMR:   currMode = &dmrMode;   break;
                 #endif
+                #ifdef CONFIG_DPMR
+                case OPMODE_DPMR:  currMode = &dpmrMode;  break;
+                #endif
                 #ifdef CONFIG_TETRA
                 case OPMODE_TETRA: currMode = &tetraMode; break;
                 #endif

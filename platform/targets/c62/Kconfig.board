@@ -160,6 +160,33 @@ config DMR_TX_ENC
 endmenu
 
 #
+# dPMR (ETSI TS 102 490): 6,25 kHz FDMA, 4FSK at 2400 symbols/s, receive only.
+# platform/targets/c62/CMakeLists.txt builds the mode and links lib/dmr_vocoder
+# for its voice. Enable it with
+#   west build -b c62 ... -- -DCONFIG_C62_DPMR_RX=y
+# See docs/RX_DPMR.md.
+#
+menu "dPMR"
+
+config C62_DPMR_RX
+	bool "dPMR receive mode (6,25 kHz, TS 102 490)"
+	select C62_DMR_VOCODER if !C62_DMR_RX
+	default n
+	help
+	  dPMR receive mode: 4FSK at 2400 symbols/s on a 6,25 kHz channel,
+	  80 ms frames of 384 bits, header and END frames, the CCH of every
+	  frame (frame number, communication mode, 12 bit address slices) and
+	  voice through the AMBE+2 3600x2450 decoder, which is the same
+	  lib/dmr_vocoder the DMR mode uses: dPMR carries the frame with a
+	  4-way interleave, not a different vocoder.
+
+	  Receive only: there is no dPMR transmitter, and PTT in this mode does
+	  nothing. ALSA-like flat discriminator input, one carrier per channel:
+	  dPMR is FDMA, there are no timeslots.
+
+endmenu
+
+#
 # APRS on the analog FM path: AX.25 frames, Bell 202 AFSK at 1200 baud,
 # messaging with acknowledgements, an optional beacon and the received station
 # list. It is not an operating mode: the decoder rides on FM and both the

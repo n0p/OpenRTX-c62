@@ -133,9 +133,29 @@ void vp_announceRadioMode(const uint8_t mode, const enum vpQueueFlags flags)
             vp_queueString("NXDN", (enum vpFlags)0);
             break;
 
+        case OPMODE_DPMR:
+            vp_queueString("dPMR", (enum vpFlags)0);
+            break;
+
+        case OPMODE_P25:
+            vp_queueString("P25", (enum vpFlags)0);
+            break;
+
+        case OPMODE_YSF:
+            vp_queueString("YSF", (enum vpFlags)0);
+            break;
+
+        case OPMODE_DSTAR:
+            vp_queueString("D STAR", (enum vpFlags)0);
+            break;
+
         case OPMODE_AIRBAND:
             /* Spelled out: "AM" read as a word is not what the band is called */
             vp_queueString("A M", (enum vpFlags)0);
+            break;
+
+        case OPMODE_WFM_BC:
+            vp_queueString("F M", (enum vpFlags)0);
             break;
     }
 
