@@ -54,6 +54,11 @@ TEST_CASE("Settings round-trip through the record", "[settings]")
     s.sms_format = DMR_SMS_FMT_DD_UTF8;
     s.dmr_timeslot = 2;
     s.m17_can = 3;
+    /* Version 4: the receive-only modes' controls */
+    s.nxdn_ran = 27;
+    s.am_agc = false;
+    s.am_step = true;
+    s.am_snap = true;
 
     uint8_t rec[SETTINGS_RECORD_SIZE];
     REQUIRE(settings_recordPack(rec, sizeof(rec), &s)
@@ -74,7 +79,25 @@ TEST_CASE("Settings round-trip through the record", "[settings]")
     REQUIRE(out.sms_format == DMR_SMS_FMT_DD_UTF8);
     REQUIRE(out.dmr_timeslot == 2);
     REQUIRE(out.m17_can == 3);
+    REQUIRE(out.nxdn_ran == 27);
+    REQUIRE(out.am_agc == false);
+    REQUIRE(out.am_step == true);
+    REQUIRE(out.am_snap == true);
     REQUIRE(memcmp(&out, &s, sizeof(s)) == 0);
+}
+
+TEST_CASE("The receive-only modes default to the behaviour they had before",
+          "[settings]")
+{
+    /*
+     * A settings reset must not change what the modes do: these four defaults
+     * are "RAN any, AGC on, 25 kHz, no snap", which is exactly what NXDN and
+     * airband AM did while there was no menu to reach them.
+     */
+    REQUIRE(default_settings.nxdn_ran == 0xFF);
+    REQUIRE(default_settings.am_agc == true);
+    REQUIRE(default_settings.am_step == false);
+    REQUIRE(default_settings.am_snap == false);
 }
 
 TEST_CASE("A record of an older version is discarded with a reason", "[settings]")

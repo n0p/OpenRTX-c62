@@ -40,6 +40,15 @@ versión, para poder distinguir «escrito por otra versión» de «corrupto».
 | 1 | registro original, sin campo de versión en la cabecera (el hueco era relleno a 0) |
 | 2 | destino DMR (`dmr_dest_type`, `dmr_dest_id`), DMRID propio (`dmr_id`) y formato de SMS (`sms_format`) |
 | 3 | timeslot de DMR (`dmr_timeslot`, 1 o 2) para el menú rápido |
+| 4 | controles de los modos de solo recepción: filtro RAN de NXDN (`nxdn_ran`) y AGC, raster y ajuste al raster de la banda aérea (`am_agc`, `am_step`, `am_snap`) |
+
+La versión 4 la reclaman también `c62/scan` (bloque de barrido) y `c62/dmr-pkg`
+(retardo de aire del TX de DMR). Los tres bloques se **añaden al final** de la
+estructura, en offsets distintos, así que al fusionar no hay ningún campo que se
+reinterprete: el que llegue segundo sube a la versión 5 y el registro de la otra
+rama se descarta y vuelve a valores por defecto, que es lo que ya pasa entre
+cualesquiera dos versiones. Lo que no puede hacerse es reordenar ni reutilizar
+un campo.
 
 Un registro de la versión 1 tiene el campo de versión a 0, así que se descarta
 solo: no hace falta código de migración y no hay forma de leerlo mal.

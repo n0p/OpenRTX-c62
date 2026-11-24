@@ -20,6 +20,8 @@ static const ui_hints_t hints_edit    = { "Edit", NULL, NULL, "Back" };
 static const ui_hints_t hints_vfo_in  = { "Set", NULL, NULL, "Cancel" };
 static const ui_hints_t hints_channel = { "Load", NULL, NULL, "Back" };
 static const ui_hints_t hints_reset   = { "Reset", NULL, NULL, "Back" };
+/* A mode's settings page behaves like the popup: green cycles, P1/P2 change */
+static const ui_hints_t hints_modePage = { "Chg", "-", "+", "Back" };
 
 const ui_hints_t *ui_hints_for_screen(uint8_t screen)
 {
@@ -58,18 +60,19 @@ const ui_hints_t *ui_hints_for_screen(uint8_t screen)
         case SETTINGS_TETRA:
 #endif
         case SETTINGS_FM:
-        /*
-         * A mode's own page (Settings → NXDN, Settings → AM). The rows are the
-         * mode's quick menu ones, so the hints are the same as any settings
-         * page: green cycles a value, P1/P2 change it, red goes back.
-         */
-        case SETTINGS_MODE:
         case SETTINGS_ACCESSIBILITY:
 #ifdef CONFIG_RTC
         case SETTINGS_TIMEDATE:
         case SETTINGS_TIMEDATE_SET:
 #endif
             return &hints_edit;
+
+        /*
+         * A mode's own page (Settings → NXDN, Settings → AM): its rows are the
+         * mode's quick menu ones, so the keys mean here what they mean there.
+         */
+        case SETTINGS_MODE:
+            return &hints_modePage;
 
         case SETTINGS_RESET2DEFAULTS:
             return &hints_reset;

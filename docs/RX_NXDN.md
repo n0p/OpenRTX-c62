@@ -17,15 +17,36 @@ west build -b c62 -d build_c62 . -- -DCONFIG_C62_NXDN_RX=y
 
 `CONFIG_C62_NXDN_RX` (`platform/targets/c62/Kconfig.board`) selects
 `CONFIG_C62_DMR_VOCODER` and adds the protocol sources, `OpMode_NXDN` and
-`CONFIG_NXDN`. **The UI has not been changed by this work**: the mode list in
-`openrtx/src/ui/default/ui.c` (the array around line 1106 that already holds
-`OPMODE_TETRA` and `OPMODE_DMR`) has to gain `OPMODE_NXDN`, and the mode label
-and the two values the mode screen shows have to be added there. Until then
-the mode is compiled but unreachable from the keypad.
+`CONFIG_NXDN`: that is what turns `UI_MODE_NXDN` on, and with it the mode's
+entry in the registry (`uiModes[]`, `ui/ui_modes.h`), its quick menu, its page
+in Settings, its label in the header and its entry in the channel editor. With
+the option off none of that is compiled in and the mode is not offered.
 
 `OPMODE_NXDN = 5` is the only enum value this work adds (`rtx.h`); `rtx.cpp`
 has the instance, the selector case and `opmode_canTransmit()` returning false
 for it. `radio_C62.cpp` configures the BK4819 for it.
+
+## 0.1. Lo que la UI enseña y lo que deja tocar
+
+La UI vive en la rama `c62/ui-modes` y no tiene nada propio de NXDN más allá de
+su tabla de filas: ver `docs/UI.md` §«Añadir un modo» para el procedimiento y
+§«NXDN» para la tabla de filas.
+
+| pieza | fuente |
+|---|---|
+| etiqueta `NXDN` en la cabecera | `chstore_modeName(OPMODE_NXDN)` |
+| línea 2: `RAN12 VOX` / `NXDN SRCH` | `nxdn_getStatus()` (`ran`, `sync`, `voice`) |
+| línea 1: `e3% f1234` | `nxdn_getStatus()` (`evm`, `frames`) |
+| filas `RAN`, `BW`, `SYNC`, `CALL`, `TYPE` | `qm_items_nxdn[]`, menú rápido y Ajustes → NXDN |
+
+`RAN` es un **filtro de recepción**, no un número de adorno: se guarda en
+`settings.nxdn_ran` (0..63, `0xFF` = cualquiera, el valor por defecto) y
+`OpMode_NXDN::onFrame()` descarta la voz y los mensajes de capa 3 de otro RAN.
+El RAN viaja en los bits SR del SACCH y no en el LICH, así que el filtro solo
+puede cerrarse cuando ya ha decodificado un superframe: durante los primeros
+~320 ms de portadora pasa todo. `BW` elige 12,5 o 6,25 kHz y lo único que cambia
+en el chip es el filtro de FI (3,3 ≈ 2,9 kHz para 6,25; 7,7 = 4,5 kHz, que es
+con el que se tomaron todas las medidas de este documento, para 12,5).
 
 ## 1. Air interface
 

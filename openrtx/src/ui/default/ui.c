@@ -678,6 +678,12 @@ static int _ui_fsm_loadChannel(int16_t channel_index, bool *sync_rtx)
         state.channel_index = selected_channel;
         // Copy channel read to state
         state.channel = channel;
+        /*
+         * A channel can be an airband one: put the VFO step back on the raster
+         * the operator chose, so tuning away from it steps by 25 or 8.33 kHz
+         * and not by whatever the previous mode left behind.
+         */
+        qm_am_applyRaster();
         *sync_rtx = true;
     }
 

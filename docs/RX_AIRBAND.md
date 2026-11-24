@@ -344,35 +344,41 @@ radio falta:
    número que se toca (9 → 10 lo dobla en tiempo, y con él el riesgo de modular
    la ganancia al ritmo de la voz).
 
-## 8. Enganches de UI (sin tocar `openrtx/src/ui/**`)
+## 8. La UI del modo
 
-El modo funciona sin cambios en la UI: aparece en el selector de modos por el
-`enum opmode`, el almacén de canales lo muestra como «AM», la zona aérea se lista
-con las demás y `opmode_canTransmit()` ya devuelve `false`, que es el mismo
-camino que la UI usa para TETRA y DMR en recepción. Lo que un cambio de UI
-podría añadir, y dónde está el dato:
+El modo está enganchado desde `c62/ui-modes`: es una entrada del registro de
+modos (`uiModes[]` en `openrtx/src/ui/default/ui_quickmenu.c`, ver
+`ui/ui_modes.h` y `docs/UI.md` §«Añadir un modo»), así que se alcanza con la
+tecla lateral, el editor de canales lo ofrece (un canal de la banda aérea guarda
+su modo y su filtro de FI) y la tecla lateral lo recorre como a los demás.
 
-| enganche | dónde está ya el dato |
+Lo que la UI muestra y dónde está el dato:
+
+| pieza de UI | fuente |
 |---|---|
-| mostrar el designador de 8,33 kHz junto a la frecuencia («118.005») | `airband_channelName(freq, buf, cap)` → `core/airband.h` |
-| paso de 8,33 kHz en el selector de paso | `freq_steps[n_freq_steps - 1]` en `state.c` |
-| teclear un designador en la pantalla de frecuencia | `airband_nameToFreq("118.005")` devuelve la portadora |
-| marcar que un canal es de la banda aérea | `airband_inBand(freq)` |
-| mando de squelch | `state.channel.sqlLevel`, el mismo S-meter que FM; no hay mando de AGC a propósito (es automático y no se guarda en los ajustes) |
+| etiqueta «AM» en la cabecera de la pantalla principal | `chstore_modeName(OPMODE_AIRBAND)` |
+| línea 2: `AM 8.33 118.005` (modo, raster y designador de canal) | `airband_channelName()` + `settings.am_step` |
+| línea 1: `AGC sql7` | `settings.am_agc`, `settings.sqlLevel` |
+| menú rápido y Ajustes → AM | tabla de filas `qm_items_airband[]` |
+| teclear un designador (`airband_nameToFreq("118.005")` da la portadora) | todavía no: la entrada de frecuencia son dígitos de frecuencia, y `SNAP` lleva cualquier frecuencia a la portadora del canal más cercano |
 | indicar que el canal no emite | `opmode_canTransmit(OPMODE_AIRBAND) == false` |
 
-Hay tres líneas de UI que **no** están puestas, porque esta rama no toca
-`openrtx/src/ui/**`, y sin ellas el modo solo se alcanza por un canal cuyo byte
-de modo valga 5 (CPS, o el editor cuando las tenga):
+Filas del menú rápido / página de ajustes (la misma tabla):
 
-1. `ui_channels.c`, `chModes[]`: añadir `OPMODE_AIRBAND` para que el editor de
-   canales lo ofrezca.
-2. `ui_menu.c`, el `switch (last_state.channel.mode)` de la pantalla principal:
-   falta el caso, y hoy no imprime etiqueta para este modo (donde TETRA imprime
-   «T», aquí iría «AM»).
-3. `ui_zones.c`: guardar un canal de la zona en el banco (`zones_toStore()` +
-   `chstore_add()`) o aplicarlo directamente (`chstore_applyRtx()`), que es como
-   el operador elegiría una frecuencia de la banda sin teclearla.
+| fila | qué hace | ajuste persistente |
+|---|---|---|
+| `SQL` | squelch **de portadora** (0..15), el mismo nivel que FM pero midiendo el RSSI | `settings.sqlLevel` |
+| `AGC` | AGC de audio del camino AM encendido/apagado | `settings.am_agc` |
+| `STEP` | raster de 25 kHz o de 8,33 kHz; mueve el paso global del VFO | `settings.am_step` |
+| `SNAP` | ajusta cada paso y cada frecuencia tecleada a la portadora del canal 8,33 más cercano | `settings.am_snap` |
+| `CH` | designador del canal en el que está el receptor (solo lectura) | — |
+| `IF` | filtro de FI ancho (25 kHz) o estrecho (12,5 kHz) del detector AM | `state.channel.bandwidth` |
+| `FINE`, `BKL`, `KEYLIT`, `LOCK`, `MSGS`, `MSG` | la cola común a todos los modos | — |
+
+Queda fuera, a propósito, un mando de ganancia manual: el AGC del BK4819 y el de
+audio son automáticos y el operador solo los enciende o los apaga. Guardar una
+frecuencia de la banda en el banco desde el navegador de zonas sigue sin estar
+(`zones_toStore()` + `chstore_add()`), pero el editor de canales ya la escribe.
 
 ## Referencias
 

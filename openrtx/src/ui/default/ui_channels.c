@@ -178,6 +178,9 @@ static bool tuneChannel(uint16_t idx)
     state.channel_index = idx;
     chstore_setLastUsed(idx);
 
+    /* An airband channel brings its raster back with it (see qm_am_applyRaster) */
+    qm_am_applyRaster();
+
     return true;
 }
 
