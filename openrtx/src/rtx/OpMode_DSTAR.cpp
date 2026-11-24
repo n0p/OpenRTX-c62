@@ -55,11 +55,9 @@ OpMode_DSTAR::OpMode_DSTAR() :
     txBlocked(false),
     txEnded(false),
     txFrames(0),
-    baseband(),
-    txSamples()
+    audioBuffer()
 {
-    memset(baseband, 0, sizeof(baseband));
-    memset(txSamples, 0, sizeof(txSamples));
+    memset(audioBuffer, 0, sizeof(audioBuffer));
 }
 
 OpMode_DSTAR::~OpMode_DSTAR()
@@ -107,7 +105,7 @@ void OpMode_DSTAR::onEot()
 void OpMode_DSTAR::startSampling()
 {
     basebandPath = audioPath_request(SOURCE_RTX, SINK_MCU, PRIO_RX);
-    basebandId = audioStream_start(basebandPath, baseband, 2 * HALF_SAMPLES, 48000,
+    basebandId = audioStream_start(basebandPath, audioBuffer, 2 * HALF_SAMPLES, 48000,
                                    STREAM_INPUT | BUF_CIRC_DOUBLE);
 }
 
@@ -130,7 +128,7 @@ bool OpMode_DSTAR::startTx(const rtxStatus_t *status)
 
     /* Flag 1: voice, and "via repeater" only when a repeater is configured. */
     cfg.hdr.flags[0] = 0;
-    snprintf(cfg.hdr.my, sizeof(cfg.hdr.my), "%s", state.settings.callsign);
+    snprintf(cfg.hdr.my, sizeof(cfg.hdr.my), "%.8s", state.settings.callsign);
     cfg.hdr.sfx[0] = '\0';
 
     if ((status->rxFrequency != status->txFrequency) && (status->txFrequency != 0)) {
@@ -140,8 +138,8 @@ bool OpMode_DSTAR::startTx(const rtxStatus_t *status)
          * repeater.  Editing RPT1/RPT2 is a settings/UI task: docs/RX_DSTAR.md,
          * "enganches de UI". */
         cfg.hdr.flags[0] |= DSTAR_FLAG1_REPEATER;
-        snprintf(cfg.hdr.rpt1, sizeof(cfg.hdr.rpt1), "%s", state.settings.callsign);
-        snprintf(cfg.hdr.rpt2, sizeof(cfg.hdr.rpt2), "%s", state.settings.callsign);
+        snprintf(cfg.hdr.rpt1, sizeof(cfg.hdr.rpt1), "%.8s", state.settings.callsign);
+        snprintf(cfg.hdr.rpt2, sizeof(cfg.hdr.rpt2), "%.8s", state.settings.callsign);
     } else {
         snprintf(cfg.hdr.rpt1, sizeof(cfg.hdr.rpt1), "DIRECT");
         snprintf(cfg.hdr.rpt2, sizeof(cfg.hdr.rpt2), "DIRECT");
@@ -165,7 +163,7 @@ bool OpMode_DSTAR::startTx(const rtxStatus_t *status)
     txPath = audioPath_request(SOURCE_MCU, SINK_RTX, PRIO_TX);
     if (txPath < 0)
         return false;
-    txId = audioStream_start(txPath, txSamples, 2 * HALF_SAMPLES, 48000,
+    txId = audioStream_start(txPath, audioBuffer, 2 * HALF_SAMPLES, 48000,
                              STREAM_OUTPUT | BUF_CIRC_DOUBLE);
     if (txId < 0) {
         audioPath_release(txPath);
@@ -180,7 +178,7 @@ void OpMode_DSTAR::stopTx()
     if (txEnded == false) {
         /* One last block so the end pattern and the pulse tail leave the
          * shaper, then close the stream. */
-        dstarTx_samples(txSamples, 2 * HALF_SAMPLES, DSTAR_TX_AMPLITUDE);
+        dstarTx_samples(audioBuffer, 2 * HALF_SAMPLES, DSTAR_TX_AMPLITUDE);
         txEnded = true;
     }
     if (txId >= 0)
@@ -194,7 +192,7 @@ void OpMode_DSTAR::stopTx()
 bool OpMode_DSTAR::txSlot()
 {
     /* Fill one half buffer (30 ms) of modulating waveform. */
-    dstarTx_samples(txSamples, HALF_SAMPLES, DSTAR_TX_AMPLITUDE);
+    dstarTx_samples(audioBuffer, HALF_SAMPLES, DSTAR_TX_AMPLITUDE);
     outputStream_sync(txId, false);
     txFrames++;
 

@@ -70,8 +70,12 @@ private:
     bool txEnded;
     uint32_t txFrames;
 
-    int16_t baseband[2 * 1440];
-    int16_t txSamples[2 * 1440];
+    /*
+     * One buffer for both directions: the radio is half duplex, so a receive
+     * block and a transmit block can never be in flight at the same time, and
+     * sharing it keeps 5,7 kB of .bss out of a RAM budget that is tight.
+     */
+    int16_t audioBuffer[2 * 1440];
 };
 
 #endif /* OPMODE_DSTAR_H */

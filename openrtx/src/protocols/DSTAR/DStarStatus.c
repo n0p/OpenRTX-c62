@@ -19,6 +19,7 @@
 
 #include "protocols/DSTAR/DStarStatus.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #ifdef CONFIG_DSTAR_MESSAGING
@@ -87,11 +88,11 @@ static struct dstarHeardStation *touchStation(const struct dstarHeader *hdr,
     }
     struct dstarHeardStation *st = &heard[0];
     memset(st, 0, sizeof(*st));
-    snprintf(st->call, sizeof(st->call), "%s", hdr->my);
-    snprintf(st->sfx, sizeof(st->sfx), "%s", hdr->sfx);
-    snprintf(st->rpt1, sizeof(st->rpt1), "%s", hdr->rpt1);
-    snprintf(st->rpt2, sizeof(st->rpt2), "%s", hdr->rpt2);
-    snprintf(st->ur, sizeof(st->ur), "%s", hdr->ur);
+    snprintf(st->call, sizeof(st->call), "%.8s", hdr->my);
+    snprintf(st->sfx, sizeof(st->sfx), "%.4s", hdr->sfx);
+    snprintf(st->rpt1, sizeof(st->rpt1), "%.8s", hdr->rpt1);
+    snprintf(st->rpt2, sizeof(st->rpt2), "%.8s", hdr->rpt2);
+    snprintf(st->ur, sizeof(st->ur), "%.8s", hdr->ur);
     st->heard = now;
     st->frames = 1;
     heardCount++;
@@ -108,11 +109,11 @@ void dstarStatus_header(const struct dstarHeader *hdr, int syncErrors, uint32_t 
     status.flags[1] = hdr->flags[1];
     status.flags[2] = hdr->flags[2];
     status.viterbi = hdr->viterbi;
-    snprintf(status.my, sizeof(status.my), "%s", hdr->my);
-    snprintf(status.sfx, sizeof(status.sfx), "%s", hdr->sfx);
-    snprintf(status.ur, sizeof(status.ur), "%s", hdr->ur);
-    snprintf(status.rpt1, sizeof(status.rpt1), "%s", hdr->rpt1);
-    snprintf(status.rpt2, sizeof(status.rpt2), "%s", hdr->rpt2);
+    snprintf(status.my, sizeof(status.my), "%.8s", hdr->my);
+    snprintf(status.sfx, sizeof(status.sfx), "%.4s", hdr->sfx);
+    snprintf(status.ur, sizeof(status.ur), "%.8s", hdr->ur);
+    snprintf(status.rpt1, sizeof(status.rpt1), "%.8s", hdr->rpt1);
+    snprintf(status.rpt2, sizeof(status.rpt2), "%.8s", hdr->rpt2);
 
     dstarSlow_reset(&slow);
     touchStation(hdr, now);
