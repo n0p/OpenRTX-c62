@@ -24,7 +24,7 @@ west build -b c62 -d build_c62 . -- -DCONFIG_C62_APRS=y     # default: y
 
 `CONFIG_C62_APRS` (`platform/targets/c62/Kconfig.board`) adds the protocol
 sources, `aprs_service.c` and `ui_aprs.c`, and defines `CONFIG_APRS` for the
-rest of the firmware. It costs **23 112 bytes of flash and 12 520 bytes of
+rest of the firmware. It costs **23 124 bytes of flash and 12 520 bytes of
 RAM** (measured on the full image with and without the option, see
 [Cost](#cost)).
 
@@ -250,7 +250,7 @@ HiFi4 DSP.
 | | FLASH | RAM |
 |---|---|---|
 | `c62/full` (464 932 / 170 392 B) | — | — |
-| `c62/full-aprs` (488 044 / 182 912 B) | +23 112 | +12 520 |
+| `c62/full-aprs` (488 056 / 182 912 B) | +23 124 | +12 520 |
 | Region use | 46.5 % of 1 MB | 69.8 % of 256 KB |
 
 The RAM figure is the receive tap buffer (2 × 480 samples), the deframer, the
