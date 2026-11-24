@@ -48,6 +48,10 @@ static struct k_mutex msgLock;
 #define MSG_RECORD_MAGIC 0x3147534dU /* "MSG1" */
 #define MSG_RECORD_VERSION 1
 
+/** The packed record, shared by the load and the write: 3 kB, not on a stack
+ *  and not duplicated. */
+static uint8_t recordBuf[MSG_STORE_MAX];
+
 static struct message outbox[MSG_OUTBOX_LEN];
 static struct message inbox[MSG_INBOX_LEN];
 static unsigned inboxCount;
@@ -140,11 +144,10 @@ void messaging_init(void)
     size_t n = messaging_store_size();
 
     if ((n > 0) && (n <= MSG_STORE_MAX)) {
-        static uint8_t rec[MSG_STORE_MAX];
-        size_t got = messaging_store_read(rec, sizeof(rec));
+        size_t got = messaging_store_read(recordBuf, sizeof(recordBuf));
 
         if (got > 0)
-            (void)messaging_deserialise(rec, got);
+            (void)messaging_deserialise(recordBuf, got);
     }
 }
 
@@ -556,20 +559,30 @@ tooBig:
 
 int messaging_deserialise(const uint8_t *buf, size_t len)
 {
-    if ((buf == NULL) || (len < 10) || (memcmp(buf, "MSG1", 4) != 0)
-        || (buf[4] != MSG_RECORD_VERSION))
-        return -1;
+    bool usable = (buf != NULL) && (len >= 10)
+                  && (memcmp(buf, "MSG1", 4) == 0)
+                  && (buf[4] == MSG_RECORD_VERSION);
 
-    uint16_t want = (uint16_t)(((uint16_t)buf[len - 2] << 8) | buf[len - 1]);
+    if (usable) {
+        uint16_t want = (uint16_t)(((uint16_t)buf[len - 2] << 8) | buf[len - 1]);
 
-    if (crc16(buf, len - 2) != want)
+        usable = (crc16(buf, len - 2) == want)
+                 && (buf[6] <= MSG_OUTBOX_LEN) && (buf[5] <= MSG_INBOX_LEN);
+    }
+
+    if (!usable) {
+        /* a record that does not check out must not leave stale entries */
+        lock();
+        memset(outbox, 0, sizeof(outbox));
+        memset(inbox, 0, sizeof(inbox));
+        inboxCount = 0;
+        inboxUnread = 0;
+        unlock();
         return -1;
+    }
 
     unsigned outCount = buf[6];
     unsigned inCount = buf[5];
-
-    if ((outCount > MSG_OUTBOX_LEN) || (inCount > MSG_INBOX_LEN))
-        return -1;
 
     lock();
     memset(outbox, 0, sizeof(outbox));
@@ -691,12 +704,11 @@ void messaging_task(uint32_t now)
     if ((now - lastChange) < MSG_WRITE_DEBOUNCE_MS)
         return;
 
-    static uint8_t rec[MSG_STORE_MAX];
-    int n = messaging_serialise(rec, sizeof(rec));
+    int n = messaging_serialise(recordBuf, sizeof(recordBuf));
 
     if (n <= 0)
         return;
-    if (messaging_store_write(rec, (size_t)n)) {
+    if (messaging_store_write(recordBuf, (size_t)n)) {
         lock();
         dirty = false;
         lastChange = now;
