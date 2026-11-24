@@ -39,6 +39,7 @@ versión, para poder distinguir «escrito por otra versión» de «corrupto».
 |---|---|
 | 1 | registro original, sin campo de versión en la cabecera (el hueco era relleno a 0) |
 | 2 | destino DMR (`dmr_dest_type`, `dmr_dest_id`), DMRID propio (`dmr_id`) y formato de SMS (`sms_format`) |
+| 3 | timeslot de DMR (`dmr_timeslot`, 1 o 2) para el menú rápido |
 
 Un registro de la versión 1 tiene el campo de versión a 0, así que se descarta
 solo: no hace falta código de migración y no hay forma de leerlo mal.
@@ -61,12 +62,27 @@ buscando su indicativo.
 
 ## 4. Tamaño
 
-`sizeof(settings_t)` es 166 B con APRS y los campos nuevos;
-`SETTINGS_RECORD_SIZE` = 174 B, por debajo del límite de 256 B del registro del
+`sizeof(settings_t)` es 167 B con APRS y los campos nuevos;
+`SETTINGS_RECORD_SIZE` = 175 B, por debajo del límite de 256 B del registro del
 driver (`NVM_RECORD_MAX`). El test comprueba que el registro no pase de 192 B
 para que quede margen antes de tocar la estructura otra vez.
 
-## 5. Canales: migración sin perder nada
+## 5. Qué campos llevan validación
+
+| campo | regla | función |
+|---|---|---|
+| `dmr_id` | 1..16777215 (24 bits; 0 = sin configurar) | `settings_dmrIdValid()` |
+| `dmr_dest_type` | `NONE`, `GROUP` o `USER` | `settings_dmrDestValid()` |
+| `dmr_dest_id` | 1..16777215 si el tipo no es `NONE` | `settings_dmrDestValid()` |
+| `sms_format` | 0..7 (`enum dmrSmsFormat`) | `settings_smsFormatValid()` |
+| `dmr_timeslot` | 1 o 2 | `settings_dmrTimeslotValid()` |
+
+Las funciones son `static inline` en `settings.h`: una pantalla puede validar
+sin llamar a nada. Los nombres cortos para los menús
+(`settings_dmrDestName()`, `settings_smsFormatName()`,
+`settings_dmrTimeslotName()`) sí viven en `settings.c`.
+
+## 6. Canales: migración sin perder nada
 
 El banco de canales (`core/channel_store.h`) tiene su propia versión
 (`CHSTORE_VERSION`, hoy **2**, con el destino DMR por canal) y **sí migra**: un
@@ -76,7 +92,7 @@ los canales del operador en una actualización no es aceptable. Un banco escrito
 por una versión **más nueva** se deja intacto y se presenta vacío, en vez de
 interpretarlo. Detalles en `docs/CHANNELS.md`.
 
-## 6. Después de tocar la estructura
+## 7. Después de tocar la estructura
 
 1. Sube `SETTINGS_VERSION` en `settings.h`.
 2. Si añades campos, añádelos también al final de `default_settings` (el orden

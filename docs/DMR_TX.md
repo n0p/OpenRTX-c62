@@ -167,14 +167,17 @@ What choosing TS2 means, plainly:
   in the `DMR_TX_LAYOUT_BS` layout: the handheld layout has no CACH, the CACH
   on the inbound channel belongs to the base station.
 * **Alignment is open loop.** The radio starts a 60 ms frame when it keys the
-  PA; it does not recover the repeater's frame from the received CACH, so
-  whether the burst lands in the repeater's TS1 or TS2 depends on the repeater
-  re-timing the call (most do not) or on the operator selecting the slot the
-  repeater announces. Doing it closed loop needs downlink frame/timing recovery
-  (the CACH and the sync word give the frame phase; the current PHY already
-  tracks the 30 ms grid for RX) and starting the TX ramp on that boundary —
-  the modulator and the state machines are ready for it, the alignment is the
-  work left.
+  PA and does not recover the repeater's frame from the received CACH, so the
+  burst lands in whichever slot of the repeater's frame that start happens to
+  fall in: for a simplex/direct call that is exact (both ends count from the
+  same keying), for a repeater it needs the radio's frame to be aligned with
+  the repeater's, which it is not. What this firmware gives is the choice of
+  *phase* within its own frame — which is what a direct-mode contact and a
+  same-slot-simplex arrangement need. Closed loop needs downlink frame/timing
+  recovery (the CACH and the sync word carry the frame phase, and the PHY
+  already tracks the 30 ms grid for RX) plus starting the TX ramp on that
+  boundary; the modulator and both state machines take the phase as a
+  parameter already, the alignment is the work left.
 
 ## The PTT state machine
 

@@ -353,8 +353,8 @@ reinterpreted: `state_init()` falls back to `default_settings`, writes them
 back on the next change and tells the screen why through
 `state.settings_reset` (`SETTINGS_RESET_VERSION`). One settings reset is the
 expected cost of upgrading across a version bump. With `CONFIG_APRS`
-`settings_t` is 166 bytes with the DMR fields (88 without APRS), and the record
-is 174 bytes, well inside the 256-byte `NVM_RECORD_MAX`. Safe defaults matter
+`settings_t` is 167 bytes with the DMR fields (88 without APRS), and the record
+is 175 bytes, well inside the 256-byte `NVM_RECORD_MAX`. Safe defaults matter
 here: `aprs_decode` and `aprs_beaconEn` are off, so a stray settings record can
 never make the radio transmit or spend CPU decoding without being asked.
 
