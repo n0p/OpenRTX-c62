@@ -6,6 +6,7 @@
 
 #include "ui/ui_aprs.h"
 #include "ui/ui_layout.h"
+#include "ui/ui_hints.h"
 #include "ui/ui_default.h"
 #include "core/aprs_service.h"
 #include "core/state.h"

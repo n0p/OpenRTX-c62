@@ -777,16 +777,16 @@ static void drawCompose(void)
     uint8_t shown = 0;
     for (uint8_t row = 0; row < MG_ROW_NUM; row++) {
         bool selected = (row == mg.row);
-        int16_t y = (int16_t)(UI_LIST_TOP + 2 + shown * 9);
+        int16_t y = (int16_t)(UI_LIST_TOP + shown * ui_row_height());
+        int16_t baseline = (int16_t)(y + ui_row_baseline());
 
         if (selected && !mg.typing)
-            gfx_drawRect((point_t){ 0, y }, CONFIG_SCREEN_WIDTH, 9, color_white,
-                         true);
+            ui_row_selection(y, ui_row_height(), true);
 
         color_t fg = (selected && !mg.typing) ? color_black : color_white;
         color_t lab = (selected && mg.typing) ? yellow_fab413 : fg;
 
-        gfx_print((point_t){ 2, (int16_t)(y + 7) }, FONT_SIZE_5PT,
+        gfx_print((point_t){ UI_TEXT_X, baseline }, FONT_SIZE_6PT,
                   TEXT_ALIGN_LEFT, lab, "%s", labels[row]);
 
         if (row == MG_ROW_TP)
@@ -807,16 +807,17 @@ static void drawCompose(void)
         else
             snprintf(value, sizeof(value), "%s", ">");
 
-        gfx_print((point_t){ 32, (int16_t)(y + 7) }, FONT_SIZE_5PT,
+        gfx_print((point_t){ 32, baseline }, FONT_SIZE_6PT,
                   TEXT_ALIGN_LEFT, fg, "%s", value);
         shown++;
         if (row == MG_ROW_TEXT && mg.typing) {
             /* The text gets a box of its own: 3 lines of 38 characters */
             uint8_t n = textLines(mg.text, lines, 3, 38);
             for (uint8_t i = 0; i < n; i++) {
-                int16_t ty = (int16_t)(y + 10 + i * 9);
-                gfx_print((point_t){ 2, ty }, FONT_SIZE_5PT, TEXT_ALIGN_LEFT,
-                          color_white, "%s", lines[i]);
+                /* The box opens under the TXT row, one 12 px band per line */
+                int16_t ty = (int16_t)(y + ui_row_height() * (i + 1) + 8);
+                gfx_print((point_t){ UI_TEXT_X, ty }, FONT_SIZE_5PT,
+                          TEXT_ALIGN_LEFT, color_white, "%s", lines[i]);
                 shown++;
             }
         }
