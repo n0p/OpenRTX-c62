@@ -480,10 +480,19 @@ Eight digits, 10 Hz resolution (the BK4819's step): `446.00625`. The dot is
 inserted after the third digit. `FREQ_DIGITS` is 8 and
 `FREQ_DIGIT_RESOLUTION` is 10, both in `ui_default.h`.
 
-In FM and M17 the entry asks for RX and then TX; ENTER on an empty TX field
-copies RX. In a receive-only mode (`opmode_canTransmit()` false: TETRA, DMR)
-there is a single frequency. A frequency outside the tuning range is not
-silently dropped: the radio says so and stays in the input screen.
+Green is **Set**: it applies what has been typed and returns to the VFO, even
+if the field has not reached its eighth digit. In FM and M17 there are two
+fields, RX and TX: the eighth RX digit moves to the TX field, UP/DOWN switch
+between them at any time, and an empty TX field takes a copy of RX, which is
+what makes a simplex entry a single frequency. In a receive-only mode
+(`opmode_canTransmit()` false: TETRA, DMR) there is a single frequency. A
+frequency outside the tuning range is not silently dropped: the radio says so
+and stays in the input screen.
+
+Until the fourth pass green did something else when the RX field was being
+edited: it moved to the TX field and applied nothing, so "I type the frequency
+and nothing happens" -- the receiver stayed where it was and the field went
+blank. `tests/unit/ui_regressions.cpp` holds the entry to the behaviour above.
 
 ## Fine RX tuning
 

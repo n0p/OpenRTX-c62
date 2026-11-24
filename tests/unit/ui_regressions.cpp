@@ -283,9 +283,9 @@ TEST_CASE("Symptom: the keypad enters a frequency and ENTER applies it",
     REQUIRE(state.ui_screen == MAIN_VFO);
 
     /*
-     * Seven digits fill the RX field without reaching its end, so the first
-     * green moves to the TX field and the second one copies RX there and
-     * applies: a split only exists if the operator types the TX frequency.
+     * Green is "Set": it applies what has been typed even when the field has
+     * not reached its last digit, which is the case the operator hit (seven
+     * digits, green, nothing happened).
      */
     resetUi(MAIN_VFO, OPMODE_FM, FREQ);
     const uint32_t seven[] = { KEY_1, KEY_4, KEY_3, KEY_5,
@@ -293,11 +293,28 @@ TEST_CASE("Symptom: the keypad enters a frequency and ENTER applies it",
     for (uint32_t k : seven)
         digit(k);
     pressKey(KEY_ENTER, false);
-    REQUIRE(state.ui_screen == MAIN_VFO_INPUT);         /* now on TX */
-    REQUIRE(state.channel.rx_frequency == FREQ);        /* not applied yet */
-    pressKey(KEY_ENTER, false);
     REQUIRE(state.channel.rx_frequency == 143500000);
     REQUIRE(state.channel.tx_frequency == 143500000);
+    REQUIRE(state.ui_screen == MAIN_VFO);
+
+    /*
+     * A split is still possible: the eighth RX digit moves to the TX field (and
+     * UP/DOWN switch between the two at any time), and the digits typed there
+     * replace the copy of RX.
+     */
+    resetUi(MAIN_VFO, OPMODE_FM, 439000000);
+    const uint32_t rx[] = { KEY_4, KEY_3, KEY_9, KEY_0,
+                            KEY_0, KEY_0, KEY_0, KEY_0 };
+    for (uint32_t k : rx)
+        digit(k);
+    REQUIRE(state.ui_screen == MAIN_VFO_INPUT);      /* now on TX */
+
+    const uint32_t tx[] = { KEY_4, KEY_3, KEY_2, KEY_9,
+                            KEY_0, KEY_0, KEY_0, KEY_0 };
+    for (uint32_t k : tx)
+        digit(k);
+    REQUIRE(state.channel.rx_frequency == 439000000);
+    REQUIRE(state.channel.tx_frequency == 432900000);
     REQUIRE(state.ui_screen == MAIN_VFO);
 
     /* A frequency the receiver cannot tune stays in the input screen */

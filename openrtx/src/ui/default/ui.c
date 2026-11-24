@@ -777,38 +777,33 @@ static bool _ui_applyVFOInput(bool *sync_rtx)
 static void _ui_fsm_confirmVFOInput(bool *sync_rtx)
 {
     vp_flush();
-    bool rxOnly = !opmode_canTransmit(state.channel.mode);
 
-    // Receive-only modes have a single frequency: confirm applies it at once
-    if((ui_state.input_set == SET_RX) && (rxOnly == false))
+    /*
+     * Green is "Set" on this screen, as the key table in docs/UI.md says: it
+     * applies what has been typed and returns to the VFO.
+     *
+     * It used to do something else when the RX field was being edited and the
+     * mode can transmit -- it moved to the TX field and applied nothing -- so
+     * the operator who typed a frequency and pressed green saw the field go
+     * blank and the receiver stay where it was: "I type the frequency and
+     * nothing happens". The TX field is still there for a split, reached with
+     * UP/DOWN (the field switch) before typing the second frequency, and an
+     * empty one takes a copy of RX in _ui_applyVFOInput().
+     */
+    if(_ui_applyVFOInput(sync_rtx))
     {
-        // Switch to TX input
-        ui_state.input_set = SET_TX;
-        // Reset input position
-        ui_state.input_position = 0;
-        // announce the rx frequency just confirmed with Enter.
-        vp_queueFrequency(ui_state.new_rx_frequency);
-        // defer playing till the end.
-        // indicate that the user has moved to the tx freq field.
-        vp_announceInputReceiveOrTransmit(true, vpqDefault);
+        // force init to clear any prompts in progress.
+        // defer play because play is called at the end of the function
+        //due to above freq queuing.
+        vp_announceFrequencies(state.channel.rx_frequency,
+                               state.channel.tx_frequency, vpqInit);
+        state.ui_screen = MAIN_VFO;
     }
     else
     {
-        if(_ui_applyVFOInput(sync_rtx))
-        {
-            // force init to clear any prompts in progress.
-            // defer play because play is called at the end of the function
-            //due to above freq queuing.
-            vp_announceFrequencies(state.channel.rx_frequency,
-                                   state.channel.tx_frequency, vpqInit);
-            state.ui_screen = MAIN_VFO;
-        }
-        else
-        {
-            // Do not silently drop the frequency: say so and stay in the
-            // input screen so the digits can be corrected.
-            vp_announceError(vpqInit);
-        }
+        // Do not silently drop the frequency: say so and stay in the
+        // input screen so the digits can be corrected.
+        vp_announceError(vpqInit);
     }
 
     vp_play();

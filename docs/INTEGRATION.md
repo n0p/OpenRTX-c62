@@ -464,9 +464,10 @@ cambio futuro no los rompa en silencio.
 | DMR ya no emite | `OpMode_DMR::startTx()` del paquete se negaba a emitir sin ID propio válido; el registro de ajustes creció dos bytes y el CRC descartó el anterior, así que la radio volvió al `dmr_id = 0` de fábrica: PTT muerto, sin error | `dmrKey_allowed()` (`rtx/DmrKey.h`): el ID propio no es condición, solo un destino no codificable; y el rechazo marca `txBlocked` en vez de reintentar cada 30 ms |
 | El menú rápido de P2 no abre, no hay knobs, el keypad no entra frecuencia, la búsqueda no arranca | los cuatro son la pantalla principal: `ui_state.edit_mode` solo tiene salida dentro del `#ifdef CONFIG_M17`, y lo pone la tecla # de M17. Un cambio de modo con el destino M17 en edición dejaba la pantalla sorda a todas las teclas | al entrar en `MAIN_VFO`/`MAIN_MEM`, un `edit_mode` que no es de M17 se descarta |
 | No hay menú de mensajes | el `#ifdef CONFIG_APRS` del despacho de APRS seguía abierto cien líneas más abajo y se tragaba el despacho de mensajes, contactos y zonas: en una build sin APRS (y en los tests de host) la bandeja abría pero el teclado iba al FSM anterior | el bloque de APRS se cierra donde acaba y el despacho de las otras tres pantallas es incondicional |
+| El keypad no elige frecuencia: se teclea y no pasa nada | con el campo RX en edición, el verde no aplicaba: pasaba al campo TX y dejaba la frecuencia sin aplicar (el receptor no se movía y el campo se quedaba en blanco) | el verde vuelve a ser *Set*: aplica lo tecleado y sale al VFO; el split se sigue haciendo con UP/DOWN y el campo TX vacío copia RX |
 | Ajustes sin páginas por modo | no reproducido: `settings_items[]` sale de `UI_MODE_PAGES` y la build lleva las siete páginas (`NXDN`, `dPMR`, `P25`, `YSF`, `DSTAR`, `AM`, `WFM`), comprobado leyendo la tabla del `zephyr.elf` | prueba por síntoma: la lista tiene una página por modo compilado y cada una abre, responde a P2 y se cierra |
 
-Nota de uso para el operador: la entrada de frecuencia del VFO en FM/M17 pide
-**RX y luego TX**; con menos de ocho dígitos el primer ENTER pasa al campo TX y
-el segundo copia RX y aplica. La entrada de una sola frecuencia (modos de solo
-recepción) aplica al terminar los dígitos o con el primer ENTER.
+Nota de uso para el operador: en el VFO, el verde **aplica** la frecuencia
+tecleada aunque no llegues a los ocho dígitos; si quieres un split, el octavo
+dígito (o UP/DOWN) pasa al campo TX y el campo de TX vacío copia el de RX. Los
+modos de solo recepción piden una sola frecuencia.
