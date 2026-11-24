@@ -33,8 +33,18 @@
 /** Samples dropped after starting or retuning: 0.5 s */
 #define SETTLE_SAMPLES 24000
 
-/* There is only one P25 mode, so the buffers are static */
+/*
+ * There is only one P25 mode, so the buffers are static.  The discriminator
+ * block goes to PSRAM: it is filled by the codec worker and read once per
+ * block, not per sample, and the 256 KiB of SRAM cannot hold one buffer per
+ * mode (DMR RX + APRS + NXDN already sit above 80 %).
+ */
+#ifdef __ZEPHYR__
+static int16_t baseband[2 * BLOCK_SAMPLES]
+    __attribute__((section(".psram_section")));
+#else
 static int16_t baseband[2 * BLOCK_SAMPLES];
+#endif
 
 /**
  * A frame arrived: show it, and hand the voice to the playback thread.

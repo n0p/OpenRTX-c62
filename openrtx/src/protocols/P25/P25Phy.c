@@ -107,7 +107,14 @@ static const float p25_rrc[P25_MF_TAPS] =
  * PSRAM (the section is NOLOAD, so p25Phy_reset() zeroes it).
  */
 #define P25_RING_SYMBOLS (2 * P25_FRAME_SYMBOLS + 40)
-#define P25_RING_LEN (P25_RING_SYMBOLS * 5)
+/*
+ * The ring length is a power of two on purpose: the index wraps with a mask
+ * instead of a 64-bit modulo, which on the M33 is a libgcc division the
+ * interpolator paid four times per symbol (it was 155 instructions per
+ * interpolation and 36 % of the demodulator's cost in QEMU).
+ */
+#define P25_RING_LEN 16384u
+#define P25_RING_MASK (P25_RING_LEN - 1u)
 /*
  * The matched filter of a full-scale signal peaks around 1.6 times the sample
  * scale, so the ring keeps half of it in an int16 without clipping: half the
@@ -132,7 +139,7 @@ static const float p25_rrc[P25_MF_TAPS] =
 struct p25PhyState
 {
     /* Matched filter at 48 kHz: touched once per input sample, stays in SRAM */
-    float inHist[P25_MF_TAPS];    ///< Input samples, ring
+    float inHist[2 * P25_MF_TAPS]; ///< Input samples, written twice: no wrap
     unsigned inPos;               ///< Write position in inHist
     int decim;                    ///< Decimation phase
 
@@ -164,7 +171,8 @@ static float ringAt(long index)
 {
     if (index < 0)
         index = 0;
-    return (float)ring[(unsigned)(index % P25_RING_LEN)] / P25_RING_SCALE;
+    /* Scale up with a multiply: dividing by 0.5 costs an FP division per tap */
+    return (float)ring[(unsigned)index & P25_RING_MASK] * (1.0f / P25_RING_SCALE);
 }
 
 /**
@@ -176,8 +184,11 @@ static float ringAt(long index)
  */
 static float ringInterp(float pos)
 {
-    long i = (long)floorf(pos);
-    float t = pos - (float)i;
+    float f = (pos >= 0.0f) ? pos : 0.0f;
+    long i = (long)f;
+    if ((float)i > f)
+        i--;
+    float t = f - (float)i;
     float y0 = ringAt(i - 1), y1 = ringAt(i), y2 = ringAt(i + 1),
           y3 = ringAt(i + 2);
     float c0 = -t * (t - 1.0f) * (t - 2.0f) * (1.0f / 6.0f);
@@ -752,7 +763,7 @@ static void pushDecimated(float mf)
     if (scaled < -32768.0f)
         scaled = -32768.0f;
 
-    ring[phy.ringCount % P25_RING_LEN] = (int16_t)lroundf(scaled);
+    ring[(unsigned)phy.ringCount & P25_RING_MASK] = (int16_t)lroundf(scaled);
     phy.ringCount++;
 
     const long frameSamples = (long)P25_FRAME_SYMBOLS * 5;
@@ -815,17 +826,25 @@ void p25Phy_push(const int16_t *samples, size_t count, p25FrameHandler handler,
     for (size_t i = 0; i < count; i++)
     {
         /* Matched filter at 48 kHz: symmetric taps over the history ring. */
-        phy.inHist[phy.inPos] = (float)samples[i];
+        /*
+        /*
+         * The history is written twice, TK95 style: inHist[pos] and
+         * inHist[pos + TAPS] get the same sample, so the taps are read forward
+         * from pos with no wrap-around test in the loop.  With the wrap tests
+         * the kernel cost 20 instructions per tap pair and 33 M instructions
+         * per second of audio in QEMU, a third of the demodulator.
+         */
+        const float x = (float)samples[i];
+        phy.inHist[phy.inPos] = x;
+        phy.inHist[phy.inPos + P25_MF_TAPS] = x;
+        const float *h = &phy.inHist[phy.inPos];
         float acc0 = 0.0f, acc1 = 0.0f;
-        unsigned idx = phy.inPos;
         for (int t = 0; t < P25_MF_TAPS - 1; t += 2)
         {
-            acc0 += p25_rrc[t] * phy.inHist[idx];
-            idx = (idx == 0) ? P25_MF_TAPS - 1 : idx - 1;
-            acc1 += p25_rrc[t + 1] * phy.inHist[idx];
-            idx = (idx == 0) ? P25_MF_TAPS - 1 : idx - 1;
+            acc0 += p25_rrc[t] * h[t];
+            acc1 += p25_rrc[t + 1] * h[t + 1];
         }
-        acc0 += p25_rrc[P25_MF_TAPS - 1] * phy.inHist[idx];
+        acc0 += p25_rrc[P25_MF_TAPS - 1] * h[P25_MF_TAPS - 1];
         phy.inPos = (phy.inPos + 1) % P25_MF_TAPS;
 
         if (++phy.decim < P25_DECIM)

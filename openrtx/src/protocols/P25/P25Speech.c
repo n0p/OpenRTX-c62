@@ -41,12 +41,23 @@ struct frame {
     bool valid;
 };
 
+/*
+ * The queue and the output buffer are read at 50 Hz, not per sample: they live
+ * in PSRAM (NOLOAD, cleared at start) so the mode costs SRAM only for the
+ * things a sample touches.
+ */
+#ifdef __ZEPHYR__
+#define P25_SPEECH_RAM __attribute__((section(".psram_section")))
+#else
+#define P25_SPEECH_RAM
+#endif
+
 static pthread_mutex_t queueMutex = PTHREAD_MUTEX_INITIALIZER;
-static struct frame queue[QUEUE_FRAMES];
+static struct frame queue[QUEUE_FRAMES] P25_SPEECH_RAM;
 static unsigned queueHead;
 static unsigned queueCount;
 
-static int16_t pcm[2 * P25_VOCODER_PCM_SAMPLES];
+static int16_t pcm[2 * P25_VOCODER_PCM_SAMPLES] P25_SPEECH_RAM;
 
 static pthread_t thread;
 static pthread_attr_t attr;
