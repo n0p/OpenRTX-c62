@@ -58,11 +58,15 @@ rtxStatus_t;
 
 /**
  * \enum bandwidth Enumeration type defining the current rtx bandwidth.
+ *
+ * The numeric values are stored in channels and in the settings journal: only
+ * append new ones.
  */
 enum bandwidth
 {
-    BW_12_5 = 0,    /**< 12.5kHz bandwidth */
-    BW_25   = 1     /**< 25kHz bandwidth   */
+    BW_12_5 = 0,    /**< 12.5 kHz bandwidth */
+    BW_25   = 1,    /**< 25 kHz bandwidth   */
+    BW_6_25 = 2     /**< 6.25 kHz bandwidth */
 };
 
 /**
@@ -133,6 +137,18 @@ rssi_t rtx_getRssi();
  * @return true if RX squelch is open.
  */
 bool rtx_rxSquelchOpen();
+
+/**
+ * Check whether an operating mode has a transmitter.
+ *
+ * TETRA and DMR are receive only on this radio: the UI must not ask for a TX
+ * frequency, offer transmit power or show the TX side of anything in those
+ * modes.
+ *
+ * @param mode: operating mode, from the opmode enum.
+ * @return true if the mode can transmit.
+ */
+bool opmode_canTransmit(uint8_t mode);
 
 #ifdef __cplusplus
 }

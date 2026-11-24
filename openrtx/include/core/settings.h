@@ -46,13 +46,38 @@ typedef struct
             vpPhoneticSpell : 1,  // Phonetic spell enabled
             macroMenuLatch  : 1,  // Automatic latch of macro menu
             tetraAfcOff     : 1,  // TETRA frequency correction off
-            _reserved       : 2;
+            keyBacklight    : 1,  // Keypad backlight on
+            _reserved       : 1;
     bool    m17_can_rx;           // Check M17 CAN on RX
     char    m17_dest[10];         // M17 destination
     bool    showBatteryIcon;      // Battery display true: icon, false: percentage
     bool    gpsSetTime;           // Use GPS to ajust RTC time
     char    M17_meta_text[53];    // M17 Meta Text to send
     int16_t tetraAfcOffset;       // TETRA frequency correction learned, Hz
+    int16_t rxFineHz;             // Manual fine RX tuning, Hz (10 Hz steps)
+#ifdef CONFIG_APRS
+    /*
+     * APRS, on the analog FM path. Everything here is off by default: the
+     * decoder is opt-in because it costs CPU while the squelch is open, and
+     * the beacon is opt-in because transmitting without being asked is how a
+     * station gets a reputation.
+     *
+     * The block is compiled in only when APRS is: other targets keep their
+     * settings_t layout, and with it their NVM record size, unchanged.
+     */
+    bool    aprs_decode;          // Decode APRS on the FM receive path
+    bool    aprs_beaconEn;        // Beacon transmission enabled
+    bool    aprs_msgAck;          // Acknowledge received messages
+    uint8_t aprs_ssid;            // SSID appended to the callsign, 0..15
+    int32_t aprs_lat_e4;          // Latitude, degrees * 10000
+    int32_t aprs_lon_e4;          // Longitude, degrees * 10000
+    char    aprs_table;           // APRS symbol table ('/' or '\\')
+    char    aprs_symbol;          // APRS symbol code
+    char    aprs_comment[26];     // Status text / beacon comment
+    char    aprs_path[24];        // Digipeater path, e.g. "WIDE1-1,WIDE2-1"
+    uint16_t aprs_interval_s;     // Beacon interval, seconds (>= 30)
+    uint16_t aprs_txdelay_ms;     // TXDELAY, ms (300 is the APRS default)
+#endif
 }
 __attribute__((packed)) settings_t;
 
@@ -76,6 +101,7 @@ static const settings_t default_settings =
     0,                            // Phonetic spell off
     1,                            // Automatic latch of macro menu enabled
     0,                            // TETRA frequency correction on
+    1,                            // Keypad backlight on
     0,                            // not used
     false,                        // Check M17 CAN on RX
     "",                           // Empty M17 destination
@@ -83,6 +109,21 @@ static const settings_t default_settings =
     false,                        // Update RTC with GPS
     "OpenRTX",                    // Default M17 meta text
     0,                            // No TETRA frequency correction learned
+    0,                            // No manual fine RX tuning
+#ifdef CONFIG_APRS
+    false,                        // APRS decoding off
+    false,                        // APRS beacon off
+    true,                         // Acknowledge messages when decoding
+    9,                            // APRS SSID -9, the portable/temporary one
+    0,                            // No position until the user enters one
+    0,
+    '/',                          // Primary symbol table
+    '-',                          // Symbol code: house / fixed station
+    "OpenRTX C62",                // Beacon comment
+    "WIDE1-1,WIDE2-1",            // Default APRS digipeater path
+    600,                          // Beacon every 10 minutes
+    300,                          // 300 ms TXDELAY, APRS101 recommendation
+#endif
 };
 
 #endif /* SETTINGS_H */

@@ -233,3 +233,21 @@ bool rtx_rxSquelchOpen()
 {
     return currMode->rxSquelchOpen();
 }
+
+bool opmode_canTransmit(uint8_t mode)
+{
+    switch (mode) {
+        case OPMODE_FM:
+            return true;
+        case OPMODE_M17:
+            return true;
+        case OPMODE_DMR:
+            /* Receive only: radio_enableTx() returns without keying */
+            return false;
+        case OPMODE_TETRA:
+            /* Receive only: OpMode_TETRA forces the status back to RX */
+            return false;
+        default:
+            return false;
+    }
+}

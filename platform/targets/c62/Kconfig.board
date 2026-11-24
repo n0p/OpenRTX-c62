@@ -28,6 +28,32 @@ endif # LSF_DSP
 endmenu
 
 #
+# Tuning range.
+#
+# The Retevis firmware only allows the two bands its PA is calibrated for;
+# the BK4819 itself tunes much wider. See platform/targets/c62/platform.c.
+#
+menu "Tuning"
+
+config C62_UNLOCKED_TUNING
+	bool "Unlocked tuning range (18-660 MHz and 840-1300 MHz)"
+	default y
+	help
+	  Open the whole BK4819 tuning range instead of the two bands Retevis
+	  declares for the C62 (VHF 137-174 MHz, UHF 400-480 MHz): 18-660 MHz
+	  and 840-1300 MHz, without the 660-840 MHz gap the chip cannot reach.
+
+	  The receiver works over the whole range. Transmission outside the
+	  calibrated bands is the user's responsibility: the radio is not type
+	  approved there and the PA calibration is extrapolated from the
+	  nearest measured point. Disable this option to restrict the radio,
+	  menus included, to the two calibrated bands.
+
+	  Disable it with: -- -DCONFIG_C62_UNLOCKED_TUNING=n
+
+endmenu
+
+#
 # This file is sourced inside the "Board Selection" choice, so the options
 # below live in a menu of their own (same shape as "DSP Manipulation" above).
 #
@@ -59,6 +85,28 @@ config C62_DMR_RX
 	  decoder. Receive only, there is no DMR transmitter. Selects the
 	  vocoder. See docs/DMR_RX.md.
 	  Enable it with west build -b c62 ... -- -DCONFIG_C62_DMR_RX=y
+
+endmenu
+
+#
+# APRS on the analog FM path: AX.25 frames, Bell 202 AFSK at 1200 baud,
+# messaging with acknowledgements, an optional beacon and the received station
+# list. It is not an operating mode: the decoder rides on FM and both the
+# decoding and the beacon are off until the operator enables them.
+# platform/targets/c62/CMakeLists.txt builds the sources and defines
+# CONFIG_APRS when this is set. See docs/APRS.md.
+#
+menu "APRS"
+
+config C62_APRS
+	bool "APRS on FM (AX.25, AFSK 1200, messaging)"
+	default y
+	help
+	  APRS decoding and messaging on the analog FM receive path. The
+	  discriminator is tapped with a second audio path, so audio is never
+	  interrupted; the tap only runs while the menu option "Decode" is on.
+	  Messages are sent from the APRS screens, never with the PTT, and a
+	  beacon is a separate option that is also off by default.
 
 endmenu
 

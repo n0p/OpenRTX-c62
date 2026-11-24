@@ -10,6 +10,9 @@
 #include <stdio.h>
 #include <stdint.h>
 #include "ui/ui_default.h"
+#ifdef CONFIG_APRS
+#include "ui/ui_aprs.h"
+#endif
 #include <string.h>
 #include "ui/ui_strings.h"
 #include "core/utils.h"
@@ -371,7 +374,22 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
     switch(last_state.channel.mode)
     {
         case OPMODE_FM:
-
+        {
+#ifdef CONFIG_APRS
+            /*
+             * APRS indicator: replaces the bandwidth line while decoding is
+             * active, so the operator can see at a glance that the receiver
+             * is decoding and whether anything arrived.
+             */
+            char aprs_line[16] = { 0 };
+            ui_aprs_statusLine(aprs_line, sizeof(aprs_line));
+            if (aprs_line[0] != '\0')
+            {
+                gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
+                          yellow_fab413, "%s", aprs_line);
+                break;
+            }
+#endif
             // Get Bandwidth string
             if(last_state.channel.bandwidth == BW_12_5)
                 sniprintf(bw_str, 8, "NFM");
@@ -395,6 +413,7 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
                           color_white, "%s", bw_str );
             }
             break;
+        }
 
 #ifdef CONFIG_DMR
         case OPMODE_DMR:
@@ -537,55 +556,85 @@ void _ui_drawFrequency()
 
 void _ui_drawVFOMiddleInput(ui_state_t* ui_state)
 {
-    // Add inserted number to string, skipping "Rx: "/"Tx: " and "."
+    /*
+     * Eight digits, 10 Hz resolution: "Rx:446.00625". The dot sits after the
+     * third digit, so the insertion point skips it.
+     */
     uint8_t insert_pos = ui_state->input_position + 3;
     if(ui_state->input_position > 3) insert_pos += 1;
     char input_char = ui_state->input_number + '0';
+    bool rxOnly = (opmode_canTransmit(last_state.channel.mode) == false);
+
+    if(rxOnly)
+    {
+        /*
+         * Receive-only mode: one frequency, no TX field. Drawing it alone in
+         * the middle of the screen also tells the user that ENTER (or the
+         * eighth digit) is all it takes.
+         */
+        if(ui_state->input_position == 0)
+        {
+            gfx_print(layout.line3_large_pos, layout.input_font,
+                      TEXT_ALIGN_CENTER, color_white, ">Rx:%03lu.%05lu",
+                      (unsigned long)ui_state->new_rx_frequency/1000000,
+                      (unsigned long)(ui_state->new_rx_frequency%1000000)/10);
+        }
+        else
+        {
+            if(ui_state->input_position == 1)
+                strcpy(ui_state->new_rx_freq_buf, ">Rx:___._____");
+            ui_state->new_rx_freq_buf[insert_pos] = input_char;
+            gfx_print(layout.line3_large_pos, layout.input_font,
+                      TEXT_ALIGN_CENTER, color_white, "%s",
+                      ui_state->new_rx_freq_buf);
+        }
+        return;
+    }
 
     if(ui_state->input_set == SET_RX)
     {
         if(ui_state->input_position == 0)
         {
             gfx_print(layout.line2_pos, layout.input_font, TEXT_ALIGN_CENTER,
-                      color_white, ">Rx:%03lu.%04lu",
+                      color_white, ">Rx:%03lu.%05lu",
                       (unsigned long)ui_state->new_rx_frequency/1000000,
-                      (unsigned long)(ui_state->new_rx_frequency%1000000)/100);
+                      (unsigned long)(ui_state->new_rx_frequency%1000000)/10);
         }
         else
         {
             // Replace Rx frequency with underscorses
             if(ui_state->input_position == 1)
-                strcpy(ui_state->new_rx_freq_buf, ">Rx:___.____");
+                strcpy(ui_state->new_rx_freq_buf, ">Rx:___._____");
             ui_state->new_rx_freq_buf[insert_pos] = input_char;
             gfx_print(layout.line2_pos, layout.input_font, TEXT_ALIGN_CENTER,
-                      color_white, ui_state->new_rx_freq_buf);
+                      color_white, "%s", ui_state->new_rx_freq_buf);
         }
         gfx_print(layout.line3_large_pos, layout.input_font, TEXT_ALIGN_CENTER,
-                  color_white, " Tx:%03lu.%04lu",
+                  color_white, " Tx:%03lu.%05lu",
                   (unsigned long)last_state.channel.tx_frequency/1000000,
-                  (unsigned long)(last_state.channel.tx_frequency%1000000)/100);
+                  (unsigned long)(last_state.channel.tx_frequency%1000000)/10);
     }
     else if(ui_state->input_set == SET_TX)
     {
         gfx_print(layout.line2_pos, layout.input_font, TEXT_ALIGN_CENTER,
-                  color_white, " Rx:%03lu.%04lu",
+                  color_white, " Rx:%03lu.%05lu",
                   (unsigned long)ui_state->new_rx_frequency/1000000,
-                  (unsigned long)(ui_state->new_rx_frequency%1000000)/100);
+                  (unsigned long)(ui_state->new_rx_frequency%1000000)/10);
         // Replace Rx frequency with underscorses
         if(ui_state->input_position == 0)
         {
             gfx_print(layout.line3_large_pos, layout.input_font, TEXT_ALIGN_CENTER,
-                      color_white, ">Tx:%03lu.%04lu",
+                      color_white, ">Tx:%03lu.%05lu",
                       (unsigned long)ui_state->new_rx_frequency/1000000,
-                      (unsigned long)(ui_state->new_rx_frequency%1000000)/100);
+                      (unsigned long)(ui_state->new_rx_frequency%1000000)/10);
         }
         else
         {
             if(ui_state->input_position == 1)
-                strcpy(ui_state->new_tx_freq_buf, ">Tx:___.____");
+                strcpy(ui_state->new_tx_freq_buf, ">Tx:___._____");
             ui_state->new_tx_freq_buf[insert_pos] = input_char;
             gfx_print(layout.line3_large_pos, layout.input_font, TEXT_ALIGN_CENTER,
-                      color_white, ui_state->new_tx_freq_buf);
+                      color_white, "%s", ui_state->new_tx_freq_buf);
         }
     }
 }

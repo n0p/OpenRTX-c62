@@ -73,7 +73,7 @@
 #define THREAD_PRIORITY 6
 #define THREAD_STACK_SIZE 2048
 
-volatile bool ui_rtxSyncRequest;
+/* ui_rtxSyncRequest is defined by the UI (ui.c), see core/ui.h */
 
 static struct k_thread thread;
 static K_THREAD_STACK_DEFINE(thread_stack, THREAD_STACK_SIZE);

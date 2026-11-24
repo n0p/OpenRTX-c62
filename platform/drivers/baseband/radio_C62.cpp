@@ -12,6 +12,7 @@
 #include <algorithm>
 
 #include "calibration/calib_C62.h"
+#include "core/state.h"
 #include "drivers/baseband/BK4819.h"
 #include "radioUtils.h"
 #ifdef C62_BASEBAND_DUMP
@@ -89,6 +90,24 @@ static bool flatMode(enum opmode mode)
  * TETRA frequency correction loop. See c62_setRxOffset().
  */
 static volatile int32_t rxOffset;
+
+/*
+ * Total offset applied to the tuned frequency: the runtime one above (TETRA's
+ * automatic correction) plus the manual fine tuning stored in the settings.
+ *
+ * They are kept apart so they cannot overwrite each other: the AFC loop only
+ * ever moves rxOffset, the user only ever moves settings.rxFineHz, and every
+ * retune adds both. Reading the setting here also means the offset survives a
+ * reboot without anyone having to push it back down at start-up.
+ */
+static int32_t rxTotalOffset()
+{
+#ifdef CONFIG_RX_FINE_OFFSET
+    return rxOffset + (int32_t)state.settings.rxFineHz;
+#else
+    return rxOffset;
+#endif
+}
 
 /* Read by the baseband dump: the REG_43 value currently in use for RX */
 extern "C" {
@@ -266,7 +285,7 @@ void radio_enableRx()
         gpioDev_set(LNA_UHF_EN);
     }
 
-    bk4819_setFrequency(&c62_bk4819, config->rxFrequency + rxOffset);
+    bk4819_setFrequency(&c62_bk4819, config->rxFrequency + rxTotalOffset());
 
     if (flatMode(radioMode)) {
         /*
@@ -365,6 +384,11 @@ void radio_updateConfiguration()
     // Set bandwidth and deviation, only for analog FM mode
     if (config->opMode == OPMODE_FM) {
         switch (config->bandwidth) {
+            case BW_6_25:
+                bk4819_setBandwidth(&c62_bk4819, BK4819_BW_6K25);
+                bk4819_setTxDeviation(&c62_bk4819, true, txCal.txDevNarrow);
+                break;
+
             case BW_12_5:
                 bk4819_setBandwidth(&c62_bk4819, BK4819_BW_12K5);
                 bk4819_setTxDeviation(&c62_bk4819, true, txCal.txDevNarrow);
@@ -428,7 +452,7 @@ extern "C" void c62_setRxOffset(int32_t hz)
 {
     rxOffset = hz;
     if ((radioStatus == RX) && (config != NULL))
-        bk4819_setFrequency(&c62_bk4819, config->rxFrequency + hz);
+        bk4819_setFrequency(&c62_bk4819, config->rxFrequency + rxTotalOffset());
 }
 
 extern "C" int32_t c62_getRxOffset(void)

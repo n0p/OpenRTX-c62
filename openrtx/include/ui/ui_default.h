@@ -18,8 +18,11 @@
 
 // Maximum menu entry length
 #define MAX_ENTRY_LEN 21
-// Frequency digits
-#define FREQ_DIGITS 7
+// Frequency digits. Eight gives 10 Hz resolution (446.00625 MHz), which the
+// BK4819 supports and the 6.25 kHz step needs.
+#define FREQ_DIGITS 8
+// Frequency resolution of the last entered digit, in Hz
+#define FREQ_DIGIT_RESOLUTION 10
 // Time & Date digits
 #define TIMEDATE_DIGITS 10
 // Max number of UI events
@@ -48,6 +51,7 @@ enum uiScreen
     SETTINGS_DISPLAY,
     SETTINGS_GPS,
     SETTINGS_RADIO,
+    SETTINGS_AUDIO,
     SETTINGS_M17,
 #ifdef CONFIG_TETRA_AFC
     SETTINGS_TETRA,
@@ -55,6 +59,17 @@ enum uiScreen
     SETTINGS_FM,
     SETTINGS_ACCESSIBILITY,
     SETTINGS_RESET2DEFAULTS,
+    /*
+     * APRS screens. They live in ui_aprs.c so that the rework of the menus
+     * and of the hints row can proceed in parallel: this enum block and the
+     * two dispatch points in ui.c are the only places the two touch.
+     */
+    MENU_APRS,
+    APRS_DETAIL,
+    APRS_MSGS,
+    APRS_MSG_VIEW,
+    APRS_MSG_EDIT,
+    APRS_CFG,
     LOW_BAT
 };
 
@@ -89,6 +104,7 @@ enum settingsItems
     S_GPS,
 #endif
     S_RADIO,
+    S_AUDIO,
 #ifdef CONFIG_M17
     S_M17,
 #endif
@@ -115,7 +131,10 @@ enum displayItems
     D_CONTRAST,
 #endif
     D_TIMER,
-    D_BATTERY
+    D_BATTERY,
+#ifdef CONFIG_KEY_BACKLIGHT
+    D_KEYLIGHT,
+#endif
 };
 
 #ifdef CONFIG_GPS
@@ -132,8 +151,6 @@ enum settingsGPSItems
 enum settingsAccessibilityItems
 {
     A_MACRO_LATCH = 0,
-    A_LEVEL,
-    A_PHONETIC,
 };
 
 enum settingsRadioItems
@@ -141,6 +158,14 @@ enum settingsRadioItems
     R_OFFSET,
     R_DIRECTION,
     R_STEP,
+    R_SQUELCH,
+    R_POWER,
+};
+
+enum settingsAudioItems
+{
+    AU_VOICE = 0,
+    AU_PHONETIC,
 };
 
 enum settingsM17Items
@@ -154,14 +179,21 @@ enum settingsM17Items
 #ifdef CONFIG_TETRA_AFC
 enum settingsTetraItems
 {
-    T_AFC = 0
+    T_AFC = 0,
+#ifdef CONFIG_RX_FINE_OFFSET
+    T_FINE,
+#endif
 };
 #endif
 
 enum settingsFMItems
 {
     CTCSS_Tone,
-    CTCSS_Enabled
+    CTCSS_Enabled,
+    CTCSS_Tx_En,
+    CTCSS_Rx_En,
+    CTCSS_Cancel,
+    FM_BANDWIDTH,
 };
 
 /**
@@ -228,8 +260,8 @@ typedef struct ui_state_t
     long long last_keypress;
     freq_t new_rx_frequency;
     freq_t new_tx_frequency;
-    char new_rx_freq_buf[14];
-    char new_tx_freq_buf[14];
+    char new_rx_freq_buf[16];
+    char new_tx_freq_buf[16];
     size_t m17_meta_text_scroll_position;
     long long m17_meta_text_last_scroll_tick;
     char new_meta_text[53];
@@ -258,6 +290,7 @@ extern const char *settings_items[];
 extern const char *display_items[];
 extern const char *settings_gps_items[];
 extern const char *settings_radio_items[];
+extern const char *settings_audio_items[];
 extern const char *settings_m17_items[];
 extern const char *settings_fm_items[];
 #ifdef CONFIG_TETRA_AFC
@@ -273,6 +306,7 @@ extern const uint8_t settings_num;
 extern const uint8_t display_num;
 extern const uint8_t settings_gps_num;
 extern const uint8_t settings_radio_num;
+extern const uint8_t settings_audio_num;
 extern const uint8_t settings_m17_num;
 extern const uint8_t settings_fm_num;
 extern const uint8_t settings_accessibility_num;
