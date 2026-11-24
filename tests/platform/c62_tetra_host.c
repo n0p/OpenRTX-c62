@@ -29,6 +29,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <tetra/tetra.h>
+#include <tetra/tetra_sds.h>
 #include "protocols/TETRA/TetraDemod.h"
 
 #define HALF_SAMPLES 1440
@@ -66,9 +67,28 @@ static void onEvent(void *user, const struct tetra_event *ev)
         case TETRA_EV_CALL:
             nCalls++;
             break;
-        case TETRA_EV_SDS:
+        case TETRA_EV_SDS: {
+            struct tetra_sds_text t;
+            char text[160];
+
             nSds++;
+            /* Print what the firmware shows, so a capture can be checked
+             * for SDS without the radio. */
+            printf("sds from %u to %u", ev->u.sds.src_ssi,
+                   ev->u.sds.dst_ssi);
+            if (ev->u.sds.type == TETRA_SDS_STATUS) {
+                printf(" status %u\n", ev->u.sds.status);
+            } else if (ev->u.sds.type == TETRA_SDS_UDD4 &&
+                       tetra_sds_parse_text(&ev->u.sds, &t) == 0 &&
+                       tetra_sds_text_utf8(&t, text, sizeof(text)) >= 0) {
+                printf(" text \"%s\"%s\n", text,
+                       ev->uplink ? " (uplink)" : "");
+            } else {
+                printf(" type %u, %u bits\n", ev->u.sds.type,
+                       ev->u.sds.nbits);
+            }
             break;
+        }
         default:
             break;
     }

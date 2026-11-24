@@ -16,6 +16,9 @@
 #include "interfaces/nvmem.h"
 #include "core/crc.h"
 #include "interfaces/delays.h"
+#ifdef CONFIG_TETRA
+#include "protocols/TETRA/TetraSds.h"
+#endif
 
 #define NVM_WRITE_DEBOUNCE_MS 3000
 
@@ -99,6 +102,11 @@ void state_init()
 
     settingsDebouncer.crc = crc_ccitt(&state.settings, sizeof(settings_t));
     vfoDebouncer.crc = crc_ccitt(&state.channel, sizeof(channel_t));
+
+#ifdef CONFIG_TETRA
+    /* Received SDS messages, kept across power cycles */
+    tetraSds_load();
+#endif
 }
 
 void state_terminate()
@@ -160,6 +168,16 @@ void state_task()
     settings = state.settings;
     vfo = state.channel;
     pthread_mutex_unlock(&state_mutex);
+
+#ifdef CONFIG_TETRA
+    /*
+     * Persist SDS messages once the traffic has been quiet for a while: an
+     * erase of the 4 KiB sector takes tens of milliseconds, which this task
+     * (100 ms cadence, not the audio path) can afford, but the first slot
+     * after a message must not wait for it.
+     */
+    tetraSds_task();
+#endif
 
     ui_pushEvent(EVENT_STATUS, 0);
 }
