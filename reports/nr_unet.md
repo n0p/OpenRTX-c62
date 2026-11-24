@@ -320,7 +320,7 @@ Cambios mínimos si se insistiera:
 
 ## 7. Recomendación
 
-**Descartar esta UNet para la C62.** No es un problema de afinado: 858 MMAC por segundo de audio es 69 % del pico de MACs del HiFi4 y 148× el coste del vocoder AMBE en el M33; en el NPU el tiempo sobra pero las activaciones (0,9–1,0 MiB) no caben en la SRAM del motor, y la latencia de 1,03 s no es negociable sin romper el propio preprocesado (`ref=max`).
+**Descartar esta UNet para la C62.** No es un problema de afinado: 858 MMAC por segundo de audio es 69 % del pico de MACs del HiFi4 y 150× el coste del vocoder AMBE en el M33; en el NPU el tiempo sobra pero las activaciones (0,9–1,0 MiB) no caben en la SRAM del motor, y la latencia de 1,03 s no es negociable sin romper el propio preprocesado (`ref=max`).
 
 **Quedarse con RNNoise v0.1.1** (o con la CNN de fábrica) para el camino de voz:
 
@@ -330,7 +330,7 @@ Cambios mínimos si se insistiera:
 * **Esfuerzo**: RNNoise cabe entero en el HiFi4 al 4–8 % (informe del otro subagente) y su conversión a int8 ya existe (Arm ML-zoo, Apache-2.0); la UNet exige port a PyTorch, QAT, cambio de upsampling y rediseño de memoria.
 * **Licencia**: BSD-3 limpia frente a una MIT **con el aviso de copyright del upstream eliminado** — irrelevante técnicamente, pero es un repo de terceros sin historial (un solo commit) en el que no conviene basar firmware.
 
-**Lo único aprovechable del repo** es su pipeline de datos (STFT 255/63, mezcla voz+ruido, escalados) como receta para **entrenar una CNN pequeña propia** (C4–C8, ventana ≤250 ms, salida en máscara) si algún día se quiere batir a RNNoise en el NPU. Ese trabajo sí cabe en el chip: 23–51 MMAC/s, 14–21 KiB de activaciones, 0,1–0,3 MB de pesos.
+**Lo único aprovechable del repo** es su pipeline de datos (STFT 255/63, mezcla voz+ruido, escalados) como receta para **entrenar una CNN pequeña propia** (C4–C8, ventana ≤250 ms, salida en máscara) si algún día se quiere batir a RNNoise en el NPU. Ese trabajo sí cabe en el chip: 23–51 MMAC/s, 14–21 KiB de activaciones, 0,12–0,46 MB de pesos.
 
 ---
 
