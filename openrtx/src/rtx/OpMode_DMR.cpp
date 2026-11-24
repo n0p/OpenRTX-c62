@@ -38,6 +38,7 @@
 #include "protocols/DMR/dmr_proto.h"
 #include "protocols/DMR/dmr_voice.h"
 #include "rtx/OpMode_DMR.hpp"
+#include "rtx/DmrKey.h"
 #include "core/state.h"
 #include "core/utils.h"
 
@@ -403,10 +404,16 @@ bool OpMode_DMR::startTx(const rtxStatus_t *status)
         return false;
     }
 
-    if (!settings_dmrDestValid(status->dmrDestType, status->dmrDestId) ||
-        (status->dmrDestType == DMR_DEST_NONE) ||
-        !settings_dmrIdValid(status->dmrSourceId))
+    if (!dmrKey_allowed(status->dmrDestType, status->dmrDestId,
+                        status->dmrSourceId)) {
+        /*
+         * A destination that cannot be encoded: no call. Block the PTT until
+         * it is released and the settings change, instead of returning here
+         * and being asked again on the next 30 ms tick for ever.
+         */
+        txBlocked = true;
         return false;
+    }
 
     if (!startBaseband(status)) {
         txg_streamsFailed(guard, (uint32_t)getTick());
