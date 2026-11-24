@@ -15,6 +15,7 @@
  * way.
  */
 
+#include <stdio.h>
 #include <string.h>
 
 #include "core/settings.h"
@@ -129,18 +130,18 @@ bool OpMode_DSTAR::startTx(const rtxStatus_t *status)
 
     /* Flag 1: voice, and "via repeater" only when a repeater is configured. */
     cfg.hdr.flags[0] = 0;
-    snprintf(cfg.hdr.my, sizeof(cfg.hdr.my), "%s", settings.callsign);
+    snprintf(cfg.hdr.my, sizeof(cfg.hdr.my), "%s", state.settings.callsign);
     cfg.hdr.sfx[0] = '\0';
 
-    if ((status->rxFreq != status->txFreq) || (status->txFreq != 0)) {
+    if ((status->rxFrequency != status->txFrequency) && (status->txFrequency != 0)) {
         /* Repeater operation: the channel's shift says which repeater this is,
          * but the firmware has no repeater database, so the operator's own
          * callsign stands in for it and the call is marked as going through a
          * repeater.  Editing RPT1/RPT2 is a settings/UI task: docs/RX_DSTAR.md,
          * "enganches de UI". */
         cfg.hdr.flags[0] |= DSTAR_FLAG1_REPEATER;
-        snprintf(cfg.hdr.rpt1, sizeof(cfg.hdr.rpt1), "%s", settings.callsign);
-        snprintf(cfg.hdr.rpt2, sizeof(cfg.hdr.rpt2), "%s", settings.callsign);
+        snprintf(cfg.hdr.rpt1, sizeof(cfg.hdr.rpt1), "%s", state.settings.callsign);
+        snprintf(cfg.hdr.rpt2, sizeof(cfg.hdr.rpt2), "%s", state.settings.callsign);
     } else {
         snprintf(cfg.hdr.rpt1, sizeof(cfg.hdr.rpt1), "DIRECT");
         snprintf(cfg.hdr.rpt2, sizeof(cfg.hdr.rpt2), "DIRECT");
@@ -281,12 +282,13 @@ void OpMode_DSTAR::update(rtxStatus_t *const rtx, const bool newCfg)
             startSampling();
 
         /* Push whatever the stream has: half a double buffer, 30 ms. */
-        int16_t *buf = inputStream_getData(basebandId);
-        if (buf != NULL) {
-            dstarPhy_push(buf, HALF_SAMPLES, headerTrampoline, frameTrampoline,
-                          eotTrampoline, this);
-            inputStream_sync(basebandId);
+        dataBlock_t block = inputStream_getData(basebandId);
+        if (block.data == NULL) {
+            sleepFor(0, 10);
+            break;
         }
+        dstarPhy_push(block.data, block.len, headerTrampoline, frameTrampoline,
+                      eotTrampoline, this);
         break;
     }
 
