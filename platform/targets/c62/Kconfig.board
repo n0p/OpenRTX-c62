@@ -143,6 +143,43 @@ config C62_APRS
 
 endmenu
 
+#
+# P25 Phase 1 receive: C4FM demodulation of the discriminator output, NID, link
+# control, TSBK, and the IMBE frames handed to a vocoder hook. Receive only.
+# platform/targets/c62/CMakeLists.txt builds the sources and defines CONFIG_P25
+# when this is set. See docs/RX_P25.md.
+#
+menu "P25"
+
+config C62_P25
+	bool "P25 Phase 1 receive (C4FM)"
+	default n
+	help
+	  P25 Phase 1 receive mode: 4800 symbol/s C4FM on a 12.5 kHz channel,
+	  root-raised-cosine matched filter, frame sync, BCH(63,16) NID with the
+	  NAC and the DUID, IMBE channel decoding, link control (RS(24,12)) and
+	  trunking blocks (trellis, CRC-16).
+
+	  Decode only, and the mode takes one frequency: there is no transmitter
+	  and no trunking follow. Voice needs an IMBE decoder linked in
+	  (C62_P25_VOCODER below); without one the mode decodes and counts the
+	  frames but plays nothing.
+
+	  Enable it with west build -b c62 ... -- -DCONFIG_C62_P25=y
+
+config C62_P25_VOCODER
+	bool "P25 IMBE voice decoder (mbelib-neo or op25 imbe_vocoder)"
+	depends on C62_P25
+	default n
+	help
+	  Decode the 88 IMBE parameters of each P25 voice frame into 8 kHz PCM.
+	  The decoder itself is not part of this tree: enable this only after
+	  linking one in (mbelib-neo, GPL-2.0-or-later, or op25's fixed-point
+	  imbe_vocoder, GPL-3.0-or-later), and read the licence and patent note in
+	  docs/RX_P25.md first.
+
+endmenu
+
 DT_COMPAT_LSF_SERVICE_CONTROLLER := lsf,service-controller
 
 config LSF_SERVICE_CONTROLLER

@@ -90,7 +90,13 @@ enum opmode
     OPMODE_FM   = 1,        /**< Analog FM          */
     OPMODE_DMR  = 2,        /**< DMR                */
     OPMODE_M17  = 3,        /**< M17                */
-    OPMODE_TETRA = 4        /**< TETRA (receive)    */
+    OPMODE_TETRA = 4,       /**< TETRA (receive)    */
+    /*
+     * Numbering is shared with the other receive modes being merged into this
+     * fork (NXDN 5, dPMR 6, P25 7, YSF 8, D-STAR 9, airband 10), so a value here
+     * never moves when another branch lands: fill in your own, do not renumber.
+     */
+    OPMODE_P25 = 7          /**< P25 Phase 1 (receive) */
 };
 
 /**

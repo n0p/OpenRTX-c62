@@ -268,6 +268,33 @@ if(CONFIG_C62_DMR_RX)
   endif()
 endif()
 
+#
+# CONFIG_C62_P25: P25 Phase 1 receive mode (protocols/P25). The PHY, the FEC and
+# the frame decoding are the C port of the host prototype in work/p25-rx, which
+# is validated against dsd-neo and op25 on real captures (docs/RX_P25.md).
+# The ring and the sliced-frame buffers live in PSRAM; the vocoder is a hook
+# (protocols/P25/P25Vocoder.c) with no backend in this tree, so voice needs
+# CONFIG_P25_VOCODER and an IMBE decoder linked in.
+#
+if(CONFIG_C62_P25)
+  target_sources(app PRIVATE
+    ${OPENRTX_ROOT}/openrtx/src/protocols/P25/P25Defs.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/P25/P25Fec.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/P25/P25Phy.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/P25/P25Speech.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/P25/P25Status.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/P25/P25Tables.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/P25/P25Vocoder.c
+    ${OPENRTX_ROOT}/openrtx/src/rtx/OpMode_P25.cpp)
+  target_compile_definitions(app PRIVATE CONFIG_P25)
+  message(STATUS "C62: P25 Phase 1 receive enabled")
+
+  if(CONFIG_C62_P25_VOCODER)
+    target_compile_definitions(app PRIVATE CONFIG_P25_VOCODER)
+    message(STATUS "C62: P25 IMBE vocoder enabled")
+  endif()
+endif()
+
 if(C62_TETRA)
   set(C62_LIBTETRA ${WEST_TOPDIR}/modules/lib/libtetra)
   if(NOT EXISTS ${C62_LIBTETRA}/CMakeLists.txt)

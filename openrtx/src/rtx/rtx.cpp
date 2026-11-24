@@ -22,6 +22,9 @@
 #ifdef CONFIG_TETRA
 #include "rtx/OpMode_TETRA.hpp"
 #endif
+#ifdef CONFIG_P25
+#include "rtx/OpMode_P25.hpp"
+#endif
 
 static pthread_mutex_t   *cfgMutex;     // Mutex for incoming config messages
 static const rtxStatus_t *newCnf;       // Pointer for incoming config messages
@@ -60,6 +63,9 @@ static OpMode_TETRA tetraMode;          // TETRA mode handler
 #endif
 #ifdef CONFIG_DMR
 static OpMode_DMR dmrMode;              // DMR mode handler
+#endif
+#ifdef CONFIG_P25
+static OpMode_P25 p25Mode;              // P25 Phase 1 mode handler
 #endif
 
 
@@ -324,6 +330,9 @@ void rtx_task()
                 #ifdef CONFIG_TETRA
                 case OPMODE_TETRA: currMode = &tetraMode; break;
                 #endif
+                #ifdef CONFIG_P25
+                case OPMODE_P25:  currMode = &p25Mode;  break;
+                #endif
                 default:   currMode = &noMode;
             }
 
@@ -414,6 +423,9 @@ bool opmode_canTransmit(uint8_t mode)
 #endif
         case OPMODE_TETRA:
             /* Receive only: OpMode_TETRA forces the status back to RX */
+            return false;
+        case OPMODE_P25:
+            /* Receive only: OpMode_P25 forces the status back to RX */
             return false;
         default:
             return false;
