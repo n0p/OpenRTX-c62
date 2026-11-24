@@ -1377,6 +1377,25 @@ dpmr_rx_test = executable('dpmr_rx_test',
                               'c_args' : linux_c_args + ['-O2', '-ffp-contract=off'],
                               'cpp_args' : linux_cpp_args + ['-O2']})
 
+# The dPMR receive chain also has the two harnesses of tests/platform: the host
+# one runs the firmware's own demodulator over a capture and prints what it
+# decodes, and the bare-metal one measures its cost on a Cortex-M33 under QEMU.
+# The host harness is built here like any other test and run by `meson test` on
+# the seven seconds of the real capture kept in tests/unit/assets; the cost
+# harness needs arm-none-eabi-gcc and qemu-system-arm, and its runner skips
+# (exit 77) where they are missing.
+dpmr_host_exe = executable('c62_dpmr_host',
+                           sources : ['tests/platform/c62_dpmr_host.c',
+                                      'openrtx/src/protocols/DPMR/DpmrDefs.c',
+                                      'openrtx/src/protocols/DPMR/DpmrData.c',
+                                      'openrtx/src/protocols/DPMR/DpmrPhy.c'],
+                           kwargs  : {'include_directories' : linux_inc,
+                                      'c_args' : linux_c_args +
+                                                 ['-O2', '-ffp-contract=off'],
+                                      'link_args' : linux_l_args})
+dpmr_phy_cost_run = find_program('tests/platform/run_dpmr_phy_cost.sh')
+dpmr_capture = meson.project_source_root() / 'tests/unit/assets/dpmr_air_frame.dis'
+
 c62_calib_test = executable('c62_calib_test',
                             sources : ['tests/unit/C62_calib.cpp',
                                        'platform/targets/c62/calib_C62.c'],
@@ -1467,6 +1486,8 @@ test('APRS Config Test',     aprs_config_test)
 test('DMR SMS Format Test',  dmr_sms_format_test)
 test('DMR LC Destination Test', dmr_lc_dest_test)
 test('dPMR RX Test',          dpmr_rx_test)
+test('dPMR Host Harness',     dpmr_host_exe, args : [dpmr_capture])
+test('dPMR PHY Cost',         dpmr_phy_cost_run, args : [dpmr_capture])
 test('User Stores Test',     user_stores_test)
 test('UI Messages Test',     ui_messages_test)
 test('UI Layout Test',       ui_layout_test)
