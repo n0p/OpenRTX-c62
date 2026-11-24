@@ -193,8 +193,12 @@ void modeStats_get(enum modeStatsMode mode, struct modeStatsValues *out);
  *
  * @param mode: mode to format.
  * @param buf: destination.
- * @param len: destination size, 200 bytes are enough.
- * @return the length written, not counting the terminator, or -1 on error.
+ * @param len: destination size: 250 bytes, what the remote control sends in
+ *             one packet, hold a line with every counter at its maximum; only
+ *             a nonsensical quality or cost figure can overflow it, and the
+ *             remote says so instead of dropping the line.
+ * @return the length written, not counting the terminator, or -1 if the line
+ *         does not fit.
  */
 int modeStats_format(enum modeStatsMode mode, char *buf, size_t len);
 

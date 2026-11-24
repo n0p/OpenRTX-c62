@@ -199,8 +199,13 @@ static void rxSummary(bool reset)
     for (int mode = 0; mode < MS_MODE_COUNT; mode++) {
         if (!modeBuilt((enum modeStatsMode)mode))
             continue;
-        if (modeStats_format((enum modeStatsMode)mode, text, sizeof(text)) > 0)
+
+        int n = modeStats_format((enum modeStatsMode)mode, text, sizeof(text));
+        if (n > 0)
             reply("%s", text);
+        else
+            /* Only when a counter passed what a line can hold: never silent */
+            reply("rx %s overflow", modeStats_name((enum modeStatsMode)mode));
     }
 }
 #endif

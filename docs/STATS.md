@@ -149,3 +149,6 @@ The 30 ms budget is what the percentage is relative to: at 300 MHz a block is
   be off by one block.
 - If the build has no cycle counter (`DWT_CTRL.NOCYCCNT`), the cost columns
   read zero: a zero is honest, a number from another clock would not be.
+- A line is one control packet of at most 250 bytes, which holds every counter
+  at its maximum. Should a nonsense quality or cost figure ever overflow it,
+  the mode prints `rx <mode> overflow` instead of nothing.
