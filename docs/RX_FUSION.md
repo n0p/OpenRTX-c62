@@ -365,12 +365,20 @@ comes from.
 | Counters, for a diagnostics line | `->frames`, `->badFich`, `->voices`, `->unsupported`, `->dataBlocks` |
 | Voice FR notice | `->unsupported` growing is "this call is a mode we cannot decode" |
 
-Mode selection: the mode is `OPMODE_YSF` in `enum opmode`. A channel can carry
-it (`chstore_modeName()` returns `"YSF"`), but the mode list of the UI
-(`openrtx/src/ui/default/ui.c`, the `modes[]` array) does not include it yet, so
-on the radio the mode is reachable only through a channel programmed with it
-until that array gains the entry. That is the one-line change this work leaves
-to the UI owner.
+Mode selection: the mode is `OPMODE_YSF` in `enum opmode`, and a channel can
+carry it (`chstore_modeName()` returns `"YSF"`). What is missing is the UI's
+side-key cycle: `openrtx/src/ui/default/ui.c` has a `modes[]` array (around
+line 1101) guarded by
+
+```c
+#if defined(CONFIG_M17) || defined(CONFIG_TETRA) || defined(CONFIG_DMR)
+```
+
+so a build with `CONFIG_YSF` and none of those compiles the cycling out
+entirely. The hook is two edits in that file — add `CONFIG_YSF` to the guard and
+`OPMODE_YSF` to the array — and it was left alone on purpose, because three
+other protocol agents are editing the same screens. Until then the mode is
+reachable only from a channel programmed with it.
 
 Messaging: `YSF_TEXT_MAX` and the reassembler are shaped for the shared store
 (`core/messaging.h`) — transport, recipient and body — but no transport leg is
