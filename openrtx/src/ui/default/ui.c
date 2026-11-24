@@ -56,6 +56,7 @@
 #include "interfaces/platform.h"
 #include "interfaces/display.h"
 #include "interfaces/cps_io.h"
+#include "ui/ui_channels.h"
 #include "interfaces/nvmem.h"
 #include "interfaces/delays.h"
 #include <string.h>
@@ -1512,6 +1513,35 @@ void ui_updateFSM(bool *sync_rtx)
             *sync_rtx = true;
         }
 
+        /*
+         * P1 long press: open the in-radio channel list. The module takes over
+         * the keypad and the screen until it closes; see docs/CHANNELS.md.
+         */
+        if (!ui_channels_isOpen() && (msg.keys & KEY_F1) && msg.long_press &&
+            !ui_state.input_locked &&
+            (state.ui_screen == MAIN_VFO || state.ui_screen == MAIN_MEM))
+        {
+            ui_channels_open();
+            redraw_needed = true;
+            return;
+        }
+
+        /* Channel list and editor consume every key while they are open. */
+        if (ui_channels_isOpen())
+        {
+            ui_channels_handleEvent(&msg, sync_rtx);
+
+            /* Never transmit with the channel UI on screen */
+            bool wantDisabled = ui_channels_isOpen();
+            if (state.txDisable != wantDisabled)
+            {
+                state.txDisable = wantDisabled;
+                *sync_rtx = true;
+            }
+
+            return;
+        }
+
         int priorUIScreen = state.ui_screen;
         switch(state.ui_screen)
         {
@@ -2725,6 +2755,12 @@ bool ui_updateGUI()
     {
         _ui_calculateLayout(&layout);
         layout_ready = true;
+    }
+    // Channel list and editor draw on top of whatever screen was open
+    if(ui_channels_isOpen())
+    {
+        ui_channels_draw();
+        return true;
     }
     // Draw current GUI page
     switch(last_state.ui_screen)

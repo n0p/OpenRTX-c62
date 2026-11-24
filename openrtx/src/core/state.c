@@ -15,6 +15,7 @@
 #include "interfaces/platform.h"
 #include "interfaces/nvmem.h"
 #include "core/crc.h"
+#include "core/channel_store.h"
 #include "interfaces/delays.h"
 #ifdef CONFIG_TETRA
 #include "protocols/TETRA/TetraSds.h"
@@ -77,6 +78,20 @@ void state_init()
         state.channel = cps_getDefaultChannel();
     }
 
+    /*
+     * Channels kept by the in-radio editor: come back on the channel that was
+     * selected at power-off. With an empty bank the VFO above stays in use.
+     */
+    chstore_init();
+    if (chstore_count() > 0) {
+        channel_t ch;
+        int idx = chstore_lastUsed();
+        if (idx >= 0 && chstore_toChannel((uint16_t)idx, &ch) == 0) {
+            state.channel = ch;
+            state.channel_index = (uint16_t)idx;
+        }
+    }
+
 /*
      * Initialise remaining fields
      */
@@ -117,6 +132,8 @@ void state_terminate()
     }
 
     nvm_writeSettingsAndVfo(&state.settings, &state.channel);
+    /* Flush a pending "last used channel" before the radio powers off */
+    chstore_commit();
     pthread_mutex_destroy(&state_mutex);
 }
 
@@ -178,6 +195,9 @@ void state_task()
      */
     tetraSds_task();
 #endif
+
+    /* Debounced write-back of the last used channel */
+    chstore_task();
 
     ui_pushEvent(EVENT_STATUS, 0);
 }
