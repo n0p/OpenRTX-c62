@@ -124,9 +124,5 @@ void display_setBacklightLevel(uint8_t level)
         LOG_ERR("Failed to set display PWM: %d", ret);
     }
 
-    // Keyboard backlight does not have dimming, only on/off
-    if (level > 0)
-        gpio_pin_set_dt(&led_keyboard, 1);
-    else
-        gpio_pin_set_dt(&led_keyboard, 0);
+    /* The keypad LED has its own setting: c62_setKeyBacklight() */
 }

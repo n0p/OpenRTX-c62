@@ -79,7 +79,8 @@ void calibC62_defaults(struct C62Calib *cal);
  * two nearest points. Below the first point and above the last one, the
  * nearest point is used.
  *
- * @param band: band calibration with at least one point.
+ * @param band: band calibration; a band with no points yields a zeroed
+ *              point (no interpolation, no division by zero).
  * @param freq: frequency, in Hz.
  * @return calibration point at the frequency.
  */

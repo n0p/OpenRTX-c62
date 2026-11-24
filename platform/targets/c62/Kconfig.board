@@ -28,6 +28,32 @@ endif # LSF_DSP
 endmenu
 
 #
+# Tuning range.
+#
+# The Retevis firmware only allows the two bands its PA is calibrated for;
+# the BK4819 itself tunes much wider. See platform/targets/c62/platform.c.
+#
+menu "Tuning"
+
+config C62_UNLOCKED_TUNING
+	bool "Unlocked tuning range (18-660 MHz and 840-1300 MHz)"
+	default y
+	help
+	  Open the whole BK4819 tuning range instead of the two bands Retevis
+	  declares for the C62 (VHF 137-174 MHz, UHF 400-480 MHz): 18-660 MHz
+	  and 840-1300 MHz, without the 660-840 MHz gap the chip cannot reach.
+
+	  The receiver works over the whole range. Transmission outside the
+	  calibrated bands is the user's responsibility: the radio is not type
+	  approved there and the PA calibration is extrapolated from the
+	  nearest measured point. Disable this option to restrict the radio,
+	  menus included, to the two calibrated bands.
+
+	  Disable it with: -- -DCONFIG_C62_UNLOCKED_TUNING=n
+
+endmenu
+
+#
 # This file is sourced inside the "Board Selection" choice, so the options
 # below live in a menu of their own (same shape as "DSP Manipulation" above).
 #

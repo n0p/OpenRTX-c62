@@ -28,15 +28,33 @@
 #include "controller.h"
 #include "dsp.h"
 
+/*
+ * Tuning range.
+ *
+ * By default the radio keeps the ranges Retevis declares for the C62
+ * (VHF 137-174 MHz, UHF 400-480 MHz), which is what the TX calibration covers.
+ * CONFIG_C62_UNLOCKED_TUNING opens the whole BK4819 range instead:
+ * 18-660 MHz and 840-1300 MHz, with the 660-840 MHz gap it cannot reach
+ * excluded, as the user asked. TX outside the calibrated bands is then the
+ * user's responsibility: the radio is not type approved there and the PA
+ * calibration is extrapolated from the nearest measured point.
+ */
 static const hwInfo_t hwInfo = {
     .name = "c62",
     .hw_version = 0,
     .uhf_band = 1,
     .vhf_band = 1,
+#ifdef CONFIG_C62_UNLOCKED_TUNING
+    .uhf_maxFreq = 1300,
+    .uhf_minFreq = 840,
+    .vhf_maxFreq = 660,
+    .vhf_minFreq = 18,
+#else
     .uhf_maxFreq = 480,
     .uhf_minFreq = 400,
     .vhf_maxFreq = 174,
     .vhf_minFreq = 137,
+#endif
 };
 
 // ADC
@@ -138,8 +156,8 @@ void platform_init_csk6()
         sleepFor(0, 10);
     } while (!platform_pwrButtonStatus());
 
-    // Enable keyboard backlight
-    gpio_pin_set_dt(&led_keyboard, 1);
+    // Enable keyboard backlight: the UI turns it off later if the setting says so
+    c62_setKeyBacklight(true);
 
     /* Initialise BK4819 SPI bus and transceiver */
     spiZephyr_init(c62_bk4819.spi);
@@ -275,6 +293,11 @@ bool platform_pwrButtonStatus()
      * the charger is connected.
     */
     return platform_getVbat() > 3000;
+}
+
+void c62_setKeyBacklight(bool on)
+{
+    gpio_pin_set_dt(&led_keyboard, on ? 1 : 0);
 }
 
 void platform_ledOn(led_t led)

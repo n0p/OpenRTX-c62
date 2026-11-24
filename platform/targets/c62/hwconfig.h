@@ -48,6 +48,21 @@ extern "C" {
 #define CONFIG_TETRA_AFC
 
 /*
+ * Keypad backlight: the C62 has one white LED under the keys, on/off only
+ * (no PWM). It is a setting of its own, not part of the display brightness,
+ * so it can be switched off at night while keeping the screen readable.
+ */
+#define CONFIG_KEY_BACKLIGHT
+
+/*
+ * Manual fine RX tuning, +-500 Hz in 10 Hz steps, added to the channel
+ * frequency on every retune. The 10 Hz resolution is what the BK4819
+ * supports (see radio_C62.cpp); TETRA's automatic correction adds to it
+ * instead of replacing it.
+ */
+#define CONFIG_RX_FINE_OFFSET
+
+/*
  * TETRA mode: starting taps of the demodulator's equalizer, measured on the
  * BK4819 flat RX path (REG_43 0x7e28). They undo the filters' inter-symbol
  * interference; the equalizer keeps adapting from there.
@@ -98,6 +113,18 @@ void c62_setRxOffset(int32_t hz);
  * @return the fine RX tuning offset, Hz.
  */
 int32_t c62_getRxOffset(void);
+
+/**
+ * Switch the keypad backlight on or off.
+ *
+ * The C62 has a single white LED under the keys with no dimming: the LED is
+ * either on or off. It follows its own setting (settings.keyBacklight), not
+ * display_setBacklightLevel(), so the keys can go dark while the screen stays
+ * readable.
+ *
+ * @param on: true to light the keys.
+ */
+void c62_setKeyBacklight(bool on);
 
 extern const struct BK1080 c62_bk1080;
 

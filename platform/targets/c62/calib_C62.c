@@ -214,6 +214,18 @@ static uint16_t interpValue(freq_t freq, freq_t f0, uint16_t v0, freq_t f1,
 
 struct C62CalPoint calibC62_interp(const struct C62BandCalib *band, freq_t freq)
 {
+    /*
+     * A band without measured points cannot be interpolated: return a zeroed
+     * point at the requested frequency instead of dividing by (f1 - f0) on
+     * garbage. Happens when the calibration is missing and the tuning opened
+     * outside the bands the PA was measured in.
+     */
+    if (band->count == 0) {
+        struct C62CalPoint empty = { 0 };
+        empty.freq = freq;
+        return empty;
+    }
+
     uint8_t last = band->count - 1;
     uint8_t i = 0;
 
