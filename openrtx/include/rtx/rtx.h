@@ -95,42 +95,19 @@ enum opmode
     OPMODE_DMR  = 2,        /**< DMR                */
     OPMODE_M17  = 3,        /**< M17                */
     OPMODE_TETRA = 4,       /**< TETRA (receive)    */
-<<<<<<< HEAD
+
     /*
-<<<<<<< HEAD
-     * Receiving-only modes, numbered in the order they were added. Every new
+     * Receive-only modes, numbered in the order they were added. Every new
      * mode takes the next free value, never a gap: two branches that both took
      * 5 is exactly what this table exists to prevent.
      */
-    OPMODE_NXDN     = 5,    /**< NXDN (receive)                    */
-    OPMODE_DPMR     = 6,    /**< dPMR (receive)                    */
-    OPMODE_P25      = 7,    /**< P25 Phase 1 (receive)             */
-    OPMODE_YSF      = 8,    /**< Yaesu System Fusion (receive)     */
-    OPMODE_DSTAR    = 9,    /**< D-STAR (receive)                  */
-    OPMODE_AIRBAND  = 10    /**< Airband AM, 118-137 MHz (receive) */
-=======
-     * Numbering is shared with the other receive modes being merged into this
-     * fork (NXDN 5, dPMR 6, P25 7, YSF 8, D-STAR 9, airband 10), so a value here
-     * never moves when another branch lands: fill in your own, do not renumber.
-     */
-    OPMODE_P25 = 7          /**< P25 Phase 1 (receive) */
->>>>>>> c62/rx-p25
-=======
-    OPMODE_NXDN = 5,        /**< Reserved: NXDN     */
-    OPMODE_DPMR = 6,        /**< Reserved: dPMR     */
-    OPMODE_P25  = 7,        /**< Reserved: P25      */
-    OPMODE_YSF  = 8,        /**< System Fusion, C4FM (receive) */
-    OPMODE_DSTAR = 9,       /**< Reserved: D-STAR   */
-    OPMODE_AIRBAND = 10,    /**< Reserved: air band */
-
-    /*
-     * The numbering is fixed across branches even where this tree has no
-     * implementation: the mode value is what the channel store, the zones and
-     * the UI quick menu persist, and two branches that picked their own next
-     * free value would collide the moment they merge. New modes take the next
-     * number after OPMODE_AIRBAND.
-     */
->>>>>>> c62/rx-fusion
+    OPMODE_NXDN     = 5,    /**< NXDN (receive)                        */
+    OPMODE_DPMR     = 6,    /**< dPMR (receive)                        */
+    OPMODE_P25      = 7,    /**< P25 Phase 1 (receive)                 */
+    OPMODE_YSF      = 8,    /**< Yaesu System Fusion (receive)         */
+    OPMODE_DSTAR    = 9,    /**< D-STAR (receive)                      */
+    OPMODE_AIRBAND  = 10,   /**< Airband AM, 118-137 MHz (receive)     */
+    OPMODE_WFM_BC   = 11   /**< Broadcast FM, 85-108 MHz (receive)    */
 };
 
 /**

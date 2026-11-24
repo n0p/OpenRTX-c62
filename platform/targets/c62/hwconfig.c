@@ -34,10 +34,17 @@ GPIO_BK4819_DEVICE_DEFINE(c62_bk4819_gpio, c62_bk4819)
 
 static struct i2cBitbangState c62_bk1080_i2cState;
 
+/*
+ * Clock half-period, microseconds. The BK1080 takes up to 2.5 MHz on this bus
+ * (400 ns), and delayUs() below 1 ms is a busy wait on this SoC, so every
+ * microsecond here is CPU time: 2 us (250 kHz, ten times slower than the chip
+ * allows) costs about 0.2 ms of busy wait per status read instead of the
+ * 1.1 ms that 10 us would. See docs/RX_WFM.md.
+ */
 static const struct i2cBitbangCfg c62_bk1080_i2cCfg = {
     .sck = { &GpioA, 5 },
     .sda = { &GpioA, 6 },
-    .clkPeriod = 10,
+    .clkPeriod = 2,
     .state = &c62_bk1080_i2cState,
 };
 

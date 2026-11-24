@@ -8,6 +8,7 @@
 #define I2C_H
 
 #include <stdint.h>
+#include <stddef.h>
 #include <pthread.h>
 #include <stdbool.h>
 

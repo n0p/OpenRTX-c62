@@ -33,11 +33,18 @@
  *  - PMR1..PMR16: 446.00625-446.19375 MHz every 12.5 kHz, 500 mW fixed
  *    (ERC/DEC/(98)25 and ECC/DEC/(15)05 for the 16-channel analogue/digital
  *    PMR446 band).
+<<<<<<< HEAD
  *  - A0..A759, airband: 118.000-136.975 MHz every 25 kHz, AM voice, receive
  *    only.  The channels are named by their frequency ("118.025") because that
  *    is how the band is used, and the 8.33 kHz raster that Europe uses above
  *    FL195 is one tuning step away (`core/airband.h` has the designators and
  *    the exact carriers).
+=======
+ *  - BC85.0..BC108.0, broadcast FM: 85.0-108.0 MHz every 100 kHz, receive
+ *    only, named by frequency like the airband.  The band object is the whole
+ *    CCIR raster the operator asked for (85-110 MHz); the receiver chip stops
+ *    at 108.0 MHz, so the plan does too.  See core/wfm.h and docs/RX_WFM.md.
+>>>>>>> c62/rx-wfm
  *
  * @note The direction of the repeater shift is data: `shift` is signed, and
  * zones_setShiftInverted() flips it for the plans where the operator's radio
@@ -70,7 +77,11 @@ enum zoneId
     ZONE_VHF_REPEATERS = 0, /**< R0..R7, 2 m FM repeaters          */
     ZONE_UHF_REPEATERS = 1, /**< U0..U100, 70 cm repeaters         */
     ZONE_PMR446        = 2, /**< PMR1..PMR16, 446 MHz, 500 mW      */
+<<<<<<< HEAD
     ZONE_AIRBAND       = 3, /**< A0..A759, 118-137 MHz AM, 25 kHz  */
+=======
+    ZONE_WFM_BC        = 3, /**< 85.0-108.0 MHz, 100 kHz, broadcast FM */
+>>>>>>> c62/rx-wfm
     ZONE_COUNT         = 4
 };
 
@@ -83,7 +94,11 @@ enum zoneFlags
     ZONE_FLAG_SIMPLEX     = 0x08, /**< TX frequency equals RX             */
     ZONE_FLAG_INTERLEAVED = 0x10, /**< Half channel, outside the 25 kHz plan */
     ZONE_FLAG_RX_ONLY     = 0x20, /**< Receive only                       */
+<<<<<<< HEAD
     ZONE_FLAG_AIRBAND     = 0x40  /**< Named by frequency, core/airband.h */
+=======
+    ZONE_FLAG_WFM         = 0x40  /**< Named by frequency, core/wfm.h     */
+>>>>>>> c62/rx-wfm
 };
 
 /** One channel of a zone, resolved: everything is in Hz, mW and enums. */

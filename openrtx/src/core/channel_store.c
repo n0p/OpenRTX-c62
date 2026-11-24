@@ -329,10 +329,14 @@ bool chstore_valid(const chstore_channel_t *ch)
     if (ch->mode != OPMODE_FM && ch->mode != OPMODE_M17 &&
         ch->mode != OPMODE_DMR && ch->mode != OPMODE_TETRA &&
 <<<<<<< HEAD
+<<<<<<< HEAD
         ch->mode != OPMODE_AIRBAND)
 =======
         ch->mode != OPMODE_YSF)
 >>>>>>> c62/rx-fusion
+=======
+        ch->mode != OPMODE_WFM_BC)
+>>>>>>> c62/rx-wfm
         return false;
 
     if (ch->bandwidth != BW_12_5 && ch->bandwidth != BW_25)
@@ -657,7 +661,11 @@ const char *chstore_modeName(uint8_t mode)
         case OPMODE_M17:   return "M17";
         case OPMODE_DMR:   return "DMR";
         case OPMODE_TETRA: return "TETRA";
+<<<<<<< HEAD
         case OPMODE_YSF:   return "YSF";
+=======
+        case OPMODE_WFM_BC: return "WFM";
+>>>>>>> c62/rx-wfm
         default:           return "----";
 >>>>>>> c62/rx-fusion
     }

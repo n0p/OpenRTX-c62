@@ -14,6 +14,7 @@
 #include "rtx/OpMode_FM.hpp"
 #include "rtx/OpMode_Airband.hpp"
 #include "rtx/OpMode_M17.hpp"
+#include "rtx/OpMode_WFM.hpp"
 #if defined(PLATFORM_C62)
 #include "drivers/audio/csk6_codec.h"
 #endif
@@ -26,13 +27,17 @@
 #ifdef CONFIG_TETRA
 #include "rtx/OpMode_TETRA.hpp"
 #endif
-<<<<<<< HEAD
 #ifdef CONFIG_NXDN
 #include "rtx/OpMode_NXDN.hpp"
-=======
+#endif
+#ifdef CONFIG_DPMR
+#include "rtx/OpMode_DPMR.hpp"
+#endif
 #ifdef CONFIG_P25
 #include "rtx/OpMode_P25.hpp"
->>>>>>> c62/rx-p25
+#endif
+#ifdef CONFIG_DSTAR
+#include "rtx/OpMode_DSTAR.hpp"
 #endif
 
 static pthread_mutex_t   *cfgMutex;     // Mutex for incoming config messages
@@ -65,6 +70,7 @@ static OpMode  *currMode;               // Pointer to currently active opMode ha
 static OpMode     noMode;               // Empty opMode handler for opmode::NONE
 static OpMode_FM  fmMode;               // FM mode handler
 static OpMode_Airband airbandMode;      // Airband AM mode handler
+static OpMode_WFM     wfmMode;          // Broadcast FM receive mode handler
 #ifdef CONFIG_M17
 static OpMode_M17 m17Mode;              // M17 mode handler
 #endif
@@ -74,18 +80,20 @@ static OpMode_TETRA tetraMode;          // TETRA mode handler
 #ifdef CONFIG_DMR
 static OpMode_DMR dmrMode;              // DMR mode handler
 #endif
-<<<<<<< HEAD
-<<<<<<< HEAD
 #ifdef CONFIG_NXDN
 static OpMode_NXDN nxdnMode;            // NXDN mode handler
-=======
+#endif
+#ifdef CONFIG_DPMR
+static OpMode_DPMR dpmrMode;            // dPMR mode handler
+#endif
 #ifdef CONFIG_P25
 static OpMode_P25 p25Mode;              // P25 Phase 1 mode handler
->>>>>>> c62/rx-p25
-=======
+#endif
+#ifdef CONFIG_DSTAR
+static OpMode_DSTAR dstarMode;          // D-STAR mode handler
+#endif
 #ifdef CONFIG_YSF
 static OpMode_YSF ysfMode;              // System Fusion mode handler
->>>>>>> c62/rx-fusion
 #endif
 
 
@@ -342,6 +350,7 @@ void rtx_task()
                 case OPMODE_NONE: currMode = &noMode;  break;
                 case OPMODE_FM:   currMode = &fmMode;  break;
                 case OPMODE_AIRBAND: currMode = &airbandMode; break;
+                case OPMODE_WFM_BC:  currMode = &wfmMode;     break;
                 #ifdef CONFIG_M17
                 case OPMODE_M17:  currMode = &m17Mode; break;
                 #endif
@@ -451,25 +460,15 @@ bool opmode_canTransmit(uint8_t mode)
         case OPMODE_TETRA:
             /* Receive only: OpMode_TETRA forces the status back to RX */
             return false;
-<<<<<<< HEAD
-<<<<<<< HEAD
         case OPMODE_NXDN:
         case OPMODE_DPMR:
         case OPMODE_P25:
         case OPMODE_YSF:
         case OPMODE_DSTAR:
-            /* Receive only: there is no transmitter for these modes yet */
-            /* fall through */
         case OPMODE_AIRBAND:
-            /* Receive only: AM voice, and not a band this radio may key in */
-=======
-        case OPMODE_P25:
-            /* Receive only: OpMode_P25 forces the status back to RX */
->>>>>>> c62/rx-p25
-=======
-        case OPMODE_YSF:
-            /* Receive only: OpMode_YSF forces the status back to RX */
->>>>>>> c62/rx-fusion
+        case OPMODE_WFM_BC:
+            /* Receive only: there is no transmitter for these modes yet */
+            return false;
             return false;
         default:
             return false;

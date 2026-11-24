@@ -163,6 +163,15 @@ void platform_pttOverride(int state);
 
 extern const struct BK1080 c62_bk1080;
 
+/**
+ * Analog audio source wired straight to the speaker amplifier, outside the
+ * codec: the BK1080 of the broadcast FM mode.  Keeps the amplifier switch on
+ * while it is set, whether or not a codec route is open.
+ *
+ * @param on: true to select the analog source.
+ */
+void audio_setExtSource(const bool on);
+
 extern const struct gpio_dt_spec speaker_enable;
 extern const struct gpio_dt_spec dtmf_enable;
 extern const struct gpio_dt_spec button_ptt;

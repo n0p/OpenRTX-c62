@@ -62,6 +62,7 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/core/settings.c',
                'openrtx/src/core/settings_record.c',
                'openrtx/src/core/zones.c',
+<<<<<<< HEAD
                'openrtx/src/core/agc.c',
                'openrtx/src/core/airband.c',
                # NXDN status and FEC: the UI reads the receive status (RAN,
@@ -71,6 +72,9 @@ openrtx_src = ['openrtx/src/core/state.c',
                # testable without the radio.
                'openrtx/src/protocols/NXDN/NxdnStatus.c',
                'openrtx/src/protocols/NXDN/NxdnFec.c',
+=======
+               'openrtx/src/core/wfm.c',
+>>>>>>> c62/rx-wfm
                'openrtx/src/core/slot_store.c',
                'openrtx/src/core/contact_store.c',
                'openrtx/src/core/msg_service.c',
@@ -79,7 +83,11 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/rtx/rtx.cpp',
                'openrtx/src/rtx/TxGuard.c',
                'openrtx/src/rtx/OpMode_FM.cpp',
+<<<<<<< HEAD
                'openrtx/src/rtx/OpMode_Airband.cpp',
+=======
+               'openrtx/src/rtx/OpMode_WFM.cpp',
+>>>>>>> c62/rx-wfm
                'openrtx/src/rtx/OpMode_M17.cpp',
                'openrtx/src/protocols/M17/DSP.cpp',
                'openrtx/src/protocols/M17/Golay.cpp',
@@ -1357,6 +1365,7 @@ zones_test = executable('zones_test',
                         sources : unit_test_src + ['tests/unit/zones.cpp'],
                         kwargs  : unit_test_opts)
 
+<<<<<<< HEAD
 # Airband: los dos rasters de canales y los designadores de 8,33 kHz
 airband_test = executable('airband_test',
                           sources : unit_test_src + ['tests/unit/airband.cpp'],
@@ -1365,6 +1374,11 @@ airband_test = executable('airband_test',
 # AGC de la banda aerea: ataque, liberacion y limitador
 agc_test = executable('agc_test',
                       sources : unit_test_src + ['tests/unit/agc.cpp'],
+=======
+# FM de radiodifusion: la banda, su rejilla de 100/50 kHz y el nombre de canal
+wfm_test = executable('wfm_test',
+                      sources : unit_test_src + ['tests/unit/wfm.cpp'],
+>>>>>>> c62/rx-wfm
                       kwargs  : unit_test_opts)
 
 # Registro de ajustes: version, CRC y descarte limpio de un registro viejo
@@ -1501,8 +1515,12 @@ test('M17 Frame Decoder Test', m17_decoder_test)
 test('C62 Calibration Test', c62_calib_test)
 test('Channel Store Test',   channel_store_test)
 test('Zones Test',           zones_test)
+<<<<<<< HEAD
 test('AGC Test',             agc_test)
 test('Airband Test',         airband_test)
+=======
+test('Broadcast FM Test',    wfm_test)
+>>>>>>> c62/rx-wfm
 test('Settings Record Test', settings_record_test)
 test('APRS Config Test',     aprs_config_test)
 test('DMR SMS Format Test',  dmr_sms_format_test)

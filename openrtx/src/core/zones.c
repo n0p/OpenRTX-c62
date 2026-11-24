@@ -5,15 +5,25 @@
  */
 
 #include "core/zones.h"
+<<<<<<< HEAD
 #include "core/airband.h"
+=======
+#include "core/wfm.h"
+>>>>>>> c62/rx-wfm
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
 
 /*
+<<<<<<< HEAD
  * The plans of this build.  Frequencies are the channel the radio listens on
  * (the repeater output); the shift takes it to the repeater input.  See
  * docs/ZONES.md for the sources.
+=======
+ * The plans of this build.  Frequencies are the channel the radio
+ * listens on (the repeater output); the shift takes it to the repeater input.
+ * See docs/ZONES.md for the sources.
+>>>>>>> c62/rx-wfm
  */
 static const zone_t zones[ZONE_COUNT] =
 {
@@ -63,6 +73,7 @@ static const zone_t zones[ZONE_COUNT] =
         .planEvery= 1,
     },
     {
+<<<<<<< HEAD
         .id       = ZONE_AIRBAND,
         .prefix   = "A",
         .descr    = "Airband AM 118-137",
@@ -75,6 +86,20 @@ static const zone_t zones[ZONE_COUNT] =
         .bandwidth= BW_12_5,      /* 8.33 kHz spacing: narrow IF      */
         .power    = 5000,         /* unused: the channel is RX only   */
         .flags    = ZONE_FLAG_AIRBAND | ZONE_FLAG_RX_ONLY | ZONE_FLAG_SIMPLEX,
+=======
+        .id       = ZONE_WFM_BC,
+        .prefix   = "BC",
+        .descr    = "FM 85-108 MHz",
+        .base     = WFM_LOW_HZ,   /* 85.0 MHz, low edge of the band   */
+        .step     = WFM_STEP_HZ,  /* the CCIR 100 kHz raster          */
+        .shift    =        0,     /* receive only, no TX frequency    */
+        .count    = WFM_CHANNELS, /* 85.0 to 108.0 MHz, 231 channels  */
+        .first    = 0,
+        .mode     = OPMODE_WFM_BC,
+        .bandwidth= BW_25,        /* unused: the tuner's IF is 200 kHz */
+        .power    = 5000,         /* unused: receive only, see below   */
+        .flags    = ZONE_FLAG_WFM | ZONE_FLAG_RX_ONLY | ZONE_FLAG_SIMPLEX,
+>>>>>>> c62/rx-wfm
         .planEvery= 1,
     },
 };
@@ -129,10 +154,20 @@ const char *zones_channelName(uint8_t id, uint16_t index, char *buf,
         return buf;
     }
 
+<<<<<<< HEAD
     /* An airband channel is called by its frequency, "118.025" */
     if ((z->flags & ZONE_FLAG_AIRBAND) != 0) {
         freq_t freq = z->base + (freq_t)z->step * index;
         return airband_channelName(freq, buf, cap);
+=======
+    /*
+     * A broadcast channel is called by its frequency, "101.1": that is how the
+     * band is used, and "BC147" would have to be counted to be understood.
+     */
+    if ((z->flags & ZONE_FLAG_WFM) != 0) {
+        freq_t freq = (freq_t)((int64_t)z->base + (int64_t)z->step * index);
+        return wfm_formatFreq(freq, buf, cap);
+>>>>>>> c62/rx-wfm
     }
 
     snprintf(buf, cap, "%s%u", z->prefix, (unsigned)(z->first + index));
@@ -200,10 +235,14 @@ bool zones_channelValid(const zone_channel_t *zc)
     if (zc->mode != OPMODE_FM && zc->mode != OPMODE_M17 &&
         zc->mode != OPMODE_DMR && zc->mode != OPMODE_TETRA &&
 <<<<<<< HEAD
+<<<<<<< HEAD
         zc->mode != OPMODE_AIRBAND)
 =======
         zc->mode != OPMODE_YSF)
 >>>>>>> c62/rx-fusion
+=======
+        zc->mode != OPMODE_WFM_BC)
+>>>>>>> c62/rx-wfm
         return false;
 
     return true;
@@ -222,7 +261,7 @@ int zones_toChannel(uint8_t id, uint16_t index, channel_t *out)
     out->power = zc.power;
     out->rx_frequency = zc.rx;
     out->tx_frequency = zc.tx;
-    out->rx_only = 0;
+    out->rx_only = ((zc.flags & ZONE_FLAG_RX_ONLY) != 0) ? 1 : 0;
     strncpy(out->name, zc.name, CPS_STR_SIZE - 1);
 
     return 0;
