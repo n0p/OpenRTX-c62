@@ -16,6 +16,9 @@
 #include "interfaces/delays.h"
 #include "core/memory_profiling.h"
 #include "ui/ui_strings.h"
+#include "ui/ui_hints.h"
+#include "ui/ui_quickmenu.h"
+#include "rtx/rtx.h"
 #include "core/voicePromptUtils.h"
 
 #ifdef PLATFORM_TTWRPLUS
@@ -146,12 +149,13 @@ static void announceMenuItemIfNeeded(char* name, char* value, bool editMode)
 void _ui_drawMenuList(uint8_t selected, int (*getCurrentEntry)(char *buf, uint8_t max_len, uint8_t index))
 {
     point_t pos = layout.line1_pos;
-    // Number of menu entries that fit in the screen height
-    uint8_t entries_in_screen = (CONFIG_SCREEN_HEIGHT - 1 - pos.y) / layout.menu_h + 1;
+    // Number of menu entries that fit above the hints row
+    uint8_t entries_in_screen = (CONFIG_SCREEN_HEIGHT - 1 - UI_HINTS_H - pos.y)
+                              / layout.menu_h + 1;
     uint8_t scroll = 0;
     char entry_buf[MAX_ENTRY_LEN] = "";
     color_t text_color = color_white;
-    for(int item=0, result=0; (result == 0) && (pos.y < CONFIG_SCREEN_HEIGHT); item++)
+    for(int item=0, result=0; (result == 0) && (pos.y < CONFIG_SCREEN_HEIGHT - UI_HINTS_H); item++)
     {
         // If selection is off the screen, scroll screen
         if(selected >= entries_in_screen)
@@ -180,13 +184,14 @@ void _ui_drawMenuListValue(ui_state_t* ui_state, uint8_t selected,
                            int (*getCurrentValue)(char *buf, uint8_t max_len, uint8_t index))
 {
     point_t pos = layout.line1_pos;
-    // Number of menu entries that fit in the screen height
-    uint8_t entries_in_screen = (CONFIG_SCREEN_HEIGHT - 1 - pos.y) / layout.menu_h + 1;
+    // Number of menu entries that fit above the hints row
+    uint8_t entries_in_screen = (CONFIG_SCREEN_HEIGHT - 1 - UI_HINTS_H - pos.y)
+                              / layout.menu_h + 1;
     uint8_t scroll = 0;
     char entry_buf[MAX_ENTRY_LEN] = "";
     char value_buf[MAX_ENTRY_LEN] = "";
     color_t text_color = color_white;
-    for(int item=0, result=0; (result == 0) && (pos.y < CONFIG_SCREEN_HEIGHT); item++)
+    for(int item=0, result=0; (result == 0) && (pos.y < CONFIG_SCREEN_HEIGHT - UI_HINTS_H); item++)
     {
         // If selection is off the screen, scroll screen
         if(selected >= entries_in_screen)
@@ -278,6 +283,13 @@ int _ui_getDisplayValueName(char *buf, uint8_t max_len, uint8_t index)
                      currentLanguage->on :
                      currentLanguage->off);
 	    return 0;
+#ifdef CONFIG_KEY_BACKLIGHT
+        case D_KEYLIGHT:
+            sniprintf(buf, max_len, "%s",
+                      last_state.settings.keyBacklight ? currentLanguage->on
+                                                       : currentLanguage->off);
+            return 0;
+#endif
     }
     sniprintf(buf, max_len, "%d", value);
     return 0;
@@ -344,6 +356,17 @@ int _ui_getRadioValueName(char *buf, uint8_t max_len, uint8_t index)
 {
     if(index >= settings_radio_num)
         return -1;
+
+    switch(index)
+    {
+        case R_SQUELCH:
+            sniprintf(buf, max_len, "%d", last_state.settings.sqlLevel);
+            return 0;
+        case R_POWER:
+            sniprintf(buf, max_len, "%s", "");
+            qm_fmt_power(buf, max_len);
+            return 0;
+    }
 
     // Only returning the sign
     if(index == R_DIRECTION)
@@ -471,6 +494,11 @@ int _ui_getTetraValueName(char *buf, uint8_t max_len, uint8_t index)
                       last_state.settings.tetraAfcOff ? currentLanguage->off
                                                       : currentLanguage->on);
             break;
+#ifdef CONFIG_RX_FINE_OFFSET
+        case T_FINE:
+            sniprintf(buf, max_len, "%+d", last_state.settings.rxFineHz);
+            break;
+#endif
     }
 
     return 0;
@@ -504,6 +532,31 @@ int _ui_getFMValueName(char* buf, uint8_t max_len, uint8_t index)
                                              last_state.channel.fm.rxToneEn,
                                              false));
             break;
+
+        case CTCSS_Tx_En:
+            sniprintf(buf, max_len, "%s", last_state.channel.fm.txToneEn ?
+                                          currentLanguage->on :
+                                          currentLanguage->off);
+            break;
+
+        case CTCSS_Rx_En:
+            sniprintf(buf, max_len, "%s", last_state.channel.fm.rxToneEn ?
+                                          currentLanguage->on :
+                                          currentLanguage->off);
+            break;
+
+        case CTCSS_Cancel:
+            sniprintf(buf, max_len, "%s", "-");
+            break;
+
+        case FM_BANDWIDTH:
+            switch(last_state.channel.bandwidth)
+            {
+                case BW_6_25: sniprintf(buf, max_len, "6.25"); break;
+                case BW_25:   sniprintf(buf, max_len, "25");   break;
+                default:      sniprintf(buf, max_len, "12.5"); break;
+            }
+            break;
     }
 
     return 0;
@@ -519,12 +572,33 @@ int _ui_getAccessibilityEntryName(char *buf, uint8_t max_len, uint8_t index)
 int _ui_getAccessibilityValueName(char *buf, uint8_t max_len, uint8_t index)
 {
     if(index >= settings_accessibility_num) return -1;
-    uint8_t value = 0;
     switch(index)
     {
-        case A_LEVEL:
+        case A_MACRO_LATCH:
+            sniprintf(buf, max_len, "%s", last_state.settings.macroMenuLatch ?
+                                          currentLanguage->on :
+                                          currentLanguage->off);
+            break;
+    }
+    return 0;
+}
+
+int _ui_getAudioEntryName(char *buf, uint8_t max_len, uint8_t index)
+{
+    if(index >= settings_audio_num) return -1;
+    sniprintf(buf, max_len, "%s", settings_audio_items[index]);
+    return 0;
+}
+
+int _ui_getAudioValueName(char *buf, uint8_t max_len, uint8_t index)
+{
+    if(index >= settings_audio_num) return -1;
+
+    switch(index)
+    {
+        case AU_VOICE:
         {
-            value = last_state.settings.vpLevel;
+            uint8_t value = last_state.settings.vpLevel;
             switch (value)
             {
                 case vpNone:
@@ -534,16 +608,15 @@ int _ui_getAccessibilityValueName(char *buf, uint8_t max_len, uint8_t index)
                     sniprintf(buf, max_len, "%s", currentLanguage->beep);
                     break;
                 default:
-                                    sniprintf(buf, max_len, "%d", (value-vpBeep));
+                    sniprintf(buf, max_len, "%d", (value-vpBeep));
                     break;
             }
             break;
         }
-        case A_PHONETIC:
-            sniprintf(buf, max_len, "%s", last_state.settings.vpPhoneticSpell ? currentLanguage->on : currentLanguage->off);
-            break;
-        case A_MACRO_LATCH:
-            sniprintf(buf, max_len, "%s", last_state.settings.macroMenuLatch ? currentLanguage->on : currentLanguage->off);
+        case AU_PHONETIC:
+            sniprintf(buf, max_len, "%s", last_state.settings.vpPhoneticSpell ?
+                                          currentLanguage->on :
+                                          currentLanguage->off);
             break;
     }
     return 0;
@@ -1183,6 +1256,15 @@ void _ui_drawSettingsRadio(ui_state_t* ui_state)
         _ui_drawMenuListValue(ui_state, ui_state->menu_selected, _ui_getRadioEntryName,
                                _ui_getRadioValueName);
     }
+}
+
+void _ui_drawSettingsAudio(ui_state_t* ui_state)
+{
+    gfx_clearScreen();
+    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER, color_white,
+              "Audio");
+    _ui_drawMenuListValue(ui_state, ui_state->menu_selected,
+                          _ui_getAudioEntryName, _ui_getAudioValueName);
 }
 
 void _ui_drawMacroTop()

@@ -65,6 +65,8 @@
 #include "hwconfig.h"
 #include "core/voicePromptUtils.h"
 #include "core/beeps.h"
+#include "ui/ui_hints.h"
+#include "ui/ui_quickmenu.h"
 
 /* UI main screen functions, their implementation is in "ui_main.c" */
 extern void _ui_drawMainBackground();
@@ -105,6 +107,7 @@ extern void _ui_drawSettingsTetra(ui_state_t* ui_state);
 extern void _ui_drawSettingsVoicePrompts(ui_state_t* ui_state);
 extern void _ui_drawSettingsReset2Defaults(ui_state_t* ui_state);
 extern void _ui_drawSettingsRadio(ui_state_t* ui_state);
+extern void _ui_drawSettingsAudio(ui_state_t* ui_state);
 extern bool _ui_drawMacroMenu(ui_state_t* ui_state);
 extern void _ui_reset_menu_anouncement_tracking();
 // TODO: get these from ui strings / currentLanguage
@@ -131,6 +134,7 @@ const char *settings_items[] =
     "GPS",
 #endif
     "Radio",
+    "Audio",
 #ifdef CONFIG_M17
     "M17",
 #endif
@@ -151,7 +155,10 @@ const char *display_items[] =
     "Contrast",
 #endif
     "Timer",
-    "Battery Icon"
+    "Battery Icon",
+#ifdef CONFIG_KEY_BACKLIGHT
+    "Key Light",
+#endif
 };
 
 #ifdef CONFIG_GPS
@@ -170,6 +177,14 @@ const char *settings_radio_items[] =
     "Offset",
     "Direction",
     "Step",
+    "Squelch",
+    "TX Power",
+};
+
+const char *settings_audio_items[] =
+{
+    "Voice",
+    "Phonetic",
 };
 
 const char * settings_m17_items[] =
@@ -187,17 +202,19 @@ const char *settings_tetra_items[] =
 };
 #endif
 
-const char* settings_fm_items[] =
+const char * settings_fm_items[] =
 {
     "CTCSS Tone",
-    "CTCSS En."
+    "CTCSS En.",
+    "CTCSS TX",
+    "CTCSS RX",
+    "Cancel CT",
+    "Bandwidth",
 };
 
 const char * settings_accessibility_items[] =
 {
     "Macro Latch",
-    "Voice",
-    "Phonetic"
 };
 
 const char *backup_restore_items[] =
@@ -274,6 +291,7 @@ const uint8_t display_num = sizeof(display_items)/sizeof(display_items[0]);
 const uint8_t settings_gps_num = sizeof(settings_gps_items)/sizeof(settings_gps_items[0]);
 #endif
 const uint8_t settings_radio_num = sizeof(settings_radio_items)/sizeof(settings_radio_items[0]);
+const uint8_t settings_audio_num = sizeof(settings_audio_items)/sizeof(settings_audio_items[0]);
 #ifdef CONFIG_M17
 const uint8_t settings_m17_num = sizeof(settings_m17_items)/sizeof(settings_m17_items[0]);
 #endif
@@ -334,7 +352,9 @@ static void _ui_calculateLayout(layout_t *layout)
     static const uint16_t line3_h = 20;
     static const uint16_t line3_large_h = 40;
     static const uint16_t line4_h = 20;
-    static const uint16_t menu_h = 16;
+    /* Menus and lists: 6 pt rows, 12 px, as requested for the 160x128 panel.
+       Ten entries fit above the hints row. */
+    static const uint16_t menu_h = 12;
     static const uint16_t bottom_h = 23;
     static const uint16_t bottom_pad = top_pad;
     static const uint16_t status_v_pad = 2;
@@ -362,8 +382,8 @@ static void _ui_calculateLayout(layout_t *layout)
     static const fontSize_t bottom_font = FONT_SIZE_8PT;
     // TimeDate/Frequency input font
     static const fontSize_t input_font = FONT_SIZE_12PT;
-    // Menu font
-    static const fontSize_t menu_font = FONT_SIZE_8PT;
+    // Menu font: 6 pt, the top bar keeps 8 pt for hierarchy
+    static const fontSize_t menu_font = FONT_SIZE_6PT;
 
     // Radioddity GD-77
     #elif CONFIG_SCREEN_HEIGHT > 63
@@ -522,7 +542,7 @@ static void _ui_drawLowBatteryScreen()
 
 static freq_t _ui_freq_add_digit(freq_t freq, uint8_t pos, uint8_t number)
 {
-    freq_t coefficient = 100;
+    freq_t coefficient = FREQ_DIGIT_RESOLUTION;
     for(uint8_t i=0; i < FREQ_DIGITS - pos; i++)
     {
         coefficient *= 10;
@@ -649,12 +669,45 @@ static int _ui_fsm_loadChannel(int16_t channel_index, bool *sync_rtx)
     return result;
 }
 
+/**
+ * Apply the frequencies typed in the VFO input screen.
+ *
+ * In a receive-only mode (TETRA, DMR) there is one frequency: RX and TX are
+ * set to the same value and the user is not asked for a second one.
+ *
+ * @return true if a valid frequency was applied.
+ */
+static bool _ui_applyVFOInput(bool *sync_rtx)
+{
+    bool rxOnly = !opmode_canTransmit(state.channel.mode);
+
+    if(ui_state.new_tx_frequency == 0 || rxOnly)
+    {
+        ui_state.new_tx_frequency = ui_state.new_rx_frequency;
+    }
+
+    if((ui_state.new_rx_frequency == 0) ||
+       (_ui_freq_check_limits(ui_state.new_rx_frequency) == false) ||
+       (_ui_freq_check_limits(ui_state.new_tx_frequency) == false))
+    {
+        return false;
+    }
+
+    state.channel.rx_frequency = ui_state.new_rx_frequency;
+    state.channel.tx_frequency = ui_state.new_tx_frequency;
+    *sync_rtx = true;
+    return true;
+}
+
 static void _ui_fsm_confirmVFOInput(bool *sync_rtx)
 {
     vp_flush();
-    // Switch to TX input
-    if(ui_state.input_set == SET_RX)
+    bool rxOnly = !opmode_canTransmit(state.channel.mode);
+
+    // Receive-only modes have a single frequency: confirm applies it at once
+    if((ui_state.input_set == SET_RX) && (rxOnly == false))
     {
+        // Switch to TX input
         ui_state.input_set = SET_TX;
         // Reset input position
         ui_state.input_position = 0;
@@ -664,33 +717,23 @@ static void _ui_fsm_confirmVFOInput(bool *sync_rtx)
         // indicate that the user has moved to the tx freq field.
         vp_announceInputReceiveOrTransmit(true, vpqDefault);
     }
-    else if(ui_state.input_set == SET_TX)
+    else
     {
-        // Save new frequency setting
-        // If TX frequency was not set, TX = RX
-        if(ui_state.new_tx_frequency == 0)
+        if(_ui_applyVFOInput(sync_rtx))
         {
-            ui_state.new_tx_frequency = ui_state.new_rx_frequency;
-        }
-        // Apply new frequencies if they are valid
-        if(_ui_freq_check_limits(ui_state.new_rx_frequency) &&
-           _ui_freq_check_limits(ui_state.new_tx_frequency))
-        {
-            state.channel.rx_frequency = ui_state.new_rx_frequency;
-            state.channel.tx_frequency = ui_state.new_tx_frequency;
-            *sync_rtx = true;
             // force init to clear any prompts in progress.
             // defer play because play is called at the end of the function
             //due to above freq queuing.
             vp_announceFrequencies(state.channel.rx_frequency,
                                    state.channel.tx_frequency, vpqInit);
+            state.ui_screen = MAIN_VFO;
         }
         else
         {
+            // Do not silently drop the frequency: say so and stay in the
+            // input screen so the digits can be corrected.
             vp_announceError(vpqInit);
         }
-
-        state.ui_screen = MAIN_VFO;
     }
 
     vp_play();
@@ -719,16 +762,34 @@ static void _ui_fsm_insertVFONumber(kbd_msg_t msg, bool *sync_rtx)
                                                        ui_state.input_position,
                                                        ui_state.input_number);
         if(ui_state.input_position >= FREQ_DIGITS)
-        {// queue the rx freq just completed.
-            vp_queueFrequency(ui_state.new_rx_frequency);
-            /// now queue tx as user has changed fields.
-            vp_queuePrompt(PROMPT_TRANSMIT);
-            // Switch to TX input
-            ui_state.input_set = SET_TX;
-            // Reset input position
-            ui_state.input_position = 0;
-            // Reset TX frequency
-            ui_state.new_tx_frequency = 0;
+        {
+            // A receive-only mode has no TX field: apply what was typed
+            if(opmode_canTransmit(state.channel.mode) == false)
+            {
+                if(_ui_applyVFOInput(sync_rtx))
+                {
+                    vp_announceFrequencies(state.channel.rx_frequency,
+                                           state.channel.tx_frequency, vpqInit);
+                }
+                else
+                {
+                    vp_announceError(vpqInit);
+                }
+                state.ui_screen = MAIN_VFO;
+            }
+            else
+            {
+                // queue the rx freq just completed.
+                vp_queueFrequency(ui_state.new_rx_frequency);
+                /// now queue tx as user has changed fields.
+                vp_queuePrompt(PROMPT_TRANSMIT);
+                // Switch to TX input
+                ui_state.input_set = SET_TX;
+                // Reset input position
+                ui_state.input_position = 0;
+                // Reset TX frequency
+                ui_state.new_tx_frequency = 0;
+            }
         }
     }
     else if(ui_state.input_set == SET_TX)
@@ -742,15 +803,15 @@ static void _ui_fsm_insertVFONumber(kbd_msg_t msg, bool *sync_rtx)
         if(ui_state.input_position >= FREQ_DIGITS)
         {
             // Save both inserted frequencies
-            if(_ui_freq_check_limits(ui_state.new_rx_frequency) &&
-               _ui_freq_check_limits(ui_state.new_tx_frequency))
+            if(_ui_applyVFOInput(sync_rtx))
             {
-                state.channel.rx_frequency = ui_state.new_rx_frequency;
-                state.channel.tx_frequency = ui_state.new_tx_frequency;
-                *sync_rtx = true;
                 // play is called at end.
                 vp_announceFrequencies(state.channel.rx_frequency,
                                        state.channel.tx_frequency, vpqInit);
+            }
+            else
+            {
+                vp_announceError(vpqInit);
             }
 
             state.ui_screen = MAIN_VFO;
@@ -1042,6 +1103,13 @@ static void _ui_fsm_menuMacro(kbd_msg_t msg, bool *sync_rtx)
                 nextMode = modes[0];
 
             state.channel.mode = nextMode;
+
+            /*
+             * A receive-only mode has one frequency: keep TX equal to RX so
+             * that nothing downstream sees a stale transmit frequency.
+             */
+            if(opmode_canTransmit(state.channel.mode) == false)
+                state.channel.tx_frequency = state.channel.rx_frequency;
 #endif
             *sync_rtx = true;
             vp_announceRadioMode(state.channel.mode, queueFlags);
@@ -1361,6 +1429,20 @@ void ui_saveState()
     last_state = state;
 }
 
+/*
+ * The keypad lock lives in the UI state: the quick menu needs to read and set
+ * it, so it gets these two accessors instead of the whole structure.
+ */
+bool ui_getInputLock(void)
+{
+    return ui_state.input_locked;
+}
+
+void ui_setInputLock(bool on)
+{
+    ui_state.input_locked = on;
+}
+
 #ifdef CONFIG_GPS
 static uint16_t priorGPSSpeed = 0;
 static int16_t  priorGPSAltitude = 0;
@@ -1464,7 +1546,16 @@ void ui_updateFSM(bool *sync_rtx)
         macro_menu = false;
     }
 
+    // The quick menu is an overlay: PTT closes it and keys the radio
+    if(qm_state.open && txOngoing)
+        qm_close();
+
     long long now = getTick();
+
+    /* Auto-close the quick menu and follow mode changes made elsewhere */
+    if(qm_tick(now))
+        redraw_needed = true;
+
     // Process pressed keys
     if(event.type == EVENT_KBD)
     {
@@ -1476,8 +1567,47 @@ void ui_updateFSM(bool *sync_rtx)
         // unless is the MONI key for the MACRO functions
         if (_ui_exitStandby(now) && !(msg.keys & KEY_MONI))
             return;
-        // If MONI is pressed, activate MACRO functions
-        bool moniPressed = msg.keys & KEY_MONI;
+
+        /*
+         * Contextual quick menu (P2, KEY_F2). Short press opens the popup on
+         * the main screens; while it is open it owns the keypad: UP/DOWN move
+         * or change the value, ENTER edits, ESC/P2 close it, digits jump.
+         */
+        if(qm_state.open)
+        {
+            qm_state.lastKeyTick = now;
+            if(msg.keys & (KEY_UP | KNOB_LEFT))
+                qm_move(-1);
+            else if(msg.keys & (KEY_DOWN | KNOB_RIGHT))
+                qm_move(+1);
+            else if(msg.keys & KEY_ENTER)
+                qm_enter();
+            else if(msg.keys & KEY_ESC)
+                qm_cancel();
+            else if(msg.long_press && (msg.keys & (KEY_F2 | KEY_MONI)))
+                qm_toggleLatch();
+            else if(input_isNumberPressed(msg) && !qm_state.editing)
+            {
+                uint8_t digit = input_getPressedNumber(msg);
+                qm_select(digit == 0 ? 9 : digit - 1);
+            }
+            if(event.payload != 0)
+                vp_play();
+            return;
+        }
+
+        if((msg.keys & KEY_F2) && !msg.long_press
+           && ((state.ui_screen == MAIN_VFO) || (state.ui_screen == MAIN_MEM))
+           && (ui_state.input_locked == false) && (ui_state.edit_mode == false))
+        {
+            qm_open();
+            return;
+        }
+
+        // If MONI is pressed, activate MACRO functions; P2 long keeps the
+        // legacy 3x3 grid as its shortcut
+        bool moniPressed = (msg.keys & KEY_MONI)
+                        || ((msg.keys & KEY_F2) && msg.long_press);
         if(moniPressed || macro_latched)
         {
             macro_menu = true;
@@ -2008,6 +2138,9 @@ void ui_updateFSM(bool *sync_rtx)
                         case S_RADIO:
                             state.ui_screen = SETTINGS_RADIO;
                             break;
+                        case S_AUDIO:
+                            state.ui_screen = SETTINGS_AUDIO;
+                            break;
 #ifdef CONFIG_M17
                         case S_M17:
                             state.ui_screen = SETTINGS_M17;
@@ -2161,6 +2294,16 @@ void ui_updateFSM(bool *sync_rtx)
                         case D_BATTERY:
                             state.settings.showBatteryIcon = !state.settings.showBatteryIcon;
                             break;
+#ifdef CONFIG_KEY_BACKLIGHT
+                        case D_KEYLIGHT:
+                            state.settings.keyBacklight =
+                                !state.settings.keyBacklight;
+                            c62_setKeyBacklight(state.settings.keyBacklight);
+                            vp_announceSettingsOnOffToggle(
+                                &currentLanguage->brightness, queueFlags,
+                                state.settings.keyBacklight);
+                            break;
+#endif
                         default:
                             state.ui_screen = SETTINGS_DISPLAY;
                     }
@@ -2188,6 +2331,16 @@ void ui_updateFSM(bool *sync_rtx)
                             _ui_changeTimer(+1);
                             vp_announceDisplayTimer();
                             break;
+#ifdef CONFIG_KEY_BACKLIGHT
+                        case D_KEYLIGHT:
+                            state.settings.keyBacklight =
+                                !state.settings.keyBacklight;
+                            c62_setKeyBacklight(state.settings.keyBacklight);
+                            vp_announceSettingsOnOffToggle(
+                                &currentLanguage->brightness, queueFlags,
+                                state.settings.keyBacklight);
+                            break;
+#endif
                         default:
                             state.ui_screen = SETTINGS_DISPLAY;
                     }
@@ -2330,6 +2483,44 @@ void ui_updateFSM(bool *sync_rtx)
                                 state.step_index += n_freq_steps;
                                 state.step_index--;
                                 state.step_index %= n_freq_steps;
+                            }
+                            break;
+                        case R_SQUELCH:
+                            // Global squelch, the same setting the quick menu
+                            // changes and OpMode_FM compares the RSSI with
+                            if(msg.keys & (KEY_UP | KEY_RIGHT | KNOB_RIGHT))
+                            {
+                                if(state.settings.sqlLevel < 15)
+                                    state.settings.sqlLevel++;
+                                *sync_rtx = true;
+                                vp_announceSquelch(state.settings.sqlLevel,
+                                                   queueFlags);
+                            }
+                            else if(msg.keys & (KEY_DOWN | KEY_LEFT | KNOB_LEFT))
+                            {
+                                if(state.settings.sqlLevel > 0)
+                                    state.settings.sqlLevel--;
+                                *sync_rtx = true;
+                                vp_announceSquelch(state.settings.sqlLevel,
+                                                   queueFlags);
+                            }
+                            break;
+                        case R_POWER:
+                            // TX power, in the same 1 / 2.5 / 5 W steps as the
+                            // quick menu and the macro grid
+                            if(msg.keys & (KEY_UP | KEY_RIGHT | KNOB_RIGHT))
+                            {
+                                if(state.channel.power < 5000)
+                                    state.channel.power += 500;
+                                *sync_rtx = true;
+                                vp_announcePower(state.channel.power, queueFlags);
+                            }
+                            else if(msg.keys & (KEY_DOWN | KEY_LEFT | KNOB_LEFT))
+                            {
+                                if(state.channel.power > 1000)
+                                    state.channel.power -= 500;
+                                *sync_rtx = true;
+                                vp_announcePower(state.channel.power, queueFlags);
                             }
                             break;
                         default:
@@ -2516,6 +2707,16 @@ void ui_updateFSM(bool *sync_rtx)
                                      msg.keys & KEY_ESC)
                                 ui_state.edit_mode = false;
                             break;
+#ifdef CONFIG_RX_FINE_OFFSET
+                        case T_FINE:
+                            if (msg.keys & (KEY_UP | KEY_RIGHT | KNOB_RIGHT))
+                                qm_set_rx_fine(state.settings.rxFineHz + 10);
+                            else if (msg.keys & (KEY_DOWN | KEY_LEFT | KNOB_LEFT))
+                                qm_set_rx_fine(state.settings.rxFineHz - 10);
+                            else if (msg.keys & (KEY_ENTER | KEY_ESC))
+                                ui_state.edit_mode = false;
+                            break;
+#endif
                     }
                 }
                 else if (msg.keys & KEY_UP || msg.keys & KNOB_LEFT)
@@ -2535,6 +2736,35 @@ void ui_updateFSM(bool *sync_rtx)
                     _ui_menuBack(MENU_SETTINGS);
                 break;
 #endif
+            case SETTINGS_AUDIO:
+                if(ui_state.edit_mode)
+                {
+                    if(msg.keys & (KEY_UP | KEY_RIGHT | KNOB_RIGHT))
+                    {
+                        if(ui_state.menu_selected == AU_PHONETIC)
+                            _ui_changePhoneticSpell(true);
+                        else
+                            _ui_changeVoiceLevel(1);
+                    }
+                    else if(msg.keys & (KEY_DOWN | KEY_LEFT | KNOB_LEFT))
+                    {
+                        if(ui_state.menu_selected == AU_PHONETIC)
+                            _ui_changePhoneticSpell(false);
+                        else
+                            _ui_changeVoiceLevel(-1);
+                    }
+                    else if(msg.keys & (KEY_ENTER | KEY_ESC))
+                        ui_state.edit_mode = false;
+                }
+                else if(msg.keys & KEY_UP || msg.keys & KNOB_LEFT)
+                    _ui_menuUp(settings_audio_num);
+                else if(msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
+                    _ui_menuDown(settings_audio_num);
+                else if(msg.keys & KEY_ENTER)
+                    ui_state.edit_mode = true;
+                else if(msg.keys & KEY_ESC)
+                    _ui_menuBack(MENU_SETTINGS);
+                break;
             case SETTINGS_FM:
                 if (ui_state.edit_mode)
                 {
@@ -2579,6 +2809,57 @@ void ui_updateFSM(bool *sync_rtx)
 
                             *sync_rtx = true;
                             break;
+                        case CTCSS_Tx_En:
+                            if (msg.keys & (KEY_UP | KEY_DOWN | KEY_LEFT |
+                                            KEY_RIGHT | KNOB_LEFT | KNOB_RIGHT))
+                                state.channel.fm.txToneEn =
+                                    !state.channel.fm.txToneEn;
+                            else if (msg.keys & (KEY_ENTER | KEY_ESC))
+                                ui_state.edit_mode = false;
+                            *sync_rtx = true;
+                            break;
+                        case CTCSS_Rx_En:
+                            if (msg.keys & (KEY_UP | KEY_DOWN | KEY_LEFT |
+                                            KEY_RIGHT | KNOB_LEFT | KNOB_RIGHT))
+                                state.channel.fm.rxToneEn =
+                                    !state.channel.fm.rxToneEn;
+                            else if (msg.keys & (KEY_ENTER | KEY_ESC))
+                                ui_state.edit_mode = false;
+                            *sync_rtx = true;
+                            break;
+                        case CTCSS_Cancel:
+                            /* Cancel all CT/DT: both tones off, as the stock
+                               firmware's CANCEL ALL CT/DT does */
+                            if (msg.keys & (KEY_ENTER | KEY_UP | KEY_DOWN))
+                            {
+                                state.channel.fm.txToneEn = 0;
+                                state.channel.fm.rxToneEn = 0;
+                                *sync_rtx = true;
+                                ui_state.edit_mode = false;
+                            }
+                            else if (msg.keys & KEY_ESC)
+                                ui_state.edit_mode = false;
+                            break;
+                        case FM_BANDWIDTH:
+                            if (msg.keys & (KEY_UP | KEY_RIGHT | KNOB_RIGHT))
+                            {
+                                if (state.channel.bandwidth < BW_6_25)
+                                    state.channel.bandwidth++;
+                                *sync_rtx = true;
+                                vp_announceBandwidth(state.channel.bandwidth,
+                                                     queueFlags);
+                            }
+                            else if (msg.keys & (KEY_DOWN | KEY_LEFT | KNOB_LEFT))
+                            {
+                                if (state.channel.bandwidth > BW_12_5)
+                                    state.channel.bandwidth--;
+                                *sync_rtx = true;
+                                vp_announceBandwidth(state.channel.bandwidth,
+                                                     queueFlags);
+                            }
+                            else if (msg.keys & (KEY_ENTER | KEY_ESC))
+                                ui_state.edit_mode = false;
+                            break;
                     }
                 }
                 else if (msg.keys & KEY_UP || msg.keys & KNOB_LEFT)
@@ -2604,12 +2885,6 @@ void ui_updateFSM(bool *sync_rtx)
                         case A_MACRO_LATCH:
                             _ui_changeMacroLatch(false);
                             break;
-                        case A_LEVEL:
-                            _ui_changeVoiceLevel(-1);
-                            break;
-                        case A_PHONETIC:
-                            _ui_changePhoneticSpell(false);
-                            break;
                         default:
                             state.ui_screen = SETTINGS_ACCESSIBILITY;
                     }
@@ -2621,12 +2896,6 @@ void ui_updateFSM(bool *sync_rtx)
                     {
                         case A_MACRO_LATCH:
                             _ui_changeMacroLatch(true);
-                            break;
-                        case A_LEVEL:
-                            _ui_changeVoiceLevel(1);
-                            break;
-                        case A_PHONETIC:
-                            _ui_changePhoneticSpell(true);
                             break;
                         default:
                             state.ui_screen = SETTINGS_ACCESSIBILITY;
@@ -2732,6 +3001,10 @@ bool ui_updateGUI()
     {
         _ui_calculateLayout(&layout);
         layout_ready = true;
+#ifdef CONFIG_KEY_BACKLIGHT
+        /* The keypad backlight follows its setting, not the display level */
+        c62_setKeyBacklight(state.settings.keyBacklight);
+#endif
     }
     // Draw current GUI page
     switch(last_state.ui_screen)
@@ -2840,6 +3113,10 @@ bool ui_updateGUI()
         case SETTINGS_RADIO:
             _ui_drawSettingsRadio(&ui_state);
             break;
+        // Voice prompts and phonetics
+        case SETTINGS_AUDIO:
+            _ui_drawSettingsAudio(&ui_state);
+            break;
         // Low battery screen
         case LOW_BAT:
             _ui_drawLowBatteryScreen();
@@ -2851,6 +3128,15 @@ bool ui_updateGUI()
     {
         _ui_drawDarkOverlay();
         _ui_drawMacroMenu(&ui_state);
+    }
+    else if(qm_state.open)
+    {
+        qm_draw();
+    }
+    else
+    {
+        /* Contextual key hints, in the row reserved above the screen bottom */
+        ui_hints_draw_for_screen(last_state.ui_screen);
     }
 
     redraw_needed = false;
