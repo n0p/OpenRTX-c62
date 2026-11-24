@@ -16,11 +16,14 @@
 /* A call is shown this long after its last activity, if no release is seen */
 #define CALL_TIMEOUT_MS 10000
 #define VOICE_TIMEOUT_MS 1000
+/* An uplink transmission stays flagged this long after its last PDU */
+#define UPLINK_TIMEOUT_MS 3000
 
 static pthread_mutex_t statusMutex = PTHREAD_MUTEX_INITIALIZER;
 static struct tetraStatus status; /* Under statusMutex */
 static long long lastCall;        /* Tick of the last call activity */
 static long long lastVoice;       /* Tick of the last traffic slot */
+static long long lastUplink;      /* Tick of the last uplink PDU */
 
 void tetra_getStatus(struct tetraStatus *out)
 {
@@ -28,8 +31,28 @@ void tetra_getStatus(struct tetraStatus *out)
     long long now = getTick();
     status.call = status.call && (now - lastCall < CALL_TIMEOUT_MS);
     status.voice = status.call && (now - lastVoice < VOICE_TIMEOUT_MS);
+    status.uplink = status.uplink && (now - lastUplink < UPLINK_TIMEOUT_MS);
     *out = status;
     pthread_mutex_unlock(&statusMutex);
+}
+
+/**
+ * An event decoded from the MS to base station direction: the radio is
+ * listening to the uplink of the cell (see tetra_tmo_set_uplink_cell), and
+ * what arrives is a transmitter of the network, not a downlink of it.
+ */
+static void markUplink(const struct tetra_event *ev)
+{
+    if (!ev->uplink)
+        return;
+    status.uplink = true;
+    lastUplink = getTick();
+    if (ev->type == TETRA_EV_CALL && ev->u.call.src_ssi != 0)
+        status.uplinkSs = ev->u.call.src_ssi;
+    else if (ev->type == TETRA_EV_SDS && ev->u.sds.src_ssi != 0)
+        status.uplinkSs = ev->u.sds.src_ssi;
+    else if (ev->type == TETRA_EV_TRAFFIC && ev->u.traffic.talker_ssi != 0)
+        status.uplinkSs = ev->u.traffic.talker_ssi;
 }
 
 static void onSds(const struct tetra_sds *s)
@@ -94,6 +117,7 @@ void tetraStatus_onEvent(void *user, const struct tetra_event *ev)
         tetraSpeech_traffic(&ev->u.traffic);
 
     pthread_mutex_lock(&statusMutex);
+    markUplink(ev);
     switch (ev->type) {
         case TETRA_EV_SYNC:
             status.sync = ev->u.sync.locked;
@@ -134,6 +158,53 @@ void tetraStatus_onEvent(void *user, const struct tetra_event *ev)
 
         case TETRA_EV_SDS:
             onSds(&ev->u.sds);
+            break;
+
+        case TETRA_EV_MM: {
+            const struct tetra_mm *m = ev->u.mm;
+            if (m == NULL)
+                break;
+            switch (m->type) {
+                case TETRA_MM_LOC_UPDATE_ACCEPT:
+                    status.registered = true;
+                    status.mmCause = 0;
+                    break;
+                case TETRA_MM_LOC_UPDATE_REJECT:
+                    status.registered = false;
+                    status.mmCause = m->cause;
+                    break;
+                case TETRA_MM_GROUP_ATTACH_DETACH:
+                case TETRA_MM_GROUP_ATTACH_DETACH_ACK:
+                    status.groups = m->ngroups;
+                    status.detachAll = m->detach_all;
+                    break;
+                default:
+                    break;
+            }
+            break;
+        }
+
+        case TETRA_EV_NETWORK: {
+            const struct tetra_network *n = ev->u.network;
+            if (n == NULL)
+                break;
+            status.haveNet = true;
+            status.netLoad = n->load;
+            status.neighbours = n->nneighbours;
+            if (n->has_time) {
+                status.netTime = n->time_valid;
+                status.netYear = n->year;
+                status.netUtc = n->utc_s;
+                status.netOffsetMin = n->offset_min;
+            }
+            break;
+        }
+
+        case TETRA_EV_SIGNAL:
+            /* An uplink burst: the receiver does not decode it without the
+             * colour code of the cell, but it is activity on the channel */
+            status.uplink = true;
+            lastUplink = getTick();
             break;
 
         default:

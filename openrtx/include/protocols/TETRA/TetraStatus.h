@@ -41,6 +41,25 @@ struct tetraStatus {
     char sds[64];       /**< Last SDS text or status, ASCII */
     long long sdsTime;  /**< Tick of the last SDS */
 
+    /* TMO mobility management (TETRA_EV_MM) */
+    bool registered;    /**< A location update was accepted */
+    uint8_t mmCause;    /**< Cause of the last location update reject */
+    uint8_t groups;     /**< Group identities in the last attach, 0 if none */
+    bool detachAll;     /**< The attach replaces every previous one */
+
+    /* TMO network broadcast (TETRA_EV_NETWORK, D-NWRK-BROADCAST) */
+    bool haveNet;       /**< The fields below were received */
+    uint8_t netLoad;    /**< Serving cell load: 0 unknown, 1 low .. 3 high */
+    uint8_t neighbours; /**< Number of neighbour cells announced */
+    bool netTime;       /**< netYear/netUtc/netOffsetMin are valid */
+    uint16_t netYear;   /**< 2000.. */
+    uint32_t netUtc;    /**< UTC seconds since the start of the year */
+    int16_t netOffsetMin; /**< Local time minus UTC, minutes */
+
+    /* Uplink (MS to base station) traffic seen */
+    bool uplink;        /**< An uplink call, SDS or slot arrived recently */
+    uint32_t uplinkSs;  /**< Sending MS of the last uplink PDU, 0 if unknown */
+
     uint16_t phaseErr;  /**< Demodulator RMS phase error, % of pi/4 */
     uint16_t overruns;  /**< Sample blocks lost: the radio was too slow */
     uint16_t resyncs;   /**< Burst synchronisation restarts */
