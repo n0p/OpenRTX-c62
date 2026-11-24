@@ -57,6 +57,8 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/core/voicePromptData.S',
                'openrtx/src/core/nvmem_access.c',
                'openrtx/src/core/channel_store.c',
+               'openrtx/src/core/scanner.c',
+               'openrtx/src/core/scan_service.c',
                'openrtx/src/core/settings.c',
                'openrtx/src/core/settings_record.c',
                'openrtx/src/core/zones.c',
@@ -382,7 +384,11 @@ linux_inc = ['platform/targets/linux',
              'platform/drivers/audio',
              'platform/drivers/tones']
 
-linux_def = {'PLATFORM_LINUX': '', 'VP_USE_FILESYSTEM':''}
+linux_def = {'PLATFORM_LINUX': '', 'VP_USE_FILESYSTEM':'',
+             # Scan and vigilance run in the host emulator as well, so the
+             # integration path of core/state.c is compiled and exercised
+             # outside the radio. See docs/SCAN.md.
+             'CONFIG_SCAN': ''}
 
 sdl_dep     = dependency('SDL2',     required: false)
 threads_dep = dependency('threads',  required: false)
@@ -1398,6 +1404,21 @@ tx_guard_test = executable('tx_guard_test',
                                       'dependencies'       : [catch2_dep],
                                       'link_args'          : linux_l_args})
 
+# Scan and vigilance: the state machine (core/scanner.c) is pure — no clock, no
+# radio — so this test drives it with a simulated receiver (synthetic squelch,
+# a bank with SKIP flags, a priority channel) and measures its cost.  settings.c
+# comes along for the step table it owns.
+scanner_test = executable('scanner_test',
+                          sources : ['tests/unit/scanner.cpp',
+                                     'openrtx/src/core/scanner.c',
+                                     'openrtx/src/core/settings.c'],
+                          kwargs  : {'c_args'             : linux_c_args,
+                                     'cpp_args'           : linux_cpp_args,
+                                     'include_directories': linux_inc +
+                                          ['openrtx/include'],
+                                     'dependencies'       : [catch2_dep],
+                                     'link_args'          : linux_l_args})
+
 # Baseband replay (tests/platform/M17Replay.hpp): a command line tool and a
 # unit test replaying a committed recording through the same class. The test
 # gets the asset directory as an absolute path so it does not depend on the
@@ -1451,4 +1472,5 @@ test('S-Level Test', slevel_test)
 test('Audio Codec Test',     audio_codec_test)
 test('DMR TX FSM Test',      dmr_tx_fsm_test)
 test('TX Guard Test',        tx_guard_test)
+test('Scanner Test',         scanner_test)
 test('M17 Baseband Replay Test', m17_replay_test, timeout : 120) # ~40 s in CI with coverage
