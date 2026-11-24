@@ -1335,6 +1335,18 @@ dmr_tx_fsm_test = executable('dmr_tx_fsm_test',
                                         'dependencies'       : [catch2_dep],
                                         'link_args'          : linux_l_args})
 
+# Transmit lifecycle: phases, deadlines and trace. TxGuard.c has no dependency
+# on the OS at all (the time is passed in), so this links the guard alone.
+tx_guard_test = executable('tx_guard_test',
+                           sources : ['tests/unit/tx_guard.cpp',
+                                      'openrtx/src/rtx/TxGuard.c'],
+                           kwargs  : {'c_args'             : linux_c_args,
+                                      'cpp_args'           : linux_cpp_args,
+                                      'include_directories': linux_inc +
+                                           ['openrtx/include'],
+                                      'dependencies'       : [catch2_dep],
+                                      'link_args'          : linux_l_args})
+
 # Baseband replay (tests/platform/M17Replay.hpp): a command line tool and a
 # unit test replaying a committed recording through the same class. The test
 # gets the asset directory as an absolute path so it does not depend on the
@@ -1380,4 +1392,5 @@ test('GFX Text Test',        gfx_text_test)
 test('S-Level Test', slevel_test)
 test('Audio Codec Test',     audio_codec_test)
 test('DMR TX FSM Test',      dmr_tx_fsm_test)
+test('TX Guard Test',        tx_guard_test)
 test('M17 Baseband Replay Test', m17_replay_test, timeout : 120) # ~40 s in CI with coverage
