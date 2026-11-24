@@ -290,9 +290,9 @@ ocupa la mensajería: dos reensambladores (uno por timeslot, ~460 B cada uno),
 el paquete en transmisión (420 B), las dos colas (6 + 6 mensajes de 196 B =
 2,3 KiB), el registro empaquetado (2 500 B) y el PDU de TETRA preparado
 (400 B). Para llegar ahí se recortaron las colas de 8+8 a 6+6, el registro de
-3 400 a 2 500 B y la agenda de 64 a 32 contactos, y se quitó la tercera copia
-del registro que el backend de flash y el backend de reserva mantenían cada
-uno por su lado (6,8 KiB).
+3 400 a 2 500 B y la agenda de 64 a 32 contactos, y se quitó la segunda copia
+del registro que el backend de flash guardaba para leer (3,4 KiB: ahora lee
+directo al buffer de `messaging.c`).
 
 ---
 
