@@ -20,7 +20,17 @@
 #include "protocols/TETRA/TetraSds.h"
 #endif
 
+/*
+ * Platforms without a graceful shutdown (the C62 cuts power with the volume
+ * knob, so state_terminate() never runs) ask for the debounced write by
+ * defining NVMEM_DEBOUNCED_WRITE in their hwconfig.h: settings and VFO are
+ * then written to flash once they have been stable for the debounce window.
+ */
+#ifdef NVMEM_DEBOUNCED_WRITE
+
+#ifndef NVM_WRITE_DEBOUNCE_MS
 #define NVM_WRITE_DEBOUNCE_MS 3000
+#endif
 
 struct debouncer {
     long long lastChange;
@@ -28,16 +38,8 @@ struct debouncer {
     bool pending;
 };
 
-state_t state;
-pthread_mutex_t state_mutex;
-static long long int lastUpdate = 0;
 static struct debouncer settingsDebouncer;
 static struct debouncer vfoDebouncer;
-
-// Commonly used frequency steps, expressed in Hz
-const uint32_t freq_steps[] = { 1000,  5000,  6250,  10000, 12500,
-                                15000, 20000, 25000, 50000, 100000 };
-const size_t n_freq_steps = sizeof(freq_steps) / sizeof(freq_steps[0]);
 
 static bool hasChanged(struct debouncer *db, const void *data, const size_t len)
 {
@@ -56,6 +58,17 @@ static bool hasChanged(struct debouncer *db, const void *data, const size_t len)
 
     return false;
 }
+
+#endif /* NVMEM_DEBOUNCED_WRITE */
+
+state_t state;
+pthread_mutex_t state_mutex;
+static long long int lastUpdate = 0;
+
+// Commonly used frequency steps, expressed in Hz
+const uint32_t freq_steps[] = { 1000,  5000,  6250,  10000, 12500,
+                                15000, 20000, 25000, 50000, 100000 };
+const size_t n_freq_steps = sizeof(freq_steps) / sizeof(freq_steps[0]);
 
 void state_init()
 {
@@ -100,8 +113,10 @@ void state_init()
         state.settings.brightness = 100;
     }
 
+#ifdef NVMEM_DEBOUNCED_WRITE
     settingsDebouncer.crc = crc_ccitt(&state.settings, sizeof(settings_t));
     vfoDebouncer.crc = crc_ccitt(&state.channel, sizeof(channel_t));
+#endif
 
 #ifdef CONFIG_TETRA
     /* Received SDS messages, kept across power cycles */
@@ -122,8 +137,10 @@ void state_terminate()
 
 void state_task()
 {
+#ifdef NVMEM_DEBOUNCED_WRITE
     settings_t settings;
     channel_t vfo;
+#endif
 
     // Update radio state once every 100ms
     if ((getTick() - lastUpdate) < 100)
@@ -165,9 +182,27 @@ void state_task()
     state.time = platform_getCurrentTime();
 #endif
 
+#ifdef NVMEM_DEBOUNCED_WRITE
     settings = state.settings;
     vfo = state.channel;
+#endif
     pthread_mutex_unlock(&state_mutex);
+
+#ifdef NVMEM_DEBOUNCED_WRITE
+    /*
+     * Persist here, and only here: this task runs every 100 ms and can afford
+     * the tens of milliseconds of a 4 KiB sector erase, the audio path cannot.
+     * hasChanged() restarts its timer on every change, so a knob being turned
+     * postpones the write instead of triggering one per interval.
+     */
+    bool writeSettings = hasChanged(&settingsDebouncer, &settings,
+                                    sizeof(settings_t));
+    bool writeVfo = hasChanged(&vfoDebouncer, &vfo, sizeof(channel_t));
+    if (writeSettings || writeVfo) {
+        nvm_writeSettingsAndVfo(writeSettings ? &settings : NULL,
+                                writeVfo ? &vfo : NULL);
+    }
+#endif
 
 #ifdef CONFIG_TETRA
     /*

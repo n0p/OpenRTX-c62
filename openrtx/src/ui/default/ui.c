@@ -299,6 +299,13 @@ static bool macro_menu = false;
 static bool layout_ready = false;
 static bool redraw_needed = true;
 
+/*
+ * Set by code that changes the radio configuration outside the UI FSM (the
+ * quick menu setters, the remote control) so that the UI thread sends it to
+ * the rtx thread. Declared in core/ui.h.
+ */
+volatile bool ui_rtxSyncRequest = false;
+
 static bool standby = false;
 static long long last_event_tick = 0;
 
