@@ -125,4 +125,15 @@ TEST_CASE("VFO entry rejects a frequency outside the tuning range", "[ui]")
     INFO("screen " << state.ui_screen << " rx " << state.channel.rx_frequency);
     REQUIRE(state.ui_screen == MAIN_VFO_INPUT);
     REQUIRE(state.channel.rx_frequency == 430000000);
+
+    /* The field is full: more digits are ignored, not shifted into the freq */
+    press(KEY_9);
+    press(KEY_9);
+    REQUIRE(state.channel.rx_frequency == 430000000);
+    REQUIRE(state.ui_screen == MAIN_VFO_INPUT);
+
+    /* ESC leaves without touching the tuned frequency */
+    press(KEY_ESC);
+    REQUIRE(state.ui_screen == MAIN_VFO);
+    REQUIRE(state.channel.rx_frequency == 430000000);
 }

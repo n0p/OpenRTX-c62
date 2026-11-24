@@ -742,6 +742,14 @@ static void _ui_fsm_confirmVFOInput(bool *sync_rtx)
 
 static void _ui_fsm_insertVFONumber(kbd_msg_t msg, bool *sync_rtx)
 {
+    /*
+     * The field is full and the frequency has not been applied (out of range):
+     * wait for ENTER or ESC. A further digit would index past FREQ_DIGITS in
+     * _ui_freq_add_digit() and shift the frequency out of the freq_t range.
+     */
+    if(ui_state.input_position >= FREQ_DIGITS)
+        return;
+
     // Advance input position
     ui_state.input_position += 1;
     // clear any prompts in progress.
@@ -771,12 +779,13 @@ static void _ui_fsm_insertVFONumber(kbd_msg_t msg, bool *sync_rtx)
                 {
                     vp_announceFrequencies(state.channel.rx_frequency,
                                            state.channel.tx_frequency, vpqInit);
+                    state.ui_screen = MAIN_VFO;
                 }
                 else
                 {
+                    // Out of range: stay here so the digits can be corrected
                     vp_announceError(vpqInit);
                 }
-                state.ui_screen = MAIN_VFO;
             }
             else
             {
