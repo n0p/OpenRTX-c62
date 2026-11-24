@@ -84,9 +84,12 @@ imported). `tests/unit/channel_store.cpp` walks a power cut across a whole save
 Erasing and rewriting 8 KiB costs tens of milliseconds, so a channel *tune*
 does not write immediately: the new `last_used` index is only flagged, and
 `chstore_task()` (called from `state_task()`, 100 ms cadence) writes it after
-`CHSTORE_LASTUSED_DELAY_MS` (3 s). Structural changes (add, edit, delete) are
-written at once because they are explicit user actions. `state_terminate()`
-flushes a pending index so that a fast power-off still remembers the channel.
+`CHSTORE_LASTUSED_DELAY_MS` (2 s, deliberately off the 3 s debounce that the
+settings and the VFO use, so the two erases do not land in the same pass).
+Structural changes (add, edit, delete) are written at once because they are
+explicit user actions. `state_terminate()` flushes a pending index where the
+platform runs it: the C62 cuts power with the volume knob, so there the 2 s
+debounce is the only chance to save it.
 
 ## API
 
@@ -144,17 +147,43 @@ exactly as when the mode is changed from the VFO.
 ## Integration points
 
 `ui_channels.c` is modal and self contained; the main UI only needs the hooks
-below (see the comments marked `HOOK` in the sources):
+below. Line numbers are those of commit `512ae76`; every block is preceded by a
+comment that names the channel UI, so `git log -S ui_channels_isOpen` finds them
+again after a rebase.
 
-- `ui.c`, `ui_updateFSM()`, right before `int priorUIScreen = state.ui_screen;`
-  forwards the keys while `ui_channels_isOpen()`, forces `state.txDisable` and
-  returns; the same place opens the list on a P1 long press.
-- `ui.c`, `ui_updateGUI()` draws with `ui_channels_draw()` while open.
-- `state.c`: `chstore_init()` + last used channel in `state_init()`,
-  `chstore_task()` in `state_task()`, `chstore_commit()` in
-  `state_terminate()`.
-- `ui_channels_drawHints()` draws the green/P1/P2/red hint line; the shared hint
-  bar can replace its body.
+| File | Site | Lines | What it does |
+|------|------|-------|--------------|
+| `openrtx/src/ui/default/ui.c` | includes | 59 | `#include "ui/ui_channels.h"` |
+| `openrtx/src/ui/default/ui.c` | `ui_updateFSM()`, before `int priorUIScreen = state.ui_screen;` | 1516-1544 | opens the list on a P1 long press from `MAIN_VFO`/`MAIN_MEM`; while open, every key goes to `ui_channels_handleEvent()`, `state.txDisable` is held true and the FSM returns |
+| `openrtx/src/ui/default/ui.c` | `ui_updateGUI()`, after the layout is ready | 2759-2764 | `ui_channels_draw()` and `return true` while open |
+| `openrtx/src/core/state.c` | includes | 18 | `#include "core/channel_store.h"` |
+| `openrtx/src/core/state.c` | `state_init()`, after the VFO is loaded | 81-93 | `chstore_init()`, then the last used channel into `state.channel` |
+| `openrtx/src/core/state.c` | `state_terminate()` | 135-136 | `chstore_commit()` |
+| `openrtx/src/core/state.c` | `state_task()`, after the TETRA SDS task | 199-200 | `chstore_task()` |
+| `platform/targets/c62/c62.dts` | `flash0` partitions | 285-294 | `factory_chan` becomes `channels_partition` (same address, no `read-only`) |
+| `CMakeLists.txt` | `target_sources(app)` | 121, 139 | `channel_store.c`, `ui_channels.c` |
+| `platform/targets/c62/CMakeLists.txt` | `target_sources(app)` | 26 | `channel_store_c62.c` |
+| `meson.build` | `openrtx_src`, `ui_src_default`, tests | 59, 83, 1270, 1324 | host build and `channel_store_test` |
+
+### Merging with the UI branch (`c62/ui-ux`)
+
+The merge was rehearsed at the time of writing: `c62/channels` and `c62/ui-ux`
+merge without conflicts (both touch `state.c` and `ui.c`, in different hunks),
+and the merged `state.c` and `ui.c` compile.
+
+- `c62/ui-ux` fixes the C62 keypad matrix (`platform/drivers/keyboard/keyboard_c62.c`):
+  on `c62/all` without it, ENTER/ESC/UP/DOWN are misreported, so the editor can
+  only be used once that fix is in. Its key map keeps P1 = `KEY_F1` and
+  P2 = `KEY_F2`, which is what the editor assumes, and ENTER = the MENU key,
+  ESC = the A/B key, matching the green/red hint labels.
+- `c62/ui-ux` guards the settings/VFO write-back in `state_task()` with
+  `NVMEM_DEBOUNCED_WRITE`. `chstore_task()` does not depend on it; the two
+  debounces are 2 s and 3 s so their erases do not land in the same pass.
+- If the UI branch takes P1 long press for something else, only the first hook
+  block changes: call `ui_channels_open()` wherever the list should be reachable
+  from (a menu entry works as well, the module does not care how it is opened).
+- `ui_channels_drawHints()` is the only drawing function the shared hint bar has
+  to replace; it receives the four labels (green, P1, P2, red).
 
 ## Limitations
 

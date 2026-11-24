@@ -54,8 +54,12 @@ extern "C" {
 /** Version of the record format described in this header. */
 #define CHSTORE_VERSION 1
 
-/** Delay before an updated "last used" index is written back to flash, ms. */
-#define CHSTORE_LASTUSED_DELAY_MS 3000
+/**
+ * Delay before an updated "last used" index is written back to flash, ms.
+ * Shorter than the settings/VFO debounce of state_task() so that the two
+ * writes do not land in the same pass, and longer than the noise of a knob.
+ */
+#define CHSTORE_LASTUSED_DELAY_MS 2000
 
 /** Frequency limits: BK4819 coverage, see docs/CHANNELS.md. */
 #define CHSTORE_FREQ_MIN     18000000U    /*  18 MHz */
