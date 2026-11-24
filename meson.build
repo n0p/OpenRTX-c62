@@ -1322,7 +1322,14 @@ ui_check_standby_test = executable('ui_check_standby_test',
 
 ui_vfo_input_test = executable('ui_vfo_input_test',
                                sources : unit_test_src + ['tests/unit/ui_vfo_input.cpp'],
-                               kwargs  : unit_test_opts)
+                               kwargs : unit_test_opts)
+
+# The VFO carrier search through the real UI FSM: the three second hold, the
+# arming, and the keys that cancel it.  It sleeps for the hold, so it is slow
+# on purpose: the timing is the feature (docs/VFO_SEARCH.md).
+ui_vfo_search_test = executable('ui_vfo_search_test',
+                                sources : unit_test_src + ['tests/unit/ui_vfo_search.cpp'],
+                                kwargs : unit_test_opts)
 
 ui_quickmenu_test = executable('ui_quickmenu_test',
                                sources : unit_test_src + ['tests/unit/ui_quickmenu.cpp'],
@@ -1509,6 +1516,7 @@ test('Codeplug Test',         cps_test)
 test('minmea conversion Test', minmea_conversion_test)
 test('UI Check Standby Test', ui_check_standby_test)
 test('UI VFO Input Test', ui_vfo_input_test)
+test('UI VFO Search Test', ui_vfo_search_test, timeout : 120)
 test('UI Quick Menu Test', ui_quickmenu_test)
 test('M17 Packet Frame Test', m17_packet_test)
 test('M17 Frame Decoder Test', m17_decoder_test)

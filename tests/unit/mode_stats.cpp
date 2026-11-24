@@ -321,6 +321,13 @@ TEST_CASE("Formatting refuses a buffer it cannot fill")
 
 TEST_CASE("Mode names and out-of-range modes")
 {
+    /*
+     * This case asserts that an out-of-range mode counts nothing, so it needs
+     * the counters at zero: Catch2 runs the cases in a random order and the
+     * saturation case legitimately leaves them at UINT32_MAX.
+     */
+    modeStats_reset(MS_MODE_COUNT);
+
     REQUIRE(std::string(modeStats_name(MS_MODE_FM)) == "fm");
     REQUIRE(std::string(modeStats_name(MS_MODE_M17)) == "m17");
     REQUIRE(std::string(modeStats_name(MS_MODE_DMR)) == "dmr");

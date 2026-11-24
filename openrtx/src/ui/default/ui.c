@@ -1697,13 +1697,6 @@ static void _ui_vfoSearchTick(long long now)
     if (searchArmKey == 0)
         return;
 
-    /* Let go of the arrow, or added the other one: no search */
-    keyboard_t held = kbd_getKeys() & (KEY_UP | KEY_DOWN);
-    if (held != searchArmKey) {
-        searchArmKey = 0;
-        return;
-    }
-
     if ((now - searchArmTick) < VFO_SEARCH_HOLD_MS)
         return;
 
@@ -1797,6 +1790,17 @@ void ui_updateFSM(bool *sync_rtx)
             return;
 
 #ifdef CONFIG_VFO_SEARCH
+        /*
+         * An armed long press is cancelled by letting go of the arrow before
+         * the three seconds are up: the keypad reports the release as an event
+         * with the remaining keys, so no keypad scan is needed here.
+         */
+        if ((searchArmKey != 0) &&
+            ((msg.keys & (KEY_UP | KEY_DOWN)) != searchArmKey)) {
+            searchArmKey = 0;
+            redraw_needed = true;
+        }
+
         /*
          * While a carrier search runs, the keypad belongs to it: any key -- a
          * second long press, a short one, the red key -- stops the sweep and

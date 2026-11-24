@@ -439,7 +439,12 @@ rssi_t rtx_getRssi()
 
 bool rtx_rxSquelchOpen()
 {
-    return currMode->rxSquelchOpen();
+    /*
+     * Before rtx_init() there is no mode yet: answer "no carrier" instead of
+     * dereferencing a null pointer, because the UI and the scan ask this
+     * before the RTX thread has started (and the host tests never start it).
+     */
+    return (currMode != NULL) ? currMode->rxSquelchOpen() : false;
 }
 
 bool opmode_canTransmit(uint8_t mode)
