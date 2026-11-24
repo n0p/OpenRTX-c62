@@ -86,6 +86,9 @@ static uint8_t lineTail;
 static uint8_t lineCount;
 
 static int (*prevPrintkHook)(int c);
+#ifdef C62_BASEBAND_DUMP
+static bool dumpPaused;
+#endif
 
 /* ------------------------------------------------------------------------- */
 /* Port                                                                      */
@@ -574,6 +577,23 @@ static void pcProtoMain(void *a, void *b, void *c)
 
             lineFeed(line);
         }
+
+        /*
+         * The baseband dump and the protocol share the UART: while a client is
+         * linked the dump is paused, and it comes back when the client goes
+         * away.  Its own trigger (PC_MSG_DBG_BB) is how a bench session starts
+         * it now, instead of holding a key at power on.
+         */
+#ifdef C62_BASEBAND_DUMP
+        bool up = pc_proto_linked(&proto);
+        if (up && !dumpPaused) {
+            baseband_dump_pause(true);
+            dumpPaused = true;
+        } else if (!up && dumpPaused) {
+            baseband_dump_pause(false);
+            dumpPaused = false;
+        }
+#endif
 
         pc_proto_tick(&proto, k_uptime_get_32());
         k_usleep(POLL_US);
