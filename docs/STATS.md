@@ -116,9 +116,9 @@ Measured on the C62 image, 300 MHz Cortex-M33, `C62_DMR_RX` + `C62_APRS` +
 |---|---|---|---|
 | release, no remote control (master and this branch with the option off) | 579 140 B | 209 640 B | 379 064 B |
 | + `C62_REMOTE` + `C62_BASEBAND_DUMP`, option off | 593 088 B | 216 296 B | 1 427 640 B |
-| + `C62_REMOTE` + `C62_BASEBAND_DUMP`, option **on** | 595 556 B | 217 104 B | 1 427 640 B |
+| + `C62_REMOTE` + `C62_BASEBAND_DUMP`, option **on** | 595 580 B | 217 104 B | 1 427 640 B |
 
-So the layer itself is **2 468 bytes of flash and 808 bytes of RAM**:
+So the layer itself is **2 492 bytes of flash and 808 bytes of RAM**:
 
 - 1 524 B of `mode_stats.c` (of which 376 B the formatter), 48 B the cycle
   counter, 16 B the mode names, 4 B the transmit cadence table, 16 B the two
@@ -128,7 +128,7 @@ So the layer itself is **2 468 bytes of flash and 808 bytes of RAM**:
   M17 (receive and transmit), 192 B in DMR (burst callback, receive, the three
   transmit stages), 90 B in FM, 22 B in the M17 demodulator, 8 B in the TETRA
   resync.
-- 56 B the `rx` command in the remote control and 90 B of assorted string
+- 80 B the `rx` command in the remote control and 90 B of assorted string
   literals.
 - RAM: 544 B of `.bss` (`stats`, 136 B per mode), 250 B the line buffer of the
   remote command, 12 B the TETRA deltas, the rest alignment.
