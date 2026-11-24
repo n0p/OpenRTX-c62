@@ -5,14 +5,16 @@
  */
 
 /*
- * Host test of the two-slot record container and of the two stores built on
- * it (contact book, message store): round trip, newest-slot wins, corrupt
- * newest slot falls back, and a power cut in the middle of a save costs the
- * save but never the previous bank.
+ * Host test of the two-slot record container, of the contact book built on it
+ * and of the message record of the shared store: round trip, newest-slot wins,
+ * corrupt newest slot falls back, a power cut in the middle of a save costs the
+ * save but never the previous bank, and the message record carries the queues,
+ * the states and the compose draft through a round trip.
  */
 
 #include <catch2/catch_test_macros.hpp>
 #include <cerrno>
+#include <cstdio>
 #include <cstring>
 #include <cstdint>
 #include <vector>
@@ -20,13 +22,11 @@
 extern "C" {
 #include "core/slot_store.h"
 #include "core/contact_store.h"
-#include "core/msg_store.h"
+#include "core/messaging.h"
+#include "core/messaging_store.h"
 #include "core/msg_service.h"
 }
 
-static_assert(sizeof(msg_rec_t) == 191, "message record size");
-static_assert(sizeof(msg_bank_t) + SLOT_HDR_SIZE <= 0x2000,
-              "the message bank has to fit one slot");
 static_assert(sizeof(cstore_contact_t) == CSTORE_RECORD_SIZE,
               "contact record size");
 static_assert(sizeof(cstore_bank_t) + SLOT_HDR_SIZE <= 0x2000,
@@ -278,75 +278,145 @@ TEST_CASE("Contact book add, edit, delete and reload", "[store][contacts]")
     REQUIRE(cstore_count() == 0);
 }
 
-TEST_CASE("Message store keeps inbox, sent and draft", "[store][messages]")
+TEST_CASE("Message store keeps inbox, outbox, states and draft",
+          "[store][messages]")
 {
-    TestPort p;
-    msg_bind(&p.ops);
-    msg_forget();
-    REQUIRE(msg_init() == 0);
-    REQUIRE(msg_inbox_count() == 0);
-    REQUIRE(msg_unread() == 0);
+    static uint8_t record[MSG_STORE_MAX];
+    int recordLen = 0;
 
-    msg_rec_t *out = msg_addOut(MSG_TP_APRS, "EA5ABC-7", "hola", 1000);
-    REQUIRE(out != NULL);
-    REQUIRE(out->status == MSG_ST_QUEUED);
-    REQUIRE(msg_sent_count() == 1);
+    messaging_init();
+    messaging_clear();
+    REQUIRE(messaging_outCount() == 0);
+    REQUIRE(messaging_unread() == 0);
 
-    msg_rec_t *in = msg_addIn(MSG_TP_APRS, "EA1XYZ", "que tal", 2000);
-    REQUIRE(in != NULL);
-    REQUIRE(msg_inbox_count() == 1);
-    REQUIRE(msg_unread() == 1);
+    int out = messaging_sendAddr(MSG_TRANSPORT_DMR, 1234567, "EA5ABC-7",
+                                 "hola", true, 1000);
+    REQUIRE(out > 0);
+    REQUIRE(messaging_outCount() == 1);
 
-    /* Unread survives a power cycle, until it is read */
-    msg_forget();
-    REQUIRE(msg_init() == 0);
-    REQUIRE(msg_inbox_count() == 1);
-    REQUIRE(msg_unread() == 1);
+    const struct message *o = messaging_outbox(0);
+    REQUIRE(o != NULL);
+    REQUIRE(o->state == MSG_STATE_QUEUED);
+    REQUIRE(o->transport == MSG_TRANSPORT_DMR);
+    REQUIRE(o->dst == 1234567);
+    REQUIRE(std::strcmp(o->peer, "EA5ABC-7") == 0);
+    REQUIRE((o->flags & MSG_FLAG_CONFIRM) != 0);
 
-    msg_markAllRead();
-    msg_forget();
-    REQUIRE(msg_init() == 0);
-    REQUIRE(msg_unread() == 0);
-    REQUIRE(msg_inbox_count() == 1);
+    int in = messaging_received(MSG_TRANSPORT_DMR, 7654321, 1234567, "que tal",
+                                false, 2000);
+    REQUIRE(in > 0);
+    REQUIRE(messaging_unread() == 1);
+    REQUIRE(std::strcmp(messaging_inbox(0)->text, "que tal") == 0);
 
-    /* Draft */
-    msg_rec_t *d = msg_draft();
-    d->tp = MSG_TP_APRS;
+    /* The draft is one more entry of the same record */
+    struct message *d = messaging_draft();
+    REQUIRE(d != NULL);
     snprintf(d->peer, sizeof(d->peer), "EA5ABC-7");
     snprintf(d->text, sizeof(d->text), "sin enviar");
-    REQUIRE(msg_save() == 0);
-    msg_forget();
-    REQUIRE(msg_init() == 0);
-    REQUIRE(std::strcmp(msg_draft()->text, "sin enviar") == 0);
+    d->transport = MSG_TRANSPORT_DMR;
+    messaging_draftTouch();
 
-    /* Sequence numbers are unique and grow */
-    uint16_t s1 = msg_inbox_at(0)->seq;
-    msg_rec_t *second = msg_addIn(MSG_TP_APRS, "EA2DEF", "otro", 3000);
-    REQUIRE(second != NULL);
-    REQUIRE(second->seq != s1);
+    recordLen = messaging_serialise(record, sizeof(record));
+    REQUIRE(recordLen > 0);
+
+    /* A restart: the queues, the unread flag and the draft come back */
+    messaging_clear();
+    REQUIRE(messaging_unread() == 0);
+    REQUIRE(messaging_outCount() == 0);
+    REQUIRE(messaging_draft()->text[0] == '\0');
+
+    REQUIRE(messaging_deserialise(record, (size_t)recordLen) > 0);
+    REQUIRE(messaging_outCount() == 1);
+    REQUIRE(messaging_unread() == 1);
+    REQUIRE(messaging_inbox(0) != NULL);
+    REQUIRE(std::strcmp(messaging_draft()->text, "sin enviar") == 0);
+
+    /* A record whose CRC does not close leaves nothing behind */
+    record[recordLen / 2] ^= 0xFF;
+    REQUIRE(messaging_deserialise(record, (size_t)recordLen) == -1);
+    REQUIRE(messaging_unread() == 0);
+    REQUIRE(messaging_outCount() == 0);
+}
+
+TEST_CASE("Message states: sending, confirming, cancelling, reading",
+          "[messages]")
+{
+    messaging_init();
+    messaging_clear();
+
+    int a = messaging_send(MSG_TRANSPORT_DMR, 111, "uno", false, 100);
+    int b = messaging_send(MSG_TRANSPORT_DMR, 222, "dos", true, 200);
+    REQUIRE(a > 0);
+    REQUIRE(b > 0);
+    REQUIRE(messaging_pending(MSG_TRANSPORT_DMR) == 2);
+
+    /* The transport takes the oldest one */
+    int begun = messaging_begin(MSG_TRANSPORT_DMR);
+    REQUIRE(begun == a);
+    REQUIRE(messaging_find(a)->state == MSG_STATE_SENDING);
+    REQUIRE(messaging_find(a)->attempts == 1);
+
+    /* No confirmation asked for: on the air is as good as it gets */
+    messaging_done(a, true, 7, 300);
+    REQUIRE(messaging_find(a)->state == MSG_STATE_SENT);
+    REQUIRE(messaging_find(a)->ref == 7);
+
+    /* Confirmation asked for: it waits, and the ACK moves it forward */
+    REQUIRE(messaging_begin(MSG_TRANSPORT_DMR) == b);
+    messaging_done(b, true, 0, 400);
+    REQUIRE(messaging_find(b)->state == MSG_STATE_SENDING);
+    messaging_confirmed(0, 222, 500);
+    REQUIRE(messaging_find(b)->state == MSG_STATE_DELIVERED);
+
+    /* A cancelled message keeps its state whatever the transport reports */
+    int c = messaging_send(MSG_TRANSPORT_DMR, 333, "tres", false, 600);
+    REQUIRE(c > 0);
+    REQUIRE(messaging_begin(MSG_TRANSPORT_DMR) == c);
+    messaging_cancel(c, 700);
+    REQUIRE(messaging_find(c)->state == MSG_STATE_CANCELLED);
+    messaging_done(c, true, 0, 800);
+    REQUIRE(messaging_find(c)->state == MSG_STATE_CANCELLED);
+
+    /* A cancelled message is never picked again */
+    REQUIRE(messaging_pending(MSG_TRANSPORT_DMR) == 0);
+    REQUIRE(messaging_begin(MSG_TRANSPORT_DMR) < 0);
+
+    /* Reading one message leaves the others unread */
+    int m1 = messaging_received(MSG_TRANSPORT_APRS, 1, 0, "primero", false, 900);
+    REQUIRE(m1 > 0);
+    REQUIRE(messaging_received(MSG_TRANSPORT_APRS, 2, 0, "segundo", false,
+                               1000) > 0);
+    REQUIRE(messaging_unread() == 2);
+    messaging_markReadId(m1);
+    REQUIRE(messaging_unread() == 1);
+    REQUIRE(messaging_inbox(0)->id != (uint8_t)m1);
+    messaging_markRead();
+    REQUIRE(messaging_unread() == 0);
 }
 
 TEST_CASE("Message service refuses what it cannot send", "[messages]")
 {
-    TestPort p;
-    msg_bind(&p.ops);
-    msg_forget();
-    REQUIRE(msg_init() == 0);
-
+    messaging_init();
+    messaging_clear();
     msg_service_init();
 
     /* Without APRS/DMR/TETRA compiled in, no transport is available and
        nothing is queued or stored. */
-    for (uint8_t tp = 0; tp < MSG_TP_NUM; tp++)
-        REQUIRE(msg_service_available(tp) == false);
+    for (uint8_t tp = 0; tp < MSG_TRANSPORT_COUNT; tp++)
+        REQUIRE(msg_service_available((enum msgTransport)tp) == false);
+    REQUIRE(msg_service_default() == MSG_TRANSPORT_COUNT);
 
-    REQUIRE(msg_service_queue(MSG_TP_APRS, "EA5ABC", "hola", 1000) == NULL);
-    REQUIRE(msg_sent_count() == 0);
+    REQUIRE(msg_service_queue(MSG_TRANSPORT_APRS, "EA5ABC", "hola", false, 1000)
+            < 0);
+    REQUIRE(messaging_outCount() == 0);
 
     /* Empty text, even on an available transport, is refused */
-    REQUIRE(msg_service_queue(MSG_TP_APRS, "EA5ABC", "", 1000) == NULL);
+    REQUIRE(msg_service_queue(MSG_TRANSPORT_APRS, "EA5ABC", "", false, 1000)
+            < 0);
 
     /* Status text always has a meaning */
-    REQUIRE(std::strcmp(msg_service_statusText(MSG_ST_ACKED), "ACK") == 0);
+    REQUIRE(std::strcmp(msg_service_statusText(MSG_STATE_DELIVERED), "ACK") == 0);
+    REQUIRE(std::strcmp(msg_service_statusText(MSG_STATE_CANCELLED), "CANC")
+            == 0);
     REQUIRE(std::strcmp(msg_service_statusText(99), "-") == 0);
 }

@@ -4,109 +4,76 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include <ctype.h>
+#include <string.h>
+
 #include "core/msg_service.h"
 #include "core/state.h"
-#include "rtx/rtx.h"
+#include "core/contact_store.h"
 #include "interfaces/delays.h"
-#include <stdio.h>
-#include <string.h>
 
 #ifdef CONFIG_APRS
 #include "core/aprs_service.h"
 #endif
 
 /*
- * Transport table. The UI never talks to a protocol: it asks for what is
- * available and queues text.
- *
- * The APRS backend is complete: aprs_sendMessage() puts the text in the
- * service outbox, which owns the channel gap and the retry schedule, and
- * poll() reads the result back into the persistent store. The DMR and TETRA
- * backends are the hooks the SMS/SDS ports fill in.
+ * Transport table and address translation.  The store, the queue and the
+ * states are core/messaging.c; nothing here keeps a second copy of them.
  */
 
 #define APRS_TEXT_MAX 67
 #define DMR_SMS_TEXT_MAX 160
 #define TETRA_SDS_TEXT_MAX 140
 
-__attribute__((weak)) bool msg_dmr_sms_available(void)
-{
-    return false;
-}
-
-__attribute__((weak)) bool msg_dmr_sms_send(const char *peer, const char *text,
-                                            char *ref, size_t refLen)
-{
-    (void)peer; (void)text; (void)ref; (void)refLen;
-    return false;
-}
-
-__attribute__((weak)) bool msg_dmr_sms_cancel(const char *ref)
-{
-    (void)ref;
-    return false;
-}
-
-__attribute__((weak)) bool msg_tetra_sds_available(void)
-{
-    return false;
-}
-
-__attribute__((weak)) bool msg_tetra_sds_send(const char *peer,
-                                              const char *text, char *ref,
-                                              size_t refLen)
-{
-    (void)peer; (void)text; (void)ref; (void)refLen;
-    return false;
-}
-
-__attribute__((weak)) bool msg_tetra_sds_cancel(const char *ref)
-{
-    (void)ref;
-    return false;
-}
-
-const char *msg_service_name(uint8_t tp)
+const char *msg_service_name(enum msgTransport tp)
 {
     switch (tp) {
-        case MSG_TP_APRS:      return "APRS";
-        case MSG_TP_DMR_SMS:   return "DMR SMS";
-        case MSG_TP_TETRA_SDS: return "TETRA SDS";
-        default:               return "?";
+        case MSG_TRANSPORT_APRS:  return "APRS";
+        case MSG_TRANSPORT_DMR:   return "DMR SMS";
+        case MSG_TRANSPORT_TETRA: return "TETRA SDS";
+        default:                  return "?";
     }
 }
 
-uint8_t msg_service_maxLen(uint8_t tp)
+uint8_t msg_service_maxLen(enum msgTransport tp)
 {
     switch (tp) {
-        case MSG_TP_APRS:      return APRS_TEXT_MAX;
-        case MSG_TP_DMR_SMS:   return DMR_SMS_TEXT_MAX;
-        case MSG_TP_TETRA_SDS: return TETRA_SDS_TEXT_MAX;
-        default:               return 0;
+        case MSG_TRANSPORT_APRS:  return APRS_TEXT_MAX;
+        case MSG_TRANSPORT_DMR:   return DMR_SMS_TEXT_MAX;
+        case MSG_TRANSPORT_TETRA: return TETRA_SDS_TEXT_MAX;
+        default:                  return 0;
     }
 }
 
-bool msg_service_available(uint8_t tp)
+bool msg_service_available(enum msgTransport tp)
 {
     switch (tp) {
-        case MSG_TP_APRS:
+        case MSG_TRANSPORT_APRS:
 #ifdef CONFIG_APRS
             return state.channel.mode == OPMODE_FM;
 #else
             return false;
 #endif
 
-        case MSG_TP_DMR_SMS:
-#ifdef CONFIG_DMR
-            return (state.channel.mode == OPMODE_DMR) && msg_dmr_sms_available();
+        case MSG_TRANSPORT_DMR:
+            /*
+             * Without the transmit chain a message would sit in the outbox for
+             * ever: SMS reception alone is not something to send with.
+             */
+#if defined(CONFIG_DMR_SMS) && defined(CONFIG_DMR_TX)
+            return state.channel.mode == OPMODE_DMR;
 #else
             return false;
 #endif
 
-        case MSG_TP_TETRA_SDS:
+        case MSG_TRANSPORT_TETRA:
+            /*
+             * There is no TETRA transmit chain in this image: the SDS is
+             * encoded and left queued (tetraSds_prepareQueued), which is what
+             * the mode documents.  The screen still lets it be written.
+             */
 #ifdef CONFIG_TETRA
-            return (state.channel.mode == OPMODE_TETRA)
-                && msg_tetra_sds_available();
+            return state.channel.mode == OPMODE_TETRA;
 #else
             return false;
 #endif
@@ -116,241 +83,223 @@ bool msg_service_available(uint8_t tp)
     }
 }
 
-uint8_t msg_service_default(void)
+enum msgTransport msg_service_default(void)
 {
     /* The current mode first, then anything else that works */
-    uint8_t first = state.channel.mode == OPMODE_FM      ? MSG_TP_APRS
-                  : state.channel.mode == OPMODE_DMR     ? MSG_TP_DMR_SMS
-                  : state.channel.mode == OPMODE_TETRA   ? MSG_TP_TETRA_SDS
-                                                         : MSG_TP_NUM;
+    enum msgTransport first = MSG_TRANSPORT_COUNT;
 
-    if (first != MSG_TP_NUM && msg_service_available(first))
+    if (state.channel.mode == OPMODE_FM)
+        first = MSG_TRANSPORT_APRS;
+    else if (state.channel.mode == OPMODE_DMR)
+        first = MSG_TRANSPORT_DMR;
+    else if (state.channel.mode == OPMODE_TETRA)
+        first = MSG_TRANSPORT_TETRA;
+
+    if ((first != MSG_TRANSPORT_COUNT) && msg_service_available(first))
         return first;
 
-    for (uint8_t tp = 0; tp < MSG_TP_NUM; tp++) {
-        if (msg_service_available(tp))
-            return tp;
+    for (uint8_t tp = 0; tp < MSG_TRANSPORT_COUNT; tp++) {
+        if (msg_service_available((enum msgTransport)tp))
+            return (enum msgTransport)tp;
     }
-    return MSG_TP_NUM;
+    return MSG_TRANSPORT_COUNT;
 }
 
-const char *msg_service_statusText(uint8_t status)
+const char *msg_service_statusText(uint8_t state)
 {
-    switch (status) {
-        case MSG_ST_QUEUED:    return "QUEUED";
-        case MSG_ST_TX:        return "TX";
-        case MSG_ST_SENT:      return "SENT";
-        case MSG_ST_ACKED:     return "ACK";
-        case MSG_ST_FAILED:    return "FAIL";
-        case MSG_ST_CANCELLED: return "CANC";
-        default:               return "-";
+    switch (state) {
+        case MSG_STATE_QUEUED:    return "QUEUED";
+        case MSG_STATE_SENDING:   return "TX";
+        case MSG_STATE_SENT:      return "SENT";
+        case MSG_STATE_DELIVERED: return "ACK";
+        case MSG_STATE_FAILED:    return "FAIL";
+        case MSG_STATE_CANCELLED: return "CANC";
+        default:                  return "-";
     }
 }
 
 void msg_service_init(void)
 {
-    msg_init();
+    /*
+     * Opening the screen must never reload the record over live messages: the
+     * store is built once, by whoever gets there first (state_init() on the
+     * radio, the test on the host).
+     */
+    if (!messaging_ready())
+        messaging_init();
 }
 
-#ifdef CONFIG_APRS
+/* -------------------------------------------------------- addresses --- */
 
-/* The APRS outbox entry of a stored message, by message number. */
-static aprs_out_msg_t *aprsEntry(const char *ref)
+/** A decimal number the operator typed, 0 if the string is not one. */
+static uint32_t parseNumber(const char *s)
 {
-    if (ref[0] == '\0')
-        return NULL;
+    uint32_t v = 0;
 
-    aprs_mbox_t *m = aprs_mailbox();
-    for (uint8_t i = 0; i < APRS_OUTBOX_MAX; i++) {
-        if (m->out[i].inUse && strncmp(m->out[i].msgNo, ref, MSG_REF_LEN) == 0)
-            return &m->out[i];
+    if ((s == NULL) || (s[0] == '\0'))
+        return 0;
+
+    for (const char *p = s; *p != '\0'; p++) {
+        if (!isdigit((unsigned char)*p))
+            return 0;
+        v = (v * 10u) + (uint32_t)(*p - '0');
+        if (v > 0xFFFFFFu)   /* a DMR ID and an SSI are 24 bits at most */
+            return 0;
     }
-    return NULL;
+    return v;
 }
 
-static bool aprsQueue(const char *peer, const char *text, char *ref,
-                      size_t refLen)
+/**
+ * The address a name stands for: the number of a contact in the book, or the
+ * digits themselves.  0 when the name is neither.
+ */
+static uint32_t resolveNumber(const char *peer)
 {
-    if (!aprs_sendMessage(peer, text, (uint32_t)getTick()))
+    uint16_t idx = cstore_findCall(peer);
+
+    if (idx != CSTORE_NONE) {
+        cstore_contact_t c;
+
+        if ((cstore_get(idx, &c) == 0) && (c.dmr_id != 0))
+            return c.dmr_id;
+    }
+    return parseNumber(peer);
+}
+
+/* ------------------------------------------------------------- queue --- */
+
+int msg_service_queue(enum msgTransport tp, const char *peer, const char *text,
+                      bool confirm, uint32_t now)
+{
+    if ((peer == NULL) || (text == NULL) || (text[0] == '\0'))
+        return -1;
+    if (strlen(peer) >= MSG_PEER_LEN)
+        return -1;
+    if (!msg_service_available(tp))
+        return -1;
+    if (strlen(text) > msg_service_maxLen(tp))
+        return -1;
+
+    switch (tp) {
+        case MSG_TRANSPORT_APRS:
+            /* A callsign is the address: the store keeps it as text */
+            return messaging_sendToText(MSG_TRANSPORT_APRS, peer, text, confirm,
+                                        now);
+
+        case MSG_TRANSPORT_DMR:
+        case MSG_TRANSPORT_TETRA: {
+            uint32_t dst = resolveNumber(peer);
+
+            if (dst == 0)
+                return -1;   /* no contact and not a number: nothing to dial */
+            return messaging_sendAddr(tp, dst, peer, text, confirm, now);
+        }
+
+        default:
+            return -1;
+    }
+}
+
+bool msg_service_cancel(int id, uint32_t now)
+{
+    struct message *m = messaging_find(id);
+
+    if (m == NULL)
+        return false;
+    if ((m->state == MSG_STATE_DELIVERED) || (m->state == MSG_STATE_SENT)
+        || (m->state == MSG_STATE_CANCELLED))
         return false;
 
-    /* Recover the message number so that poll() can follow this very entry */
-    aprs_mbox_t *m = aprs_mailbox();
-    aprs_out_msg_t *found = NULL;
-    for (uint8_t i = 0; i < APRS_OUTBOX_MAX; i++) {
-        aprs_out_msg_t *o = &m->out[i];
-        if (!o->inUse || o->acked || o->failed)
-            continue;
-        if (strncmp(o->peer, peer, sizeof(o->peer)) == 0
-            && strncmp(o->text, text, sizeof(o->text)) == 0)
-            found = o;
+    messaging_cancel(id, now);
+
+#ifdef CONFIG_APRS
+    /*
+     * APRS keeps its own retry schedule in the FM mailbox: drop the entry
+     * there too, or the service would send it anyway.
+     */
+    if (m->transport == MSG_TRANSPORT_APRS) {
+        aprs_mbox_t *box = aprs_mailbox();
+
+        for (uint8_t i = 0; i < APRS_OUTBOX_MAX; i++) {
+            aprs_out_msg_t *o = &box->out[i];
+
+            if (!o->inUse)
+                continue;
+            if ((strncmp(o->peer, m->peer, sizeof(o->peer)) == 0)
+                && (strncmp(o->text, m->text, sizeof(o->text)) == 0))
+                o->inUse = false;
+        }
     }
+#endif
 
-    if (found == NULL)
-        return true; /* queued, we just cannot follow the retries */
-
-    snprintf(ref, refLen, "%s", found->msgNo);
     return true;
 }
 
-/* Refresh the state of every APRS message we have stored. */
-static void aprsPoll(uint32_t now)
+/* --------------------------------------------------------------- APRS --- */
+
+#ifdef CONFIG_APRS
+
+/**
+ * The APRS mailbox is the transport's own buffer: this keeps the store the one
+ * place the screen reads.
+ *
+ *  - inbound: an unread mailbox entry becomes a received message in the store
+ *    and is marked read there, so it is shown once;
+ *  - outbound: the mailbox knows whether the peer acknowledged the packet or
+ *    the retries ran out, and that becomes the message state.
+ */
+static void aprsSync(uint32_t now)
 {
-    aprs_mbox_t *m = aprs_mailbox();
-    aprs_mbox_tick(m, now);
+    aprs_mbox_t *box = aprs_mailbox();
 
-    bool changed = false;
+    aprs_mbox_tick(box, now);
 
-    for (uint8_t i = 0; i < MSG_SENT_MAX; i++) {
-        msg_rec_t *r = msg_sent_at(i);
-        if ((r == NULL) || (r->tp != MSG_TP_APRS))
-            continue;
-        if (r->status == MSG_ST_ACKED || r->status == MSG_ST_FAILED
-            || r->status == MSG_ST_CANCELLED)
-            continue;
-
-        aprs_out_msg_t *o = aprsEntry(r->ref);
-        uint8_t st = r->status;
-        uint8_t attempts = r->attempts;
-
-        if (o != NULL) {
-            attempts = o->attempts;
-            if (o->acked)
-                st = MSG_ST_ACKED;
-            else if (o->failed)
-                st = MSG_ST_FAILED;
-            else if (o->attempts == 0)
-                st = MSG_ST_QUEUED;
-            else if (m->lastTxValid && (uint32_t)(now - m->lastTxMs) < 1500)
-                st = MSG_ST_TX;
-            else
-                st = MSG_ST_SENT;
-        } else if (r->status != MSG_ST_QUEUED && r->ref[0] != '\0') {
-            /* The service dropped it: no more retries */
-            st = MSG_ST_FAILED;
-        }
-
-        if (st != r->status || attempts != r->attempts) {
-            r->status = st;
-            r->attempts = attempts;
-            changed = true;
-        }
-    }
-
-    /* Mirror what the receive path stored into the persistent inbox */
     for (uint8_t i = 0; i < APRS_INBOX_MAX; i++) {
-        aprs_in_msg_t *e = &m->in[i];
-        if (!e->inUse)
+        aprs_in_msg_t *e = &box->in[i];
+
+        if ((!e->inUse) || e->read)
             continue;
 
-        bool seen = false;
-        for (uint8_t k = 0; k < MSG_INBOX_MAX && !seen; k++) {
-            msg_bank_t *b = msg_bank();
-            seen = (b->in[k].seq != 0)
-                && (strncmp(b->in[k].peer, e->from, MSG_PEER_LEN) == 0)
-                && (strncmp(b->in[k].ref, e->msgNo, MSG_REF_LEN) == 0);
-        }
-        if (seen)
-            continue;
-
-        msg_rec_t *r = msg_addIn(MSG_TP_APRS, e->from, e->text, e->rxMs);
-        if (r != NULL) {
-            snprintf(r->ref, sizeof(r->ref), "%s", e->msgNo);
-            msg_save();
-        }
+        if (messaging_received(MSG_TRANSPORT_APRS, 0, 0, e->text, false, now) >= 0)
+            aprs_mbox_markRead(box, i);
     }
 
-    /* Delivery states changed: one write for the whole pass */
-    if (changed)
-        msg_save();
+    const int n = messaging_outCount();
+
+    for (int i = 0; i < n; i++) {
+        const struct message *m = messaging_outbox(i);
+
+        if ((m == NULL) || (m->transport != MSG_TRANSPORT_APRS))
+            continue;
+        if ((m->state != MSG_STATE_QUEUED) && (m->state != MSG_STATE_SENDING)
+            && (m->state != MSG_STATE_SENT))
+            continue;
+
+        for (uint8_t k = 0; k < APRS_OUTBOX_MAX; k++) {
+            aprs_out_msg_t *o = &box->out[k];
+
+            if (!o->inUse)
+                continue;
+            if (strncmp(o->peer, m->peer, sizeof(o->peer)) != 0)
+                continue;
+            if (strncmp(o->text, m->text, sizeof(o->text)) != 0)
+                continue;
+
+            if (o->acked)
+                messaging_confirmed(m->id, 0, now);
+            else if (o->failed)
+                messaging_fail(m->id, now);
+            break;
+        }
+    }
 }
 
 #endif /* CONFIG_APRS */
 
-msg_rec_t *msg_service_queue(uint8_t tp, const char *peer, const char *text,
-                             uint32_t now)
-{
-    if ((peer == NULL) || (text == NULL) || (text[0] == '\0')
-        || !msg_service_available(tp))
-        return NULL;
-
-    if (strlen(text) > msg_service_maxLen(tp))
-        return NULL;
-
-    char ref[MSG_REF_LEN] = "";
-    bool queued = false;
-
-    switch (tp) {
-        case MSG_TP_APRS:
-#ifdef CONFIG_APRS
-            queued = aprsQueue(peer, text, ref, sizeof(ref));
-#endif
-            break;
-
-        case MSG_TP_DMR_SMS:
-            queued = msg_dmr_sms_send(peer, text, ref, sizeof(ref));
-            break;
-
-        case MSG_TP_TETRA_SDS:
-            queued = msg_tetra_sds_send(peer, text, ref, sizeof(ref));
-            break;
-
-        default:
-            break;
-    }
-
-    if (!queued)
-        return NULL;
-
-    msg_rec_t *r = msg_addOut(tp, peer, text, now);
-    if (r == NULL)
-        return NULL;
-
-    snprintf(r->ref, sizeof(r->ref), "%s", ref);
-    r->status = MSG_ST_QUEUED;
-    msg_save();
-    return r;
-}
-
-bool msg_service_cancel(msg_rec_t *rec)
-{
-    if (rec == NULL || rec->seq == 0)
-        return false;
-    if (rec->status == MSG_ST_CANCELLED || rec->status == MSG_ST_ACKED)
-        return false;
-
-    switch (rec->tp) {
-        case MSG_TP_APRS:
-#ifdef CONFIG_APRS
-        {
-            aprs_out_msg_t *o = aprsEntry(rec->ref);
-            if (o != NULL)
-                o->inUse = false;
-        }
-#endif
-            break;
-
-        case MSG_TP_DMR_SMS:
-            msg_dmr_sms_cancel(rec->ref);
-            break;
-
-        case MSG_TP_TETRA_SDS:
-            msg_tetra_sds_cancel(rec->ref);
-            break;
-
-        default:
-            break;
-    }
-
-    rec->status = MSG_ST_CANCELLED;
-    msg_save();
-    return true;
-}
-
 void msg_service_poll(uint32_t now)
 {
 #ifdef CONFIG_APRS
-    aprsPoll(now);
+    aprsSync(now);
 #else
     (void)now;
 #endif

@@ -24,7 +24,7 @@
 #include <hwconfig.h>
 #include "core/state.h"
 #include "core/cps.h"
-#include "core/msg_store.h"
+#include "core/messaging.h"
 #include "core/ui.h"
 #include "core/beeps.h"
 #include "core/graphics.h"
@@ -216,11 +216,11 @@ void qm_set_mode(int opmode)
 /* Unread messages badge, shown on the MSGS row of every table */
 static void qm_fmt_unread(char *buf, int len)
 {
-    uint8_t n = msg_unread();
-    if (n == 0)
+    int n = messaging_unread();
+    if (n <= 0)
         buf[0] = '\0';
     else
-        snprintf(buf, len, "!%u", (unsigned)n);
+        snprintf(buf, len, "!%d", n);
 }
 
 void qm_fmt_frequency(char *buf, int len)

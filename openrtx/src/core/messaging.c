@@ -46,10 +46,10 @@ static struct k_mutex msgLock;
 #define MSG_WRITE_DEBOUNCE_MS 4000
 
 #define MSG_RECORD_MAGIC 0x3147534dU /* "MSG1" */
-#define MSG_RECORD_VERSION 1
+#define MSG_RECORD_VERSION 2
 
-/** The packed record, shared by the load and the write: 3 kB, not on a stack
- *  and not duplicated. */
+/** The packed record, shared by the load and the write: 3,3 kB, not on a
+ *  stack and not duplicated. */
 static uint8_t recordBuf[MSG_STORE_MAX];
 
 static struct message outbox[MSG_OUTBOX_LEN];
@@ -59,6 +59,19 @@ static unsigned inboxUnread;
 static uint8_t nextId = 1;
 static bool dirty;
 static uint32_t lastChange;
+
+/**
+ * The compose draft.  It is one more entry of the same record, not a queue:
+ * the messaging screen edits it in place and the store writes it with the rest
+ * of the changes.
+ */
+static struct message draft;
+static bool draftUsed;
+
+/** True once messaging_init() has run, so the store is built and the record
+ *  read.  Opening a screen must not build it again: that would reload the
+ *  record over messages the radio has just received. */
+static bool initialised;
 
 /** Bytes one entry takes in the record, before its text: id, transport,
  *  state, flags, attempts, src, dst, time, ref, textLen and the peer name. */
@@ -94,6 +107,7 @@ static struct message *freeSlot(void)
     for (int i = 0; i < MSG_OUTBOX_LEN; i++) {
         if ((outbox[i].state == MSG_STATE_DELIVERED)
             || (outbox[i].state == MSG_STATE_FAILED)
+            || (outbox[i].state == MSG_STATE_CANCELLED)
             || (outbox[i].state == MSG_STATE_SENT))
             return &outbox[i];
     }
@@ -140,6 +154,7 @@ void messaging_init(void)
     dirty = false;
     lastChange = 0;
     unlock();
+    initialised = true;
 
     size_t n = messaging_store_size();
 
@@ -151,8 +166,9 @@ void messaging_init(void)
     }
 }
 
-int messaging_send(enum msgTransport transport, uint32_t dst, const char *text,
-                   bool confirm, uint32_t now)
+int messaging_sendAddr(enum msgTransport transport, uint32_t dst,
+                       const char *peer, const char *text, bool confirm,
+                       uint32_t now)
 {
     if ((transport >= MSG_TRANSPORT_COUNT) || (text == NULL)
         || (text[0] == '\0'))
@@ -175,12 +191,26 @@ int messaging_send(enum msgTransport transport, uint32_t dst, const char *text,
     m->time = now;
     if (confirm)
         m->flags |= MSG_FLAG_CONFIRM;
+    if (peer != NULL) {
+        size_t n = 0;
+
+        while ((peer[n] != '\0') && (n < sizeof(m->peer) - 1))
+            n++;
+        memcpy(m->peer, peer, n);
+        m->peer[n] = '\0';
+    }
     copyText(m, text);
     int id = (int)m->id;
 
     touch();
     unlock();
     return id;
+}
+
+int messaging_send(enum msgTransport transport, uint32_t dst, const char *text,
+                   bool confirm, uint32_t now)
+{
+    return messaging_sendAddr(transport, dst, NULL, text, confirm, now);
 }
 
 int messaging_sendToText(enum msgTransport transport, const char *peer,
@@ -195,24 +225,8 @@ int messaging_sendToText(enum msgTransport transport, const char *peer,
     for (const char *p = peer; (*p != '\0') && (p < peer + 11); p++) {
         hash = (hash ^ (uint32_t)(uint8_t)*p) * 16777619u;
     }
-    int id = messaging_send(transport, hash & 0xFFFFFFu, text, confirm, now);
-
-    if (id > 0) {
-        lock();
-        for (int i = 0; i < MSG_OUTBOX_LEN; i++) {
-            if ((outbox[i].id == (uint8_t)id) && (outbox[i].state != MSG_STATE_FREE)) {
-                size_t n = 0;
-
-                while ((peer[n] != '\0') && (n < sizeof(outbox[i].peer) - 1))
-                    n++;
-                memcpy(outbox[i].peer, peer, n);
-                outbox[i].peer[n] = '\0';
-                break;
-            }
-        }
-        unlock();
-    }
-    return id;
+    return messaging_sendAddr(transport, hash & 0xFFFFFFu, peer, text, confirm,
+                              now);
 }
 
 int messaging_pending(enum msgTransport transport)
@@ -298,6 +312,9 @@ void messaging_done(int id, bool delivered, uint16_t ref, uint32_t now)
 
         if ((m->id != (uint8_t)id) || (m->state == MSG_STATE_FREE))
             continue;
+        /* A cancelled message keeps its state: the outcome is not interesting */
+        if (m->state == MSG_STATE_CANCELLED)
+            break;
         if (ref != 0)
             m->ref = ref;
         if (delivered) {
@@ -408,11 +425,30 @@ const struct message *messaging_inbox(int i)
 
 const struct message *messaging_outbox(int i)
 {
-    if ((i < 0) || (i >= MSG_OUTBOX_LEN))
+    if (i < 0)
         return NULL;
-    if (outbox[i].state == MSG_STATE_FREE)
-        return NULL;
-    return &outbox[i];
+
+    /* Dense: the i-th entry in use, skipping the free slots between them */
+    for (int k = 0; k < MSG_OUTBOX_LEN; k++) {
+        if (outbox[k].state == MSG_STATE_FREE)
+            continue;
+        if (i == 0)
+            return &outbox[k];
+        i--;
+    }
+    return NULL;
+}
+
+int messaging_outCount(void)
+{
+    int n = 0;
+
+    lock();
+    for (int i = 0; i < MSG_OUTBOX_LEN; i++)
+        if (outbox[i].state != MSG_STATE_FREE)
+            n++;
+    unlock();
+    return n;
 }
 
 int messaging_unread(void)
@@ -426,6 +462,43 @@ void messaging_markRead(void)
     for (unsigned i = 0; i < inboxCount; i++)
         inbox[i].flags &= (uint8_t)~MSG_FLAG_UNREAD;
     inboxUnread = 0;
+    touch();
+    unlock();
+}
+
+void messaging_markReadId(int id)
+{
+    lock();
+    for (unsigned i = 0; i < inboxCount; i++) {
+        if ((inbox[i].id == (uint8_t)id)
+            && ((inbox[i].flags & MSG_FLAG_UNREAD) != 0)) {
+            inbox[i].flags &= (uint8_t)~MSG_FLAG_UNREAD;
+            if (inboxUnread > 0)
+                inboxUnread--;
+            touch();
+            break;
+        }
+    }
+    unlock();
+}
+
+void messaging_cancel(int id, uint32_t now)
+{
+    lock();
+    for (int i = 0; i < MSG_OUTBOX_LEN; i++) {
+        struct message *m = &outbox[i];
+
+        if ((m->id != (uint8_t)id) || (m->state == MSG_STATE_FREE))
+            continue;
+        if ((m->state == MSG_STATE_DELIVERED)
+            || (m->state == MSG_STATE_SENT)
+            || (m->state == MSG_STATE_CANCELLED))
+            break; /* already over: nothing to cancel */
+        m->state = MSG_STATE_CANCELLED;
+        m->time = now;
+        touch();
+        break;
+    }
     unlock();
 }
 
@@ -436,10 +509,46 @@ void messaging_clear(void)
     memset(inbox, 0, sizeof(inbox));
     inboxCount = 0;
     inboxUnread = 0;
+    memset(&draft, 0, sizeof(draft));
+    draftUsed = false;
     dirty = true;
     lastChange = 0;
     unlock();
     messaging_store_clear();
+}
+
+/* --------------------------------------------------------------- draft --- */
+
+bool messaging_ready(void)
+{
+    return initialised;
+}
+
+struct message *messaging_draft(void)
+{
+    return &draft;
+}
+
+void messaging_draftTouch(void)
+{
+    lock();
+    size_t len = 0;
+
+    while ((len < MSG_TEXT_MAX) && (draft.text[len] != '\0'))
+        len++;
+    draft.textLen = (uint8_t)len;
+    draftUsed = (len > 0) || (draft.peer[0] != '\0');
+    touch();
+    unlock();
+}
+
+void messaging_draftClear(void)
+{
+    lock();
+    memset(&draft, 0, sizeof(draft));
+    draftUsed = false;
+    touch();
+    unlock();
 }
 
 /* ---------------------------------------------------------- persistence --- */
@@ -469,6 +578,93 @@ static uint32_t get3(const uint8_t *p)
     return ((uint32_t)p[0] << 16) | ((uint32_t)p[1] << 8) | p[2];
 }
 
+/**
+ * Serialise one message into the record.
+ *
+ * @return the new write position, 0 if the entry does not fit in `cap`.
+ */
+static size_t putMessage(uint8_t *buf, size_t cap, size_t n,
+                         const struct message *m)
+{
+    /*
+     * The length is taken from the string, not from textLen: the compose draft
+     * is edited in place by the screen, which only guarantees that the string
+     * is current and NUL terminated.
+     */
+    size_t len = 0;
+
+    while ((len < MSG_TEXT_MAX) && (m->text[len] != '\0'))
+        len++;
+    if (n + ENTRY_HEAD + len > cap)
+        return 0;
+
+    buf[n++] = m->id;
+    buf[n++] = m->transport;
+    buf[n++] = m->state;
+    buf[n++] = m->flags;
+    buf[n++] = m->attempts;
+    put3(buf + n, m->src);
+    n += 3;
+    put3(buf + n, m->dst);
+    n += 3;
+    buf[n++] = (uint8_t)(m->time >> 24);
+    buf[n++] = (uint8_t)(m->time >> 16);
+    buf[n++] = (uint8_t)(m->time >> 8);
+    buf[n++] = (uint8_t)m->time;
+    buf[n++] = (uint8_t)(m->ref >> 8);
+    buf[n++] = (uint8_t)m->ref;
+    buf[n++] = (uint8_t)len;
+    memcpy(buf + n, m->peer, sizeof(m->peer));
+    n += sizeof(m->peer);
+    memcpy(buf + n, m->text, len);
+    n += len;
+    return n;
+}
+
+/**
+ * Read one message back.
+ *
+ * @return false if the entry runs past `end`, in which case the caller throws
+ *         the whole record away: a half read entry is not a message.
+ */
+static bool getMessage(const uint8_t *buf, size_t end, size_t *pos,
+                       struct message *m)
+{
+    size_t n = *pos;
+
+    memset(m, 0, sizeof(*m));
+    if (n + ENTRY_HEAD > end)
+        return false;
+
+    m->id = buf[n++];
+    m->transport = buf[n++];
+    m->state = buf[n++];
+    m->flags = buf[n++];
+    m->attempts = buf[n++];
+    m->src = get3(buf + n);
+    n += 3;
+    m->dst = get3(buf + n);
+    n += 3;
+    m->time = ((uint32_t)buf[n] << 24) | ((uint32_t)buf[n + 1] << 16)
+              | ((uint32_t)buf[n + 2] << 8) | buf[n + 3];
+    n += 4;
+    m->ref = (uint16_t)(((uint16_t)buf[n] << 8) | buf[n + 1]);
+    n += 2;
+    m->textLen = buf[n++];
+    if ((m->textLen > MSG_TEXT_MAX)
+        || (m->transport >= MSG_TRANSPORT_COUNT)
+        || (n + sizeof(m->peer) + m->textLen > end))
+        return false;
+    memcpy(m->peer, buf + n, sizeof(m->peer));
+    m->peer[sizeof(m->peer) - 1] = '\0';
+    n += sizeof(m->peer);
+    memcpy(m->text, buf + n, m->textLen);
+    m->text[m->textLen] = '\0';
+    n += m->textLen;
+    *pos = n;
+    return true;
+}
+
 int messaging_serialise(uint8_t *buf, size_t cap)
 {
     if (buf == NULL)
@@ -476,72 +672,45 @@ int messaging_serialise(uint8_t *buf, size_t cap)
 
     lock();
     size_t n = 8;
+    unsigned outCount = 0;
 
     if (cap < n)
         goto tooBig;
 
-    memcpy(buf, "MSG1", 4);
-    buf[4] = MSG_RECORD_VERSION;
-    buf[5] = (uint8_t)inboxCount;
-
-    unsigned outCount = 0;
-
     for (int i = 0; i < MSG_OUTBOX_LEN; i++)
         if (outbox[i].state != MSG_STATE_FREE)
             outCount++;
+
+    memcpy(buf, "MSG1", 4);
+    buf[4] = MSG_RECORD_VERSION;
+    buf[5] = (uint8_t)inboxCount;
     buf[6] = (uint8_t)outCount;
+    buf[7] = (uint8_t)((inboxUnread > 255) ? 255 : inboxUnread);
 
-    for (int pass = 0; pass < 2; pass++) {
-        int count = (pass == 0) ? (int)outCount : (int)inboxCount;
-
-        for (int i = 0; i < count; i++) {
-            const struct message *m = NULL;
-
-            if (pass == 0) {
-                /* compact the outbox while walking it */
-                unsigned k = 0;
-
-                for (int j = 0; j < MSG_OUTBOX_LEN; j++) {
-                    if (outbox[j].state == MSG_STATE_FREE)
-                        continue;
-                    if ((int)k == i) {
-                        m = &outbox[j];
-                        break;
-                    }
-                    k++;
-                }
-            } else {
-                m = &inbox[i];
-            }
-            if (m == NULL)
-                continue;
-            if (n + ENTRY_HEAD + m->textLen > cap)
-                goto tooBig;
-
-            buf[n++] = m->id;
-            buf[n++] = m->transport;
-            buf[n++] = m->state;
-            buf[n++] = m->flags;
-            buf[n++] = m->attempts;
-            put3(buf + n, m->src);
-            n += 3;
-            put3(buf + n, m->dst);
-            n += 3;
-            buf[n++] = (uint8_t)(m->time >> 24);
-            buf[n++] = (uint8_t)(m->time >> 16);
-            buf[n++] = (uint8_t)(m->time >> 8);
-            buf[n++] = (uint8_t)m->time;
-            buf[n++] = (uint8_t)(m->ref >> 8);
-            buf[n++] = (uint8_t)m->ref;
-            buf[n++] = m->textLen;
-            memcpy(buf + n, m->peer, sizeof(m->peer));
-            n += sizeof(m->peer);
-            memcpy(buf + n, m->text, m->textLen);
-            n += m->textLen;
-        }
+    /* The outbox is written packed, without its free slots */
+    for (int i = 0; i < MSG_OUTBOX_LEN; i++) {
+        if (outbox[i].state == MSG_STATE_FREE)
+            continue;
+        n = putMessage(buf, cap, n, &outbox[i]);
+        if (n == 0)
+            goto tooBig;
     }
 
-    buf[7] = (uint8_t)((inboxUnread > 255) ? 255 : inboxUnread);
+    for (unsigned i = 0; i < inboxCount; i++) {
+        n = putMessage(buf, cap, n, &inbox[i]);
+        if (n == 0)
+            goto tooBig;
+    }
+
+    /* The compose draft: a marker byte and, when there is one, its entry */
+    if (n + 1 > cap)
+        goto tooBig;
+    buf[n++] = (draftUsed != 0) ? 1u : 0u;
+    if (draftUsed) {
+        n = putMessage(buf, cap, n, &draft);
+        if (n == 0)
+            goto tooBig;
+    }
 
     if (n + 2 > cap)
         goto tooBig;
@@ -559,7 +728,7 @@ tooBig:
 
 int messaging_deserialise(const uint8_t *buf, size_t len)
 {
-    bool usable = (buf != NULL) && (len >= 10)
+    bool usable = (buf != NULL) && (len >= 11)
                   && (memcmp(buf, "MSG1", 4) == 0)
                   && (buf[4] == MSG_RECORD_VERSION);
 
@@ -575,6 +744,8 @@ int messaging_deserialise(const uint8_t *buf, size_t len)
         lock();
         memset(outbox, 0, sizeof(outbox));
         memset(inbox, 0, sizeof(inbox));
+        memset(&draft, 0, sizeof(draft));
+        draftUsed = false;
         inboxCount = 0;
         inboxUnread = 0;
         unlock();
@@ -587,6 +758,8 @@ int messaging_deserialise(const uint8_t *buf, size_t len)
     lock();
     memset(outbox, 0, sizeof(outbox));
     memset(inbox, 0, sizeof(inbox));
+    memset(&draft, 0, sizeof(draft));
+    draftUsed = false;
     inboxCount = 0;
     inboxUnread = buf[7];
 
@@ -594,74 +767,30 @@ int messaging_deserialise(const uint8_t *buf, size_t len)
     int restored = 0;
 
     for (unsigned i = 0; i < outCount; i++) {
-        if (n + ENTRY_HEAD > len - 2)
+        if (!getMessage(buf, len - 2, &n, &outbox[i]))
             goto bad;
-        struct message *m = &outbox[i];
-
-        m->id = buf[n++];
-        m->transport = buf[n++];
-        m->state = buf[n++];
-        m->flags = buf[n++];
-        m->attempts = buf[n++];
-        m->src = get3(buf + n);
-        n += 3;
-        m->dst = get3(buf + n);
-        n += 3;
-        m->time = ((uint32_t)buf[n] << 24) | ((uint32_t)buf[n + 1] << 16)
-                  | ((uint32_t)buf[n + 2] << 8) | buf[n + 3];
-        n += 4;
-        m->ref = (uint16_t)(((uint16_t)buf[n] << 8) | buf[n + 1]);
-        n += 2;
-        m->textLen = buf[n++];
-        if ((m->textLen > MSG_TEXT_MAX)
-            || (n + sizeof(m->peer) + m->textLen > len - 2))
-            goto bad;
-        memcpy(m->peer, buf + n, sizeof(m->peer));
-        m->peer[sizeof(m->peer) - 1] = '\0';
-        n += sizeof(m->peer);
-        memcpy(m->text, buf + n, m->textLen);
-        m->text[m->textLen] = '\0';
-        n += m->textLen;
         /*
          * A message that was on the air when the radio lost power has no
          * known outcome: queue it again rather than claim it was sent.
          */
-        if (m->state == MSG_STATE_SENDING)
-            m->state = MSG_STATE_QUEUED;
+        if (outbox[i].state == MSG_STATE_SENDING)
+            outbox[i].state = MSG_STATE_QUEUED;
         restored++;
     }
 
     for (unsigned i = 0; i < inCount; i++) {
-        if (n + ENTRY_HEAD > len - 2)
+        if (!getMessage(buf, len - 2, &n, &inbox[i]))
             goto bad;
-        struct message *m = &inbox[i];
-
-        m->id = buf[n++];
-        m->transport = buf[n++];
-        m->state = buf[n++];
-        m->flags = buf[n++];
-        m->attempts = buf[n++];
-        m->src = get3(buf + n);
-        n += 3;
-        m->dst = get3(buf + n);
-        n += 3;
-        m->time = ((uint32_t)buf[n] << 24) | ((uint32_t)buf[n + 1] << 16)
-                  | ((uint32_t)buf[n + 2] << 8) | buf[n + 3];
-        n += 4;
-        m->ref = (uint16_t)(((uint16_t)buf[n] << 8) | buf[n + 1]);
-        n += 2;
-        m->textLen = buf[n++];
-        if ((m->textLen > MSG_TEXT_MAX)
-            || (n + sizeof(m->peer) + m->textLen > len - 2))
-            goto bad;
-        memcpy(m->peer, buf + n, sizeof(m->peer));
-        m->peer[sizeof(m->peer) - 1] = '\0';
-        n += sizeof(m->peer);
-        memcpy(m->text, buf + n, m->textLen);
-        m->text[m->textLen] = '\0';
-        n += m->textLen;
         inboxCount++;
         restored++;
+    }
+
+    if (n + 1 > len - 2)
+        goto bad;
+    if (buf[n++] != 0) {
+        if (!getMessage(buf, len - 2, &n, &draft))
+            goto bad;
+        draftUsed = true;
     }
 
     dirty = false;
@@ -672,6 +801,8 @@ int messaging_deserialise(const uint8_t *buf, size_t len)
 bad:
     memset(outbox, 0, sizeof(outbox));
     memset(inbox, 0, sizeof(inbox));
+    memset(&draft, 0, sizeof(draft));
+    draftUsed = false;
     inboxCount = 0;
     inboxUnread = 0;
     unlock();
@@ -742,6 +873,7 @@ const char *messaging_stateName(enum msgState state)
         case MSG_STATE_SENT:      return "sent";
         case MSG_STATE_DELIVERED: return "delivered";
         case MSG_STATE_FAILED:    return "failed";
+        case MSG_STATE_CANCELLED: return "cancelled";
     }
     return "?";
 }

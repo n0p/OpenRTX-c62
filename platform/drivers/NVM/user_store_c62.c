@@ -7,26 +7,24 @@
 #include <zephyr/storage/flash_map.h>
 #include <errno.h>
 #include "core/contact_store.h"
-#include "core/msg_store.h"
 
 /*
- * Flash backend for the contact book and the message store.
+ * Flash backend for the contact book.
  *
- * Both live in the same partition as the channel bank (the OEM channel area,
+ * It lives in the same partition as the channel bank (the OEM channel area,
  * 256 KiB at 0x3C0000, see platform/targets/c62/c62.dts), which the channel
- * store only uses up to 0x4000. The map is:
+ * store only uses up to 0x4000.  The map is:
  *
  *   0x00000  channel store, two 8 KiB slots
- *   0x08000  contact book,   two 8 KiB slots
- *   0x10000  message store,  two 8 KiB slots
- *   0x18000+ free
+ *   0x08000  contact book,  two 8 KiB slots
+ *   0x10000+ free (240 KiB - 16 KiB still unused)
  *
- * Keeping the three stores in one partition means no devicetree change and a
- * single place to look when something does not survive a power cycle.
+ * The messages are NOT here: the shared store (core/messaging.c) keeps its own
+ * two sectors in the storage partition, next to the settings, the VFO and the
+ * TETRA SDS history.  See docs/MESSAGING.md for the whole map.
  */
 
 #define CSTORE_BASE 0x08000U
-#define MSTORE_BASE 0x10000U
 #define USLOT_SIZE  0x2000U
 #define USECTOR     0x1000U
 
@@ -73,21 +71,7 @@ static const slot_ops_t contactOps = {
     .sector = USECTOR
 };
 
-static const slot_ops_t msgOps = {
-    .read = uRead,
-    .erase = uErase,
-    .write = uWrite,
-    .ctx = (void *)(uintptr_t)MSTORE_BASE,
-    .slot_size = USLOT_SIZE,
-    .sector = USECTOR
-};
-
 const slot_ops_t *cstore_platformOps(void)
 {
     return &contactOps;
-}
-
-const slot_ops_t *msg_platformOps(void)
-{
-    return &msgOps;
 }

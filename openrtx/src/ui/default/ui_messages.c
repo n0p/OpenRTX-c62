@@ -10,9 +10,8 @@
 #include <hwconfig.h>
 #include "core/graphics.h"
 #include "core/state.h"
-#include "core/msg_store.h"
+#include "core/messaging.h"
 #include "core/msg_service.h"
-#include "core/contact_store.h"
 #include "core/beeps.h"
 #include "core/voicePrompts.h"
 #include "interfaces/delays.h"
@@ -24,6 +23,11 @@
 /*
  * Messaging UI. See docs/UI.md for the key table.
  *
+ * Nothing here keeps messages of its own: the inbox, the sent folder, the
+ * delivery states and the draft are the shared store (core/messaging.h), and
+ * msg_service translates a recipient into an address.  A screen is therefore
+ * always showing what the transports are really doing.
+ *
  * Inbox / sent: UP/DOWN move, green opens (or the status page), P1 switches
  * inbox<->sent (P2 replies from the inbox), red goes back.
  *
@@ -32,8 +36,8 @@
  * text row, green starts multi-tap typing: digits type, P1 is backspace, P2
  * is space, green ends typing and red leaves the row. Green on SEND queues it.
  *
- * The draft, the inbox and the sent folder are persistent and written with
- * the same two-slot CRC discipline as the channel bank.
+ * The draft lives in the message store, so it survives a power cycle with the
+ * same two-sector discipline as the queues.
  */
 
 #define MG_HEADER_H 12
@@ -41,8 +45,8 @@
 #define MG_ROWS     ((CONFIG_SCREEN_HEIGHT - MG_HEADER_H - UI_HINTS_H) / MG_ROW_H)
 #define MG_MSG_MS   2000
 #define MG_TAP_MS   1200   /* multi-tap window                          */
-#define MG_DRAFT_MS 3000   /* idle time before the draft hits flash     */
 #define MG_POLL_MS  500
+#define MG_DRAFT_MS 3000   /* idle time before the draft reaches flash  */
 
 /* Multi-tap groups, indexed by the digit key (0..9) */
 static const char *const tapMap[10] = {
@@ -72,8 +76,8 @@ static struct
     uint8_t sel;          /**< cursor in the list screens                 */
     uint8_t row;          /**< cursor in the composer                     */
     bool typing;          /**< composing: the text row takes the digits   */
-    uint8_t tp;           /**< chosen transport                           */
-    uint16_t seq;         /**< message on the view/status screen          */
+    uint8_t tp;           /**< chosen transport, enum msgTransport        */
+    uint8_t id;           /**< message on the view/status screen          */
     char peer[MSG_PEER_LEN];
     char text[MSG_TEXT_MAX + 1];
     uint8_t pos;
@@ -83,8 +87,7 @@ static struct
     long long tapTick;
     long long lastEdit;
     long long lastPoll;
-    bool draftDirty;
-    bool draftLoaded;
+    bool draftTouched;    /**< the store still has to be told we edited   */
     char msg[22];
     long long msgUntil;
 } mg;
@@ -107,7 +110,35 @@ static void setMessage(const char *text)
 
 static const char *tpName(uint8_t tp)
 {
-    return (tp < MSG_TP_NUM) ? msg_service_name(tp) : "-";
+    return (tp < MSG_TRANSPORT_COUNT) ? msg_service_name((enum msgTransport)tp)
+                                      : "-";
+}
+
+/* The name a message shows: the peer as typed, or the address it came from */
+static void peerText(const struct message *m, char *buf, size_t len)
+{
+    if (m->peer[0] != '\0') {
+        snprintf(buf, len, "%s", m->peer);
+        return;
+    }
+    if ((m->flags & MSG_FLAG_INBOUND) != 0)
+        snprintf(buf, len, "%u", (unsigned)m->src);
+    else
+        snprintf(buf, len, "%u", (unsigned)m->dst);
+}
+
+/* A message by id, in the inbox or in the outbox.  NULL when it is gone. */
+static const struct message *findMsg(uint8_t id)
+{
+    for (int i = 0; i < MSG_INBOX_LEN; i++) {
+        const struct message *m = messaging_inbox(i);
+
+        if (m == NULL)
+            break;
+        if (m->id == id)
+            return m;
+    }
+    return messaging_find(id);
 }
 
 /* ------------------------------------------------------------------------ */
@@ -116,15 +147,13 @@ static const char *tpName(uint8_t tp)
 
 static void draftLoad(void)
 {
-    if (mg.draftLoaded)
-        return;
-    mg.draftLoaded = true;
+    struct message *d = messaging_draft();
 
-    msg_rec_t *d = msg_draft();
-    if (d->seq == 0 && d->text[0] == '\0' && d->peer[0] == '\0')
+    if ((d->text[0] == '\0') && (d->peer[0] == '\0'))
         return;
 
-    mg.tp = (d->tp < MSG_TP_NUM) ? d->tp : msg_service_default();
+    mg.tp = (d->transport < MSG_TRANSPORT_COUNT) ? d->transport
+                                                 : msg_service_default();
     snprintf(mg.peer, sizeof(mg.peer), "%s", d->peer);
     snprintf(mg.text, sizeof(mg.text), "%s", d->text);
     mg.pos = (uint8_t)strlen(mg.text);
@@ -132,12 +161,13 @@ static void draftLoad(void)
 
 static void draftStore(void)
 {
-    msg_rec_t *d = msg_draft();
-    d->tp = mg.tp;
+    struct message *d = messaging_draft();
+
     snprintf(d->peer, sizeof(d->peer), "%s", mg.peer);
     snprintf(d->text, sizeof(d->text), "%s", mg.text);
-    mg.draftDirty = false;
-    msg_save();
+    d->transport = mg.tp;
+    messaging_draftTouch();
+    mg.draftTouched = false;
 }
 
 static void draftDrop(void)
@@ -146,8 +176,8 @@ static void draftDrop(void)
     memset(mg.text, 0, sizeof(mg.text));
     mg.pos = 0;
     mg.tapKey = 0xFF;
-    mg.draftDirty = false;
-    msg_draftClear();
+    mg.draftTouched = false;
+    messaging_draftClear();
 }
 
 /* ------------------------------------------------------------------------ */
@@ -158,7 +188,9 @@ static uint8_t textMax(void)
 {
     /* With no transport available the draft still has to be writable: fall
        back to the roomiest limit of any transport, not to zero. */
-    uint8_t m = (mg.tp < MSG_TP_NUM) ? msg_service_maxLen(mg.tp) : MSG_TEXT_MAX;
+    uint8_t m = (mg.tp < MSG_TRANSPORT_COUNT)
+                    ? msg_service_maxLen((enum msgTransport)mg.tp)
+                    : MSG_TEXT_MAX;
     if (m == 0 || m > MSG_TEXT_MAX)
         m = MSG_TEXT_MAX;
     return m;
@@ -188,7 +220,7 @@ static void textChanged(void)
 {
     mg.pos = (uint8_t)strlen(activeBuf());
     mg.lastEdit = getTick();
-    mg.draftDirty = true;
+    mg.draftTouched = true;
 }
 
 static void textAppend(char c)
@@ -246,13 +278,11 @@ static void tapKeyPress(uint8_t digit, bool literal, long long now)
                       && ((size_t)mg.tapPos + 1 == len);
 
     if (continueBurst) {
-        char c = group[mg.tapIdx];
         mg.tapIdx = (uint8_t)((mg.tapIdx + 1) % n);
         buf[mg.tapPos] = group[mg.tapIdx];
         mg.pos = mg.tapPos + 1;
         mg.lastEdit = now;
-        mg.draftDirty = true;
-        (void)c;
+        mg.draftTouched = true;
     } else {
         if (len >= (size_t)activeMax())
             return;
@@ -271,14 +301,30 @@ static void tapKeyPress(uint8_t digit, bool literal, long long now)
 /* List helpers                                                             */
 /* ------------------------------------------------------------------------ */
 
+/*
+ * The inbox is newest first; the outbox is stored oldest first, so the sent
+ * folder walks it backwards to show the last message at the top.
+ */
 static uint8_t listCount(bool sent)
 {
-    return sent ? msg_sent_count() : msg_inbox_count();
+    if (!sent) {
+        uint8_t n = 0;
+
+        while ((n < MSG_INBOX_LEN) && (messaging_inbox(n) != NULL))
+            n++;
+        return n;
+    }
+
+    int n = messaging_outCount();
+
+    return (n > MSG_OUTBOX_LEN) ? (uint8_t)MSG_OUTBOX_LEN : (uint8_t)n;
 }
 
-static msg_rec_t *listAt(bool sent, uint8_t n)
+static const struct message *listAt(bool sent, uint8_t n)
 {
-    return sent ? msg_sent_at(n) : msg_inbox_at(n);
+    if (!sent)
+        return messaging_inbox(n);
+    return messaging_outbox(messaging_outCount() - 1 - (int)n);
 }
 
 static void clampSel(bool sent)
@@ -300,11 +346,12 @@ static void composeEnter(const char *peer)
 
     if (peer != NULL) {
         snprintf(mg.peer, sizeof(mg.peer), "%s", peer);
-        mg.draftDirty = true;
+        mg.draftTouched = true;
     }
 
-    if (mg.tp >= MSG_TP_NUM || !msg_service_available(mg.tp))
-        mg.tp = msg_service_default();
+    if ((mg.tp >= MSG_TRANSPORT_COUNT)
+        || !msg_service_available((enum msgTransport)mg.tp))
+        mg.tp = (uint8_t)msg_service_default();
 
     mg.row = MG_ROW_TO;
     mg.typing = false;
@@ -315,18 +362,18 @@ static void composeEnter(const char *peer)
 
 static void cycleTransport(int dir)
 {
-    if (msg_service_default() == MSG_TP_NUM) {
+    if (msg_service_default() == MSG_TRANSPORT_COUNT) {
         beepError();
         setMessage("NO LINK");
         return;
     }
 
     uint8_t tp = mg.tp;
-    for (uint8_t i = 0; i < MSG_TP_NUM; i++) {
-        tp = (uint8_t)((tp + MSG_TP_NUM + dir) % MSG_TP_NUM);
-        if (msg_service_available(tp)) {
+    for (uint8_t i = 0; i < MSG_TRANSPORT_COUNT; i++) {
+        tp = (uint8_t)((tp + MSG_TRANSPORT_COUNT + dir) % MSG_TRANSPORT_COUNT);
+        if (msg_service_available((enum msgTransport)tp)) {
             mg.tp = tp;
-            mg.draftDirty = true;
+            mg.draftTouched = true;
             beepOk();
             return;
         }
@@ -355,7 +402,7 @@ static void cyclePeer(int dir)
     char call[MSG_PEER_LEN];
     if (ui_contacts_callAt(idx, call, sizeof(call))) {
         snprintf(mg.peer, sizeof(mg.peer), "%s", call);
-        mg.draftDirty = true;
+        mg.draftTouched = true;
     }
 }
 
@@ -375,7 +422,8 @@ static bool peerValid(void)
 
 static void composeSend(void)
 {
-    if (msg_service_default() == MSG_TP_NUM || !msg_service_available(mg.tp)) {
+    if (msg_service_default() == MSG_TRANSPORT_COUNT
+        || !msg_service_available((enum msgTransport)mg.tp)) {
         beepError();
         setMessage("NO LINK");
         return;
@@ -396,15 +444,15 @@ static void composeSend(void)
         return;
     }
 
-    msg_rec_t *rec = msg_service_queue(mg.tp, mg.peer, mg.text,
-                                       (uint32_t)getTick());
-    if (rec == NULL) {
+    int id = msg_service_queue((enum msgTransport)mg.tp, mg.peer, mg.text,
+                               true, (uint32_t)getTick());
+    if (id < 0) {
         beepError();
         setMessage("SEND FAILED");
         return;
     }
 
-    mg.seq = rec->seq;
+    mg.id = (uint8_t)id;
     mg.typing = false;
     draftDrop();
     beepOk();
@@ -413,10 +461,13 @@ static void composeSend(void)
 
 static void reply(void)
 {
-    msg_rec_t *r = listAt(false, mg.sel);
+    const struct message *r = listAt(false, mg.sel);
     if (r == NULL)
         return;
-    composeEnter(r->peer);
+
+    char peer[MSG_PEER_LEN];
+    peerText(r, peer, sizeof(peer));
+    composeEnter(peer);
 }
 
 /* ------------------------------------------------------------------------ */
@@ -434,13 +485,11 @@ static bool inboxKey(kbd_msg_t *msg, bool sent)
         if (n > 0)
             mg.sel = (mg.sel + 1 < n) ? (uint8_t)(mg.sel + 1) : 0;
     } else if (msg->keys & KEY_ENTER) {
-        msg_rec_t *r = listAt(sent, mg.sel);
+        const struct message *r = listAt(sent, mg.sel);
         if (r != NULL) {
-            mg.seq = r->seq;
-            if (!sent && r->unread) {
-                r->unread = 0;
-                msg_save();
-            }
+            mg.id = r->id;
+            if (!sent && ((r->flags & MSG_FLAG_UNREAD) != 0))
+                messaging_markReadId((int)r->id);
             state.ui_screen = MSG_VIEW;
         }
     } else if (msg->keys & KEY_F1) {
@@ -448,13 +497,14 @@ static bool inboxKey(kbd_msg_t *msg, bool sent)
         mg.sel = 0;
         state.ui_screen = sent ? MENU_MESSAGES : MSG_SENT;
     } else if (msg->keys & KEY_F2) {
-        if (!sent)
+        if (!sent) {
             reply();
-        else {
-            msg_rec_t *r = listAt(true, mg.sel);
-            if (r != NULL && msg_service_cancel(r)) {
+        } else {
+            const struct message *r = listAt(true, mg.sel);
+            if ((r != NULL) && msg_service_cancel((int)r->id,
+                                                 (uint32_t)getTick())) {
                 beepOk();
-                mg.seq = r->seq;
+                mg.id = r->id;
                 state.ui_screen = MSG_STATUS;
             } else {
                 beepError();
@@ -469,14 +519,12 @@ static bool inboxKey(kbd_msg_t *msg, bool sent)
 
 static bool viewKey(kbd_msg_t *msg)
 {
-    msg_rec_t *r = msg_findSeq(mg.seq);
-
     if (msg->keys & KEY_ENTER) {
         reply();
     } else if (msg->keys & KEY_ESC) {
         state.ui_screen = MENU_MESSAGES;
-    } else if ((msg->keys & KEY_F1) && (r != NULL)) {
-        msg_service_cancel(r);
+    } else if ((msg->keys & KEY_F1) && (findMsg(mg.id) != NULL)) {
+        msg_service_cancel((int)mg.id, (uint32_t)getTick());
         state.ui_screen = MSG_SENT;
     }
 
@@ -510,14 +558,14 @@ static bool composeKey(kbd_msg_t *msg, long long now)
             mg.typing = false;
             if (mg.row == MG_ROW_TO)
                 mg.row = MG_ROW_TEXT;
-            if (mg.draftDirty)
+            if (mg.draftTouched)
                 draftStore();
             beepOk();
             return true;
         }
         if (msg->keys & KEY_ESC) {
             mg.typing = false;
-            if (mg.draftDirty)
+            if (mg.draftTouched)
                 draftStore();
             return true;
         }
@@ -562,7 +610,7 @@ static bool composeKey(kbd_msg_t *msg, long long now)
                 break;
         }
     } else if (msg->keys & KEY_ESC) {
-        if (mg.draftDirty)
+        if (mg.draftTouched)
             draftStore();
         state.ui_screen = MENU_MESSAGES;
     }
@@ -572,10 +620,8 @@ static bool composeKey(kbd_msg_t *msg, long long now)
 
 static bool statusKey(kbd_msg_t *msg)
 {
-    msg_rec_t *r = msg_findSeq(mg.seq);
-
     if (msg->keys & KEY_F2) {
-        if (r != NULL && msg_service_cancel(r)) {
+        if (msg_service_cancel((int)mg.id, (uint32_t)getTick())) {
             beepOk();
         } else {
             beepError();
@@ -643,7 +689,7 @@ static void drawFolder(bool sent)
     uint8_t n = listCount(sent);
 
     snprintf(right, sizeof(right), "%u%s", (unsigned)n,
-             msg_unread() ? " !" : "");
+             messaging_unread() ? " !" : "");
     drawHeader(sent ? "SENT" : "INBOX", right);
 
     if (n == 0) {
@@ -662,7 +708,7 @@ static void drawFolder(bool sent)
         if (row >= n)
             break;
 
-        msg_rec_t *r = listAt(sent, row);
+        const struct message *r = listAt(sent, row);
         if (r == NULL)
             break;
 
@@ -674,13 +720,17 @@ static void drawFolder(bool sent)
                          color_white, true);
 
         color_t fg = selected ? color_black : color_white;
-        char left[MSG_PEER_LEN + 2];
-        snprintf(left, sizeof(left), "%s%s", r->unread ? "*" : "", r->peer);
+        char who[MSG_PEER_LEN + 2];
+        char peer[MSG_PEER_LEN];
+
+        peerText(r, peer, sizeof(peer));
+        snprintf(who, sizeof(who), "%s%s",
+                 (r->flags & MSG_FLAG_UNREAD) ? "*" : "", peer);
         gfx_print((point_t){ 2, (int16_t)(y + 8) }, FONT_SIZE_5PT,
-                  TEXT_ALIGN_LEFT, fg, "%s", left);
+                  TEXT_ALIGN_LEFT, fg, "%s", who);
         gfx_print((point_t){ CONFIG_SCREEN_WIDTH - 2, (int16_t)(y + 8) },
                   FONT_SIZE_5PT, TEXT_ALIGN_RIGHT, fg, "%s",
-                  sent ? msg_service_statusText(r->status) : tpName(r->tp));
+                  sent ? msg_service_statusText(r->state) : tpName(r->transport));
     }
 
     ui_hints_draw(&(ui_hints_t){ sent ? "STATUS" : "OPEN", "SWAP",
@@ -689,9 +739,10 @@ static void drawFolder(bool sent)
 
 static void drawView(void)
 {
-    msg_rec_t *r = msg_findSeq(mg.seq);
+    const struct message *r = findMsg(mg.id);
     char lines[4][40];
     char right[16];
+    char peer[MSG_PEER_LEN];
 
     if (r == NULL) {
         drawHeader("MESSAGE", NULL);
@@ -701,8 +752,9 @@ static void drawView(void)
         return;
     }
 
-    snprintf(right, sizeof(right), "%s", tpName(r->tp));
-    drawHeader(r->peer, right);
+    peerText(r, peer, sizeof(peer));
+    snprintf(right, sizeof(right), "%s", tpName(r->transport));
+    drawHeader(peer, right);
 
     uint8_t n = textLines(r->text, lines, 6, 38);
     for (uint8_t i = 0; i < n; i++) {
@@ -744,7 +796,8 @@ static void drawCompose(void)
 
         if (row == MG_ROW_TP)
             snprintf(value, sizeof(value), "%s",
-                     msg_service_available(mg.tp) ? tpName(mg.tp) : "NO LINK");
+                     msg_service_available((enum msgTransport)mg.tp)
+                         ? tpName(mg.tp) : "NO LINK");
         else if (row == MG_ROW_TO)
             snprintf(value, sizeof(value), "%s",
                      mg.peer[0] ? mg.peer : "-");
@@ -784,9 +837,10 @@ static void drawCompose(void)
 
 static void drawStatus(void)
 {
-    msg_rec_t *r = msg_findSeq(mg.seq);
+    const struct message *r = findMsg(mg.id);
     char right[16];
     char lines[3][40];
+    char peer[MSG_PEER_LEN];
 
     if (r == NULL) {
         drawHeader("STATUS", NULL);
@@ -796,15 +850,16 @@ static void drawStatus(void)
         return;
     }
 
-    snprintf(right, sizeof(right), "%s", tpName(r->tp));
-    drawHeader(r->peer, right);
+    peerText(r, peer, sizeof(peer));
+    snprintf(right, sizeof(right), "%s", tpName(r->transport));
+    drawHeader(peer, right);
 
     gfx_print((point_t){ 2, (int16_t)(MG_HEADER_H + 6) }, FONT_SIZE_6PT,
               TEXT_ALIGN_LEFT, yellow_fab413, "%s",
-              msg_service_statusText(r->status));
+              msg_service_statusText(r->state));
     gfx_print((point_t){ 2, (int16_t)(MG_HEADER_H + 18) }, FONT_SIZE_5PT,
-              TEXT_ALIGN_LEFT, color_white, "try %u of 3",
-              (unsigned)r->attempts);
+              TEXT_ALIGN_LEFT, color_white, "try %u of %u",
+              (unsigned)r->attempts, (unsigned)MSG_MAX_ATTEMPTS);
 
     uint8_t n = textLines(r->text, lines, 2, 38);
     for (uint8_t i = 0; i < n; i++) {
@@ -863,7 +918,8 @@ void ui_msgs_tick(long long now)
         msg_service_poll((uint32_t)now);
     }
 
-    if (mg.draftDirty && (now - mg.lastEdit) >= MG_DRAFT_MS)
+    /* The store debounces the write; handing it the change is enough */
+    if (mg.draftTouched && (now - mg.lastEdit) >= MG_DRAFT_MS)
         draftStore();
 
     /* The multi-tap burst ends by itself: the next press starts a new char */
@@ -876,9 +932,9 @@ void ui_msgs_fmt_unread(char *buf, int len)
     if (buf == NULL || len <= 0)
         return;
 
-    uint8_t n = msg_unread();
-    if (n == 0)
+    int n = messaging_unread();
+    if (n <= 0)
         buf[0] = '\0';
     else
-        snprintf(buf, len, "!%u", (unsigned)n);
+        snprintf(buf, len, "!%d", n);
 }

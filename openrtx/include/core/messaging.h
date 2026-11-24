@@ -66,6 +66,7 @@ enum msgState {
     MSG_STATE_SENT,       ///< On the air, no confirmation asked for
     MSG_STATE_DELIVERED,  ///< The peer confirmed it
     MSG_STATE_FAILED,     ///< Given up after MSG_MAX_ATTEMPTS
+    MSG_STATE_CANCELLED,  ///< Dropped by the operator before it finished
 };
 
 /** Flags of a message. */
@@ -100,6 +101,13 @@ struct message {
 void messaging_init(void);
 
 /**
+ * @return true once messaging_init() has run.  A screen or a caller that finds
+ * the store built must not build it again: initialising reloads the record and
+ * would drop what the radio received since.
+ */
+bool messaging_ready(void);
+
+/**
  * Queue a message for a transport.
  *
  * @param transport: which path carries it.
@@ -111,6 +119,19 @@ void messaging_init(void);
  */
 int messaging_send(enum msgTransport transport, uint32_t dst, const char *text,
                    bool confirm, uint32_t now);
+
+/**
+ * Queue a message with both a numeric address and the name the operator typed.
+ *
+ * The numeric address is what the transport puts on the air (a DMR radio ID, a
+ * TETRA SSI); the name is what the messaging screen shows -- a callsign from
+ * the contact book or a manual entry.  messaging_send() is this with no name.
+ *
+ * @return the message id, or -1.
+ */
+int messaging_sendAddr(enum msgTransport transport, uint32_t dst,
+                       const char *peer, const char *text, bool confirm,
+                       uint32_t now);
 
 /**
  * Queue a message addressed by name, for the transports whose addresses are
@@ -189,15 +210,53 @@ int messaging_received(enum msgTransport transport, uint32_t src, uint32_t dst,
 /** @return the i-th received message, 0 is the newest, NULL out of range. */
 const struct message *messaging_inbox(int i);
 
-/** @return the i-th outbound message, 0 is the oldest queued, NULL out of
- *  range.  Terminal states are kept until messaging_clear(). */
+/**
+ * @return the i-th outbound entry in use, 0 is the oldest, NULL out of range.
+ * Terminal states are kept until their slot is reused by a new message.
+ */
 const struct message *messaging_outbox(int i);
+
+/** @return how many outbound entries are in use (queued and finished). */
+int messaging_outCount(void);
 
 /** @return how many received messages are still unread. */
 int messaging_unread(void);
 
 /** Clear the unread flag of every received message. */
 void messaging_markRead(void);
+
+/** Clear the unread flag of one message, by id (a message opened on screen). */
+void messaging_markReadId(int id);
+
+/**
+ * Drop a message the operator cancelled.  Its transport stops sending it (a
+ * queued entry is never picked again; one on the air finishes, and the late
+ * outcome is ignored) and the screen shows it as cancelled.
+ *
+ * @param id: message id.
+ * @param now: uptime in ms.
+ */
+void messaging_cancel(int id, uint32_t now);
+
+/* --------------------------------------------------------------- draft --- */
+
+/**
+ * The compose draft: transport, recipient and text of a message that was not
+ * sent yet.  It is part of the store, so it survives a power cycle with the
+ * same two-sector discipline as the queues.
+ *
+ * Edit the fields in place and call messaging_draftTouch(); the write happens
+ * on the next messaging_task() pass, debounced like any other change.
+ *
+ * @return the draft, never NULL.  An empty draft has an empty text.
+ */
+struct message *messaging_draft(void);
+
+/** Note that the draft changed (the store writes it on the next pass). */
+void messaging_draftTouch(void);
+
+/** Empty the draft. */
+void messaging_draftClear(void);
 
 /** Drop every message, in RAM and in the pending record. */
 void messaging_clear(void);

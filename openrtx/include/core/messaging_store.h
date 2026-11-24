@@ -29,8 +29,10 @@ extern "C" {
 #endif
 
 /** Largest record the store has to hold: eight queued and eight received
- *  entries of at most 30 + MSG_TEXT_MAX octets, plus the header and the CRC. */
-#define MSG_STORE_MAX 3100
+ *  entries of at most 30 + MSG_TEXT_MAX octets, the compose draft, the header
+ *  and the CRC.  It has to fit one 4 KiB sector next to the 16 byte sector
+ *  header of the backend. */
+#define MSG_STORE_MAX 3400
 
 /**
  * @return the number of bytes of the stored record, 0 if there is none.
