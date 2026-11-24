@@ -69,6 +69,12 @@ set(C62_BASEBAND_DUMP_FORMAT 1 CACHE STRING
 option(C62_BASEBAND_DUMP_BURST
        "Fill 1 MiB of PSRAM, send it, repeat (gapless at any baud rate)" ON)
 option(C62_REG43_SWEEP "Cycle REG_43 test values in M17 RX" OFF)
+# C62_DMR_12K5: run the DMR mode in the BK4819's 12.5 kHz channel mode with the
+#   4.5 kHz IF filters, which is what the stock firmware uses for its own 4FSK
+#   digital mode (REG_43 = 0x7e48), instead of the 25 kHz mode used for TETRA
+#   and M17-wide (0x7e28, where the IF filters are doubled to 9 kHz). See
+#   reports/dmr_rx_hw.md.
+option(C62_DMR_12K5 "DMR in the BK4819 12.5 kHz channel mode" OFF)
 # C62_TETRA: TETRA TMO downlink receive mode ("T" under key 5), decoded with
 #   libtetra, which west fetches to modules/lib/libtetra.
 option(C62_TETRA "TETRA receive mode" ON)
@@ -82,6 +88,9 @@ set(C62_REG43_SWEEP_MS 1400 CACHE STRING "REG_43 sweep dwell time, ms")
 
 if(C62_WIDE_RX)
   target_compile_definitions(app PRIVATE C62_WIDE_RX)
+endif()
+if(C62_DMR_12K5)
+  target_compile_definitions(app PRIVATE C62_DMR_12K5)
 endif()
 if(C62_REG43_SWEEP)
   target_compile_definitions(app PRIVATE C62_REG43_SWEEP
@@ -267,6 +276,7 @@ endif()
 
 message(STATUS "C62: wide RX ${C62_WIDE_RX}, TETRA ${C62_TETRA} "
                "(speech ${C62_TETRA_SPEECH}), REG_43 sweep ${C62_REG43_SWEEP}, "
+               "DMR 12.5 kHz ${C62_DMR_12K5}, "
                "baseband dump ${C62_BASEBAND_DUMP} "
                "(${C62_BASEBAND_DUMP_BAUD} baud, format "
                "${C62_BASEBAND_DUMP_FORMAT}, burst ${C62_BASEBAND_DUMP_BURST})")

@@ -305,6 +305,57 @@ INSNHIST_OUT=/tmp/h qemu-system-arm -M mps2-an505 -nographic \
    -plugin file=$D/common/libinsnframe.so -d plugin
 ```
 
+## Capturing what the radio hears
+
+Everything above is verified on files. The one question files cannot answer is
+what the BK4819 hands to the demodulator on this particular receiver: level,
+bandwidth, continuity. The baseband dump exists for that, and it is the first
+thing to run when a digital mode decodes nothing (or decodes badly) on the air.
+
+**Arm it from the keypad**: hold the A/B key (the red one, `KEY_ESC`) while
+switching the radio on. The log prints `baseband dump armed` and is muted from
+then on; without the key the dump is inert and the console is a normal console.
+The first capture starts when a mode opens the radio receive path, so switch to
+DMR, tune the channel and wait for the bursts.
+
+**Get the samples out**: the console UART is the Kenwood programming cable
+(`/dev/ttyUSB0` with the usual USB-serial adapter), and the default build fills
+1 MiB of PSRAM (10.4 s of 48 kHz audio) and then sends it in one burst, gapless,
+at 115200 baud, taking about 91 s:
+
+```sh
+scripts/c62_bbdump.py -p /dev/ttyUSB0 -t 100 -o dmr_air
+```
+
+Each burst gives `dmr_air_burst000.wav` (48 kHz mono, exactly what
+`dmrPhy_push()` receives), a `.f32` for GNU Radio, a per-packet `.csv` with
+REG_43 and RSSI, and `dmr_air_radio.txt` with the radio's own report: the
+BK4819 registers read back over SPI when reception started, and once a second
+the level into the codec ADC and the number of buffer halves the reader lost.
+
+Raise the rate if the adapter allows it: `-DC62_BASEBAND_DUMP_BAUD=1500000`
+with the s16 format, or 921600 with `-DC62_BASEBAND_DUMP_FORMAT=2` (12-bit
+packed, 16 dB of dynamic range less, still enough to see a 4FSK eye).
+
+**Decode it on the host**, which separates a PHY defect from an audio-path one:
+
+```sh
+make -C tests/host/dmr_phy_host
+tests/host/dmr_phy_host/build/dmr_phy_host dmr_air_burst000.wav   # the firmware code
+/home/n0p/src/c62/work/dmr-rx/build/dmr_rx dmr_air_burst000.wav --no-wav  # the prototype
+```
+
+* Both decode it, and the radio's live numbers are worse: the firmware is
+  losing blocks or the blocks are stale, not the signal (check `misses=` and
+  `rxpk=` in the radio report, and the `sequence gaps` count of the tool).
+* Neither decodes it: the analog path is the problem, and
+  `tests/host/dmr_phy_host/run.sh` says which defect produces the numbers the
+  radio showed. A baseband high-pass is the one that keeps the sync and the
+  CACH intact while destroying the payload, because the 4FSK slicer needs the
+  absolute levels, not the sign.
+* Only the firmware decodes it: a timing or level bug in `DmrPhy.c`; the
+  prototype's `--csv` gives the per-burst offset and EVM to compare.
+
 ## Limitations
 
 * **No TX in this mode's default build.** The transmitter exists

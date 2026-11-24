@@ -57,10 +57,23 @@ static constexpr uint8_t M17_MIC_GAIN = 0;
  * is what the host prototype was validated on. The receiver estimates its
  * levels per burst, so the deviation (1944 Hz on ETSI, 1600 Hz on the C62)
  * does not have to be configured.
+ *
+ * C62_DMR_12K5 builds it the other way, the way the stock firmware runs its own
+ * 4FSK digital mode (REG_43 = 0x7e48: 12.5 kHz mode, RF filters 4.5 kHz, where
+ * the 25 kHz mode doubles them to 9 kHz). A 12.5 kHz channel with a 9 kHz IF
+ * filter lets a neighbouring channel through, so this is the setting to try
+ * when a capture shows energy from outside the channel. See
+ * reports/dmr_rx_hw.md.
  */
-static constexpr uint8_t DMR_RF_BW = 7;      // 4.5 kHz
+#ifdef C62_DMR_12K5
+static constexpr uint8_t DMR_RF_BW = 7;      // 4.5 kHz, not doubled
 static constexpr uint8_t DMR_RF_BW_WEAK = 7; // 4.5 kHz
+#else
+static constexpr uint8_t DMR_RF_BW = 7;      // 4.5 kHz, doubled to 9 kHz
+static constexpr uint8_t DMR_RF_BW_WEAK = 7; // 4.5 kHz
+#endif
 static constexpr uint8_t DMR_TX_LPF2_BW = 0; // 3 kHz: REG_43 AF TX LPF2
+
 /*
  * TX deviation tuning word (REG_40 <11:0>).  M17 uses 0x582 for its 4FSK,
  * whose outer symbols sit at +-2.4 kHz; ETSI DMR puts them at +-1.944 kHz, so
@@ -246,13 +259,20 @@ void radio_setOpmode(const enum opmode mode)
          */
         bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_BYPASS);
         bk4819_setTxDeviation(&c62_bk4819, true, DMR_TX_DEVIATION);
+#ifdef C62_DMR_12K5
+        /* The stock firmware's own digital setting: 12.5 kHz channel mode */
+        bk4819_setBandwidth(&c62_bk4819, BK4819_BW_12K5);
+        bk4819_setRfFilter(&c62_bk4819, DMR_RF_BW, DMR_RF_BW_WEAK);
+        c62_rx_reg43 = 0x7e48;
+#else
         bk4819_setBandwidth(&c62_bk4819, BK4819_BW_25K);
         bk4819_setRfFilter(&c62_bk4819, DMR_RF_BW, DMR_RF_BW_WEAK);
+        c62_rx_reg43 = 0x7e28;
+#endif
         bk4819_setTxAudioFilter(&c62_bk4819, DMR_TX_LPF2_BW);
         bk4819_setRxAudioGain(&c62_bk4819, DMR_RX_AUDIO_GAIN1,
                               DMR_RX_AUDIO_GAIN2);
         bk4819_setMicGain(&c62_bk4819, DMR_MIC_GAIN);
-        c62_rx_reg43 = 0x7e28;
     } else if (mode == OPMODE_TETRA) {
         // Flat, wide receive path: 25 kHz channel, widest RF filters
         bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_BYPASS);
