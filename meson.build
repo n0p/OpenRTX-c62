@@ -1263,6 +1263,14 @@ ui_check_standby_test = executable('ui_check_standby_test',
                                     sources : unit_test_src + ['tests/unit/ui_check_standby.cpp'],
                                     kwargs  : unit_test_opts)
 
+ui_vfo_input_test = executable('ui_vfo_input_test',
+                               sources : unit_test_src + ['tests/unit/ui_vfo_input.cpp'],
+                               kwargs  : unit_test_opts)
+
+ui_quickmenu_test = executable('ui_quickmenu_test',
+                               sources : unit_test_src + ['tests/unit/ui_quickmenu.cpp'],
+                               kwargs  : unit_test_opts)
+
 m17_packet_test = executable('m17_packet_test',
                               sources : unit_test_src + ['tests/unit/M17_packet.cpp'],
                               kwargs  : unit_test_opts)
@@ -1315,6 +1323,8 @@ test('Codeplug Test',         cps_test)
 ## test('Linux InputStream Test', linux_inputStream_test)
 test('minmea conversion Test', minmea_conversion_test)
 test('UI Check Standby Test', ui_check_standby_test)
+test('UI VFO Input Test', ui_vfo_input_test)
+test('UI Quick Menu Test', ui_quickmenu_test)
 test('M17 Packet Frame Test', m17_packet_test)
 test('C62 Calibration Test', c62_calib_test)
 test('DSP Oversampling Test', dsp_oversampling_test)
