@@ -139,6 +139,7 @@ typedef struct
     bool     am_agc;              // Audio AGC of the AM receive path
     bool     am_step;             // Airband raster: false 25 kHz, true 8.33 kHz
     bool     am_snap;             // Snap tuning to the 8.33 kHz raster
+    /*
      * Scan and vigilance (core/scanner.h, docs/SCAN.md).
      *
      * The units are chosen to keep the whole block in 15 bytes: the record has

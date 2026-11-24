@@ -18,14 +18,13 @@
 #include "ui/ui_strings.h"
 #include "core/utils.h"
 #include "ui/utils.h"
+#ifdef UI_MODE_NXDN
+#include "protocols/NXDN/NxdnStatus.h"
+#endif
 #ifdef CONFIG_DMR
 #include "protocols/DMR/DmrDefs.h"
 #include "protocols/DMR/DmrStatus.h"
 #endif
-#ifdef UI_MODE_NXDN
-#include "protocols/NXDN/NxdnStatus.h"
-#endif
-
 #ifdef CONFIG_TETRA
 #include "protocols/TETRA/TetraSds.h"
 #include "protocols/TETRA/TetraStatus.h"
@@ -41,16 +40,11 @@
  */
 #define TETRA_SYMBOL_GAP 6
 
->>>>>>> c62/tetra-elk
 /**
  * Print, centred on a line, the first of several texts that fits clear of a
  * left margin and the same margin on the right, measured in the font; the
  * last one is printed in any case. gfx_print() does not clip: text wider
  * than the screen wraps onto the line below.
- *
- * Shared by every mode with a status line (TETRA, DMR, NXDN, AM), so it lives
- * outside the CONFIG_TETRA block: it used to be inside it, and a build with a
- * mode that had a status line but no TETRA failed to link.
  *
  * @param pos: line position.
  * @param font: font.
@@ -70,20 +64,6 @@ static void _ui_printFit(point_t pos, fontSize_t font, uint16_t left,
         i++;
     gfx_print(pos, font, TEXT_ALIGN_CENTER, color_white, "%s", texts[i]);
 }
-
-#ifdef CONFIG_TETRA
-#include "protocols/TETRA/TetraSds.h"
-#include "protocols/TETRA/TetraStatus.h"
-
-/* An SDS text stays on the main screen this long */
-#define TETRA_SDS_SHOW_MS 30000
-
-/*
- * Text beside a symbol keeps this far from where gfx_drawSymbol() says the
- * symbol ends: the symbol bitmaps are wider than their advance (13 against
- * 9 pixels at 8 pt), and a gap keeps the two apart.
- */
-#define TETRA_SYMBOL_GAP 6
 
 /**
  * Draw a symbol at the left of a line and centre a text clear of it.

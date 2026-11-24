@@ -187,13 +187,21 @@ endif()
 # only decides whether the code is linked in. See docs/APRS.md.
 #
 #
-# CONFIG_MESSAGING: the shared text message store (core/messaging.c): outbox,
+# C62_MESSAGING: the shared text message store (core/messaging.c): outbox,
 # inbox, states and the flash record, used by APRS, DMR SMS and TETRA SDS.  The
 # messaging screen of the UI talks to this and nothing else.
 #
-option(CONFIG_MESSAGING "Shared text message store (APRS, DMR SMS, TETRA SDS)" ON)
+# The option is NOT called CONFIG_MESSAGING on purpose, and so are C62_SCAN and
+# C62_DMR_SMS below: Zephyr takes every CMake cache variable named CONFIG_* as
+# a Kconfig assignment (cmake/modules/kconfig.cmake), so an option named that
+# way survives in CMakeCache.txt and the next configure aborts with "attempt
+# to assign the value 'ON' to the undefined symbol".  The CONFIG_* spelling is
+# the C macro the sources see, and that one is emitted by
+# target_compile_definitions below.
+#
+option(C62_MESSAGING "Shared text message store (APRS, DMR SMS, TETRA SDS)" ON)
 
-if(CONFIG_MESSAGING)
+if(C62_MESSAGING)
   target_sources(app PRIVATE
     ${OPENRTX_ROOT}/openrtx/src/core/messaging.c
     ${OPENRTX_ROOT}/openrtx/src/core/messaging_store_zephyr.c)
@@ -202,14 +210,14 @@ if(CONFIG_MESSAGING)
 endif()
 
 #
-# CONFIG_SCAN: memory and VFO scanning with a priority channel, per-channel
+# C62_SCAN: memory and VFO scanning with a priority channel, per-channel
 # SKIP and a configurable resume rule (core/scanner.c, core/scan_service.c).
 # The state machine is pure and unit tested on the host; the service is what
 # moves the radio, from state_task(). See docs/SCAN.md.
 #
-option(CONFIG_SCAN "Channel and VFO scan with priority and configurable resume" ON)
+option(C62_SCAN "Channel and VFO scan with priority and configurable resume" ON)
 
-if(CONFIG_SCAN)
+if(C62_SCAN)
   target_sources(app PRIVATE
     ${OPENRTX_ROOT}/openrtx/src/core/scanner.c
     ${OPENRTX_ROOT}/openrtx/src/core/scan_service.c)
@@ -229,7 +237,7 @@ if(CONFIG_C62_APRS)
   target_compile_definitions(app PRIVATE CONFIG_APRS)
   message(STATUS "C62: APRS on the FM path enabled")
 
-  if(CONFIG_MESSAGING)
+  if(C62_MESSAGING)
     # The APRS leg of the message store: queued messages go into its mailbox.
     target_sources(app PRIVATE
       ${OPENRTX_ROOT}/openrtx/src/core/messaging_aprs.c)
@@ -259,12 +267,12 @@ if(CONFIG_C62_NXDN_RX)
 endif()
 
 #
-# CONFIG_DMR_SMS: short messages in the DMR mode (protocols/DMR/DmrSms.c).
+# C62_DMR_SMS: short messages in the DMR mode (protocols/DMR/DmrSms.c).
 # A data call carries the text, one burst per TDMA frame; the message store
-# (CONFIG_MESSAGING) holds the queue the UI writes to.  Needs CONFIG_DMR_TX to
+# (C62_MESSAGING) holds the queue the UI writes to.  Needs CONFIG_DMR_TX to
 # transmit and CONFIG_C62_DMR_RX to receive, but compiles with either alone.
 #
-option(CONFIG_DMR_SMS "DMR short messages (data calls)" ON)
+option(C62_DMR_SMS "DMR short messages (data calls)" ON)
 
 #
 # C62_YSF: Yaesu System Fusion receive mode.  The frame layer reuses the Golay
@@ -296,9 +304,9 @@ if(CONFIG_C62_DMR_RX)
   target_compile_definitions(app PRIVATE CONFIG_DMR)
   message(STATUS "C62: DMR mode enabled")
 
-  if(CONFIG_DMR_SMS)
-    if(NOT CONFIG_MESSAGING)
-      message(FATAL_ERROR "CONFIG_DMR_SMS needs CONFIG_MESSAGING")
+  if(C62_DMR_SMS)
+    if(NOT C62_MESSAGING)
+      message(FATAL_ERROR "C62_DMR_SMS needs C62_MESSAGING")
     endif()
     target_sources(app PRIVATE
       ${OPENRTX_ROOT}/openrtx/src/protocols/DMR/DmrSms.c

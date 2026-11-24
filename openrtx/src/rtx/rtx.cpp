@@ -359,10 +359,10 @@ void rtx_task()
                 #endif
                 #ifdef CONFIG_TETRA
                 case OPMODE_TETRA: currMode = &tetraMode; break;
+                #endif
 #ifdef CONFIG_NXDN
                 case OPMODE_NXDN:  currMode = &nxdnMode;  break;
 #endif
-                #endif
                 #ifdef CONFIG_P25
                 case OPMODE_P25:  currMode = &p25Mode;  break;
                 #endif
@@ -468,7 +468,6 @@ bool opmode_canTransmit(uint8_t mode)
         case OPMODE_AIRBAND:
         case OPMODE_WFM_BC:
             /* Receive only: there is no transmitter for these modes yet */
-            return false;
             return false;
         default:
             return false;

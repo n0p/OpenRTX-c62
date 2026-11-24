@@ -110,7 +110,6 @@ static constexpr uint8_t TETRA_RX_AUDIO_GAIN2 = 0x3f;
 static constexpr uint8_t TETRA_MIC_GAIN = 0;
 
 /*
-<<<<<<< HEAD
  * C62 BK4819 settings for the airband mode, AM receive only. The AM detector
  * itself is bk4819_setAmReceive(); what is left here is the AF level it hands
  * over and the software AGC that holds it.
@@ -133,7 +132,8 @@ static constexpr uint16_t AM_AF_PEAK_LOW = 7000;   // 0.21 of full scale
 /* REG_48<11:10> has four steps, 0 dB to -18 dB in 6 dB steps */
 static constexpr uint8_t AM_RX_AUDIO_GAIN1_MAX = 3;
 static constexpr int64_t AM_AF_STEP_MS = 300;
-=======
+
+/*
  * Broadcast FM. The BK1080 is a receiver of its own, with its own LNA, IF,
  * stereo decoder and audio DACs, and its L/R outputs reach the speaker
  * amplifier through the analog volume pot: no part of this audio goes through
@@ -147,7 +147,6 @@ static constexpr int64_t AM_AF_STEP_MS = 300;
  */
 static constexpr uint32_t WFM_STATUS_MS = 100;  // Status poll period, ms
 static constexpr uint8_t WFM_VOLUME = 0x0F;     // 0 dBFS: the pot does volume
->>>>>>> c62/rx-wfm
 
 /**
  * Digital modes receive the raw discriminator through the flat audio path:
@@ -214,7 +213,6 @@ static bool reg43SweepStarted;
 static struct C62Calib calData;  // TX calibration
 static struct C62CalPoint txCal; // TX calibration at the TX frequency
 
-<<<<<<< HEAD
 /* Level control of the AM receive path, see the airband settings above */
 static struct agc amAgc;
 static uint8_t amAfGain1 = AM_RX_AUDIO_GAIN1;
@@ -242,7 +240,6 @@ static void amAudioProcess(int16_t *samples, size_t count, size_t stride)
         agc_process(&amAgc, samples, count, stride);
 }
 
-=======
 /*
  * Broadcast FM receiver state.  wfmReady means the tuner answered its chip ID
  * and is powered: entering the mode costs the configuration write plus the
@@ -366,8 +363,6 @@ static void wfmTune(const uint32_t freq)
     wfmLastOk = false;
 }
 
-
->>>>>>> c62/rx-wfm
 /**
  * Set the TX power control (APC) voltage through the PWM on pin A03. The TX
  * calibration gives the duty cycles of the low and high power settings at the
@@ -441,7 +436,6 @@ void radio_setOpmode(const enum opmode mode)
     radio_disableRtx();
 
     /*
-<<<<<<< HEAD
      * Only the airband mode receives AM. Every other one goes back to the FM
      * demodulator profile first, because the AM one changes registers they
      * would otherwise inherit: the top of the RX AGC gain table (REG_13), the
@@ -452,7 +446,9 @@ void radio_setOpmode(const enum opmode mode)
     if (mode != OPMODE_AIRBAND) {
         bk4819_setModulation(&c62_bk4819, true);
         csk6codec_setRxProcessor(NULL);
-=======
+    }
+
+    /*
      * Leaving broadcast FM: the tuner has its own output on the amplifier
      * input, so it has to be powered down and the analog path closed, or it
      * keeps playing under the next mode.
@@ -460,7 +456,6 @@ void radio_setOpmode(const enum opmode mode)
     if ((mode != OPMODE_WFM_BC) && wfmReady) {
         wfmLeave();
         audio_setExtSource(false);
->>>>>>> c62/rx-wfm
     }
 
     if (mode == OPMODE_M17) {
@@ -546,7 +541,6 @@ void radio_setOpmode(const enum opmode mode)
                               TETRA_RX_AUDIO_GAIN2);
         bk4819_setMicGain(&c62_bk4819, TETRA_MIC_GAIN);
         c62_rx_reg43 = 0x7e28;
-<<<<<<< HEAD
     } else if (mode == OPMODE_AIRBAND) {
         /*
          * AM receive, DSB with carrier. The IF filter follows the channel
@@ -562,7 +556,6 @@ void radio_setOpmode(const enum opmode mode)
         bk4819_setRxAudioGain(&c62_bk4819, amAfGain1, AM_RX_AUDIO_GAIN2);
         agc_init(&amAgc, NULL);
         csk6codec_setRxProcessor(amAudioProcess);
-=======
     } else if (mode == OPMODE_WFM_BC) {
         /*
          * Broadcast FM. The BK4819 is not in this path at all: its audio is
@@ -576,7 +569,6 @@ void radio_setOpmode(const enum opmode mode)
         wfmReady = wfmEnter();
         if (!wfmReady)
             printk("BK1080: no answer on the bus, broadcast FM unavailable\n");
->>>>>>> c62/rx-wfm
     } else {
         bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_VOICE);
     }
@@ -766,11 +758,6 @@ void radio_enableRx()
 
 void radio_enableTx()
 {
-<<<<<<< HEAD
-    // Aircraft band AM is receive only, and so is TETRA
-    if ((config->txDisable == 1) || (radioMode == OPMODE_TETRA) ||
-        (radioMode == OPMODE_AIRBAND))
-=======
     /*
      * Broadcast FM has no transmitter by definition: the band is receive only
      * and the mode has no microphone path. Refuse before touching the PA.
@@ -778,9 +765,9 @@ void radio_enableTx()
     if (radioMode == OPMODE_WFM_BC)
         return;
 
-    // TETRA is receive only on this radio: its modulation needs a linear PA
-    if ((config->txDisable == 1) || (radioMode == OPMODE_TETRA))
->>>>>>> c62/rx-wfm
+    // Aircraft band AM is receive only, and so is TETRA
+    if ((config->txDisable == 1) || (radioMode == OPMODE_TETRA) ||
+        (radioMode == OPMODE_AIRBAND))
         return;
 
     gpioDev_clear(LNA_VHF_EN);
