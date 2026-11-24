@@ -13,6 +13,7 @@
 #include "rtx/rtx.h"
 #include "rtx/OpMode_FM.hpp"
 #include "rtx/OpMode_M17.hpp"
+#include "rtx/OpMode_WFM.hpp"
 #if defined(PLATFORM_C62)
 #include "drivers/audio/csk6_codec.h"
 #endif
@@ -52,6 +53,7 @@ static uint32_t        txAbortTime;
 static OpMode  *currMode;               // Pointer to currently active opMode handler
 static OpMode     noMode;               // Empty opMode handler for opmode::NONE
 static OpMode_FM  fmMode;               // FM mode handler
+static OpMode_WFM wfmMode;              // Broadcast FM receive mode handler
 #ifdef CONFIG_M17
 static OpMode_M17 m17Mode;              // M17 mode handler
 #endif
@@ -315,6 +317,7 @@ void rtx_task()
             {
                 case OPMODE_NONE: currMode = &noMode;  break;
                 case OPMODE_FM:   currMode = &fmMode;  break;
+                case OPMODE_WFM_BC: currMode = &wfmMode; break;
                 #ifdef CONFIG_M17
                 case OPMODE_M17:  currMode = &m17Mode; break;
                 #endif

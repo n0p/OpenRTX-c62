@@ -83,6 +83,10 @@ enum bandwidth
 
 /**
  * \enum opmode Enumeration type defining the current rtx operating mode.
+ *
+ * The values are stored in channels and in the settings journal: only append
+ * new ones, and give them explicit values so that inserting a mode never
+ * moves another one.
  */
 enum opmode
 {
@@ -90,7 +94,8 @@ enum opmode
     OPMODE_FM   = 1,        /**< Analog FM          */
     OPMODE_DMR  = 2,        /**< DMR                */
     OPMODE_M17  = 3,        /**< M17                */
-    OPMODE_TETRA = 4        /**< TETRA (receive)    */
+    OPMODE_TETRA = 4,       /**< TETRA (receive)    */
+    OPMODE_WFM_BC = 11      /**< Broadcast FM, 85-108 MHz (receive) */
 };
 
 /**

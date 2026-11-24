@@ -13,7 +13,9 @@
 
 #include "calibration/calib_C62.h"
 #include "core/state.h"
+#include "core/wfm.h"
 #include "drivers/baseband/BK4819.h"
+#include "drivers/baseband/BK1080.h"
 #include "drivers/audio/csk6_codec.h"
 #include "radioUtils.h"
 #include <stdio.h>
@@ -105,6 +107,21 @@ static constexpr uint8_t TETRA_RX_AUDIO_GAIN1 = 1; // -6 dB
 static constexpr uint8_t TETRA_RX_AUDIO_GAIN2 = 0x3f;
 static constexpr uint8_t TETRA_MIC_GAIN = 0;
 
+/*
+ * Broadcast FM. The BK1080 is a receiver of its own, with its own LNA, IF,
+ * stereo decoder and audio DACs, and its L/R outputs reach the speaker
+ * amplifier through the analog volume pot: no part of this audio goes through
+ * the BK4819, the codec or the DSP. What the radio driver has to do is power
+ * and tune the tuner, keep the BK4819 audio out of the summing node, and
+ * switch the amplifier on.
+ *
+ * The chip tunes 76.0-108.0 MHz with BAND=01 (the value the factory table
+ * leaves) and 87.5-108.0 with BAND=00. BAND=01 is used for the whole band, as
+ * in the stock firmware, which is what makes 85.0-87.5 MHz reachable at all.
+ */
+static constexpr uint32_t WFM_STATUS_MS = 100;  // Status poll period, ms
+static constexpr uint8_t WFM_VOLUME = 0x0F;     // 0 dBFS: the pot does volume
+
 /**
  * Digital modes receive the raw discriminator through the flat audio path:
  * M17, and DMR (which transmits from the same flat path).
@@ -169,6 +186,130 @@ static bool reg43SweepStarted;
 static struct C62Calib calData;  // TX calibration
 static struct C62CalPoint txCal; // TX calibration at the TX frequency
 
+/*
+ * Broadcast FM receiver state.  wfmReady means the tuner answered its chip ID
+ * and is powered: entering the mode costs the configuration write plus the
+ * calibration waits (about 0.3 s, see BK1080_Init), so it is done once on
+ * entry and not on every retune.
+ */
+static bool wfmReady;
+static uint8_t wfmEnterFails;       // Failed power-ups, to bound the retries
+static enum bk1080Spacing wfmSpacing = BK1080_SPACE_100K;
+static wfm_status_t wfmLast;        // Last status read from the tuner
+static rssi_t wfmLastDbm = -127;    // Its level on the dBm scale
+static bool wfmLastOk;              // The last read reached the chip
+static int64_t wfmLastPoll;         // Uptime of that read, ms
+
+/**
+ * Power and configure the tuner, once per entry into the mode.
+ */
+static bool wfmEnter()
+{
+    gpioPin_setMode(&c62_bk1080.pwr, OUTPUT);
+    gpioPin_set(&c62_bk1080.pwr);       // make sure it is off before powering
+
+    if (!BK1080_Init(&c62_bk1080)) {
+        /*
+         * A chip that does not answer costs a second of polling, so do not
+         * retry it on every retune: three attempts per power cycle, then the
+         * mode stays silent until the next one.
+         */
+        if (wfmEnterFails < UINT8_MAX)
+            wfmEnterFails++;
+
+        return false;
+    }
+
+    /*
+     * The stock firmware leaves the factory table's values here: 100 kHz
+     * spacing, full-scale digital volume (the analog pot is the volume
+     * control), AGC and the soft mute enabled, and 50 us de-emphasis, which
+     * is what Europe transmits (the table has DE = 0, 75 us, for the US).
+     */
+    BK1080_SetVolume(&c62_bk1080, WFM_VOLUME);
+    BK1080_SetDeemphasis50us(&c62_bk1080, true);
+    BK1080_SetMono(&c62_bk1080, false);
+    BK1080_SetSeekThreshold(&c62_bk1080, 8);    // dBuV, around S3
+    BK1080_SetSeekQuality(&c62_bk1080, 2, 14);  // the factory table's values
+
+    wfmLastPoll = 0;
+    return true;
+}
+
+/**
+ * Mute the tuner and drop its supply: the mode is over.
+ */
+static void wfmLeave()
+{
+    if (!wfmReady)
+        return;
+
+    BK1080_PowerOff(&c62_bk1080);
+    wfmReady = false;
+}
+
+/**
+ * Read the tuner status, no more often than WFM_STATUS_MS.
+ *
+ * @param force: read now even if the last read is recent.
+ * @return true if the chip answered.
+ */
+static bool wfmUpdateStatus(const bool force)
+{
+    int64_t now = k_uptime_get();
+
+    if ((!force) && ((now - wfmLastPoll) < (int64_t)WFM_STATUS_MS))
+        return wfmLastOk;
+
+    wfmLastPoll = now;
+
+    struct bk1080Status hw;
+    if (!BK1080_ReadStatus(&c62_bk1080, &hw)) {
+        wfmLastOk = false;
+        return false;
+    }
+
+    wfmLast.chan = hw.chan;
+    wfmLast.rssi = hw.rssi;
+    wfmLast.snr = hw.snr;
+    wfmLast.freqd = (int16_t)hw.freqd;
+    wfmLast.tuned = hw.stc;
+    wfmLast.afcrl = hw.afcrl;
+    wfmLast.stereo = hw.stereo;
+    wfmLast.stereoSync = hw.stereoSync;
+    wfmLast.rds = false;
+    wfmLast.freq = (config != nullptr) ? config->rxFrequency : 0;
+
+    wfmLastDbm = wfm_dbuVToDbm(hw.rssi);
+    wfmLastOk = true;
+
+    return true;
+}
+
+/**
+ * Tune the broadcast receiver, muted across the retune so the PLL settling
+ * does not reach the speaker.
+ */
+static void wfmTune(const uint32_t freq)
+{
+    if (!wfmReady)
+        return;
+
+    freq_t target = wfm_snap(freq, (wfmSpacing == BK1080_SPACE_50K)
+                                      ? WFM_STEP_FINE_HZ : WFM_STEP_HZ);
+
+    BK1080_SetMute(&c62_bk1080, true);
+    bool ok = BK1080_SetFrequency(&c62_bk1080, target, wfmSpacing);
+    BK1080_SetMute(&c62_bk1080, !ok);
+
+    /* The previous status was another channel: do not carry it over */
+    wfmLastPoll = 0;
+    wfmLast = wfm_status_t();
+    wfmLastDbm = -127;
+    wfmLastOk = false;
+}
+
+
 /**
  * Set the TX power control (APC) voltage through the PWM on pin A03. The TX
  * calibration gives the duty cycles of the low and high power settings at the
@@ -208,6 +349,15 @@ void radio_init(const rtxStatus_t *rtxState)
 
     bk4819_setAfOutput(&c62_bk4819, BK4819_AF_MUTE);
 
+    /*
+     * The broadcast receiver is off until its mode is selected: drive its
+     * power pin high (active low) so the chip cannot draw its 20 mA in FM,
+     * M17, DMR or TETRA.
+     */
+    gpioPin_setMode(&c62_bk1080.pwr, OUTPUT);
+    gpioPin_set(&c62_bk1080.pwr);
+    wfmReady = false;
+
     gpioDev_setMode(LNA_VHF_EN, OUTPUT_ACTIVE_LOW);
     gpioDev_setMode(LNA_UHF_EN, OUTPUT_ACTIVE_LOW);
     gpioDev_setMode(PA_VHF_EN, OUTPUT);
@@ -217,6 +367,8 @@ void radio_init(const rtxStatus_t *rtxState)
 
 void radio_terminate()
 {
+    /* The tuner has its own supply switch: do not leave it drawing 20 mA */
+    wfmLeave();
 }
 
 void radio_tuneVcxo(const int16_t vhfOffset, const int16_t uhfOffset)
@@ -229,6 +381,16 @@ void radio_setOpmode(const enum opmode mode)
 {
     // The core calls this before disabling the old mode: unkey first
     radio_disableRtx();
+
+    /*
+     * Leaving broadcast FM: the tuner has its own output on the amplifier
+     * input, so it has to be powered down and the analog path closed, or it
+     * keeps playing under the next mode.
+     */
+    if ((mode != OPMODE_WFM_BC) && wfmReady) {
+        wfmLeave();
+        audio_setExtSource(false);
+    }
 
     if (mode == OPMODE_M17) {
         bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_BYPASS);
@@ -283,6 +445,19 @@ void radio_setOpmode(const enum opmode mode)
                               TETRA_RX_AUDIO_GAIN2);
         bk4819_setMicGain(&c62_bk4819, TETRA_MIC_GAIN);
         c62_rx_reg43 = 0x7e28;
+    } else if (mode == OPMODE_WFM_BC) {
+        /*
+         * Broadcast FM. The BK4819 is not in this path at all: its audio is
+         * muted so it cannot sum into the amplifier input, and the analog FM
+         * profile is restored for when the operator leaves the mode. The
+         * tuner is powered and configured here, before the first tune, so
+         * that the calibration waits of BK1080_Init are paid once.
+         */
+        bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_VOICE);
+        bk4819_setAfOutput(&c62_bk4819, BK4819_AF_MUTE);
+        wfmReady = wfmEnter();
+        if (!wfmReady)
+            printk("BK1080: no answer on the bus, broadcast FM unavailable\n");
     } else {
         bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_VOICE);
     }
@@ -297,6 +472,14 @@ bool radio_checkRxDigitalSquelch()
 
 void radio_enableAfOutput()
 {
+    /*
+     * In broadcast FM the BK4819 audio must stay out of the amplifier input:
+     * the speaker is driven by the tuner, through the analog path, and
+     * unmuting the transceiver here would mix its noise under the station.
+     */
+    if (radioMode == OPMODE_WFM_BC)
+        return;
+
     /*
      * Only the RTX to speaker path opens it: FM demodulated audio for the
      * analog modes, the raw discriminator for the digital ones.
@@ -370,6 +553,25 @@ static void dumpSendStats()
 
 void radio_enableRx()
 {
+    /*
+     * Broadcast FM: the tuner is the receiver. Its audio does not go through
+     * the codec -- it reaches the amplifier through the analog volume pot --
+     * so there is no audio path to open here, only the amplifier switch, and
+     * the BK4819 stays out of the way with its audio muted.
+     */
+    if (radioMode == OPMODE_WFM_BC) {
+        if ((!wfmReady) && (wfmEnterFails < 3))
+            wfmReady = wfmEnter();
+
+        if (wfmReady) {
+            wfmTune(config->rxFrequency + rxTotalOffset());
+            audio_setExtSource(true);
+        }
+
+        radioStatus = RX;
+        return;
+    }
+
     gpioDev_clear(LNA_VHF_EN);
     gpioDev_clear(LNA_UHF_EN);
     gpioDev_clear(PA_VHF_EN);
@@ -431,6 +633,13 @@ void radio_enableRx()
 
 void radio_enableTx()
 {
+    /*
+     * Broadcast FM has no transmitter by definition: the band is receive only
+     * and the mode has no microphone path. Refuse before touching the PA.
+     */
+    if (radioMode == OPMODE_WFM_BC)
+        return;
+
     // TETRA is receive only on this radio: its modulation needs a linear PA
     if ((config->txDisable == 1) || (radioMode == OPMODE_TETRA))
         return;
@@ -477,10 +686,21 @@ void radio_disableRtx()
     gpioDev_clear(PA_UHF_EN);
     gpioDev_clear(ALC_TX_LED_EN);
 
-    // Leaving RX closes the AF output: the digital modes opened it in
-    // radio_enableRx(), FM's audio path closes it too
-    if (radioStatus == RX)
+    if (radioMode == OPMODE_WFM_BC) {
+        /*
+         * Not leaving the mode, so the tuner stays powered and keeps its
+         * calibration: only silence it and close the analog path, which is
+         * the pop-suppression sequence the stock firmware uses as well.
+         */
+        if (wfmReady)
+            BK1080_SetMute(&c62_bk1080, true);
+
+        audio_setExtSource(false);
+    } else if (radioStatus == RX) {
+        // Leaving RX closes the AF output: the digital modes opened it in
+        // radio_enableRx(), FM's audio path closes it too
         radio_disableAfOutput();
+    }
 
     bk4819_disableRtx(&c62_bk4819);
     radioStatus = OFF;
@@ -532,6 +752,18 @@ void radio_updateConfiguration()
 
 rssi_t radio_getRssi()
 {
+    if (radioMode == OPMODE_WFM_BC) {
+        /*
+         * The level comes from the tuner, in dBuV, and is converted to the
+         * dBm scale the S-meter and the squelch use. Its own reads are
+         * throttled to 10 Hz by wfmUpdateStatus().
+         */
+        if (wfmReady && wfmUpdateStatus(false))
+            return wfmLastDbm;
+
+        return (rssi_t)-127;
+    }
+
 #ifdef C62_REG43_SWEEP
     /* Called by the rtx thread in RX, so it can own the BK4819 here */
     if (flatMode(radioMode) && (radioStatus == RX)) {
@@ -577,6 +809,34 @@ extern "C" void c62_setRxOffset(int32_t hz)
 extern "C" int32_t c62_getRxOffset(void)
 {
     return rxOffset;
+}
+
+/*
+ * Broadcast FM receiver, for the operating mode (openrtx/src/core/wfm.c) and
+ * for whatever screen ends up showing the station.  Everything below is a
+ * thin pass-through to the tuner driver: the mode owns neither the chip nor
+ * the bus.
+ */
+
+extern "C" bool c62_wfmPoll(wfm_status_t *st)
+{
+    if ((st == nullptr) || (radioMode != OPMODE_WFM_BC) || (!wfmReady))
+        return false;
+
+    if (!wfmUpdateStatus(false))
+        return false;
+
+    *st = wfmLast;
+    return true;
+}
+
+/**
+ * Channel raster of the broadcast receiver: 100 kHz (CCIR, the default) or
+ * 50 kHz, for the countries that offset some stations (Italy, among others).
+ */
+extern "C" void c62_wfmSetSpacing(bool fine)
+{
+    wfmSpacing = fine ? BK1080_SPACE_50K : BK1080_SPACE_100K;
 }
 
 #ifdef CONFIG_TETRA_AFC

@@ -13,17 +13,26 @@ unas decenas de bytes de flash.
 
 ---
 
-## 1. Las tres zonas
+## 1. Las zonas
 
 | zona | nombre | canales | RX del canal 0 | paso | shift | potencia |
 |---|---|---|---|---|---|---|
 | `ZONE_VHF_REPEATERS` | `R0`..`R7` | 8 | 145.600 MHz | 25 kHz | −600 kHz | 5 W (bajable) |
 | `ZONE_UHF_REPEATERS` | `U0`..`U100` | 101 | 438.650 MHz | 12,5 kHz | −7,6 MHz | 5 W (bajable) |
 | `ZONE_PMR446` | `PMR1`..`PMR16` | 16 | 446.00625 MHz | 12,5 kHz | 0 (símplex) | **500 mW fijos** |
+| `ZONE_WFM_BC` | `85.0`..`108.0` | 231 | 85.0 MHz | 100 kHz | 0 (símplex) | — (sólo RX) |
 
 `rx` es siempre **la frecuencia en la que se escucha** (la salida de la
 repetidora) y `tx = rx + shift`; con el plan español `shift` es negativo porque
 la entrada está por debajo de la salida.
+
+La zona de radiodifusión es distinta de las otras tres: no es un plan de
+radioaficionado sino la rejilla CCIR de emisoras comerciales, **sólo recepción**
+(modo `OPMODE_WFM_BC`, receptor BK1080), y sus canales se llaman por su
+frecuencia («101.1») porque es así como se usa la banda. El plan va de 85,0 a
+108,0 MHz porque el BK1080 no sintoniza por encima de 108,0; el porqué y el
+detalle del receptor están en `docs/RX_WFM.md`. La potencia del canal es un
+valor de relleno: la radio no transmite en esta banda y el PTT no la clavea.
 
 ## 2. Fuentes y verificación de frecuencias
 

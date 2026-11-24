@@ -327,7 +327,8 @@ bool chstore_valid(const chstore_channel_t *ch)
         return false;
 
     if (ch->mode != OPMODE_FM && ch->mode != OPMODE_M17 &&
-        ch->mode != OPMODE_DMR && ch->mode != OPMODE_TETRA)
+        ch->mode != OPMODE_DMR && ch->mode != OPMODE_TETRA &&
+        ch->mode != OPMODE_WFM_BC)
         return false;
 
     if (ch->bandwidth != BW_12_5 && ch->bandwidth != BW_25)
@@ -605,6 +606,7 @@ const char *chstore_modeName(uint8_t mode)
         case OPMODE_M17:   return "M17";
         case OPMODE_DMR:   return "DMR";
         case OPMODE_TETRA: return "TETRA";
+        case OPMODE_WFM_BC: return "WFM";
         default:           return "----";
     }
 }

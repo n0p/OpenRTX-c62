@@ -21,6 +21,13 @@ static K_MUTEX_DEFINE(boardMutex);
 static bool initialized;
 /* Active routes, by source and sink */
 static bool paths[SOURCE_MCU + 1][SINK_MCU + 1];
+/*
+ * Analog source wired straight to the amplifier, outside the codec: the
+ * BK1080 of the broadcast FM mode. It only needs the amplifier switch, but
+ * the switch has to stay on while the source is selected even though no
+ * codec route is open.
+ */
+static bool extSource;
 
 /*
  * Both device tables use one driver: the config selects capture or playback,
@@ -63,7 +70,8 @@ const struct audioDevice inputDevices[] = {
  */
 static void updateSpeaker(void)
 {
-    bool speaker = false;
+    bool speaker = extSource;
+
     for (size_t i = 0; i < ARRAY_SIZE(paths); i++)
         speaker |= paths[i][SINK_SPK];
 #ifndef C62_ENABLE_SWD
@@ -88,9 +96,21 @@ void audio_terminate(void)
 #ifndef C62_ENABLE_SWD
     gpio_pin_set_dt(&speaker_enable, 0);
 #endif
+    extSource = false;
     radio_disableAfOutput();
     csk6codec_terminate();
     initialized = false;
+}
+
+void audio_setExtSource(const bool on)
+{
+    if (!initialized)
+        return;
+
+    k_mutex_lock(&boardMutex, K_FOREVER);
+    extSource = on;
+    updateSpeaker();
+    k_mutex_unlock(&boardMutex);
 }
 
 void audio_connect(const enum AudioSource source, const enum AudioSink sink)

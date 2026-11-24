@@ -13,6 +13,7 @@
 #include <stdbool.h>
 #include "core/cps.h"
 #include "core/gps.h"
+#include "core/wfm.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -52,6 +53,13 @@ typedef struct {
     bool restore_eflash;
     bool txDisable;
     uint8_t step_index;
+
+    /**
+     * Broadcast FM receiver status (stereo, level, channel), valid while the
+     * selected channel is OPMODE_WFM_BC.  Written by the operating mode at
+     * the rate it polls the tuner, see core/wfm.h.
+     */
+    wfm_status_t wfm;
 } state_t;
 
 extern const uint32_t freq_steps[];

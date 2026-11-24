@@ -18,18 +18,20 @@
 extern "C" {
 #include "core/zones.h"
 #include "core/channel_store.h"
+#include "core/wfm.h"
 }
 
 /* The Spanish plan, written out: channel n of the VHF repeater zone. */
 static uint32_t vhfOut(uint32_t n) { return 145600000u + n * 25000u; }
 static uint32_t uhfOut(uint32_t n) { return 438650000u + n * 12500u; }
 
-TEST_CASE("The three zones of the build are there", "[zones]")
+TEST_CASE("The zones of the build are there", "[zones]")
 {
     REQUIRE(zones_count() == ZONE_COUNT);
     REQUIRE(zones_get(ZONE_VHF_REPEATERS) != nullptr);
     REQUIRE(zones_get(ZONE_UHF_REPEATERS) != nullptr);
     REQUIRE(zones_get(ZONE_PMR446) != nullptr);
+    REQUIRE(zones_get(ZONE_WFM_BC) != nullptr);
     REQUIRE(zones_get(ZONE_COUNT) == nullptr);
     REQUIRE(zones_at(-1) == nullptr);
     REQUIRE(zones_at(ZONE_COUNT) == nullptr);
@@ -37,6 +39,49 @@ TEST_CASE("The three zones of the build are there", "[zones]")
     REQUIRE(zones_channels(zones_get(ZONE_VHF_REPEATERS)) == 8);
     REQUIRE(zones_channels(zones_get(ZONE_UHF_REPEATERS)) == 101);
     REQUIRE(zones_channels(zones_get(ZONE_PMR446)) == 16);
+    REQUIRE(zones_channels(zones_get(ZONE_WFM_BC)) == WFM_CHANNELS);
+}
+
+/*
+ * The broadcast FM zone is not a radio amateur plan: it is the CCIR raster,
+ * receive only, named by frequency. Its last channel is 108.0 MHz because the
+ * BK1080 stops there, not because 110.0 was forgotten.
+ */
+TEST_CASE("BC85.0..BC108.0 is the broadcast FM raster, receive only", "[zones]")
+{
+    zone_channel_t zc;
+    char buf[ZONE_NAME_LEN];
+
+    REQUIRE(zones_channel(ZONE_WFM_BC, 0, &zc) == 0);
+    REQUIRE(zc.rx == 85000000u);
+    REQUIRE(zc.tx == zc.rx);
+    REQUIRE(zc.mode == OPMODE_WFM_BC);
+    REQUIRE(zc.flags & ZONE_FLAG_RX_ONLY);
+    REQUIRE(zc.flags & ZONE_FLAG_WFM);
+    REQUIRE(std::string(zc.name) == "85.0");
+
+    /* 101.1 MHz is channel 161 of the zone */
+    REQUIRE(zones_channel(ZONE_WFM_BC, 161, &zc) == 0);
+    REQUIRE(zc.rx == 101100000u);
+    REQUIRE(std::string(zc.name) == "101.1");
+    REQUIRE(std::string(zones_channelName(ZONE_WFM_BC, 161, buf,
+                                         sizeof(buf))) == "101.1");
+
+    /* The top of the band, and nothing above it */
+    REQUIRE(zones_channel(ZONE_WFM_BC, WFM_CHANNELS - 1, &zc) == 0);
+    REQUIRE(zc.rx == 108000000u);
+    REQUIRE(zones_channel(ZONE_WFM_BC, WFM_CHANNELS, &zc) != 0);
+
+    /* Every channel of the plan is a valid zone channel and a storable one */
+    chstore_channel_t rec;
+    for (uint16_t i = 0; i < WFM_CHANNELS; i += 37) {
+        REQUIRE(zones_channel(ZONE_WFM_BC, i, &zc) == 0);
+        REQUIRE(zones_channelValid(&zc));
+        REQUIRE(zones_toStore(ZONE_WFM_BC, i, &rec) == 0);
+        REQUIRE(rec.mode == OPMODE_WFM_BC);
+        REQUIRE(rec.flags & CHSTORE_FLAG_RX_ONLY);
+        REQUIRE(chstore_valid(&rec));
+    }
 }
 
 TEST_CASE("R0..R7 are the Spanish 2 m repeater channels", "[zones]")
