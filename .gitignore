@@ -95,3 +95,10 @@ scripts/get_demod_log
 # lib/dstar_vocoder/tests/ref/ref_dstar.c against mbelib-neo (see
 # docs/RX_DSTAR.md); the frame bank itself is committed, like the DMR one.
 lib/dstar_vocoder/tests/data/*_ref.pcm
+
+# Host harnesses build into their own directory
+tests/host/*/build/
+
+# Python bytecode of the reference client
+__pycache__/
+*.pyc
