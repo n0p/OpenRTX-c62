@@ -40,6 +40,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /** Symbols in one frame: 100 ms at 4800 symbols/s. */
 #define YSF_FRAME_SYMBOLS 480
 
@@ -82,5 +86,9 @@ bool ysfPhy_synced(void);
  */
 void ysfPhy_push(const int16_t *samples, size_t count, ysfFrameHandler handler,
                  void *user);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* OPENRTX_YSF_PHY_H */

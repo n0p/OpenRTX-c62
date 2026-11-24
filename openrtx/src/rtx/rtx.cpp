@@ -61,6 +61,8 @@ static OpMode_TETRA tetraMode;          // TETRA mode handler
 #endif
 #ifdef CONFIG_DMR
 static OpMode_DMR dmrMode;              // DMR mode handler
+#endif
+#ifdef CONFIG_YSF
 static OpMode_YSF ysfMode;              // System Fusion mode handler
 #endif
 

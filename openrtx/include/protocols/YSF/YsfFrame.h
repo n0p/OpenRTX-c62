@@ -36,6 +36,10 @@
 
 #include "protocols/YSF/YsfPhy.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /** Characters in a System Fusion callsign field. */
 #define YSF_CALLSIGN_LEN 10
 
@@ -123,5 +127,9 @@ const struct ysfCallInfo *ysfFrame_call(void);
 
 /** The text message being assembled, or the last one completed. */
 const struct ysfText *ysfFrame_text(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* OPENRTX_YSF_FRAME_H */

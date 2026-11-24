@@ -24,6 +24,10 @@
 
 #include "protocols/YSF/YsfFrame.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /** Start the playback thread.  Idempotent. */
 void ysfSpeech_start(void);
 
@@ -46,5 +50,9 @@ void ysfSpeech_push(const struct ysfVoiceSlot *slots, unsigned count);
 
 /** Frames played since start, and frames dropped for want of room. */
 void ysfSpeech_stats(unsigned *played, unsigned *dropped);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* OPENRTX_YSF_SPEECH_H */
