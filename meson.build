@@ -59,6 +59,9 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/core/channel_store.c',
                'openrtx/src/core/scanner.c',
                'openrtx/src/core/scan_service.c',
+               'openrtx/src/core/vfo_search.c',
+               'openrtx/src/core/vfo_search_service.c',
+               'openrtx/src/rtx/ModeReport.c',
                'openrtx/src/core/settings.c',
                'openrtx/src/core/settings_record.c',
                'openrtx/src/core/zones.c',
@@ -405,7 +408,11 @@ linux_def = {'PLATFORM_LINUX': '', 'VP_USE_FILESYSTEM':'',
              # Scan and vigilance run in the host emulator as well, so the
              # integration path of core/state.c is compiled and exercised
              # outside the radio. See docs/SCAN.md.
-             'CONFIG_SCAN': ''}
+             'CONFIG_SCAN': '',
+             # Same for the VFO carrier search: state_task() polls it and the
+             # UI hooks are compiled, so the host build covers the whole path
+             # except the radio itself. See docs/VFO_SEARCH.md.
+             'CONFIG_VFO_SEARCH': ''}
 
 sdl_dep     = dependency('SDL2',     required: false)
 threads_dep = dependency('threads',  required: false)
@@ -1322,7 +1329,14 @@ ui_check_standby_test = executable('ui_check_standby_test',
 
 ui_vfo_input_test = executable('ui_vfo_input_test',
                                sources : unit_test_src + ['tests/unit/ui_vfo_input.cpp'],
-                               kwargs  : unit_test_opts)
+                               kwargs : unit_test_opts)
+
+# The VFO carrier search through the real UI FSM: the three second hold, the
+# arming, and the keys that cancel it.  It sleeps for the hold, so it is slow
+# on purpose: the timing is the feature (docs/VFO_SEARCH.md).
+ui_vfo_search_test = executable('ui_vfo_search_test',
+                                sources : unit_test_src + ['tests/unit/ui_vfo_search.cpp'],
+                                kwargs : unit_test_opts)
 
 ui_quickmenu_test = executable('ui_quickmenu_test',
                                sources : unit_test_src + ['tests/unit/ui_quickmenu.cpp'],
@@ -1559,6 +1573,7 @@ test('Codeplug Test',         cps_test)
 test('minmea conversion Test', minmea_conversion_test)
 test('UI Check Standby Test', ui_check_standby_test)
 test('UI VFO Input Test', ui_vfo_input_test)
+test('UI VFO Search Test', ui_vfo_search_test, timeout : 120)
 test('UI Quick Menu Test', ui_quickmenu_test)
 test('M17 Packet Frame Test', m17_packet_test)
 test('M17 Frame Decoder Test', m17_decoder_test)
@@ -1613,4 +1628,18 @@ test('Mode Stats Off Test', mode_stats_off_script,
      args : [meson.project_source_root(), ''])
 
 test('Scanner Test',         scanner_test)
+
+# VFO carrier search: the machine (core/vfo_search.c) is pure — the time and a
+# sample of the receiver are arguments — so this test sweeps a band with a
+# synthetic squelch, frames and a published frequency, and measures its cost.
+vfo_search_test = executable('vfo_search_test',
+                             sources : ['tests/unit/vfo_search.cpp',
+                                        'openrtx/src/core/vfo_search.c'],
+                             kwargs  : {'c_args'             : linux_c_args,
+                                        'cpp_args'           : linux_cpp_args,
+                                        'include_directories': linux_inc +
+                                             ['openrtx/include'],
+                                        'dependencies'       : [catch2_dep],
+                                        'link_args'          : linux_l_args})
+test('VFO Search Test',      vfo_search_test)
 test('M17 Baseband Replay Test', m17_replay_test, timeout : 120) # ~40 s in CI with coverage

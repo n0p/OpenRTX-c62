@@ -446,14 +446,11 @@ rssi_t rtx_getRssi()
 bool rtx_rxSquelchOpen()
 {
     /*
-     * currMode is set by rtx_init(); before it runs — and in the host builds,
-     * where the RTX thread is never started — there is no handler to ask, and
-     * "no mode" means the squelch is closed.
+     * Before rtx_init() there is no mode yet: answer "no carrier" instead of
+     * dereferencing a null pointer, because the UI and the scan ask this
+     * before the RTX thread has started (and the host tests never start it).
      */
-    if (currMode == nullptr)
-        return false;
-
-    return currMode->rxSquelchOpen();
+    return (currMode != NULL) ? currMode->rxSquelchOpen() : false;
 }
 
 bool opmode_canTransmit(uint8_t mode)

@@ -17,6 +17,9 @@
 #include "core/crc.h"
 #include "core/channel_store.h"
 #include "core/scan_service.h"
+#ifdef CONFIG_VFO_SEARCH
+#include "core/vfo_search_service.h"
+#endif
 #include "interfaces/delays.h"
 #ifdef CONFIG_TETRA
 #include "protocols/TETRA/TetraSds.h"
@@ -166,6 +169,11 @@ void state_init()
      * it will read are already loaded above */
     scan_service_init();
 #endif
+
+#ifdef CONFIG_VFO_SEARCH
+    /* Carrier search: nothing to load, it only resets the machine */
+    vfoSearchService_init();
+#endif
 }
 
 void state_terminate()
@@ -205,6 +213,15 @@ void state_task()
      * running (one flag test).
      */
     scan_service_poll();
+#endif
+
+#ifdef CONFIG_VFO_SEARCH
+    /*
+     * The carrier search runs at the same cadence and for the same reason: its
+     * dwell and its debounce are in milliseconds.  One flag test when it is
+     * idle.
+     */
+    vfoSearchService_poll();
 #endif
 
     // Update radio state once every 100ms

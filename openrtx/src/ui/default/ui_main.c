@@ -35,6 +35,10 @@
 #include "protocols/TETRA/TetraSds.h"
 #include "protocols/TETRA/TetraStatus.h"
 #endif
+#ifdef CONFIG_VFO_SEARCH
+#include "core/vfo_search.h"
+#include "core/vfo_search_service.h"
+#endif
 
 /* An SDS text stays on the main screen this long */
 #define TETRA_SDS_SHOW_MS 30000
@@ -1035,8 +1039,71 @@ void _ui_drawVFOMiddleInput(ui_state_t* ui_state)
     }
 }
 
+#ifdef CONFIG_VFO_SEARCH
+/**
+ * The carrier search, on the bottom row of the main screen.
+ *
+ * While it sweeps, the row says where it is going and how much of the band has
+ * been covered; for a couple of seconds after it stops it says why, which is
+ * the only feedback the operator gets that the sweep found a carrier, a
+ * synchronism, a frequency the network corrected, nothing, or was cancelled.
+ *
+ * The S-meter gives up the row while this is drawn: the search is what the
+ * operator is watching, and the meter comes back the moment the message
+ * expires.  The row is the one the hints use on the menu screens, so nothing
+ * else moves.
+ *
+ * @return true when the row was taken over.
+ */
+static bool _ui_drawSearchLine(void)
+{
+    struct vfoSearchStatus st;
+    if (!vfoSearchService_status(&st))
+        return false;
+
+    if (!st.active) {
+        if ((st.result == VFOS_RESULT_NONE) || (st.age >= VFO_SEARCH_MESSAGE_MS))
+            return false;
+    }
+
+    char freq[16];
+    char line[32];
+
+    snprintf(freq, sizeof(freq), "%03lu.%05lu",
+             (unsigned long)(st.frequency / 1000000UL),
+             (unsigned long)((st.frequency % 1000000UL) / 10UL));
+
+    if (st.active) {
+        const char *arrow = (st.direction == VFOS_UP) ? "up" : "dn";
+        snprintf(line, sizeof(line), "%s %s %u%%", arrow, freq,
+                 (unsigned)(st.progress / 10U));
+    }
+    else {
+        const char *why = vfoSearchService_reasonName(st.result, st.corrected);
+        if (st.corrected) {
+            long off = (long)(st.offsetHz / 10);   /* 10 Hz units, like the VFO */
+            snprintf(line, sizeof(line), "%s %s %+ld", why, freq, off);
+        }
+        else {
+            snprintf(line, sizeof(line), "%s %s", why, freq);
+        }
+    }
+
+    gfx_print(layout.bottom_pos, FONT_SIZE_5PT, TEXT_ALIGN_CENTER, color_white,
+              "%s", line);
+
+    return true;
+}
+#endif /* CONFIG_VFO_SEARCH */
+
 void _ui_drawMainBottom()
 {
+#ifdef CONFIG_VFO_SEARCH
+    /* A running search, or the reason the last one stopped, owns the row */
+    if (_ui_drawSearchLine())
+        return;
+#endif
+
     // Squelch bar
     rssi_t   rssi = last_state.rssi;
     uint8_t  squelch = last_state.settings.sqlLevel;
