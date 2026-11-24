@@ -24,15 +24,16 @@ Only the first 16 KiB of the region are used: two 8 KiB slots. The remaining
 240 KiB are free for a larger bank (the current record of 32 bytes per channel
 caps the bank at 128 channels; a second pair of slots would allow 256).
 
-The same partition also holds the two user stores added with the messaging
-work, each with its own pair of 8 KiB slots and the same power-cut rules
-(`platform/drivers/NVM/user_store_c62.c`):
+The same partition also holds the contact book, with its own pair of 8 KiB
+slots and the same power-cut rules (`platform/drivers/NVM/user_store_c62.c`).
+The messages are **not** here: they are in the storage partition, in the shared
+store of `docs/MESSAGING.md`.
 
 | Offset | Owner |
 |---|---|
 | `0x0000`-`0x3FFF` | channel bank (`chstore`, two slots) |
-| `0x8000`-`0xBFFF` | contact book (`cstore`) |
-| `0x10000`-`0x13FFF` | message store, inbox/sent/draft (`msg_store`) |
+| `0x8000`-`0xBFFF` | contact book (`cstore`, two slots) |
+| `0xC000`-`0x3FFFF` | free |
 
 Both use `core/slot_store.c`: a 16-byte header (magic, version, length,
 sequence, CRC16), payload, and a read-back check before the new slot becomes

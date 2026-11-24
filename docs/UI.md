@@ -185,16 +185,22 @@ move the caret or change the transport, green saves, red discards. A contact
 with an empty callsign is never written.
 
 The book lives in the OEM channel partition, 0x8000..0xC000 (two 8 KiB
-ping-pong slots), next to the channel bank and the message store; see
+ping-pong slots), next to the channel bank; see
 `platform/drivers/NVM/user_store_c62.c`. Every save is CRC-checked and read
-back, so a power cut costs the save and never the book.
+back, so a power cut costs the save and never the book. The messages are not
+here: they are in the shared store of the storage partition
+(`docs/MESSAGING.md`), and the book only supplies the address a message goes
+to.
 
 ## Messages
 
 Menu → Messages (with an unread badge: `Messages !3`) or the `MSGS` row of the
-quick menu opens the inbox. The screens are transport agnostic: APRS over FM is
-wired today, DMR SMS and TETRA SDS are thin hooks (`msg_dmr_sms_*`,
-`msg_tetra_sds_*` in `core/msg_service.h`) for their ports.
+quick menu opens the inbox. The screens only know the shared message store
+(`core/messaging.h`): one outbox, one inbox, one set of states for APRS, DMR
+SMS and TETRA SDS. `core/msg_service.h` is the thin layer between the two: it
+says which transport can send in the current mode, and turns the recipient on
+screen (a contact's callsign, or the digits typed) into the address the
+transport puts on the air (a DMR radio ID, a TETRA SSI, an APRS callsign).
 
 | Screen | Content | Keys |
 |---|---|---|
@@ -226,16 +232,21 @@ Green on `SEND` queues the message and shows the status page. The length limit
 is the transport's (APRS 67, DMR SMS 160, SDS 140) and the counter in the
 header shows `used/max`.
 
-Delivery states are `QUEUED`, `TX`, `SENT`, `ACK`, `FAIL` and `CANC`; APRS
-retries three times on its own schedule and the status page shows the attempt
-count. Cancelling stops the retries for that message.
+Delivery states are `QUEUED`, `TX`, `SENT`, `ACK`, `FAIL` and `CANC`, and they
+are the transport's real state: DMR SMS and TETRA SDS report through
+`messaging_done()`/`messaging_confirmed()`, APRS through the outcome of its own
+mailbox. Retries are part of the store (three attempts, then `FAIL`) and the
+status page shows the count. Cancelling stops the retries for that message and
+keeps the `CANC` state even if the transport finishes the burst it already
+started.
 
-Everything is persistent: inbox (16), sent (8) and two drafts, in the same
-partition at 0x10000..0x14000, written through the two-slot CRC container. The
-draft is flushed 3 s after the last edit and when leaving the composer, so a
-battery pull does not lose it. The inbox is mirrored from the APRS service
-(peer plus message number is the deduplication key), so a message read before
-a power cycle stays read.
+Everything is persistent, and all of it is the one record of the shared store
+(`docs/MESSAGING.md`): inbox (8), outbox with its terminal states (8), the
+unread flags and the compose draft, in the two alternating sectors at
+0x4000/0x5000 of the storage partition. The store flushes a change a few
+seconds after it happens, so a battery pull does not lose the draft or the
+unread marks. Incoming APRS text is copied from the FM mailbox into the same
+inbox, so the screen shows one list whatever carried the message.
 
 ## Contextual quick menu
 

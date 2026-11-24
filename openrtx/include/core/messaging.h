@@ -41,11 +41,17 @@ extern "C" {
 /** UTF-8 bytes kept per message, terminator excluded. */
 #define MSG_TEXT_MAX 160
 
+/*
+ * Sizes are a RAM budget, not a wish: every entry is 196 B of .bss and there
+ * are two queues, so eight and eight cost 3,1 kB.  Six pending messages is
+ * more than a DMR data call (about 0.4 s each) or the FM mailbox will ever
+ * hold, and six received ones fill the screen the messaging inbox is drawn on.
+ */
 /** Pending messages the outbox holds. */
-#define MSG_OUTBOX_LEN 8
+#define MSG_OUTBOX_LEN 6
 
 /** Received messages kept for the UI, newest first. */
-#define MSG_INBOX_LEN 8
+#define MSG_INBOX_LEN 6
 
 /** Reached after this many attempts a message is given up on. */
 #define MSG_MAX_ATTEMPTS 3

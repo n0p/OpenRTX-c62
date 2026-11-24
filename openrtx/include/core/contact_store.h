@@ -33,8 +33,12 @@ extern "C" {
 /** Size of one record on flash: 10 + 17 + 4 + 1 + 1. */
 #define CSTORE_RECORD_SIZE 33
 
-/** Maximum number of contacts. */
-#define CSTORE_MAX_CONTACTS 64
+/**
+ * Maximum number of contacts.  33 B each in .bss: 64 of them were 2,1 kB of the
+ * 256 kB of SRAM for an address book that has to share the budget with the
+ * message queues, so it holds 32 (`docs/CHANNELS.md`).
+ */
+#define CSTORE_MAX_CONTACTS 32
 
 /** Callsign field size including the NUL: "N0CALL-15" is the longest form. */
 #define CSTORE_CALL_LEN 10
