@@ -1486,6 +1486,49 @@ spectrum_test = executable('spectrum_test',
                            sources : unit_test_src + ['tests/unit/spectrum.cpp'],
                            kwargs  : unit_test_opts)
 
+# El coste del barrido visto por el servicio (tests/unit/spectrum_settle.cpp): la
+# tabla de espera que recorre la fila ESPERA, el indice por defecto de la build,
+# el estado que leen la pantalla y el menu, y el span de 96 MHz que el barrido
+# rapido hizo posible.
+spectrum_settle_test = executable('spectrum_settle_test',
+                                  sources : unit_test_src + ['tests/unit/spectrum_settle.cpp'],
+                                  kwargs  : unit_test_opts)
+
+# Vocoder IMBE de P25 (lib/imbe_vocoder, docs/IMBE.md): el decodificador que
+# lleva el modo P25 por defecto. El primero compara 64 tramas de la captura real
+# contra su propia renderizacion comprometida (regresion bit a bit); el segundo
+# barre errores de un bit y parametros aleatorios, que es lo que la cadena
+# entrega en un canal con ruido. Los dos necesitan la ruta de los corpora y la
+# del asset como rutas absolutas, para no depender del directorio de ejecucion.
+imbe_defs = {
+    'IMBE_CORPUS_DIR' : meson.project_source_root() / 'lib/imbe_vocoder/tests/data',
+    'IMBE_ASSET_DIR'  : meson.project_source_root() / 'tests/unit/assets'
+}
+imbe_inc = linux_inc + ['lib/imbe_vocoder', 'lib/dmr_vocoder']
+imbe_src = ['lib/imbe_vocoder/imbe_vocoder.c',
+            'lib/imbe_vocoder/imbe_decoder.c',
+            'lib/imbe_vocoder/imbe_fft.c']
+imbe_test_defs = []
+foreach k, v : imbe_defs
+    imbe_test_defs += '-D@0@="@1@"'.format(k, v)
+endforeach
+
+imbe_vocoder_test = executable('imbe_vocoder_test',
+                               sources : imbe_src + ['tests/unit/imbe_vocoder.cpp'],
+                               kwargs  : {'include_directories' : imbe_inc,
+                                          'c_args' : linux_c_args + ['-ffp-contract=off'],
+                                          'cpp_args' : linux_cpp_args + imbe_test_defs,
+                                          'dependencies' : [catch2_dep],
+                                          'link_args' : linux_l_args})
+
+imbe_robust_test = executable('imbe_robust_test',
+                              sources : imbe_src + ['tests/unit/imbe_robust.cpp'],
+                              kwargs  : {'include_directories' : imbe_inc,
+                                         'c_args' : linux_c_args + ['-ffp-contract=off'],
+                                         'cpp_args' : linux_cpp_args + imbe_test_defs,
+                                         'dependencies' : [catch2_dep],
+                                         'link_args' : linux_l_args})
+
 # Modulador AM de la banda aerea: banda de audio, profundidad, portadora y rampas
 am_tx_test = executable('am_tx_test',
                         sources : unit_test_src + ['tests/unit/am_tx.cpp'],
@@ -1740,6 +1783,15 @@ test('UI VFO Search Test', ui_vfo_search_test, timeout : 120)
 test('UI Regressions Test', ui_regressions_test, timeout : 120)
 test('UI Regressions Test (no APRS)', ui_regressions_noaprs_test, timeout : 120)
 test('UI Quick Menu Test', ui_quickmenu_test)
+
+# El mapa del menu despues de cinco pasadas (tests/unit/ui_menu_map.cpp): el
+# registro de modos y el menu rapido son la misma lista, cada fila es pintable,
+# UI_MODE_TX y opmode_canTransmit() dicen lo mismo, y el analizador es
+# alcanzable desde los dos modos analogicos con su fila ESPERA.
+ui_menu_map_test = executable('ui_menu_map_test',
+                              sources : unit_test_src + ['tests/unit/ui_menu_map.cpp'],
+                              kwargs  : unit_test_opts)
+test('UI Menu Map Test', ui_menu_map_test)
 test('M17 Packet Frame Test', m17_packet_test)
 test('M17 Frame Decoder Test', m17_decoder_test)
 test('C62 Calibration Test', c62_calib_test)
@@ -1755,8 +1807,11 @@ test('Airband Test',         airband_test)
 test('Broadcast FM Test',    wfm_test)
 
 test('Spectrum Test',        spectrum_test)
+test('Spectrum Settle Test',  spectrum_settle_test)
 test('UI Spectrum Test',     ui_spectrum_test)
 test('Settings Record Test', settings_record_test)
+test('P25 IMBE Vocoder Test', imbe_vocoder_test)
+test('P25 IMBE Robustness Test', imbe_robust_test)
 test('APRS Config Test',     aprs_config_test)
 test('DMR SMS Format Test',  dmr_sms_format_test)
 test('DMR LC Destination Test', dmr_lc_dest_test)
@@ -1779,6 +1834,15 @@ test('Audio Codec Test',     audio_codec_test)
 test('TX Guard Test',        tx_guard_test)
 test('Mode Arena Test',      mode_arena_test)
 test('Mode Switch Test',     mode_switch_test)
+
+# Los once modos del enum, ida y vuelta, sobre el bloque compartido, y el lazo
+# TX->RX despues del recorrido (tests/unit/mode_walk.cpp). El host tiene cuatro
+# de los once, asi que los otros ocho comprueban que pedirlos deja la radio
+# inactiva sin romper el cambio.
+mode_walk_test = executable('mode_walk_test',
+                            sources : unit_test_src + ['tests/unit/mode_walk.cpp'],
+                            kwargs  : unit_test_opts)
+test('Mode Walk Test',       mode_walk_test)
 
 # Per-mode statistics (core/mode_stats.h). The layer takes everything it
 # measures as an argument and its cycle counter is a weak symbol, so this links
@@ -1827,3 +1891,11 @@ test('M17 Baseband Replay Test', m17_replay_test, timeout : 120) # ~40 s in CI w
 # is optional and the script skips it when the tools are not installed.
 kiss_loop_script = find_program('tests/host/kiss_loop/run.sh')
 test('KISS Packet Modem Loop', kiss_loop_script, timeout : 300)
+
+# The PC protocol's own harness (tests/host/pc_proto_host): three device builds
+# -- protocol, protocol+debug, protocol+debug+bench -- driven through a pty by
+# the Python clients that ship in tools/cps and tools/bench, including the bench
+# end to end against a simulated radio. It builds itself with cc in its own
+# directory, the way the operator runs it.
+pc_proto_host_script = find_program('tests/host/pc_proto_host/run.sh')
+test('PC Protocol Host Harness', pc_proto_host_script, timeout : 300)
