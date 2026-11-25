@@ -59,9 +59,9 @@
 #define DUMP_BUF 16384
 
 static bool from_stdin = false;
-static int  listen_fd  = -1;
-static int  client_fd  = -1;
-static FILE *out       = NULL;
+static int listen_fd = -1;
+static int client_fd = -1;
+static FILE *out = NULL;
 static pthread_mutex_t outLock = PTHREAD_MUTEX_INITIALIZER;
 static unsigned shotCounter;
 
@@ -154,7 +154,7 @@ static long long now_ms(void)
 static void sleep_ms(int ms)
 {
     struct timespec ts;
-    ts.tv_sec  = ms / 1000;
+    ts.tv_sec = ms / 1000;
     ts.tv_nsec = (long)(ms % 1000) * 1000000L;
     nanosleep(&ts, NULL);
 }
@@ -300,8 +300,8 @@ static void cmd_dump(const char *format)
         say("#warning the UI did not advance: the dump may be stale");
 
     bool locked = state_tryLock(500);
-    size_t n = json ? ui_dump_json(buf, sizeof(buf))
-                    : ui_dump_text(buf, sizeof(buf));
+    size_t n = json ? ui_dump_json(buf, sizeof(buf)) :
+                      ui_dump_text(buf, sizeof(buf));
     if (locked)
         state_unlock();
 
@@ -402,11 +402,7 @@ static void cmd_ptt(const char *arg)
 }
 
 /** Result of one command line. */
-enum cmd_result {
-    CMD_OK = 0,
-    CMD_ERR,
-    CMD_QUIT
-};
+enum cmd_result { CMD_OK = 0, CMD_ERR, CMD_QUIT };
 
 static enum cmd_result execute(char *line)
 {
@@ -629,7 +625,7 @@ static void *controlThread(void *arg)
 bool sim_control_wanted(void)
 {
     const char *headless = getenv("OPENRTX_SIM_HEADLESS");
-    const char *sock     = getenv("OPENRTX_SIM_SOCKET");
+    const char *sock = getenv("OPENRTX_SIM_SOCKET");
 
     if (headless != NULL && headless[0] != '\0' && strcmp(headless, "0") != 0)
         from_stdin = true;

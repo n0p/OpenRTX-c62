@@ -74,11 +74,11 @@ void gfx_capture_text(point_t start, fontSize_t size, textAlign_t align,
     }
 
     gfx_capture_line_t *l = &building->line[building->lines++];
-    l->x     = start.x;
-    l->y     = start.y;
-    l->font  = (uint8_t)size;
+    l->x = start.x;
+    l->y = start.y;
+    l->font = (uint8_t)size;
     l->align = (uint8_t)align;
-    l->rgb   = ((uint32_t)color.r << 16) | ((uint32_t)color.g << 8) | color.b;
+    l->rgb = ((uint32_t)color.r << 16) | ((uint32_t)color.g << 8) | color.b;
     copy_text(l->text, sizeof(l->text), text);
 }
 
@@ -91,9 +91,9 @@ void gfx_capture_header(const char *title, const char *right)
 
 void gfx_capture_selection(int16_t top, uint8_t row_h, bool filled)
 {
-    building->selection  = true;
-    building->sel_top    = top;
-    building->sel_h      = row_h;
+    building->selection = true;
+    building->sel_top = top;
+    building->sel_h = row_h;
     building->sel_filled = filled;
 }
 

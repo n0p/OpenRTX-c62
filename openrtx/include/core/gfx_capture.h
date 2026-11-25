@@ -49,28 +49,26 @@ extern "C" {
 #define GFX_CAPTURE_SLOTS 96
 
 /** One string, as it was drawn. */
-typedef struct
-{
-    int16_t  x;                       /**< x passed to gfx_print()          */
-    int16_t  y;                       /**< baseline y passed to gfx_print() */
-    uint8_t  font;                    /**< enum fontSize_t                  */
-    uint8_t  align;                   /**< enum textAlign_t                 */
-    uint32_t rgb;                     /**< 0x00RRGGBB of the text colour    */
-    char     text[GFX_CAPTURE_TEXT];
+typedef struct {
+    int16_t x;     /**< x passed to gfx_print()          */
+    int16_t y;     /**< baseline y passed to gfx_print() */
+    uint8_t font;  /**< enum fontSize_t                  */
+    uint8_t align; /**< enum textAlign_t                 */
+    uint32_t rgb;  /**< 0x00RRGGBB of the text colour    */
+    char text[GFX_CAPTURE_TEXT];
 } gfx_capture_line_t;
 
 /** One screen, as it was drawn. */
-typedef struct
-{
-    uint16_t lines;                   /**< Recorded strings                 */
-    uint32_t dropped;                 /**< Strings that did not fit         */
-    bool     header;                  /**< The screen drew a header band    */
-    char     title[24];               /**< Header title, "" when there is none */
-    char     right[16];               /**< Header right-hand status, or ""  */
-    bool     selection;               /**< The screen drew a row selection  */
-    int16_t  sel_top;                 /**< Top of the selection rectangle   */
-    uint8_t  sel_h;                   /**< Height of the selection          */
-    bool     sel_filled;              /**< true: selected, false: editing   */
+typedef struct {
+    uint16_t lines;   /**< Recorded strings                 */
+    uint32_t dropped; /**< Strings that did not fit         */
+    bool header;      /**< The screen drew a header band    */
+    char title[24];   /**< Header title, "" when there is none */
+    char right[16];   /**< Header right-hand status, or ""  */
+    bool selection;   /**< The screen drew a row selection  */
+    int16_t sel_top;  /**< Top of the selection rectangle   */
+    uint8_t sel_h;    /**< Height of the selection          */
+    bool sel_filled;  /**< true: selected, false: editing   */
     gfx_capture_line_t line[GFX_CAPTURE_SLOTS];
 } gfx_capture_frame_t;
 

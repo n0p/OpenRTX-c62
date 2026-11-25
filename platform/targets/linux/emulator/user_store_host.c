@@ -33,7 +33,7 @@
 #include "core/slot_store.h"
 
 /** Size of the image: the two stores, 16 KiB each, as on the radio. */
-#define IMG_SIZE   0x10000U
+#define IMG_SIZE 0x10000U
 #define CSTORE_BASE 0x8000U
 
 static FILE *image = NULL;
@@ -99,8 +99,8 @@ static int imgErase(void *ctx, uint32_t off, size_t len)
             uint8_t ff[512];
             memset(ff, 0xFF, sizeof(ff));
             for (size_t done = 0; done < len && rc == 0; done += sizeof(ff)) {
-                size_t chunk = (len - done < sizeof(ff)) ? len - done
-                                                         : sizeof(ff);
+                size_t chunk = (len - done < sizeof(ff)) ? len - done :
+                                                           sizeof(ff);
                 if (fwrite(ff, 1, chunk, image) != chunk)
                     rc = -EIO;
             }
@@ -132,14 +132,12 @@ static int imgWrite(void *ctx, uint32_t off, const void *buf, size_t len)
 
 /* ---------------------------------------------------------------- channels -- */
 
-static const struct chstorePort channelPort = {
-    .read   = imgRead,
-    .erase  = imgErase,
-    .write  = imgWrite,
-    .ctx    = (void *)(uintptr_t)0,
-    .size   = 0x4000,
-    .sector = CHSTORE_SECTOR_SIZE
-};
+static const struct chstorePort channelPort = { .read = imgRead,
+                                                .erase = imgErase,
+                                                .write = imgWrite,
+                                                .ctx = (void *)(uintptr_t)0,
+                                                .size = 0x4000,
+                                                .sector = CHSTORE_SECTOR_SIZE };
 
 const struct chstorePort *chstore_platformPort(void)
 {
@@ -148,14 +146,12 @@ const struct chstorePort *chstore_platformPort(void)
 
 /* ---------------------------------------------------------------- contacts -- */
 
-static const slot_ops_t contactOps = {
-    .read      = imgRead,
-    .erase     = imgErase,
-    .write     = imgWrite,
-    .ctx       = (void *)(uintptr_t)CSTORE_BASE,
-    .slot_size = 0x2000,
-    .sector    = 0x1000
-};
+static const slot_ops_t contactOps = { .read = imgRead,
+                                       .erase = imgErase,
+                                       .write = imgWrite,
+                                       .ctx = (void *)(uintptr_t)CSTORE_BASE,
+                                       .slot_size = 0x2000,
+                                       .sector = 0x1000 };
 
 const slot_ops_t *cstore_platformOps(void)
 {

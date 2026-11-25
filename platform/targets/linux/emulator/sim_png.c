@@ -85,22 +85,22 @@ bool sim_png_write(const char *path, const uint8_t *rgb, int w, int h)
         if (f == NULL) {
             ok = false;
         } else {
-            static const uint8_t signature[8] = { 0x89, 'P', 'N', 'G', 0x0d,
-                                                  0x0a, 0x1a, 0x0a };
+            static const uint8_t signature[8] = { 0x89, 'P',  'N',  'G',
+                                                  0x0d, 0x0a, 0x1a, 0x0a };
             uint8_t ihdr[13];
             put32(ihdr + 0, (uint32_t)w);
             put32(ihdr + 4, (uint32_t)h);
-            ihdr[8]  = 8;    /* bit depth           */
-            ihdr[9]  = 2;    /* colour type: RGB    */
-            ihdr[10] = 0;    /* deflate             */
-            ihdr[11] = 0;    /* adaptive filtering  */
-            ihdr[12] = 0;    /* no interlace        */
+            ihdr[8] = 8;  /* bit depth           */
+            ihdr[9] = 2;  /* colour type: RGB    */
+            ihdr[10] = 0; /* deflate             */
+            ihdr[11] = 0; /* adaptive filtering  */
+            ihdr[12] = 0; /* no interlace        */
 
             ok = (fwrite(signature, 1, sizeof(signature), f)
                   == sizeof(signature))
-                 && write_chunk(f, "IHDR", ihdr, sizeof(ihdr))
-                 && write_chunk(f, "IDAT", z, (uint32_t)zlen)
-                 && write_chunk(f, "IEND", NULL, 0);
+              && write_chunk(f, "IHDR", ihdr, sizeof(ihdr))
+              && write_chunk(f, "IDAT", z, (uint32_t)zlen)
+              && write_chunk(f, "IEND", NULL, 0);
 
             if (fclose(f) != 0)
                 ok = false;

@@ -112,57 +112,102 @@ static bool line_selected(const gfx_capture_line_t *l)
 const char *ui_dump_screenName(uint8_t screen)
 {
     switch (screen) {
-        case MAIN_VFO:            return "MAIN_VFO";
-        case MAIN_VFO_INPUT:      return "MAIN_VFO_INPUT";
-        case MAIN_MEM:            return "MAIN_MEM";
-        case MODE_VFO:            return "MODE_VFO";
-        case MODE_MEM:            return "MODE_MEM";
-        case MENU_TOP:            return "MENU_TOP";
-        case MENU_BANK:           return "MENU_BANK";
-        case MENU_CHANNEL:        return "MENU_CHANNEL";
-        case MENU_ZONES:          return "MENU_ZONES";
-        case MENU_CONTACTS:       return "MENU_CONTACTS";
-        case MENU_GPS:            return "MENU_GPS";
-        case MENU_SETTINGS:       return "MENU_SETTINGS";
-        case MENU_BACKUP_RESTORE: return "MENU_BACKUP_RESTORE";
-        case MENU_BACKUP:         return "MENU_BACKUP";
-        case MENU_RESTORE:        return "MENU_RESTORE";
-        case MENU_INFO:           return "MENU_INFO";
-        case MENU_ABOUT:          return "MENU_ABOUT";
-        case SETTINGS_TIMEDATE:   return "SETTINGS_TIMEDATE";
-        case SETTINGS_TIMEDATE_SET: return "SETTINGS_TIMEDATE_SET";
-        case SETTINGS_DISPLAY:    return "SETTINGS_DISPLAY";
-        case SETTINGS_GPS:        return "SETTINGS_GPS";
-        case SETTINGS_RADIO:      return "SETTINGS_RADIO";
-        case SETTINGS_AUDIO:      return "SETTINGS_AUDIO";
-        case SETTINGS_M17:        return "SETTINGS_M17";
+        case MAIN_VFO:
+            return "MAIN_VFO";
+        case MAIN_VFO_INPUT:
+            return "MAIN_VFO_INPUT";
+        case MAIN_MEM:
+            return "MAIN_MEM";
+        case MODE_VFO:
+            return "MODE_VFO";
+        case MODE_MEM:
+            return "MODE_MEM";
+        case MENU_TOP:
+            return "MENU_TOP";
+        case MENU_BANK:
+            return "MENU_BANK";
+        case MENU_CHANNEL:
+            return "MENU_CHANNEL";
+        case MENU_ZONES:
+            return "MENU_ZONES";
+        case MENU_CONTACTS:
+            return "MENU_CONTACTS";
+        case MENU_GPS:
+            return "MENU_GPS";
+        case MENU_SETTINGS:
+            return "MENU_SETTINGS";
+        case MENU_BACKUP_RESTORE:
+            return "MENU_BACKUP_RESTORE";
+        case MENU_BACKUP:
+            return "MENU_BACKUP";
+        case MENU_RESTORE:
+            return "MENU_RESTORE";
+        case MENU_INFO:
+            return "MENU_INFO";
+        case MENU_ABOUT:
+            return "MENU_ABOUT";
+        case SETTINGS_TIMEDATE:
+            return "SETTINGS_TIMEDATE";
+        case SETTINGS_TIMEDATE_SET:
+            return "SETTINGS_TIMEDATE_SET";
+        case SETTINGS_DISPLAY:
+            return "SETTINGS_DISPLAY";
+        case SETTINGS_GPS:
+            return "SETTINGS_GPS";
+        case SETTINGS_RADIO:
+            return "SETTINGS_RADIO";
+        case SETTINGS_AUDIO:
+            return "SETTINGS_AUDIO";
+        case SETTINGS_M17:
+            return "SETTINGS_M17";
 #ifdef CONFIG_TETRA_AFC
-        case SETTINGS_TETRA:      return "SETTINGS_TETRA";
+        case SETTINGS_TETRA:
+            return "SETTINGS_TETRA";
 #endif
-        case SETTINGS_FM:         return "SETTINGS_FM";
-        case SETTINGS_MODE:       return "SETTINGS_MODE";
-        case SETTINGS_ACCESSIBILITY: return "SETTINGS_ACCESSIBILITY";
-        case SETTINGS_RESET2DEFAULTS: return "SETTINGS_RESET2DEFAULTS";
+        case SETTINGS_FM:
+            return "SETTINGS_FM";
+        case SETTINGS_MODE:
+            return "SETTINGS_MODE";
+        case SETTINGS_ACCESSIBILITY:
+            return "SETTINGS_ACCESSIBILITY";
+        case SETTINGS_RESET2DEFAULTS:
+            return "SETTINGS_RESET2DEFAULTS";
 #ifdef CONFIG_APRS
-        case MENU_APRS:           return "MENU_APRS";
-        case APRS_DETAIL:         return "APRS_DETAIL";
-        case APRS_MSGS:           return "APRS_MSGS";
-        case APRS_MSG_VIEW:       return "APRS_MSG_VIEW";
-        case APRS_MSG_EDIT:       return "APRS_MSG_EDIT";
-        case APRS_CFG:            return "APRS_CFG";
+        case MENU_APRS:
+            return "MENU_APRS";
+        case APRS_DETAIL:
+            return "APRS_DETAIL";
+        case APRS_MSGS:
+            return "APRS_MSGS";
+        case APRS_MSG_VIEW:
+            return "APRS_MSG_VIEW";
+        case APRS_MSG_EDIT:
+            return "APRS_MSG_EDIT";
+        case APRS_CFG:
+            return "APRS_CFG";
 #endif
 #ifdef CONFIG_KISS
-        case PKT_CFG:             return "PKT_CFG";
-        case PKT_STATUS:          return "PKT_STATUS";
+        case PKT_CFG:
+            return "PKT_CFG";
+        case PKT_STATUS:
+            return "PKT_STATUS";
 #endif
-        case MENU_MESSAGES:       return "MENU_MESSAGES";
-        case MSG_VIEW:            return "MSG_VIEW";
-        case MSG_SENT:            return "MSG_SENT";
-        case MSG_COMPOSE:         return "MSG_COMPOSE";
-        case MSG_STATUS:          return "MSG_STATUS";
-        case LOW_BAT:             return "LOW_BAT";
-        case SPECTRUM:            return "SPECTRUM";
-        default:                  return "UNKNOWN";
+        case MENU_MESSAGES:
+            return "MENU_MESSAGES";
+        case MSG_VIEW:
+            return "MSG_VIEW";
+        case MSG_SENT:
+            return "MSG_SENT";
+        case MSG_COMPOSE:
+            return "MSG_COMPOSE";
+        case MSG_STATUS:
+            return "MSG_STATUS";
+        case LOW_BAT:
+            return "LOW_BAT";
+        case SPECTRUM:
+            return "SPECTRUM";
+        default:
+            return "UNKNOWN";
     }
 }
 
@@ -200,8 +245,8 @@ size_t ui_dump_text(char *buf, size_t len)
     bool have = gfx_capture_last(&f);
 
     append(buf, len, &pos, "# screen %s (%u)  claim %u x%u  edit %s  lock %s\n",
-           ui_dump_screenName(state.ui_screen), state.ui_screen,
-           ui_lastClaim(), ui_lastClaimCount(), ui_edit_mode() ? "yes" : "no",
+           ui_dump_screenName(state.ui_screen), state.ui_screen, ui_lastClaim(),
+           ui_lastClaimCount(), ui_edit_mode() ? "yes" : "no",
            ui_getInputLock() ? "yes" : "no");
 
     if (have && f.header)
@@ -217,9 +262,10 @@ size_t ui_dump_text(char *buf, size_t len)
         for (uint16_t i = 0; i < f.lines; i++) {
             const gfx_capture_line_t *l = &f.line[i];
             append(buf, len, &pos, "  y%3d x%3d f%u %c %s%s\n", l->y, l->x,
-                   l->font, (l->align == TEXT_ALIGN_LEFT)   ? 'L'
-                            : (l->align == TEXT_ALIGN_CENTER) ? 'C'
-                                                              : 'R',
+                   l->font,
+                   (l->align == TEXT_ALIGN_LEFT)   ? 'L' :
+                   (l->align == TEXT_ALIGN_CENTER) ? 'C' :
+                                                     'R',
                    line_selected(l) ? "* " : "  ", l->text);
         }
 
@@ -244,8 +290,8 @@ size_t ui_dump_text(char *buf, size_t len)
     }
 
     fmt_mhz(hz, sizeof(hz), state.channel.rx_frequency);
-    append(buf, len, &pos, "radio: %s rx %s MHz", ui_mode_label(state.channel.mode),
-           hz);
+    append(buf, len, &pos, "radio: %s rx %s MHz",
+           ui_mode_label(state.channel.mode), hz);
     fmt_mhz(hz, sizeof(hz), state_txFrequency());
     append(buf, len, &pos, "  tx %s MHz  ch#%u \"%s\"  bw %u  pwr %lumW\n", hz,
            state.channel_index, state.channel.name, state.channel.bandwidth,
@@ -271,8 +317,9 @@ size_t ui_dump_text(char *buf, size_t len)
 #endif
            state.settings.display_timer);
 
-    append(buf, len, &pos, "modules: channels %s  contacts %s (%d)  zones %s  "
-                           "msgs %s\n",
+    append(buf, len, &pos,
+           "modules: channels %s  contacts %s (%d)  zones %s  "
+           "msgs %s\n",
            ui_channels_isOpen() ? "open" : "closed",
            ui_contacts_isOpen() ? "open" : "closed", cstore_count(),
            ui_zones_isOpen() ? "open" : "closed",
@@ -331,8 +378,7 @@ size_t ui_dump_json(char *buf, size_t len)
                    "%s{\"y\":%d,\"x\":%d,\"font\":%u,\"align\":%u,"
                    "\"rgb\":\"%06lx\",\"selected\":%s,\"text\":",
                    (i == 0) ? "" : ",", l->y, l->x, l->font, l->align,
-                   (unsigned long)l->rgb,
-                   line_selected(l) ? "true" : "false");
+                   (unsigned long)l->rgb, line_selected(l) ? "true" : "false");
             append_json_string(buf, len, &pos, l->text);
             append(buf, len, &pos, "}");
         }
@@ -345,8 +391,8 @@ size_t ui_dump_json(char *buf, size_t len)
 
     append(buf, len, &pos, ",\"quickmenu\":");
     if (qm != NULL) {
-        append(buf, len, &pos, "{\"kind\":\"%s\",\"title\":",
-               qm_state.open ? "popup" : "page");
+        append(buf, len, &pos,
+               "{\"kind\":\"%s\",\"title\":", qm_state.open ? "popup" : "page");
         append_json_string(buf, len, &pos, qm->title);
         append(buf, len, &pos, ",\"selected\":%u,\"rows\":[", sel);
 
@@ -411,8 +457,7 @@ size_t ui_dump_json(char *buf, size_t len)
 #endif
 
 #ifdef CONFIG_KISS
-    append(buf, len, &pos,
-           ",\"packet\":{\"enabled\":%s,\"modem\":%u}",
+    append(buf, len, &pos, ",\"packet\":{\"enabled\":%s,\"modem\":%u}",
            state.settings.packet_enable ? "true" : "false",
            state.settings.packet_modem);
 #endif
