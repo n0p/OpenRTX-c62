@@ -39,6 +39,7 @@
 #include <IOMuxManager.h>
 
 #include "core/openrtx.h"
+#include "core/blackbox.h"
 #include "core/pc_proto.h"
 #include "core/port_ptt.h"
 #include "core/psram_state.h"
@@ -424,6 +425,12 @@ int pc_proto_platformDiag(pcProtoDiag_t *out)
          * CONFIG_INIT_STACKS, which this build does not set.  The number is an
          * estimate: a frame that wrote zeroes over zeroes is invisible, which
          * is the standard limitation of the technique.
+         *
+         * With CONFIG_INIT_STACKS (docs/BLACKBOX.md) the stacks are filled
+         * with 0xAA instead of zeroes, so the estimate below would read "never
+         * used" as "never touched by anything but the fill" and report the
+         * wrong number: the kernel's own accounting is used there, which is
+         * exact and costs nothing extra when the option is already on.
          */
         extern struct k_thread z_main_thread;
         struct k_thread *list[2] = { &z_main_thread, &thread };
@@ -432,11 +439,15 @@ int pc_proto_platformDiag(pcProtoDiag_t *out)
         for (int i = 0; i < 2 && out->taskCount < 8; i++) {
             uintptr_t start = list[i]->stack_info.start;
             size_t size = list[i]->stack_info.size;
-            const uint8_t *base = (const uint8_t *)start;
             size_t unused = size;
 
             if (start == 0 || size == 0 || size > 65535)
                 continue;
+#if defined(CONFIG_INIT_STACKS)
+            if (k_thread_stack_space_get(list[i], &unused) != 0)
+                continue;
+#else
+            const uint8_t *base = (const uint8_t *)start;
             /* Skip the 8-byte sentinel Zephyr reserves at the very top. */
             for (size_t n = size; n > 8; n--) {
                 if (base[n - 1] != 0) {
@@ -444,6 +455,7 @@ int pc_proto_platformDiag(pcProtoDiag_t *out)
                     break;
                 }
             }
+#endif
             pcProtoTaskStack_t *t = &out->tasks[out->taskCount++];
             snprintf(t->name, sizeof(t->name), "%s", names[i]);
             t->unused = (uint16_t)unused;
@@ -808,6 +820,7 @@ static void pcProtoMain(void *a, void *b, void *c)
     for (;;) {
         loopSeq++;
         loopMs = k_uptime_get_32();
+        bb_beat(BB_BEAT_PROTO);
 
         /* Who owns the pad on this pass, and did that just change? */
         const uint8_t mode = c62_portMode();

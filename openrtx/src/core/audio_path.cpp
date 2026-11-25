@@ -6,7 +6,7 @@
 
 #include "core/audio_path.h"
 #include "interfaces/delays.h"
-
+#include "core/blackbox.h"
 #include <map>
 #include <pthread.h>
 #include <set>
@@ -184,6 +184,10 @@ static Route *routeFind(int id)
 pathId audioPath_request(enum AudioSource source, enum AudioSink sink,
                          enum AudioPriority prio)
 {
+    /* Opening a route reaches the audio driver and takes the path lock: the
+     * first thing a stuck "no sound and no keys" looks for in the record. */
+    bb_mark(BB_M_AUDIO_OPEN);
+
     const Path path(source, sink, prio);
     if (!path.isValid())
         return -1;
@@ -300,6 +304,9 @@ enum PathStatus audioPath_getStatus(const pathId id)
 
 void audioPath_release(const pathId id)
 {
+    /* Same reason as the request: this takes the lock and calls the driver. */
+    bb_mark(BB_M_AUDIO_CLOSE);
+
     Route routeToRemove;
     std::vector< Path > toClose;
     std::vector< Path > toResume;

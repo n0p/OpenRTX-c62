@@ -719,6 +719,7 @@ static const struct pcProtoEntry pc_table[] =
     { PC_MSG_DBG_BB,          PC_CAP_DEBUG,            pc_dbg_bb },
     { PC_MSG_DBG_TX_TRACE,    PC_CAP_DEBUG,            pc_dbg_txTrace },
     { PC_MSG_DBG_RX_COUNTERS, PC_CAP_DEBUG,            pc_dbg_rxCounters },
+    { PC_MSG_DBG_BLACKBOX,    PC_CAP_DEBUG,            pc_dbg_blackbox },
 
     /* Bench namespace: same rule, refused on PC_CAP_BENCH when the build has
      * no CONFIG_C62_BENCH_PROTO. */

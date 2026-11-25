@@ -403,6 +403,7 @@ detrás de tres puertas y **todas** tienen que abrirse.
 | 0x0540 | `DBG_BB` | estado y disparo del volcado de banda base |
 | 0x0550 | `DBG_TX_TRACE` | traza viva del ciclo de transmisión (texto) |
 | 0x0551 | `DBG_RX_COUNTERS` | contadores por modo, igual que el comando `rx` |
+| 0x0552 | `DBG_BLACKBOX` | el post-mortem del último cuelgue, crudo (docs/BLACKBOX.md) |
 
 ### Las tres puertas
 
@@ -412,7 +413,9 @@ detrás de tres puertas y **todas** tienen que abrirse.
    lo anuncia.
 2. **El testigo de sesión**. `HELLO` lo entrega en `PC_TAG_TOKEN` y rota en
    cada `HELLO` (un segundo cliente invalida al primero). Las escrituras —y
-   las lecturas de memoria y de captura— lo tienen que repetir.
+   las lecturas de memoria y de captura— lo tienen que repetir. El post-mortem
+   (`DBG_BLACKBOX`) es una lectura y no lo pide: no toca la radio y su valor
+   para el que depura es máximo justo cuando nada más contesta.
 3. **La lista blanca y los límites**. La lectura de registros cubre el fichero
    legible de cada chip (BK4819 0x00-0x7F, BK1080 0x00-0x21). La **escritura**
    solo admite lo que hay en una tabla de seis entradas —registros que el

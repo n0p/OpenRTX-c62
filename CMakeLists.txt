@@ -119,6 +119,9 @@ target_sources(app
     openrtx/src/core/crc.c
     openrtx/src/core/datetime.c
     openrtx/src/core/openrtx.c
+    # Post-mortem recorder: breadcrumbs, liveness beats, the crash record
+    # (docs/BLACKBOX.md).  Portable C; the platform side lives in the target.
+    openrtx/src/core/blackbox.c
     openrtx/src/core/audio_codec.c
     openrtx/src/core/audio_stream.c
     openrtx/src/core/audio_path.cpp

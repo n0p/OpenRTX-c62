@@ -123,6 +123,7 @@ int pc_dbg_capRead(struct pcReq *r);
 int pc_dbg_bb(struct pcReq *r);
 int pc_dbg_txTrace(struct pcReq *r);
 int pc_dbg_rxCounters(struct pcReq *r);
+int pc_dbg_blackbox(struct pcReq *r);
 
 /* Bench namespace (pc_proto_bench.c).  Same rule as the debug namespace: with
  * the build option off every one answers PC_ERR_NOT_ALLOWED, and the
