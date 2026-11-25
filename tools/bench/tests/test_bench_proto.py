@@ -130,6 +130,32 @@ class BenchTest(unittest.TestCase):
         self.assertEqual(p2["tone"], 0)
         self.link.ptt(False)
 
+    def test_status_answers_while_transmitting(self):
+        """
+        The instrument has to work with the PA keyed.
+
+        A status that waits for the transmit path (or for the state lock the
+        UI holds across its FSM) turns the bench blind exactly when it is
+        measuring: this is the case that was reported from hardware as
+        "BENCH_PTT never answers and the protocol goes silent while keyed".
+        Ten polls, worst case under 100 ms.
+        """
+        self.link.ptt(True, tone=88)
+        try:
+            worst = 0.0
+            for _ in range(10):
+                t = time.monotonic()
+                self.link.status()
+                worst = max(worst, time.monotonic() - t)
+            # The simulated radio does not model the RTX status, so tx_state is
+            # not what this asks: it is the transport's own latency with the PA
+            # keyed, which is what a measurement has to live with.
+            self.assertLess(worst, 0.1,
+                            "status took %.0f ms with the PTT down"
+                            % (worst * 1000.0))
+        finally:
+            self.link.ptt(False)
+
     def test_capture_fills_and_reads_back(self):
         samples, meta = self.link.capture(60)
         self.assertEqual(meta["rate"], 48000)

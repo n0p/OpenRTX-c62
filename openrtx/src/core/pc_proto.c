@@ -402,6 +402,21 @@ __attribute__((weak)) int pc_proto_platformStatus(pcProtoStatus_t *out)
     return -1;
 }
 
+/**
+ * Platform work that has to happen after the answer is on the wire.
+ *
+ * The bench PTT is the case: the handler must not key the PA itself, because
+ * the keying is what puts the RTX thread to work, and a radio that transmits
+ * (or, worse, one whose transmit path stalls) must not be able to swallow the
+ * answer to the frame that asked for it.  The handler arms the press, the
+ * frame is written, and this hook -- called from the transport loop, after the
+ * dispatch -- applies it.
+ */
+__attribute__((weak)) void pc_proto_platformTick(uint32_t nowMs)
+{
+    (void)nowMs;
+}
+
 __attribute__((weak)) const char *pc_proto_platformModel(void)
 {
     return "OpenRTX";
@@ -1030,6 +1045,10 @@ void pc_proto_tick(pcProto_t *p, uint32_t nowMs)
      * events: a capture or a sweep is a measurement in progress, not an
      * event stream. */
     pc_proto_benchTick(nowMs);
+
+    /* Deferred platform work: the bench's PTT edge, which is applied only once
+     * the frame that asked for it has been answered. */
+    pc_proto_platformTick(nowMs);
 
     if (!p->linked || !p->events)
         return;

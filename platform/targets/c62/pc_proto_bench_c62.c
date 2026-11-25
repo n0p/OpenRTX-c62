@@ -101,6 +101,8 @@ static struct
     uint8_t  savedToneEn;
     uint8_t  savedToneIdx;
     bool     ptt;
+    /** A press waiting for the answer to be written: -1 none, 0 up, 1 down */
+    int8_t   pttPending;
 } bs;
 
 /** Index of the CTCSS entry nearest to `hz`, or -1 when none is close. */
@@ -186,6 +188,28 @@ static void benchRestore(void)
     bs.toneSaved = false;
 }
 
+/**
+ * Apply a bench press that was armed by BENCH_PTT.
+ *
+ * Called from the transport loop after the dispatch, so the answer to the frame
+ * that asked for the keying is already out.  Nothing else lives here: the
+ * unkey is immediate (it only drops the PA, there is nothing to protect).
+ */
+void pc_proto_platformTick(uint32_t nowMs)
+{
+    (void)nowMs;
+
+    if (bs.pttPending < 0)
+        return;
+
+    const int8_t want = bs.pttPending;
+
+    bs.pttPending = -1;
+    platform_pttOverride(want != 0 ? 1 : -1);
+    if (want == 0)
+        bs.ptt = false;
+}
+
 int pc_proto_platformBench(uint8_t op, pcProtoBenchArgs_t *a)
 {
     if (a == NULL)
@@ -260,6 +284,7 @@ int pc_proto_platformBench(uint8_t op, pcProtoBenchArgs_t *a)
 
         case PC_BENCH_OP_PTT: {
             if (a->ptt == 0) {
+                bs.pttPending = -1;
                 benchRestore();
                 a->ptt = 0;
                 a->toneHz = 0;
@@ -320,10 +345,20 @@ int pc_proto_platformBench(uint8_t op, pcProtoBenchArgs_t *a)
                 bs.toneSaved = false;
             }
 
-            /* The deviation scaling lands on the first poll with the PA up. */
+            /*
+             * The deviation scaling lands on the first poll with the PA up.
+             *
+             * The press itself is applied by pc_proto_platformTick(), after
+             * this answer has been written.  Keying here would hand the radio
+             * to the RTX thread -- and to its transmit path -- while the answer
+             * to this very frame was still being formatted, so a radio whose
+             * transmit path stops would take the answer with it, which is what
+             * the bench measured: BENCH_PTT timeouts with no fault to show for
+             * them (references/bench-measurement.md).
+             */
             bs.pending = a->level;
             bs.ptt = true;
-            platform_pttOverride(1);
+            bs.pttPending = 1;
 
             a->txState = (uint8_t)rtx_getCurrentStatus().opStatus;
             a->toneHz = bs.toneHz;

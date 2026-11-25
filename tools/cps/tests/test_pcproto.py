@@ -481,6 +481,18 @@ class BootShapeTest(unittest.TestCase):
             s = radio.link.status()
             self.assertLess(time.time() - t0, 1.0)
             self.assertEqual(s["rx_freq"], 145500000)
+            # The bench's instrument case: STATUS while the radio is busy has
+            # to answer inside 100 ms, every time -- a status that waits for
+            # the UI (or for the transmit path) is a measurement that cannot
+            # be taken while transmitting.
+            worst = 0.0
+            for _ in range(10):
+                t = time.monotonic()
+                radio.link.status()
+                worst = max(worst, time.monotonic() - t)
+            self.assertLess(worst, 0.1,
+                            "status took %.0f ms with the state lock held"
+                            % (worst * 1000.0))
             # A read that does need the lock answers BUSY, not silence, and
             # the link is still alive afterwards.
             busy = False
