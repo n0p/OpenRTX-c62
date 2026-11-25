@@ -17,8 +17,9 @@
 #include "emulator.h"
 #include "sdl_engine.h"
 
-/* Custom SDL Event to request a screenshot */
-extern Uint32 SDL_Screenshot_Event;
+#ifdef PLATFORM_LINUX_SIM
+#include "sim_control.h"
+#endif
 
 emulator_state_t emulator_state = {
     -100.0f, // RSSI
@@ -74,6 +75,22 @@ static int _skq_out;
 //     while(emulator_getKeys());
 // }
 
+static void shellkeyq_put(keyboard_t keys);
+
+bool emulator_keyEnqueue(keyboard_t keys)
+{
+    if ((_skq_in - _skq_out) >= _skq_cap)
+        return false;
+
+    shellkeyq_put(keys);
+    return true;
+}
+
+int emulator_keyPending(void)
+{
+    return _skq_in - _skq_out;
+}
+
 static void shellkeyq_put(keyboard_t keys)
 {
     // note - we must allow keys == 0 to be inserted because otherwise a queue
@@ -101,6 +118,34 @@ static int shell_ready(void *_self, int _argc, char **_argv)
         usleep(10 * 1000); //sleep until keyboard is caught up
     }
     return SH_CONTINUE;
+}
+
+static keyboard_t keyname2keyboard(char *name);
+
+keyboard_t emulator_keyFromName(const char *name)
+{
+    /*
+     * The names of the radio's own keys first: an operator (and the tour of
+     * docs/SIMULATOR.md) says "green", "red", "P1", "P2" and "side", not
+     * KEY_ENTER, KEY_ESC, KEY_F1, KEY_F2 and KEY_MONI.
+     */
+    static const struct { const char *name; keyboard_t key; } physical[] = {
+        { "GREEN", KEY_ENTER },
+        { "RED",   KEY_ESC   },
+        { "P1",    KEY_F1    },
+        { "P2",    KEY_F2    },
+        { "SIDE",  KEY_MONI  },
+        { "MENU",  KEY_ENTER },
+        { "VOLUP", KEY_VOLUP },
+        { "VOLDOWN", KEY_VOLDOWN },
+    };
+
+    for (size_t i = 0; i < sizeof(physical) / sizeof(physical[0]); i++) {
+        if (strcasecmp(name, physical[i].name) == 0)
+            return physical[i].key;
+    }
+
+    return keyname2keyboard((char *)name);
 }
 
 static keyboard_t keyname2keyboard(char *name)
@@ -225,22 +270,19 @@ static int pressMultiKeys(void *_self, int _argc, char **_argv)
 static int screenshot(void *_self, int _argc, char **_argv)
 {
     (void)_self;
-    char *filename = "screenshot.bmp";
+    const char *filename = "screenshot.bmp";
 
     if (_argc && _argv[0] != NULL) {
         filename = _argv[0];
     }
 
-    int len = strlen(filename);
+    size_t len = strlen(filename);
+    bool png = (len > 4) && (strcasecmp(filename + len - 4, ".png") == 0);
 
-    SDL_Event e;
-    SDL_zero(e);
-    e.type = SDL_Screenshot_Event;
-    e.user.data1 = malloc(len + 1);
-    memset(e.user.data1, 0, len + 1);
-    strcpy(e.user.data1, filename);
+    bool ok = sdlEngine_capture(filename, png, 5000);
+    printf("%s %s\n", ok ? "Saved" : "Failed:", filename);
 
-    return SDL_PushEvent(&e) == 1 ? SH_CONTINUE : SH_ERR;
+    return ok ? SH_CONTINUE : SH_ERR;
 }
 
 static int setFloat(void *_self, int _argc, char **_argv)
@@ -493,6 +535,19 @@ void *startCLIMenu(void *arg)
 void emulator_start()
 {
     sdlEngine_init();
+
+#ifdef PLATFORM_LINUX_SIM
+    /*
+     * The simulator's control channel replaces the readline shell when it is
+     * asked for: one command per line on stdin (or on a socket), no prompt, no
+     * echo, and a terminating line per command so that a script can drive the
+     * radio (docs/SIMULATOR.md).
+     */
+    if (sim_control_wanted()) {
+        sim_control_start();
+        return;
+    }
+#endif
 
     pthread_t cli_thread;
     int err = pthread_create(&cli_thread, NULL, startCLIMenu, NULL);
