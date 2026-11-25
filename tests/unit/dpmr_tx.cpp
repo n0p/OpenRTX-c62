@@ -81,7 +81,7 @@ Decoded loopback(const Call &call, float level, int preambleFrames,
     dpmrTx_setCallType(&tx, call.mode, 0, DPMR_FMT_PEER);
 
     fsk4_mod_t mod;
-    fsk4Mod_init(&mod, DPMR_TX_SPS, level, false);
+    fsk4Mod_init(&mod, DPMR_TX_SPS, level, false, false);
 
     dpmrPhy_init();
 

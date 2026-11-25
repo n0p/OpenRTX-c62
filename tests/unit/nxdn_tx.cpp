@@ -85,7 +85,7 @@ Decoded loopback(uint16_t src, uint16_t dst, uint8_t ran, bool group,
     tx.scrambler = scrambler;
 
     fsk4_mod_t mod;
-    fsk4Mod_init(&mod, NXDN_TX_SPS, level, false);
+    fsk4Mod_init(&mod, NXDN_TX_SPS, level, false, true);
 
     nxdnPhy_init();
 

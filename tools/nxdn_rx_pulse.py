@@ -12,7 +12,8 @@ symbol, 4 symbols either side (161 taps), and prints it as a C table with a DC
 gain of one.  It also reports the noise bandwidth of the old flat-RRC table and
 of the new one, which is the sensitivity the matched filter is expected to buy.
 
-    python3 tools/nxdn_rx_pulse.py            # print the C table
+    python3 tools/nxdn_rx_pulse.py            # the receive table (H D)
+    python3 tools/nxdn_rx_pulse.py --tx       # the transmit table (H sinc)
     python3 tools/nxdn_rx_pulse.py --check    # only the bandwidth numbers
 """
 
@@ -44,6 +45,25 @@ def inv_sinc(f):
     if abs(x) < 1e-12:
         return 1.0
     return x / math.sin(x)
+
+
+def tx_pulse(taps=TAPS):
+    """Transmit pulse P(f) = H(f) sinc(f T), the same quadrature as pulse()."""
+    fmax = (1.0 + ALPHA) / 2.0 * RS
+    steps = 20000
+    centre = (taps - 1) / 2.0
+    out = []
+    for n in range(taps):
+        t = (n - centre) / FS
+        acc = 0.0
+        for i in range(steps + 1):
+            f = -fmax + 2.0 * fmax * i / steps
+            w = 1.0 if 0 < i < steps else 0.5
+            x = math.pi * f / RS
+            sinc = 1.0 if abs(x) < 1e-12 else math.sin(x) / x
+            acc += w * rrc(f) * sinc * math.cos(2.0 * math.pi * f * t)
+        out.append(acc * 2.0 * fmax / steps)
+    return out
 
 
 def pulse(taps=TAPS):
@@ -98,6 +118,16 @@ def noise_bandwidth(taps):
 
 
 if __name__ == '__main__':
+    if '--tx' in sys.argv:
+        h = tx_pulse()
+        h = [x / sum(h) for x in h]
+        print('/* %d taps: H(f) sinc(fT) at 48 kHz, 20 samples/symbol, a = 0.2 */'
+              % TAPS)
+        for i in range(0, TAPS, 4):
+            row = ', '.join('%.9ef' % v for v in h[i:i + 4])
+            print('    ' + row + (',' if i + 4 < TAPS else ''))
+        sys.exit(0)
+
     new = pulse()
     g = sum(new)
     new = [x / g for x in new]

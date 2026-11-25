@@ -18,13 +18,15 @@
  * Matched filter: 161 taps, 20 per symbol at 48 kHz, 4 symbols of span each
  * way.  The taps are spaced at the 48 kHz input rate, which is the rate the
  * convolution runs at, and the output is decimated by two to the 24 kHz ring
- * below; the filter is a root raised cosine with alpha 0.2, the pulse NXDN
- * transmits.  (It used to be the DMR table -- 81 taps designed for ten samples
- * per symbol -- applied at 48 kHz, where one NXDN symbol is twenty samples:
- * twice the bandwidth the signal has, so the eye was left with the ISI of an
- * unmatched root pulse and the slicer ran at an EVM of 0.08 to 0.10 on a
- * clean signal.  Measured on the loopback of docs/TX_NXDN.md: 0.03 to 0.06
- * with this one.)
+ * below; the filter is H(f) D(f), the matched filter of the pulse NXDN
+ * transmits (RRC 0.2 times the sinc of a held symbol) -- see the table below.
+ * (Before this it was a plain RRC 0.2, the matched filter of half the
+ * transmitter's pulse, and before that the DMR table -- 81 taps designed for
+ * ten samples per symbol -- applied at 48 kHz, where one NXDN symbol is twenty
+ * samples: twice the bandwidth the signal has, so the eye was left with the
+ * ISI of an unmatched root pulse and the slicer ran at an EVM of 0.08 to 0.10
+ * on a clean signal.  Measured on the loopback of docs/TX_NXDN.md: 0.03 to
+ * 0.06 with the RRC one.)
  */
 #define NXDN_MF_TAPS 161
 #define NXDN_MF_CENTER 80
@@ -54,14 +56,24 @@
 #define NXDN_RING_MARGIN 8
 
 /**
- * Sync acceptance: bit errors out of the 20 bits of the 20-symbol sync field
- * (10 symbols, two bits each), and the distance of the window to the ideal
- * waveform.  A magnitude-blind sign correlation accepts any run of outer
- * symbols with the right signs -- 6.8 % of the positions of a real capture --
- * so the detector compares whole dibits, as the reference decoders do.
+ * Sync acceptance: distance of the window to the ideal 10-symbol waveform
+ * (errors out of the 20 bits the field carries are kept for the log).  A
+ * magnitude-blind sign correlation accepts any run of outer symbols with the
+ * right signs, so the detector compares the whole field, as the reference
+ * decoders do.
+ *
+ * Two thresholds, because the two jobs are not the same. Following an
+ * established frame grid a weak match is fine -- the position is known to a
+ * few symbols and the frame is decoded and checked anyway. *Acquiring* the
+ * grid is not: the scan visits every symbol position, and a marginal match on
+ * a run of payload symbols that happen to carry the sync's signs latches the
+ * grid six or seven symbols early, which then decodes "frames" whose LICH
+ * never passes and that never re-converge. So an acquisition needs a match
+ * this close to the ideal field, and a tracked frame does not.
  */
 #define NXDN_SYNC_MAX_ERRORS 1
 #define NXDN_SYNC_MIN_SCORE 0.72f
+#define NXDN_SYNC_ACQUIRE_SCORE 0.92f
 
 /** Pre-gate: share of the sync window that must sit at the outer levels. */
 #define NXDN_APERTURE_PREGATE 60
@@ -82,58 +94,86 @@
 #define NXDN_GRID_TOLERANCE 3
 #define NXDN_GRID_MISSES 8
 
+/**
+ * Frames in a row whose LICH does not pass before the grid is dropped.  A
+ * frame grid latched on a false sync stays latched: every predicted position
+ * still has *a* sync-shaped run nearby, so the grid misses never reach
+ * NXDN_GRID_MISSES and the receiver keeps decoding frames whose LICH is
+ * garbage. Four is past what a real fade does to a good grid (the LICH is one
+ * parity bit, it fails maybe one frame in ten at the sensitivity floor) and
+ * short enough that the re-acquisition costs a fifth of a second.
+ */
+#define NXDN_LICH_MISSES 4
+
 /** A frame decoded less than this long ago keeps the mode "synced". */
 #define NXDN_SYNC_TIMEOUT_MS 300
 
 /*
- * Root-raised-cosine impulse response, alpha 0.2, 20 samples per symbol at
- * 48 kHz, 4 symbols of span each way.  Computed once from its closed form;
- * here it is a table so that the firmware needs no transcendental at boot.
- * The scale is the one the DMR table had (same DC gain), so the level
- * estimates and the EVM gates keep their meaning.
+ * Receive pulse: the matched filter of the pulse NXDN transmits.
+ *
+ * TS 1-A 3.4/3.5 (H(f) P(f) out, H(f) D(f) in; ETSI TS 102 658 clause 14.2.2.2
+ * is the same pair for dPMR).  The transmitter filters the symbol stream with
+ * a root raised cosine of roll-off 0.2 and then *holds* each symbol for its
+ * period, so its pulse is H(f) sinc(fT); the receiver therefore has to use
+ *
+ *     H(f) D(f),   D(f) = 1 / sinc(fT) = pi f T / sin(pi f T),
+ *                  |f| <= (1 + 0.2) / 2T
+ *
+ * and the two together are the Nyquist raised cosine H(f)^2 -- zero ISI at the
+ * symbol instants, and all of the transmitted energy collected.  A plain RRC
+ * on the receiving side (what this table used to be) is the matched filter of
+ * the wrong pulse: it misses the band-edge energy the hold puts there and
+ * leaves the pair at RC(f) / sinc(fT), which is not Nyquist.
+ *
+ * 161 taps at 48 kHz, 20 samples per symbol, four symbols of span each way,
+ * from tools/nxdn_rx_pulse.py (quadrature of H D), DC gain one.  It is the
+ * same pulse dsd-neo's src/dsp/dsd_filters.c carries as nxdn_dpmr_rx_taps,
+ * computed here from the specification instead of copied: the two tables agree
+ * to 5e-10 per tap.  The tap count and the loop below are the ones the flat
+ * RRC had, so the filter costs exactly what it did.
  */
-static const float nxdn_rrc[NXDN_MF_TAPS] = {
-    4.334602913e-03f, 3.758219220e-03f, 3.020128412e-03f, 2.134020008e-03f,
-    1.119143503e-03f, -1.235560223e-17f, -1.194146797e-03f, -2.429933482e-03f,
-    -3.670721328e-03f, -4.877564246e-03f, -6.010297299e-03f, -7.028718071e-03f,
-    -7.893829189e-03f, -8.569107126e-03f, -9.021760103e-03f, -9.223936675e-03f,
-    -9.153846435e-03f, -8.796755222e-03f, -8.145819383e-03f, -7.202726859e-03f,
-    -5.978117207e-03f, -4.491757954e-03f, -2.772460825e-03f, -8.577282444e-04f,
-    1.206872110e-03f, 3.368599222e-03f, 5.568683787e-03f, 7.743705373e-03f,
-    9.827173205e-03f, 1.175127529e-02f, 1.344875442e-02f, 1.485486454e-02f,
-    1.590935686e-02f, 1.655844230e-02f, 1.675667575e-02f, 1.646870731e-02f,
-    1.567084777e-02f, 1.435239828e-02f, 1.251669904e-02f, 1.018185757e-02f,
-    7.381124585e-03f, 4.162893458e-03f, 5.903086318e-04f, -3.259521826e-03f,
-    -7.296704232e-03f, -1.142011207e-02f, -1.551928761e-02f, -1.947665646e-02f,
-    -2.317001023e-02f, -2.647520404e-02f, -2.926900877e-02f, -3.143205226e-02f,
-    -3.285177970e-02f, -3.342536094e-02f, -3.306247224e-02f, -3.168788105e-02f,
-    -2.924376564e-02f, -2.569170663e-02f, -2.101429392e-02f, -1.521630090e-02f,
-    -8.325387428e-03f, -3.923040103e-04f, 8.509419030e-03f, 1.828430101e-02f,
-    2.881625029e-02f, 3.997039226e-02f, 5.159535257e-02f, 6.352595059e-02f,
-    7.558624769e-02f, 8.759288577e-02f, 9.935864335e-02f, 1.106961311e-01f,
-    1.214215437e-01f, 1.313583840e-01f, 1.403410731e-01f, 1.482183658e-01f,
-    1.548564897e-01f, 1.601419382e-01f, 1.639838492e-01f, 1.663159163e-01f,
-    1.670977875e-01f, 1.663159163e-01f, 1.639838492e-01f, 1.601419382e-01f,
-    1.548564897e-01f, 1.482183658e-01f, 1.403410731e-01f, 1.313583840e-01f,
-    1.214215437e-01f, 1.106961311e-01f, 9.935864335e-02f, 8.759288577e-02f,
-    7.558624769e-02f, 6.352595059e-02f, 5.159535257e-02f, 3.997039226e-02f,
-    2.881625029e-02f, 1.828430101e-02f, 8.509419030e-03f, -3.923040103e-04f,
-    -8.325387428e-03f, -1.521630090e-02f, -2.101429392e-02f, -2.569170663e-02f,
-    -2.924376564e-02f, -3.168788105e-02f, -3.306247224e-02f, -3.342536094e-02f,
-    -3.285177970e-02f, -3.143205226e-02f, -2.926900877e-02f, -2.647520404e-02f,
-    -2.317001023e-02f, -1.947665646e-02f, -1.551928761e-02f, -1.142011207e-02f,
-    -7.296704232e-03f, -3.259521826e-03f, 5.903086318e-04f, 4.162893458e-03f,
-    7.381124585e-03f, 1.018185757e-02f, 1.251669904e-02f, 1.435239828e-02f,
-    1.567084777e-02f, 1.646870731e-02f, 1.675667575e-02f, 1.655844230e-02f,
-    1.590935686e-02f, 1.485486454e-02f, 1.344875442e-02f, 1.175127529e-02f,
-    9.827173205e-03f, 7.743705373e-03f, 5.568683787e-03f, 3.368599222e-03f,
-    1.206872110e-03f, -8.577282444e-04f, -2.772460825e-03f, -4.491757954e-03f,
-    -5.978117207e-03f, -7.202726859e-03f, -8.145819383e-03f, -8.796755222e-03f,
-    -9.153846435e-03f, -9.223936675e-03f, -9.021760103e-03f, -8.569107126e-03f,
-    -7.893829189e-03f, -7.028718071e-03f, -6.010297299e-03f, -4.877564246e-03f,
-    -3.670721328e-03f, -2.429933482e-03f, -1.194146797e-03f, -1.235560223e-17f,
-    1.119143503e-03f, 2.134020008e-03f, 3.020128412e-03f, 3.758219220e-03f,
-    4.334602913e-03f,
+static const float nxdn_rx_pulse[NXDN_MF_TAPS] = {
+    2.814440403e-03f, 2.601039445e-03f, 2.289232411e-03f, 1.883442118e-03f,
+    1.391341649e-03f, 8.237721103e-04f, 1.945572689e-04f, -4.797835537e-04f,
+    -1.180419714e-03f, -1.886682863e-03f, -2.576619149e-03f, -3.227606416e-03f,
+    -3.817020293e-03f, -4.322930968e-03f, -4.724810836e-03f, -5.004232106e-03f,
+    -5.145532955e-03f, -5.136430960e-03f, -4.968563274e-03f, -4.637934437e-03f,
+    -4.145254687e-03f, -3.496154244e-03f, -2.701262122e-03f, -1.776141540e-03f,
+    -7.410779030e-04f, 3.792805801e-04f, 1.556425297e-03f, 2.758624067e-03f,
+    3.951679656e-03f, 5.099793307e-03f, 6.166513035e-03f, 7.115743373e-03f,
+    7.912790665e-03f, 8.525416173e-03f, 8.924868055e-03f, 9.086862943e-03f,
+    8.992488220e-03f, 8.628997383e-03f, 7.990472892e-03f, 7.078333735e-03f,
+    5.901668427e-03f, 4.477378330e-03f, 2.830120820e-03f, 9.920468974e-04f,
+    -9.976667924e-04f, -3.093486109e-03f, -5.244376824e-03f, -7.394835074e-03f,
+    -9.486069637e-03f, -1.145731027e-02f, -1.324721236e-02f, -1.479532497e-02f,
+    -1.604358667e-02f, -1.693781237e-02f, -1.742913326e-02f, -1.747535283e-02f,
+    -1.704218273e-02f, -1.610432510e-02f, -1.464637079e-02f, -1.266348703e-02f,
+    -1.016187329e-02f, -7.158968977e-03f, -3.683402949e-03f, 2.253189170e-04f,
+    4.517385508e-03f, 9.133502390e-03f, 1.400594830e-02f, 1.905984466e-02f,
+    2.421461090e-02f, 2.938557363e-02f, 3.448569333e-02f, 3.942736912e-02f,
+    4.412427971e-02f, 4.849321761e-02f, 5.245587313e-02f, 5.594052600e-02f,
+    5.888360413e-02f, 6.123107213e-02f, 6.293961628e-02f, 6.397759724e-02f,
+    6.432574760e-02f, 6.397759724e-02f, 6.293961628e-02f, 6.123107213e-02f,
+    5.888360413e-02f, 5.594052600e-02f, 5.245587313e-02f, 4.849321761e-02f,
+    4.412427971e-02f, 3.942736912e-02f, 3.448569333e-02f, 2.938557363e-02f,
+    2.421461090e-02f, 1.905984466e-02f, 1.400594830e-02f, 9.133502390e-03f,
+    4.517385508e-03f, 2.253189170e-04f, -3.683402949e-03f, -7.158968977e-03f,
+    -1.016187329e-02f, -1.266348703e-02f, -1.464637079e-02f, -1.610432510e-02f,
+    -1.704218273e-02f, -1.747535283e-02f, -1.742913326e-02f, -1.693781237e-02f,
+    -1.604358667e-02f, -1.479532497e-02f, -1.324721236e-02f, -1.145731027e-02f,
+    -9.486069637e-03f, -7.394835074e-03f, -5.244376824e-03f, -3.093486109e-03f,
+    -9.976667924e-04f, 9.920468974e-04f, 2.830120820e-03f, 4.477378330e-03f,
+    5.901668427e-03f, 7.078333735e-03f, 7.990472892e-03f, 8.628997383e-03f,
+    8.992488220e-03f, 9.086862943e-03f, 8.924868055e-03f, 8.525416173e-03f,
+    7.912790665e-03f, 7.115743373e-03f, 6.166513035e-03f, 5.099793307e-03f,
+    3.951679656e-03f, 2.758624067e-03f, 1.556425297e-03f, 3.792805801e-04f,
+    -7.410779030e-04f, -1.776141540e-03f, -2.701262122e-03f, -3.496154244e-03f,
+    -4.145254687e-03f, -4.637934437e-03f, -4.968563274e-03f, -5.136430960e-03f,
+    -5.145532955e-03f, -5.004232106e-03f, -4.724810836e-03f, -4.322930968e-03f,
+    -3.817020293e-03f, -3.227606416e-03f, -2.576619149e-03f, -1.886682863e-03f,
+    -1.180419714e-03f, -4.797835537e-04f, 1.945572689e-04f, 8.237721103e-04f,
+    1.391341649e-03f, 1.883442118e-03f, 2.289232411e-03f, 2.601039445e-03f,
+    2.814440403e-03f
 };
 
 /** Four-level model of one window of symbols. */
@@ -168,6 +208,7 @@ struct nxdnPhy {
     long scan;       ///< Next symbol position to test
     long grid;       ///< Last frame's sync position, -1 when free running
     long gridMisses;
+    long lichMisses; ///< Frames in a row whose LICH did not pass
 
     long lastFrame;  ///< Input index of the last decoded frame, -1 if none
 
@@ -443,6 +484,7 @@ static float frame_evm(const struct nxdnLevels *levels)
     return sqrtf(acc / (float)n) / levels->outer;
 }
 
+
 /**
  * Sign errors and eye aperture of a 10-symbol window against the sync word.
  *
@@ -556,7 +598,8 @@ static bool aperture_pregate(long k, float *offset)
  * ambiguity is the sign of the discriminator: an inverted one matches the
  * negated pattern.
  */
-static bool find_sync(long k, float offset, struct nxdnCandidate *c)
+static bool find_sync(long k, float offset, float minScore,
+                      struct nxdnCandidate *c)
 {
     float v[NXDN_FSW_SYMBOLS];
 
@@ -581,8 +624,7 @@ static bool find_sync(long k, float offset, struct nxdnCandidate *c)
         }
     }
 
-    if ((bestErrors > NXDN_SYNC_MAX_ERRORS)
-        || (bestScore < NXDN_SYNC_MIN_SCORE))
+    if ((bestErrors > NXDN_SYNC_MAX_ERRORS) || (bestScore < minScore))
         return false;
 
     c->symbol = k;
@@ -806,6 +848,7 @@ static bool decode_frame(struct nxdnCandidate *c, struct nxdnFrame *out,
         }
 
         out->sacchOk = nxdnFecSacch(bits, info);
+
         out->sacchSr = (uint8_t)((info[0] << 7) | (info[1] << 6)
                                  | (info[2] << 5) | (info[3] << 4)
                                  | (info[4] << 3) | (info[5] << 2)
@@ -866,7 +909,7 @@ static bool search_window(long from, long to, struct nxdnCandidate *best)
         if (!aperture_pregate(k, &offset))
             continue;
 
-        if (!find_sync(k, offset, &c))
+        if (!find_sync(k, offset, NXDN_SYNC_MIN_SCORE, &c))
             continue;
 
         if ((!found) || (c.errors < best->errors)
@@ -923,7 +966,7 @@ static void scan(nxdnFrameHandler handler, void *user)
                 phy.scan++;
                 continue;
             }
-            if (!find_sync(phy.scan, offset, &c)) {
+            if (!find_sync(phy.scan, offset, NXDN_SYNC_ACQUIRE_SCORE, &c)) {
                 phy.scan++;
                 continue;
             }
@@ -942,6 +985,22 @@ static void scan(nxdnFrameHandler handler, void *user)
         phy.grid = (target >= 0) ? target : c.symbol;
         phy.gridMisses = 0;
         phy.scan = c.symbol + NXDN_FRAME_SYMBOLS - 4;
+
+        /*
+         * A grid that keeps producing frames whose LICH does not pass is a
+         * grid built on a false sync: the payload symbols still sit on their
+         * levels (the eye is fine, the EVM gate passes) but the frame is
+         * being read a few symbols off, so nothing decodes and nothing ever
+         * moves the grid.  Drop it and go back to a free-running scan, which
+         * only accepts a near-perfect sync field.
+         */
+        if (frame.lichOk) {
+            phy.lichMisses = 0;
+        } else if (++phy.lichMisses >= NXDN_LICH_MISSES) {
+            phy.grid = -1;
+            phy.gridMisses = 0;
+            phy.lichMisses = 0;
+        }
 
         track_timing(offset);
         emit(&frame, handler, user);
@@ -969,10 +1028,10 @@ static void push_sample(float sample, nxdnFrameHandler handler, void *user)
     float acc1 = 0.0f;
 
     for (int t = 0; t < (NXDN_MF_TAPS - 1); t += 4) {
-        acc0 += nxdn_rrc[t] * x[t] + nxdn_rrc[t + 2] * x[t + 2];
-        acc1 += nxdn_rrc[t + 1] * x[t + 1] + nxdn_rrc[t + 3] * x[t + 3];
+        acc0 += nxdn_rx_pulse[t] * x[t] + nxdn_rx_pulse[t + 2] * x[t + 2];
+        acc1 += nxdn_rx_pulse[t + 1] * x[t + 1] + nxdn_rx_pulse[t + 3] * x[t + 3];
     }
-    acc0 += nxdn_rrc[NXDN_MF_TAPS - 1] * x[NXDN_MF_TAPS - 1];
+    acc0 += nxdn_rx_pulse[NXDN_MF_TAPS - 1] * x[NXDN_MF_TAPS - 1];
 
     phy.ringIndex++;
     phy.ring[(unsigned)phy.ringIndex & (NXDN_RING_LEN - 1)] = acc0 + acc1;

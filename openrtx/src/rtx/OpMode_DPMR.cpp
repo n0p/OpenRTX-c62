@@ -257,7 +257,7 @@ bool OpMode_DPMR::startBaseband(const rtxStatus_t *status)
     dpmrTx_setCallType(&tx, DPMR_MODE_VOICE, 0,
                        (status->dmrDestType == DMR_DEST_USER) ? DPMR_FMT_PEER
                                                               : DPMR_FMT_ALL_CALL);
-    fsk4Mod_init(&txMod, DPMR_TX_SPS, DPMR_TX_LEVEL, DPMR_TX_INVERT);
+    fsk4Mod_init(&txMod, DPMR_TX_SPS, DPMR_TX_LEVEL, DPMR_TX_INVERT, false);
 
     txPath = audioPath_request(SOURCE_MCU, SINK_RTX, PRIO_TX);
     if (txPath < 0)

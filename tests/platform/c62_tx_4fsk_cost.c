@@ -58,7 +58,7 @@ static void nxdnRun(int frames)
             ambe[v][b] = (uint8_t)(v * 17 + b * 7 + 0x21);
 
     nxdnTx_setup(&tx, 0x0123, 0x4567, 17, true);
-    fsk4Mod_init(&mod, NXDN_TX_SPS, 3189.0f, true);
+    fsk4Mod_init(&mod, NXDN_TX_SPS, 3189.0f, true, true);
 
     MARK();   /* preamble is part of the call, not per frame */
     nxdnTx_preamble(levels);
@@ -83,7 +83,7 @@ static void dpmrRun(int frames)
             ambe[v][b] = (uint8_t)(v * 17 + b * 7 + 0x21);
 
     dpmrTx_setup(&tx, 0x000135, 0x00393D, 0x0DD);
-    fsk4Mod_init(&mod, DPMR_TX_SPS, 3189.0f, true);
+    fsk4Mod_init(&mod, DPMR_TX_SPS, 3189.0f, true, false);
 
     MARK();
     dpmrTx_preamble(levels);

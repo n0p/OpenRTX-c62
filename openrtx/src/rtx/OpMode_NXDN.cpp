@@ -199,7 +199,7 @@ bool OpMode_NXDN::startBaseband(const rtxStatus_t *status)
         return false;
 
     nxdnTx_setup(&tx, src, dst, ran, status->dmrDestType != DMR_DEST_USER);
-    fsk4Mod_init(&txMod, NXDN_TX_SPS, level, NXDN_TX_INVERT);
+    fsk4Mod_init(&txMod, NXDN_TX_SPS, level, NXDN_TX_INVERT, true);
 
     txPath = audioPath_request(SOURCE_MCU, SINK_RTX, PRIO_TX);
     if (txPath < 0)

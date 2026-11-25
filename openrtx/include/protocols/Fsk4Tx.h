@@ -42,6 +42,9 @@ extern "C" {
 /** Longest tap table: 20 samples per symbol, four symbols of span each way. */
 #define FSK4_TX_MAX_TAPS 161
 
+/** Samples per symbol the symbol-hold pulse table is defined at. */
+#define FSK4_HOLD_SPS 20
+
 typedef struct {
     float taps[FSK4_TX_MAX_TAPS];
     float hist[16];   ///< Last symbols, newest at histPos
@@ -60,8 +63,14 @@ typedef struct {
  * @param gain output for a long run of symbols +1 (a run of +3 gives three
  *             times this).  Peaks are saturated to int16.
  * @param invert negate the output (for a transmitter that inverts).
+ * @param hold apply the symbol hold of the NXDN/dPMR transmitter model, i.e.
+ *             send P(f) = H(f) sinc(fT) instead of a plain RRC H(f).  Only
+ *             defined at 20 samples per symbol; ignored at any other rate.
+ *             NXDN sets it (TS 1-A 3.4/3.5, and its receiver matches it with
+ *             H(f) D(f), D = 1/sinc); dPMR does not, because its receiver is
+ *             still a plain RRC.
  */
-void fsk4Mod_init(fsk4_mod_t *mod, int sps, float gain, bool invert);
+void fsk4Mod_init(fsk4_mod_t *mod, int sps, float gain, bool invert, bool hold);
 
 /**
  * @brief Modulate symbols.
