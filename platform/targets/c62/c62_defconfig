@@ -29,3 +29,20 @@ CONFIG_FLASH_LOAD_SIZE=0x100000
 # platform_terminate() reboots through the SoC reset, which also resets
 # the peripherals.
 CONFIG_REBOOT=y
+
+# Post-mortem recorder (docs/BLACKBOX.md).  The three options below are what
+# makes a crash record readable rather than a list of numbers:
+#
+#   THREAD_MONITOR  the kernel keeps the list of live threads, which is what
+#                   k_thread_foreach() walks: name, priority, state, stack.
+#   THREAD_NAME     threads carry the name their creator gave them.
+#   INIT_STACKS     every stack is filled with a pattern when the thread is
+#                   created, which is what turns "free bytes" into a high-water
+#                   mark (k_thread_stack_space_get()) instead of an estimate.
+#
+# Cost: about 20 bytes of RAM per thread for the name and the list link, and a
+# memset of each stack at creation (40 KiB in total, ~0.2 ms at boot).  Flash:
+# a few hundred bytes.  All of it is only read when a record is written.
+CONFIG_THREAD_MONITOR=y
+CONFIG_THREAD_NAME=y
+CONFIG_INIT_STACKS=y

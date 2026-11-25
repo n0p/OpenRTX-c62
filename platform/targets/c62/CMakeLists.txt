@@ -36,6 +36,7 @@ target_sources(app
 
     ${OPENRTX_ROOT}/platform/targets/c62/air_tx.c
     ${OPENRTX_ROOT}/platform/targets/c62/platform.c
+    ${OPENRTX_ROOT}/platform/targets/c62/blackbox_c62.c
     ${OPENRTX_ROOT}/platform/targets/c62/hwconfig.c
     ${OPENRTX_ROOT}/platform/targets/c62/dsp.c
     ${OPENRTX_ROOT}/platform/targets/c62/lsf.c

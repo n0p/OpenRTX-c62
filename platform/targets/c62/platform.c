@@ -34,8 +34,10 @@
 extern void kiss_uart_init(void);
 #endif
 #include "controller.h"
+#include "blackbox_c62.h"
 #include "dsp.h"
 #include <IOMuxManager.h>
+#include "core/blackbox.h"
 #include "core/port_ptt.h"
 #include "core/settings.h"
 #include "core/state.h"
@@ -216,6 +218,14 @@ void platform_init_csk6()
     /* Initialise non volatile memory manager */
     nvm_init();
 
+    /*
+     * The post-mortem the previous boot left behind, if any: read, printed on
+     * the console and invalidated before anything else can take that console
+     * over.  After nvm_init(), because both live in the same flash partition
+     * and this one needs the driver up (docs/BLACKBOX.md).
+     */
+    bb_c62_init();
+
     // Configure the PTT key as input with pull-up
     gpio_pin_configure_dt(&button_ptt, GPIO_INPUT);
 
@@ -339,6 +349,13 @@ void platform_init_csk6()
                wdtRet);
     else
         printk("C62: watchdog armed, 2 s\n");
+
+    /*
+     * The radio is up: from here the liveness supervisor has threads to watch.
+     * The mark below is the first breadcrumb of the next crash's record, and
+     * it is what tells a reader that the firmware got this far.
+     */
+    bb_mark(BB_M_BOOT);
 }
 
 void platform_terminate()
