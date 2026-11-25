@@ -818,8 +818,6 @@ static enum tryResult tryFrame(long start, struct p25Frame *f)
     }
 
     phy.lastFine = fine;
-    phy.lastLevels = L;
-    phy.haveLevels = true;
     f->symbol = start / 5;
     f->spanSymbols = (uint16_t)nSym;
     /*
@@ -835,7 +833,14 @@ static enum tryResult tryFrame(long start, struct p25Frame *f)
     f->inverted = (bestPol < 0);
     f->bchErrors = -1;
     f->lcRsErrors = -1;
-    return decodeFrame(f, phy.handler, phy.user, nSym) ? TRY_DONE : TRY_NONE;
+    if (!decodeFrame(f, phy.handler, phy.user, nSym))
+        return TRY_NONE;
+
+    /* The levels this frame settled on are the best estimate the next one has
+     * of the channel, for the NID retry above. */
+    phy.lastLevels = L;
+    phy.haveLevels = true;
+    return TRY_DONE;
 }
 
 /* ------------------------------------------------------------------- API */
