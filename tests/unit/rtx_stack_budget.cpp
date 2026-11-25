@@ -57,6 +57,7 @@ static constexpr size_t kDmrSizes = RTX_THREAD_STKSIZE;
 #undef THREADS_H
 #undef RTX_THREAD_STKSIZE
 #undef CONFIG_DMR_TX
+#define CONFIG_TETRA 1
 #include "core/threads.h"
 static_assert(RTX_THREAD_STKSIZE >= 4096, "TETRA decodes in the rtx thread");
 static constexpr size_t kTetraSize = RTX_THREAD_STKSIZE;
@@ -65,6 +66,7 @@ static constexpr size_t kTetraSize = RTX_THREAD_STKSIZE;
  *    sanity floor: the modes that matter here are the three above. */
 #undef THREADS_H
 #undef RTX_THREAD_STKSIZE
+#undef CONFIG_TETRA
 #include "core/threads.h"
 static_assert(RTX_THREAD_STKSIZE >= 1024, "the receive-only floor");
 static constexpr size_t kBaseSize = RTX_THREAD_STKSIZE;

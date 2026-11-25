@@ -18,7 +18,7 @@
  * happens to be selected: the branches below used to be exclusive, so a build
  * with TETRA and DMR_TX at once (the bench image) took the first one and gave
  * the DMR transmitter 4 KiB. */
-#if defined(PLATFORM_C62) && (defined(CONFIG_TETRA) || defined(CONFIG_DMR_TX))
+#if defined(PLATFORM_C62) && defined(CONFIG_DMR_TX)
 /*
  * The DMR transmitter encodes in the rtx thread, and the AMBE+2 encoder is
  * deep.  Measured on the C62 build itself (-Os, Cortex-M33, -fstack-usage,
@@ -40,6 +40,9 @@
  * DMR transmission looked like from the outside.
  */
 #define RTX_THREAD_STKSIZE    9216
+#elif defined(PLATFORM_C62) && defined(CONFIG_TETRA)
+/* libtetra's decode chain lives in this thread too. */
+#define RTX_THREAD_STKSIZE    4096
 #elif defined(PLATFORM_C62)
 #define RTX_THREAD_STKSIZE    1024
 #else
