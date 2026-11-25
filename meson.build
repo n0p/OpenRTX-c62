@@ -66,6 +66,9 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/rtx/ModeReport.c',
                'openrtx/src/core/settings.c',
                'openrtx/src/core/settings_record.c',
+               # The accessory pad's PTT rule and the table of the three port
+               # modes (docs/ACCESSORY.md). Portable C, no radio in it.
+               'openrtx/src/core/port_ptt.c',
                'openrtx/src/core/zones.c',
                'openrtx/src/core/agc.c',
                'openrtx/src/core/am_tx.c',
@@ -1584,7 +1587,14 @@ wfm_test = executable('wfm_test',
 # Registro de ajustes: version, CRC y descarte limpio de un registro viejo
 settings_record_test = executable('settings_record_test',
                                   sources : unit_test_src + ['tests/unit/settings_record.cpp'],
-                                  kwargs  : unit_test_opts)
+                                  kwargs : unit_test_opts)
+
+# El puerto de accesorio: un pad, tres modos (docs/ACCESSORY.md). El
+# discriminador de PTT contra el byte 0x00 y el break, la convivencia con las
+# tramas HELLO intercaladas y la tabla de los tres modos, sobre el parser real.
+port_mode_test = executable('port_mode_test',
+                            sources : unit_test_src + ['tests/unit/port_mode.cpp'],
+                            kwargs  : unit_test_opts)
 
 # APRS: validacion de indicativo, SSID y path antes de emitir
 aprs_config_test = executable('aprs_config_test',
@@ -1877,6 +1887,7 @@ test('Spectrum Test',        spectrum_test)
 test('Spectrum Settle Test',  spectrum_settle_test)
 test('UI Spectrum Test',     ui_spectrum_test)
 test('Settings Record Test', settings_record_test)
+test('Accessory Port Test',  port_mode_test)
 test('P25 IMBE Vocoder Test', imbe_vocoder_test)
 test('P25 IMBE Robustness Test', imbe_robust_test)
 test('APRS Config Test',     aprs_config_test)

@@ -131,6 +131,9 @@ target_sources(app
     openrtx/src/core/channel_store.c
     openrtx/src/core/settings.c
     openrtx/src/core/settings_record.c
+    # The accessory jack's PTT rule: one pad, UART2 RXD and the speaker-mic
+    # switch (docs/ACCESSORY.md).
+    openrtx/src/core/port_ptt.c
     openrtx/src/core/zones.c
     openrtx/src/core/agc.c
     openrtx/src/core/am_tx.c

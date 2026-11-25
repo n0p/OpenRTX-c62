@@ -32,6 +32,15 @@ const char *settings_scanStepName(uint8_t idx)
     return (idx < SETTINGS_SCAN_STEPS) ? names[idx] : "----";
 }
 
+const char *settings_portModeName(uint8_t mode)
+{
+    switch (mode) {
+        case PORT_MODE_ALWAYS: return "Always";
+        case PORT_MODE_NEVER:  return "Never";
+        default:               return "Auto";
+    }
+}
+
 const char *settings_dmrDestName(uint8_t type)
 {
     switch (type)

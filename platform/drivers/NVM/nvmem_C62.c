@@ -221,6 +221,19 @@ int nvm_readSettings(settings_t *settings)
      */
     int ret = settings_recordLoad(buf, sizeof(buf), settings, &cause);
 
+    /*
+     * A record written by version 7 is a prefix of this one and is migrated
+     * rather than dropped (settings_record.c): the operator keeps his settings
+     * and the appended field comes back at its default.  Say it on the log, so
+     * that a bench session can tell a migrated radio from a reset one.
+     */
+    if ((ret == 0) && (settings_recordVersion(buf, sizeof(buf)) !=
+                       (uint16_t)SETTINGS_VERSION)) {
+        printk("settings: record v%u migrated to v%u, defaults for the new "
+               "fields\n", (unsigned)settings_recordVersion(buf, sizeof(buf)),
+               (unsigned)SETTINGS_VERSION);
+    }
+
     /* Debounce key: the record as it is on flash, not the parsed structure */
     settingsCrc = crc_ccitt(buf, sizeof(buf));
 

@@ -33,6 +33,22 @@ static void write_u32(uint8_t *p, uint32_t v)
     p[3] = (uint8_t)((v >> 24) & 0xFF);
 }
 
+/*
+ * Version 7 -> 8.  The record on flash is a prefix of today's, so the migration
+ * is a copy of the prefix plus the defaults of what was appended.  It is
+ * written out for this one version on purpose: a later version that appends
+ * another field repeats the exercise with its own size and its own default,
+ * because "one byte shorter than today" stops being true as soon as anything
+ * else is added.
+ */
+#define SETTINGS_V7 7u
+#define SETTINGS_V7_PAYLOAD ((size_t)(sizeof(settings_t) - sizeof(uint8_t)))
+
+static void settings_recordUpgradeV7(settings_t *s)
+{
+    s->pc_port = (uint8_t)PORT_MODE_AUTO;
+}
+
 int settings_recordPack(uint8_t *buf, size_t cap, const settings_t *s)
 {
     if (buf == NULL || s == NULL || cap < SETTINGS_RECORD_SIZE)
@@ -67,7 +83,33 @@ int settings_recordRead(const uint8_t *buf, size_t len, settings_t *out)
      * another firmware" so that the screen can say the settings were reset by
      * the upgrade, not as a random corruption.
      */
-    if (read_u16(buf + 6) != (uint16_t)SETTINGS_VERSION)
+    uint16_t version = read_u16(buf + 6);
+
+    if (version == SETTINGS_V7) {
+        /*
+         * The one version that is a prefix of this one: version 8 appended
+         * settings_t.pc_port and nothing else, so a version 7 record is the
+         * same payload one byte shorter, with its own CRC.  Loading the prefix
+         * and leaving the appended field at its default keeps everything the
+         * operator had -- callsign, channels' power, scan settings -- instead
+         * of dropping the record as a whole.  A v7 record whose CRC does not
+         * match over that length is still corrupt.
+         */
+        if (len < SETTINGS_RECORD_HDR + SETTINGS_V7_PAYLOAD)
+            return SETTINGS_RECORD_ERR_CORRUPT;
+
+        uint16_t oldCrc = crc_ccitt(buf + SETTINGS_RECORD_HDR,
+                                    SETTINGS_V7_PAYLOAD);
+        if (oldCrc != read_u16(buf + 4))
+            return SETTINGS_RECORD_ERR_CORRUPT;
+
+        memset(out, 0, sizeof(*out));
+        memcpy(out, buf + SETTINGS_RECORD_HDR, SETTINGS_V7_PAYLOAD);
+        settings_recordUpgradeV7(out);
+        return 0;
+    }
+
+    if (version != (uint16_t)SETTINGS_VERSION)
         return SETTINGS_RECORD_ERR_VERSION;
 
     uint16_t crc = crc_ccitt(buf + SETTINGS_RECORD_HDR, sizeof(settings_t));
