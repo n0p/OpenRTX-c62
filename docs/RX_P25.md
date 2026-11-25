@@ -214,7 +214,7 @@ Firmware PHY (`tests/host/p25_phy_host`), fed the same files as the prototype:
 | 20 s of contiguous frames built from one LDU1 (`gen_stream.py`) | 112/112 frames, 1008/1008 IMBE frames, 0 corrected bits |
 
 The `syncErrors` counter in the frame struct is the sign errors found in the
-sync field at the phase the frame was actually cut at: 0 over the 36 frames of
+sync field at the phase the frame was actually cut at: 0 over the 31 frames of
 the voice capture since the cut lands on the eye (it was 18 while the grid was
 predicted from the integer start position and frames were re-acquired by hand).
 It is a diagnostic, not a defect — a frame whose sync has a sign error still
