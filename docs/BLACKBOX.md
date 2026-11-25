@@ -183,12 +183,19 @@ protocolo hasta el siguiente cuelgue.
 ### 3.1 Fallo duro, no cuelgue
 
 Un *hard fault*, un `assert` o un desbordamiento de pila no son un atasco: el
-hilo no se para, se muere. El manejador `k_sys_fatal_error_handler()` de
-`blackbox_c62.c` escribe también su registro (`reason = FATAL`, `detail` = motivo
-de Zephyr) y reinicia. Antes suspende al supervisor, y el kernel llama al
-manejador con las interrupciones cerradas: si la escritura se atasca (un fallo
-dentro del driver de flash es posible), el perro guardián de hardware reinicia
-igual y el registro es el del cuelgue anterior.
+hilo no se para, se muere. El puerto CSK6 instala su propio
+`k_sys_fatal_error_handler()` (`csk/soc/arm/csk6/fatal.c`), que imprime una
+traza y termina en `arch_system_halt()` — el hook débil del kernel para "para
+esta CPU". Ahí es donde engancha `blackbox_c62.c`: es el único punto por el que
+pasan todos los caminos fatales sin parchear un módulo, y su implementación por
+defecto deja la radio muerta hasta el mando de volumen.
+
+El nuevo `arch_system_halt()` escribe el registro (`reason = FATAL`, `detail` =
+motivo de Zephyr, PC/LR leídos del marco de excepción que el hardware apiló en
+el PSP del hilo) y reinicia. Antes suspende al supervisor, y el kernel llama al
+hook con las interrupciones cerradas: si la escritura se atasca (un fallo dentro
+del driver de flash es posible), el perro guardián de hardware reinicia igual y
+el registro es el del cuelgue anterior.
 
 ---
 
@@ -272,17 +279,23 @@ tools/cps/blackbox.py -f volcado_0x2b6000.bin
 
 ## 6. Coste
 
+Medido con la build completa (todas las banderas, `-DC62_PC_PROTO=ON
+-DC62_DEBUG_PROTO=ON -DC62_BENCH_PROTO=ON -DC62_AIR_TX=ON`), contra el mismo
+commit sin la caja negra:
+
 | concepto | coste |
 |---|---|
-| `bb_mark()` | 2 cargas, 1 AND, 1 OR, 2 stores. Sin cerrojos, sin reloj |
-| `bb_beat()` | 1 incremento + 1 lectura de reloj + 1 store, una vez por vuelta del hilo |
-| RAM estática | 32×4 B de anillo + 4 contadores + 4 punteros + 516 B de copia + ~100 B de estado |
-| pila del supervisor | 3 KiB (lleva el registro de 516 B y la escritura de flash) |
-| flash | 1 sector de 4 KiB reservado, 516 B usados; se escribe **solo** al colgarse |
-| código | ~2,5 KiB con todo |
-| `CONFIG_THREAD_MONITOR` | ~20 B de RAM por hilo (enlace de lista) |
-| `CONFIG_THREAD_NAME` | 32 B de RAM por hilo |
-| `CONFIG_INIT_STACKS` | relleno de cada pila al crearla (~40 KiB de `memset` en el arranque, ~0,2 ms) |
+| `bb_mark()` | 60 B de código, 12 instrucciones: 2 cargas, 1 AND, 1 OR, 2 stores. Sin cerrojos, sin reloj, sin llamadas |
+| `bb_beat()` | 60 B; 1 incremento + 1 lectura de reloj + 1 store, una vez por vuelta del hilo |
+| FLASH | **+5.528 B** (793.044 → 798.572 B, 75,63 % → 76,16 % del MiB). De ellos 2.668 B son el grabador, el detector y el volcado de texto; el resto, las tres opciones de kernel |
+| RAM | **+5.904 B** (180.472 → 186.376 B, 68,84 % → 71,10 % de 256 KiB): 3 KiB de pila del supervisor, 1 KiB de pila de ISR (el manejador de fallo escribe desde ella), 516 B de copia del registro, el anillo de 128 B y ~50 B por hilo de las dos opciones de kernel |
+| PSRAM | **sin cambios** (653.910 B) |
+| flash reservada | 1 sector de 4 KiB, de los que se usan 516 B; se escribe **solo** al colgarse |
+
+Tamaños por función en el ELF: `bb_mark` 60 B, `bb_beat` 60 B, `bb_supervise`
+156 B, `bb_recordBuild` 432 B, `bb_recordValid` 96 B, `bb_textDump` 1.232 B
+(es la que gasta: cadenas y números; solo se ejecuta al arrancar y detrás de un
+cuelgue).
 
 Las tres opciones de kernel están en `c62_defconfig` y son lo que convierte la
 tabla de hilos en algo legible (nombre, estado, mínimo histórico de pila libre
