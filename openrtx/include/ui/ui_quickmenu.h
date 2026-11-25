@@ -32,7 +32,8 @@ enum qm_type
     QM_ENUM,      /**< Index into names[]                                */
     QM_TOGGLE,    /**< QM_ENUM with the OFF/ON names                     */
     QM_INFO,      /**< Read only, rendered by fmt()                      */
-    QM_GOTO       /**< ENTER leaves the popup for another screen         */
+    QM_GOTO,      /**< ENTER leaves the popup for another screen         */
+    QM_ACTION     /**< ENTER runs act(): no value, no cursor edit        */
 };
 
 /** One quick menu row. */
@@ -52,6 +53,7 @@ typedef struct
     void (*fmt)(char *buf, int len); /**< QM_INFO / QM_INT value text      */
     uint8_t goto_screen;        /**< QM_GOTO: destination screen           */
     uint8_t goto_item;          /**< QM_GOTO: item selected there          */
+    void (*act)(void);          /**< QM_ACTION: what ENTER does            */
 } qm_item_t;
 
 /**
@@ -102,6 +104,26 @@ const qm_menu_t *qm_findMenu(uint8_t opmode);
 
 /** Open the popup on the table of the current mode. */
 void qm_open(void);
+
+/**
+ * Open the popup on a table of its own.
+ *
+ * The popup normally follows the operating mode, but a screen can have rows
+ * that belong to the screen and not to the mode -- the spectrum analyser's
+ * span, step and hold are the first of those. This opens the popup on that
+ * table; qm_tick() only rebuilds by mode when the mode itself changes, so the
+ * table stays until the popup is closed.
+ *
+ * @param table: rows to show, must not be NULL.
+ */
+void qm_openTable(const qm_menu_t *table);
+
+/**
+ * The spectrum analyser's rows: span, step, maximum hold, clear, peak and the
+ * measured time per point. Declared here because ui_spectrum.c opens it and
+ * because the UI tests walk it like any other table.
+ */
+const qm_menu_t *qm_spectrumMenu(void);
 
 /** Close the popup. */
 void qm_close(void);

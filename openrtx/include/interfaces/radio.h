@@ -115,6 +115,54 @@ rssi_t radio_getRssi();
  */
 enum opstatus radio_getStatus();
 
+/*
+ * Spectrum analyser.
+ *
+ * The receiver the C62 uses (BK4819) has no I/Q output: what it can be asked
+ * for is the RSSI of the frequency it is tuned to, and the audio of the
+ * demodulator. A spectrum is therefore a sweep: tune, let the PLL settle, read
+ * REG_67. These four calls are that, and only the platforms whose receiver can
+ * be tuned a single word at a time implement them (the C62 does; nothing else
+ * calls them). See core/spectrum_service.h for who is allowed to call them and
+ * when, and docs/SPECTRUM.md for the numbers.
+ */
+
+/**
+ * Take the receiver over for sweeping: remember the IF filter and the audio
+ * routing, select the widest receive path and mute the AF output.
+ *
+ * @return false if the receiver is not receiving (off or transmitting).
+ */
+bool radio_spectrumEnter(void);
+
+/**
+ * Switch between the sweep profile and the normal one.
+ *
+ * @param on: true selects the widest IF and mutes the audio, false restores the
+ *            filter and the AF output the mode had.
+ */
+void radio_spectrumSweep(bool on);
+
+/**
+ * One point of the sweep: tune, wait for the synthesizer, read the level.
+ *
+ * @param frequency: frequency to tune, Hz.
+ * @param settleUs: time given to the PLL before the level is read, us.
+ * @param pointUs: filled with the measured duration of the whole point, us.
+ * @return RSSI level of that frequency, dBm.
+ */
+int16_t radio_spectrumPoint(uint32_t frequency, uint32_t settleUs,
+                            uint32_t *pointUs);
+
+/**
+ * Put the receiver back on the configured frequency, with its own filter and
+ * audio, and stay there: the normal receive path runs again from here.
+ */
+void radio_spectrumPark(void);
+
+/** Give the receiver back after a sweep session. */
+void radio_spectrumLeave(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -861,8 +861,9 @@ void _ui_drawMenuGPS()
 
         gfx_print(layout.line1_pos, layout.top_font, TEXT_ALIGN_CENTER,
                   color_white, direction_lat);
-        gfx_print(layout.line1_pos, layout.top_font, TEXT_ALIGN_RIGHT,
-                  color_white, "%d.%.6d", latitude_int, latitude_dec);
+        gfx_print(gfx_right_edge(layout.line1_pos), layout.top_font,
+                  TEXT_ALIGN_RIGHT, color_white, "%d.%.6d",
+                  latitude_int, latitude_dec);
         gfx_print(layout.line2_pos, layout.top_font, TEXT_ALIGN_LEFT,
                   color_white, type_buf);
 
@@ -874,8 +875,9 @@ void _ui_drawMenuGPS()
 
         gfx_print(layout.line2_pos, layout.top_font, TEXT_ALIGN_CENTER,
                   color_white, direction_lon);
-        gfx_print(layout.line2_pos, layout.top_font, TEXT_ALIGN_RIGHT,
-                  color_white, "%d.%.6d", longitude_int, longitude_dec);
+        gfx_print(gfx_right_edge(layout.line2_pos), layout.top_font,
+                  TEXT_ALIGN_RIGHT, color_white, "%d.%.6d",
+                  longitude_int, longitude_dec);
         gfx_print(layout.bottom_pos, layout.bottom_font, TEXT_ALIGN_CENTER,
                   color_white, "S %dkm/h  A %dm",
                   last_state.gps_data.speed,
@@ -1237,12 +1239,14 @@ void _ui_drawMacroTop()
     {
         if(last_state.gps_data.fix_quality > 0)
         {
-            gfx_drawSymbol(layout.top_pos, layout.top_symbol_size, TEXT_ALIGN_RIGHT,
+            gfx_drawSymbol(gfx_right_edge(layout.top_pos),
+                           layout.top_symbol_size, TEXT_ALIGN_RIGHT,
                            color_white, SYMBOL_CROSSHAIRS_GPS);
         }
         else
         {
-            gfx_drawSymbol(layout.top_pos, layout.top_symbol_size, TEXT_ALIGN_RIGHT,
+            gfx_drawSymbol(gfx_right_edge(layout.top_pos),
+                           layout.top_symbol_size, TEXT_ALIGN_RIGHT,
                            color_white, SYMBOL_CROSSHAIRS);
         }
     }
@@ -1299,10 +1303,10 @@ bool _ui_drawMacroMenu(ui_state_t* ui_state)
 #if defined(CONFIG_UI_NO_KEYBOARD)
         if (ui_state->macro_menu_selected == 2)
 #endif  // CONFIG_UI_NO_KEYBOARD
-            gfx_print(layout.line1_pos, layout.top_font, TEXT_ALIGN_RIGHT,
-                      yellow_fab413, "3        ");
-        gfx_print(layout.line1_pos, layout.top_font, TEXT_ALIGN_RIGHT,
-                  color_white, " T+");
+            gfx_print(gfx_right_edge(layout.line1_pos), layout.top_font,
+                      TEXT_ALIGN_RIGHT, yellow_fab413, "3        ");
+        gfx_print(gfx_right_edge(layout.line1_pos), layout.top_font,
+                  TEXT_ALIGN_RIGHT, color_white, " T+");
     }
 #ifdef CONFIG_M17
     else if (last_state.channel.mode == OPMODE_M17)
@@ -1370,7 +1374,7 @@ bool _ui_drawMacroMenu(ui_state_t* ui_state)
 #if defined(CONFIG_UI_NO_KEYBOARD)
         if (ui_state->macro_menu_selected == 5)
 #endif // CONFIG_UI_NO_KEYBOARD
-    gfx_print(pos_2, layout.top_font, TEXT_ALIGN_RIGHT,
+    gfx_print(gfx_right_edge(pos_2), layout.top_font, TEXT_ALIGN_RIGHT,
               yellow_fab413, "6        ");
 
     // Compute x.y format for TX power avoiding to pull in floating point math.
@@ -1381,14 +1385,15 @@ bool _ui_drawMacroMenu(ui_state_t* ui_state)
     if (power_dec == 0)
     {
         // Print power output as an integer without a decimal (i.e "5W")
-        gfx_print(pos_2, layout.top_font, TEXT_ALIGN_RIGHT,
+        gfx_print(gfx_right_edge(pos_2), layout.top_font, TEXT_ALIGN_RIGHT,
                   color_white, "%dW", power_int);
     }
     else
     {
         // Smaller font to fit larger strings on screen (i.e "2.5W")
-        gfx_print(pos_2, layout.top_font - 1, TEXT_ALIGN_RIGHT,
-                  color_white, "%d.%dW", power_int, power_dec);
+        gfx_print(gfx_right_edge(pos_2), layout.top_font - 1,
+                  TEXT_ALIGN_RIGHT, color_white, "%d.%dW", power_int,
+                  power_dec);
     }
 
     // Third row
@@ -1418,14 +1423,14 @@ bool _ui_drawMacroMenu(ui_state_t* ui_state)
 #if defined(CONFIG_UI_NO_KEYBOARD)
         if (ui_state->macro_menu_selected == 8)
 #endif // CONFIG_UI_NO_KEYBOARD
-    gfx_print(layout.line3_large_pos, layout.top_font, TEXT_ALIGN_RIGHT,
-              yellow_fab413, "9        ");
+    gfx_print(gfx_right_edge(layout.line3_large_pos), layout.top_font,
+              TEXT_ALIGN_RIGHT, yellow_fab413, "9        ");
     if( ui_state->input_locked == true )
-        gfx_print(layout.line3_large_pos, layout.top_font, TEXT_ALIGN_RIGHT,
-                  color_white, "Unlk");
+        gfx_print(gfx_right_edge(layout.line3_large_pos), layout.top_font,
+                  TEXT_ALIGN_RIGHT, color_white, "Unlk");
     else
-        gfx_print(layout.line3_large_pos, layout.top_font, TEXT_ALIGN_RIGHT,
-                    color_white, "Lck");
+        gfx_print(gfx_right_edge(layout.line3_large_pos), layout.top_font,
+                  TEXT_ALIGN_RIGHT, color_white, "Lck");
 
     // Draw S-meter bar
     _ui_drawMainBottom();

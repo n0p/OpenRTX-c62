@@ -6,6 +6,7 @@
 
 #include "interfaces/radio.h"
 #include "interfaces/platform.h"
+#include "core/spectrum_service.h"
 #include "core/utils.h"
 #include "hwconfig.h"
 #include <stdio.h>
@@ -284,6 +285,22 @@ void rtx_supervise()
 
 void rtx_task()
 {
+    /*
+     * Spectrum analyser. While the analyser's screen is open the sweep owns the
+     * receiver, and it does so from this thread because this is the thread that
+     * owns the chip: the RSSI read below and the sweep would otherwise fight
+     * over the same tuning word, and every bin would look like a squelch
+     * opening to the mode.
+     *
+     * The service returns false when it has parked the receiver on the centre
+     * frequency with its own filter and audio, and the rest of this function
+     * then runs unchanged: that is how the squelch, the audio path and the
+     * mode's own decisions keep working between two sweeps, and how a carrier
+     * on the centre pauses the sweep instead of being chopped by it.
+     */
+    if (spectrumService_poll())
+        return;
+
     const uint32_t now = (uint32_t)getTick();
 
     /*

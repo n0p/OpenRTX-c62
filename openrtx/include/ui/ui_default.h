@@ -88,7 +88,13 @@ enum uiScreen
     MSG_SENT,
     MSG_COMPOSE,
     MSG_STATUS,
-    LOW_BAT
+    LOW_BAT,
+    /*
+     * The spectrum analyser (ui_spectrum.c). At the end of the enum on purpose:
+     * the screens above are reached by number from the quick menu's QM_GOTO
+     * rows and from tests, and inserting in the middle renumbers them all.
+     */
+    SPECTRUM
 };
 
 enum SetRxTx

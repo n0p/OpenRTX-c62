@@ -121,7 +121,8 @@ void _ui_drawMenuListValue(ui_state_t* ui_state, uint8_t selected,
                 gfx_drawRect(rect_pos, CONFIG_SCREEN_WIDTH, layout.menu_h, color_white, full_rect);
             }
             gfx_print(pos, layout.menu_font, TEXT_ALIGN_LEFT, text_color, entry_buf);
-            gfx_print(pos, layout.menu_font, TEXT_ALIGN_RIGHT, text_color, value_buf);
+            gfx_print(gfx_right_edge(pos), layout.menu_font, TEXT_ALIGN_RIGHT,
+                      text_color, value_buf);
             pos.y += layout.menu_h;
         }
     }
@@ -388,8 +389,9 @@ void _ui_drawMenuGPS()
                   color_white, fix_buf);
         gfx_print(layout.line1_pos, layout.top_font, TEXT_ALIGN_CENTER,
                   color_white, "N     ");
-        gfx_print(layout.line1_pos, layout.top_font, TEXT_ALIGN_RIGHT,
-                  color_white, "%8.6f", last_state.gps_data.latitude);
+        gfx_print(gfx_right_edge(layout.line1_pos), layout.top_font,
+                  TEXT_ALIGN_RIGHT, color_white, "%8.6f",
+                  last_state.gps_data.latitude);
         gfx_print(layout.line2_pos, layout.top_font, TEXT_ALIGN_LEFT,
                   color_white, type_buf);
         // Convert from signed longitude, to unsigned + direction
@@ -398,8 +400,8 @@ void _ui_drawMenuGPS()
         longitude = (longitude < 0) ? -longitude : longitude;
         gfx_print(layout.line2_pos, layout.top_font, TEXT_ALIGN_CENTER,
                   color_white, direction);
-        gfx_print(layout.line2_pos, layout.top_font, TEXT_ALIGN_RIGHT,
-                  color_white, "%8.6f", longitude);
+        gfx_print(gfx_right_edge(layout.line2_pos), layout.top_font,
+                  TEXT_ALIGN_RIGHT, color_white, "%8.6f", longitude);
         gfx_print(layout.bottom_pos, layout.bottom_font, TEXT_ALIGN_CENTER,
                   color_white, "S %4.1fkm/h  A %4.1fm",
                   last_state.gps_data.speed,
@@ -574,8 +576,8 @@ void _ui_drawSettingsM17(ui_state_t* ui_state)
         // Print Button Info
         gfx_print(layout.line5_pos, layout.line5_font, TEXT_ALIGN_LEFT,
                   color_white, "Cancel");
-        gfx_print(layout.line5_pos, layout.line5_font, TEXT_ALIGN_RIGHT,
-                  color_white, "Accept");
+        gfx_print(gfx_right_edge(layout.line5_pos), layout.line5_font,
+                  TEXT_ALIGN_RIGHT, color_white, "Accept");
     }
     else
     if((ui_state->edit_meta_text) && (ui_state->menu_selected == M_METATEXT))
@@ -609,8 +611,8 @@ void _ui_drawSettingsM17(ui_state_t* ui_state)
         // Print Button Info
         gfx_print(layout.line5_pos, layout.line5_font, TEXT_ALIGN_LEFT,
                   color_white, "Cancel");
-        gfx_print(layout.line5_pos, layout.line5_font, TEXT_ALIGN_RIGHT,
-                  color_white, "Accept");
+        gfx_print(gfx_right_edge(layout.line5_pos), layout.line5_font,
+                  TEXT_ALIGN_RIGHT, color_white, "Accept");
     }
     else
     {

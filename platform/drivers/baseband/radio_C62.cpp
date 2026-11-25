@@ -211,6 +211,19 @@ extern "C" {
 volatile uint16_t c62_rx_reg43 = 0x7808;
 }
 
+/*
+ * Spectrum analyser state (see the section at the end of this file).
+ *
+ * Declared up here because radio_updateConfiguration() has to know whether a
+ * sweep session owns the chip: it invalidates the sweep's receive profile, and
+ * the next sweep has to put it back.
+ */
+static bool     specOn;          // A sweep session owns the receiver
+static bool     specWide;        // The sweep profile is the one in the chip
+static bool     specDirty;       // Something else rewrote the profile
+static uint16_t specReg43;       // REG_43 the mode was using
+static uint32_t specFreq;        // Frequency the PLL was last set to
+
 #ifdef C62_REG43_SWEEP
 /*
  * Cycle REG_43 through these values in the digital RX modes,
@@ -895,6 +908,14 @@ void radio_disableRtx()
 
 void radio_updateConfiguration()
 {
+    /*
+     * A reconfiguration writes REG_43 and the AF routing from the mode's
+     * profile: while the analyser is open that means the sweep profile is no
+     * longer in the chip, and the next sweep has to put it back.
+     */
+    if (specOn)
+        specDirty = true;
+
     // TX calibration at the TX frequency, from the band its PA is in
     const struct C62BandCalib *band = &calData.uhf;
     if (config->txFrequency < 174000000)
@@ -1078,3 +1099,159 @@ void radio_setRxOffset(int32_t hz)
     c62_setRxOffset(hz);
 }
 #endif
+
+/* ------------------------------------------------------------------------- */
+/* Spectrum analyser                                                          */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * The BK4819 has no I/Q output, so a spectrum is a sweep: write the PLL word of
+ * a frequency (REG_39 then REG_38, 10 Hz units), give the synthesizer its
+ * settling time, read the RSSI (REG_67, 0.5 dB per step, dBm = value/2 - 160)
+ * and move on. core/spectrum_service.c owns the raster, the storage and the
+ * timing; this is only the hardware half, and it runs in the RTX thread, which
+ * is the owner of the chip.
+ *
+ * Two profile switches, because a spectrum of 9 kHz bins is the right filter
+ * for measuring and the wrong one for listening:
+ *
+ *  - sweep: the widest receive path the chip has (25 kHz channel mode, REG_43
+ *    0x7e28: the 4.5 kHz IF filter, doubled to 9 kHz by the mode), AF muted so
+ *    the bins are not heard;
+ *  - park: the filter and the AF output the mode had, restored from the words
+ *    saved here, on the configured frequency. The receiver is then exactly what
+ *    it was before the analyser opened, which is what lets the mode's own
+ *    squelch pause the sweep with the audio working.
+ */
+
+/** Cycles of the core clock to microseconds, for the per-point measurement. */
+static uint32_t specCyclesToUs(const uint32_t cycles)
+{
+    const uint64_t hz = CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC;
+
+    if (hz == 0)
+        return 0;
+
+    return (uint32_t)(((uint64_t)cycles * 1000000ULL) / hz);
+}
+
+bool radio_spectrumEnter(void)
+{
+    if ((radioStatus != RX) || (config == nullptr))
+        return false;
+
+    if (specOn)
+        return true;
+
+    /* Remember what the mode is using before any register is touched */
+    specReg43 = bk4819_readReg(&c62_bk4819, 0x43);
+    specFreq  = config->rxFrequency + rxTotalOffset();
+    specOn    = true;
+    specWide  = false;
+    specDirty = true;
+
+    radio_spectrumSweep(true);
+    return true;
+}
+
+void radio_spectrumSweep(const bool on)
+{
+    if (!specOn)
+        return;
+
+    if (on)
+    {
+        /* Already wide, and nothing else has touched the chip since */
+        if (specWide && (!specDirty))
+            return;
+
+        /*
+         * The widest documented receive path (the profile C62_WIDE_RX and
+         * TETRA use): 4.5 kHz IF filter in the 25 kHz channel mode, about
+         * 9 kHz of resolution. Narrower than the smallest step the analyser
+         * offers, so two bins never see the same channel.
+         */
+        bk4819_setBandwidth(&c62_bk4819, BK4819_BW_25K);
+        bk4819_setRfFilter(&c62_bk4819, 7, 7);
+        c62_rx_reg43 = 0x7e28;
+        bk4819_setAfOutput(&c62_bk4819, BK4819_AF_MUTE);
+        specWide  = true;
+        specDirty = false;
+    }
+    else
+    {
+        /* The mode is using its own filters again: nothing to restore */
+        if ((!specWide) && (!specDirty))
+            return;
+
+        bk4819_writeReg(&c62_bk4819, 0x43, specReg43);
+        c62_rx_reg43 = specReg43;
+        radio_enableAfOutput();
+        specWide  = false;
+        specDirty = false;
+    }
+}
+
+int16_t radio_spectrumPoint(const uint32_t frequency, const uint32_t settleUs,
+                            uint32_t *pointUs)
+{
+    if (!specOn)
+        return (int16_t)-160;
+
+    const uint32_t t0 = k_cycle_get_32();
+
+    /*
+     * The LNA of the C62 is switched by band: a sweep that crosses 174 MHz has
+     * to move it too, or half the span is measured through the wrong front
+     * end. Only when it crosses, which costs nothing on a span inside a band.
+     */
+    if ((frequency < 174000000U) != (specFreq < 174000000U))
+    {
+        gpioDev_clear(LNA_VHF_EN);
+        gpioDev_clear(LNA_UHF_EN);
+
+        if (frequency < 174000000U)
+            gpioDev_set(LNA_VHF_EN);
+        else
+            gpioDev_set(LNA_UHF_EN);
+    }
+
+    bk4819_setFrequency(&c62_bk4819, frequency);
+    specFreq = frequency;
+
+    /*
+     * The settle sleeps the RTX thread instead of spinning on it: at 10 kHz of
+     * system tick k_usleep() rounds up by at most 100 us, and the audio worker
+     * and the UI keep running, which a k_busy_wait() of half a millisecond per
+     * point would not allow.
+     */
+    if (settleUs > 0)
+        k_usleep(settleUs);
+
+    const int16_t rssi = bk4819_getRssi(&c62_bk4819);
+
+    if (pointUs != nullptr)
+        *pointUs = specCyclesToUs(k_cycle_get_32() - t0);
+
+    return rssi;
+}
+
+void radio_spectrumPark(void)
+{
+    if ((!specOn) || (config == nullptr))
+        return;
+
+    radio_spectrumSweep(false);
+
+    specFreq = config->rxFrequency + rxTotalOffset();
+    bk4819_setFrequency(&c62_bk4819, specFreq);
+}
+
+void radio_spectrumLeave(void)
+{
+    if (!specOn)
+        return;
+
+    radio_spectrumPark();
+    specOn = false;
+}
