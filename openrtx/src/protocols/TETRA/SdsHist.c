@@ -20,8 +20,9 @@
 #include <string.h>
 
 #include "protocols/TETRA/SdsHist.h"
+#include "core/psram_state.h"
 
-static struct sds_hist_entry hist[SDS_HIST_LEN];
+static struct sds_hist_entry hist[SDS_HIST_LEN] PSRAM_STATE;
 static int histCount;
 static int histUnread;
 

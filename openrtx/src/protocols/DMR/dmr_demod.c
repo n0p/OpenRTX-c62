@@ -7,6 +7,7 @@
 #include "dmr_demod.h"
 #include "dmr_proto.h"
 #include "dmr_port.h"
+#include "core/psram_state.h"
 
 #include <math.h>
 #include <string.h>
@@ -58,7 +59,7 @@ static const uint64_t k_sync_hex[DMR_SYNC_COUNT] = {
 typedef enum { FAM_BS, FAM_MS, FAM_DIRECT } family_t;
 
 static float s_sync_sign[DMR_SYNC_COUNT]
-                        [24]; /* +1 / -1 (sync uses only the outer symbols) */
+                        [24] PSRAM_STATE; /* +1 / -1 (sync uses only the outer symbols) */
 static float s_sync_mean[DMR_SYNC_COUNT];
 static float s_sync_den[DMR_SYNC_COUNT]; /* sum (s - mean)^2 */
 

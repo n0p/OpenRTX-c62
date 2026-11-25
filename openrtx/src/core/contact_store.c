@@ -5,13 +5,14 @@
  */
 
 #include "core/contact_store.h"
+#include "core/psram_state.h"
 #include <string.h>
 #include <errno.h>
 
 #define CSTORE_MAGIC   0x54435443U /* "CTCT" */
 #define CSTORE_VERSION 1
 
-static cstore_bank_t bank;
+static cstore_bank_t bank PSRAM_STATE;
 static slot_store_t store;
 static const slot_ops_t *port = NULL;
 static bool ready = false;

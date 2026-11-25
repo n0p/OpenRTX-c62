@@ -14,6 +14,7 @@
 #include "interfaces/platform.h"
 #include "interfaces/radio.h"
 #include "protocols/TETRA/TetraDemod.h"
+#include "core/psram_state.h"
 #include "protocols/TETRA/TetraSpeech.h"
 #include "protocols/TETRA/TetraStatus.h"
 #include "core/mode_stats.h"
@@ -30,7 +31,7 @@
 
 /* Large state: static, there is only one TETRA mode */
 static int16_t baseband[2 * HALF_SAMPLES];
-static int8_t soft[HALF_SAMPLES * 3 / 4 + 8];
+static int8_t soft[HALF_SAMPLES * 3 / 4 + 8] PSRAM_STATE;
 static struct tetraDemod demod;
 static struct tetra_tmo_rx tmo;
 

@@ -40,6 +40,7 @@
 
 #include "core/openrtx.h"
 #include "core/pc_proto.h"
+#include "core/psram_state.h"
 #include "core/state.h"
 #include "rtx/rtx.h"
 #include "rtx/TxGuard.h"
@@ -70,7 +71,7 @@
 #define LINE_RING 4
 #define LINE_MAX 128
 
-static pcProto_t proto;
+static pcProto_t proto PSRAM_STATE;
 static struct k_thread thread;
 static K_THREAD_STACK_DEFINE(thread_stack, THREAD_STACK);
 static bool started;
@@ -79,7 +80,7 @@ static uint32_t lastFrameMs;
 /* Log capture: the hook appends characters here, the transport thread turns
  * complete lines into pc_proto_logPush() calls.  Guarded by irq_lock() because
  * the hook runs in whatever context produced the line. */
-static char lineRing[LINE_RING][LINE_MAX];
+static char lineRing[LINE_RING][LINE_MAX] PSRAM_STATE;
 static uint8_t lineLen[LINE_RING];
 static uint8_t lineHead;
 static uint8_t lineTail;

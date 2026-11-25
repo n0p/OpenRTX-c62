@@ -8,6 +8,7 @@
 #include "core/crc.h"
 #include "core/settings.h"
 #include "interfaces/delays.h"
+#include "core/psram_state.h"
 #include <string.h>
 #include <errno.h>
 
@@ -26,7 +27,7 @@
 static const struct chstorePort *port = NULL;
 
 /* The bank itself: 4 KiB, the RAM cost of the whole feature. */
-static chstore_channel_t bank[CHSTORE_MAX_CHANNELS];
+static chstore_channel_t bank[CHSTORE_MAX_CHANNELS] PSRAM_STATE;
 
 static uint16_t nbChannels = 0;
 static uint16_t lastUsedIdx = CHSTORE_NONE;

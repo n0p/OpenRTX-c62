@@ -25,6 +25,7 @@
 #include "core/audio_stream.h"
 #include "core/state.h"
 #include "core/settings.h"
+#include "core/psram_state.h"
 #include "interfaces/audio.h"
 #include "interfaces/delays.h"
 #include "interfaces/platform.h"
@@ -86,7 +87,7 @@ static struct
     pkt_engine_t engine;
     bool         engineReady;
     uint8_t      modem;
-} svc;
+} svc PSRAM_STATE;
 
 static struct k_thread thread;
 static K_THREAD_STACK_DEFINE(threadStack, PKT_THREAD_STACK);

@@ -16,6 +16,7 @@
 #include <tetra/tetra.h>
 #include "core/audio_path.h"
 #include "core/audio_stream.h"
+#include "core/psram_state.h"
 #include "interfaces/delays.h"
 
 #define QUEUE_FRAMES 16     /* 480 ms */
@@ -31,11 +32,11 @@ struct frame {
 
 /* Queue from the rtx thread (libtetra callback) to the playback thread */
 static pthread_mutex_t queueMutex = PTHREAD_MUTEX_INITIALIZER;
-static struct frame queue[QUEUE_FRAMES];
+static struct frame queue[QUEUE_FRAMES] PSRAM_STATE;
 static unsigned queueHead;
 static unsigned queueCount;
 
-static struct tetra_speech_ws channelWs; /* rtx thread only */
+static struct tetra_speech_ws channelWs PSRAM_STATE; /* rtx thread only */
 static volatile uint32_t statFrames;     /* Speech frames decoded */
 static volatile uint32_t statBad;        /* Of which failed the CRC (BFI) */
 static volatile uint32_t statOtherTs;    /* Slots ignored: other timeslot */
@@ -48,7 +49,7 @@ static volatile uint32_t playNoStream; /* Output stream did not start */
 static volatile uint32_t playNoBuffer; /* No output buffer: burst cut */
 static uint8_t followTn;               /* rtx thread only, 0 = none */
 static long long followLast;           /* rtx thread only, ms */
-static oa_dec_t decoder;               /* Playback thread only */
+static oa_dec_t decoder PSRAM_STATE;   /* Playback thread only */
 static stream_sample_t pcm[2 * OA_FRAME_SAMPLES];
 
 static pthread_t thread;

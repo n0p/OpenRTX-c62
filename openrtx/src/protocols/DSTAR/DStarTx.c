@@ -21,6 +21,7 @@
  */
 
 #include "protocols/DSTAR/DStarTx.h"
+#include "core/psram_state.h"
 
 #include <string.h>
 
@@ -43,7 +44,7 @@ enum txStage {
 };
 
 static enum txStage stage;
-static uint8_t headerBits[DSTAR_CODED_BITS];
+static uint8_t headerBits[DSTAR_CODED_BITS] PSRAM_STATE;
 static uint32_t bitIndex;
 static uint32_t frameIndex;
 

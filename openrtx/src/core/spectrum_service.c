@@ -5,6 +5,7 @@
  */
 
 #include "core/spectrum_service.h"
+#include "core/psram_state.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -66,7 +67,7 @@ static const char *const stepNames[] = { "12.5k", "25k", "50k", "100k", "250k" }
 
 /* --------------------------------------------------------------- the state */
 
-static spectrum_t scan;
+static spectrum_t scan PSRAM_STATE;
 
 static volatile bool     active;      ///< The screen is open
 static volatile bool     entered;     ///< The driver holds the RX profile

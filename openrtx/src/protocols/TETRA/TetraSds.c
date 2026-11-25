@@ -28,6 +28,7 @@
 #include "core/crc.h"
 #ifdef CONFIG_MESSAGING
 #include "core/messaging.h"
+#include "core/psram_state.h"
 #endif
 #include "interfaces/delays.h"
 #include "protocols/TETRA/TetraSds.h"
@@ -57,7 +58,7 @@ static int pageIndex;
 static long long pageTick;
 
 /* Static, not on a thread stack: the packed record is up to 608 bytes. */
-static uint8_t recBuf[SDS_RECORD_MAX];
+static uint8_t recBuf[SDS_RECORD_MAX] PSRAM_STATE;
 
 int tetraSds_onEvent(const struct tetra_sds *s)
 {
@@ -275,7 +276,7 @@ void tetraSds_task(void)
 
 /** The last PDU encoded, for the transmitter of a future build and for the
  *  diagnostics of this one. */
-static struct sds_tx prepared;
+static struct sds_tx prepared PSRAM_STATE;
 static int preparedId = -1;
 
 int tetraSds_prepareQueued(void)

@@ -57,8 +57,8 @@ static struct k_mutex msgLock;
  */
 static uint8_t recordBuf[MSG_STORE_MAX] PSRAM_STATE;
 
-static struct message outbox[MSG_OUTBOX_LEN];
-static struct message inbox[MSG_INBOX_LEN];
+static struct message outbox[MSG_OUTBOX_LEN] PSRAM_STATE;
+static struct message inbox[MSG_INBOX_LEN] PSRAM_STATE;
 static unsigned inboxCount;
 static unsigned inboxUnread;
 static uint8_t nextId = 1;
