@@ -144,9 +144,9 @@ frame struct), on the captures of the repo, the old code was:
 
 | capture | frame on the air | window cut | frames | grid misses | candidates/frame | host cpu/frame |
 |---|---|---|---|---|---|---|
-| voice, 5.4 s | 864 (LDU) | 864 | 31 | 9 | 338.9 | 857 us |
-| control, 54.4 s | **360 (TSDU)** | **864** | 725 | **725** | 374.9 | 679 us |
-| 20 s of contiguous LDUs | 864 | 864 | 112 | 1 | 53.8 | 454 us |
+| voice, 5.4 s | 864 (LDU) | 864 | 31 | 9 | 338.9 | 688 us |
+| control, 54.4 s | **360 (TSDU)** | **864** | 725 | **725** | 374.9 | 551 us |
+| 20 s of contiguous LDUs | 864 | 864 | 112 | 1 | 53.8 | 404 us |
 
 Where the window went wrong, in numbers, for the TSDU case:
 
@@ -186,17 +186,19 @@ Two more defects the same instrument turned up, both in the same place:
   acquisition paid a few thousand candidates that all interpolated sample 0.
   Starting at 0 took the voice capture from 10505 candidates to 1217.
 
-After the fix, same captures, same instrument, median of five runs on the host:
+After the fix, same captures, same instrument, median of seven runs on the host:
 
 | capture | frames | grid misses | candidates/frame | host cpu/frame |
 |---|---|---|---|---|
-| voice, 5.4 s | 31 | 1 | **39.3** | **455 us** |
-| control, 54.4 s | 725 | **1** | **5.3** | **176 us** |
-| 20 s of contiguous LDUs | 112 | 1 | 19.6 | 414 us |
+| voice, 5.4 s | 31 | 1 | **39.3** | **418 us** (-39 %) |
+| control, 54.4 s | 725 | **1** | **5.3** | **158 us** (-71 %) |
+| 20 s of contiguous LDUs | 112 | 1 | 19.6 | 372 us (-8 %) |
 
-The host figures are x86-64 wall-CPU per decoded frame (`tests/host/p25_phy_host`
-times `p25Phy_push()`); they are a ratio, not a budget - the M33 numbers are the
-QEMU ones under *Cost*. What did **not** change is the payload: the voice
+The host figures are x86-64 CPU time per decoded frame (`tests/host/p25_phy_host`
+timing `p25Phy_push()` with `CLOCK_PROCESS_CPUTIME_ID`), median of seven runs of
+each binary interleaved on an otherwise idle machine; run to run they spread by
++-10 % on this host, so the ratio is the number to read, not the absolute. They
+are a ratio, not a budget - the M33 numbers are the QEMU ones under *Cost*. What did **not** change is the payload: the voice
 capture still gives NAC 0x293, 15/15 link controls and 261/261 IMBE frames with
 zero corrected bits, byte for byte the same as the reference receiver's own
 dump of the same file, and the control channel still gives 725/725 TSBK blocks
@@ -314,8 +316,8 @@ taken from the frame structure:
 The control-channel row is what the frame cut fixed: with the grid holding
 (1 miss in 725 frames) that capture stops paying for the ring scan and lands
 on the steady-state row instead of the three-times-the-steady-state one. The
-host measures the ratio directly, 679 us to 176 us per decoded frame
-(**-74 %**); the QEMU row was not re-run here because the probe needs the
+host measures the ratio directly, 551 us to 158 us per decoded frame
+(**-71 %**); the QEMU row was not re-run here because the probe needs the
 cross toolchain under QEMU, so the figure to quote for the M33 is the
 steady-state 23.6 M, not a new number.
 
@@ -342,7 +344,7 @@ dropped from 339 and 375 candidates per frame to 39 and 5.
   hand when the frame is sliced, so the RMS distance of the symbols to them
   (what the prototype prints as `evm=0.10-0.11` on the voice capture) is one
   more pass over the frame: **0.76 us per 864-symbol frame on this host**,
-  0.2 % of the 455 us the demodulator takes per frame, so it is affordable on
+  0.2 % of the 418 us the demodulator takes per frame, so it is affordable on
   the M33 and would give the UI a real squelch/quality figure instead of "a
   frame decoded".
 * **The trellis decoder takes hard bits.** The slicer already knows how far each
