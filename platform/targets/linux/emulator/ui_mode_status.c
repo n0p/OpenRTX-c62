@@ -104,7 +104,9 @@ void packet_service_setEnabled(bool on)
        service (core/packet_service.c) does the same, and a stub that only
        keeps its own copy makes the page look broken on the host. */
     pkt.enabled = on;
+#ifdef CONFIG_KISS
     state.settings.packet_enable = on;
+#endif
 }
 
 bool packet_service_setModem(uint8_t modem)
@@ -115,7 +117,9 @@ bool packet_service_setModem(uint8_t modem)
         return false;
 
     pkt.modem = modem;
+#ifdef CONFIG_KISS
     state.settings.packet_modem = modem;
+#endif
     return true;
 }
 
@@ -124,6 +128,7 @@ void packet_service_setParam(uint8_t cmd, uint8_t value)
     if (cmd < sizeof(pkt.params))
         pkt.params[cmd] = value;
 
+#ifdef CONFIG_KISS
     switch (cmd)
     {
         case KISS_CMD_TXDELAY:
@@ -144,6 +149,7 @@ void packet_service_setParam(uint8_t cmd, uint8_t value)
         default:
             break;
     }
+#endif
 }
 
 void packet_service_status(packet_status_t *out)

@@ -525,7 +525,7 @@ class Tour:
         self.settings_list()
         self.menu_to(3, on="MENU_SETTINGS")
         self.key("GREEN")
-        self.menu_to(3)
+        self.menu_to(3, on="SETTINGS_RADIO")
         before = self.dump()["settings"]["sql"]
         self.key("GREEN")
         self.key("DOWN")
@@ -537,27 +537,31 @@ class Tour:
         for _ in range(3):
             self.key("RED")
 
-        # The page of every mode: its own quick menu rows as a list
-        for i, label in enumerate(SETTINGS_PAGES):
-            if label not in ("DMR", "NXDN", "dPMR", "P25", "YSF", "DSTAR", "AM",
-                             "WFM", "TETRA", "FM"):
-                continue
+        # The page of every mode. DMR, NXDN, dPMR, P25, YSF, DSTAR, AM and WFM
+        # draw their own quick menu rows as a page (SETTINGS_MODE); TETRA and
+        # FM have a page of their own, written by hand.
+        own_page = {"TETRA": "SETTINGS_TETRA", "FM": "SETTINGS_FM"}
+
+        for label in ("DMR", "NXDN", "dPMR", "P25", "YSF", "DSTAR", "AM",
+                      "WFM", "TETRA", "FM"):
             if not self.settings_list():
                 continue
-            self.menu_to(i, on="MENU_SETTINGS")
+            self.menu_to(SETTINGS_PAGES.index(label), on="MENU_SETTINGS")
             self.key("GREEN")
-            d = self.capture("settings-page-%s" % label.lower(), screen="SETTINGS_MODE")
+
+            want = own_page.get(label, "SETTINGS_MODE")
+            d = self.capture("settings-page-%s" % label.lower(), screen=want)
             q = d["quickmenu"]
-            self.check(q is not None and q["kind"] == "page",
-                       "%s does not open its mode page" % label)
 
             if q is not None:
+                # Every row of the page selectable, then one of them edited
                 for row in range(len(q["rows"])):
                     self.qm_to(row)
-            self.capture("settings-page-%s-rows" % label.lower())
+                    if self.dump()["quickmenu"]["selected"] != row:
+                        self.fail("%s: row %d of the page cannot be selected"
+                                  % (label, row))
+                self.capture("settings-page-%s-rows" % label.lower())
 
-            # One editable row of the page must change with P2
-            if q is not None:
                 skip = ("SYNC", "CALL", "TYPE", "NAC", "MY", "UR", "RPT",
                         "TXT", "CH", "LVL", "SNR", "LOCK", "MSGS", "MSG")
                 for row, item in enumerate(q["rows"]):
@@ -573,7 +577,22 @@ class Tour:
                         break
                 else:
                     if any(r["value"] for r in q["rows"]):
-                        self.fail("%s: no row of the page changes a value" % label)
+                        self.fail("%s: no row of the page changes a value"
+                                  % label)
+            else:
+                # A hand-written page: walk it and edit its first row
+                before = " | ".join(l["text"] for l in d["lines"])
+                for _ in range(3):
+                    self.key("DOWN")
+                self.capture("settings-page-%s-rows" % label.lower())
+                self.menu_to(0, on=want)
+                self.key("GREEN")
+                self.key("DOWN")
+                self.key("GREEN")
+                after = " | ".join(l["text"] for l in self.dump()["lines"])
+                self.capture("settings-page-%s-edited" % label.lower())
+                self.check(before != after,
+                           "%s: no row of the page changes a value" % label)
 
             for _ in range(3):
                 if self.dump()["screen"]["name"] == "MENU_SETTINGS":
@@ -597,11 +616,6 @@ class Tour:
         d = self.capture("channels-editor-new", need=["NEW CHANNEL"])
         self.check(d["header"]["title"] == "NEW CHANNEL",
                    "P1 in the list does not open a new channel")
-
-        # Name: UP changes the character under the caret
-        name_row = " ".join(l["text"] for l in d["lines"])
-        self.key("UP")
-        d = self.capture("channels-editor-name")
 
         # RX frequency: green enters the field, UP/DOWN walk the digits
         self.key("DOWN")
@@ -632,17 +646,14 @@ class Tour:
         # state.channel_index but does not switch the display to the memory
         # screen, so the channel's name is never shown on the main screen.
         self.key("GREEN")
-        d = self.capture("channels-tuned")
+        d = self.capture("channels-tuned", screen="MAIN_MEM")
         self.check(d["radio"]["mode"] == "FM", "the tuned channel is not FM")
         self.check(d["radio"]["rx"] > 0, "the tuned channel has no frequency")
         self.check(d["radio"]["name"].startswith("CH"),
                    "the tuned channel did not land in state.channel: %r"
                    % d["radio"]["name"])
-        if d["screen"]["name"] == "MAIN_VFO":
-            self.finding("green on a channel of the in-radio bank tunes it "
-                         "(state.channel and channel_index are set, the name "
-                         "is in the dump) but leaves the screen on MAIN_VFO "
-                         "and never shows the channel name or index")
+        self.check("CH 1" in " ".join(l["text"] for l in d["lines"]),
+                   "the memory screen does not show the channel name")
 
         # And the editor opens the stored record: P2 on the entry
         self.key_long("P1")
@@ -751,16 +762,11 @@ class Tour:
         self.home()
 
         # The station list is reached with a long P2 in FM (docs/UI.md). The
-        # popup opens on the press edge and keeps the keypad, so the long press
-        # never arrives: this is a finding, not a tour failure, and the setup
-        # page is reached from the popup's own APRS row instead.
+        # keypad reports the press and the long press as two events, so the
+        # popup opens first and the long press has to take the keypad back.
         self.sim.cmd("hold P2 1500")
-        d = self.dump()
-        if d["quickmenu"] is not None and d["screen"]["name"] == "MAIN_VFO":
-            self.finding("P2 long in FM opens the quick menu and not the APRS "
-                         "station list: the popup is opened by the press event "
-                         "and consumes the long press 700 ms later "
-                         "(docs/UI.md says P2 long is APRS)")
+        d = self.capture("aprs-stations", screen="MENU_APRS")
+        self.check(d["quickmenu"] is None, "the popup stayed open over APRS")
         self.key("RED")
 
         if self.qm_goto("APRS"):
@@ -854,7 +860,7 @@ class Tour:
                 self.key("RED")
                 self.top_menu(6)
                 self.key("GREEN")
-                self.menu_to(SETTINGS_PAGES.index("AM"))
+                self.menu_to(SETTINGS_PAGES.index("AM"), on="MENU_SETTINGS")
                 self.key("GREEN")
                 self.capture("mode-am-page", screen="SETTINGS_MODE")
                 for _ in range(3):

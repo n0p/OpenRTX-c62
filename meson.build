@@ -1495,6 +1495,21 @@ ui_quickmenu_test = executable('ui_quickmenu_test',
                                sources : unit_test_src + ['tests/unit/ui_quickmenu.cpp'],
                                kwargs  : unit_test_opts)
 
+# P2 held on the FM main screen has to reach the APRS screens: the keypad
+# reports the press and, 700 ms later, the long press, so the popup is already
+# open when the long press arrives and used to eat it. The test presses the two
+# events in that order (tests/unit/ui_aprs_entry.cpp).
+ui_aprs_entry_test = executable('ui_aprs_entry_test',
+                                sources : unit_test_src + ui_regressions_aprs_src +
+                                          ['tests/unit/ui_aprs_entry.cpp'],
+                                kwargs  : ui_regressions_opts)
+
+# Green on a bank entry loads it as a memory channel: MAIN_MEM, tuner_mode CH,
+# and the VFO kept for the way back (tests/unit/ui_bank_tune.cpp).
+ui_bank_tune_test = executable('ui_bank_tune_test',
+                               sources : unit_test_src + ['tests/unit/ui_bank_tune.cpp'],
+                               kwargs  : unit_test_opts)
+
 m17_packet_test = executable('m17_packet_test',
                               sources : unit_test_src + ['tests/unit/M17_packet.cpp'],
                               kwargs  : unit_test_opts)
@@ -1941,6 +1956,8 @@ test('UI VFO Search Test', ui_vfo_search_test, timeout : 120)
 test('UI Regressions Test', ui_regressions_test, timeout : 120)
 test('UI Regressions Test (no APRS)', ui_regressions_noaprs_test, timeout : 120)
 test('UI Quick Menu Test', ui_quickmenu_test)
+test('UI APRS Entry Test',   ui_aprs_entry_test)
+test('UI Bank Tune Test',    ui_bank_tune_test)
 
 # El mapa del menu despues de cinco pasadas (tests/unit/ui_menu_map.cpp): el
 # registro de modos y el menu rapido son la misma lista, cada fila es pintable,
@@ -2055,6 +2072,23 @@ test('M17 Baseband Replay Test', m17_replay_test, timeout : 120) # ~40 s in CI w
 # is optional and the script skips it when the tools are not installed.
 kiss_loop_script = find_program('tests/host/kiss_loop/run.sh')
 test('KISS Packet Modem Loop', kiss_loop_script, timeout : 300)
+
+# The menu tour of the simulator (docs/SIMULATOR.md): every screen of the C62's
+# interface, walked with keys through the control channel, with a PNG and a
+# text dump per screen. It fails on a blank screen, on a row that cannot be
+# selected, on a value that does not change and on a key that no block of the
+# UI claims. `ninja -C build_sim test` builds the simulator first through the
+# dependency.
+python3 = import('python').find_installation('python3')
+sim_tour_py = files('tools/simulator/tour.py')
+if python3.found() and zlib_dep.found()
+  test('Simulator Menu Tour',
+       python3,
+       args : [sim_tour_py, '--quiet', '--out', meson.current_build_dir() / 'sim-tour'],
+       depends : openrtx_c62_sim,
+       env : ['OPENRTX_SIM_BIN=' + openrtx_c62_sim.full_path()],
+       timeout : 600)
+endif
 
 # The PC protocol's own harness (tests/host/pc_proto_host): three device builds
 # -- protocol, protocol+debug, protocol+debug+bench -- driven through a pty by

@@ -95,7 +95,7 @@ Per screen:
 | Settings page of a mode (NXDN, dPMR, P25, YSF, D-STAR, AM, WFM) | previous / next row | cycle the value | value − (long: coarse) | value + (long: coarse) | back |
 | Settings page, editing | change value | confirm | — | — | leave edit |
 | Default settings | — | Reset, then Reset again | — | — | back |
-| Quick menu | previous / next row | cycle value / open screen | value − (long: coarse) | value + (long: latch) | close |
+| Quick menu | previous / next row | cycle value / open screen | value − (long: coarse) | value + (long: latch; FM main screen: APRS) | close |
 | Channel list | previous / next | tune | new (duplicate / from the VFO) | edit (long: delete) | exit |
 | Channel editor | next / previous field | edit field / apply | caret left, DMR: timeslot | save; in a field: caret right | cancel (leaves the field first) |
 | Contacts list | previous / next | edit | new | edit (long: delete) | back to the menu |
@@ -188,7 +188,8 @@ other's keys:
 6. APRS screens, then messaging screens, then the contact book, then the zone
    browser: each consumes everything while its screen is on and keeps
    `state.txDisable` true.
-7. P2 long on the FM main screen: APRS. Then MONI / P2 long: macro grid.
+7. P2 long on the FM main screen: APRS, and the popup it may have opened on the
+   way is closed first. Then MONI / P2 long: macro grid.
 8. Channels: P1 long opens, and the module consumes everything while open.
 9. The screen switch (main screens, menus, settings).
 
@@ -206,7 +207,7 @@ Transitions, briefly:
 | FSM | States | Enter | Leave |
 |---|---|---|---|
 | Quick menu | closed → open (latched / unlatched) | P2 short on `MAIN_VFO`/`MAIN_MEM`, unlocked, not editing | ESC, PTT, unlatched timeout (`QM_TIMEOUT_MS` = 15 s), `QM_GOTO` row |
-| Channels | `CHS_CLOSED`/`LIST`/`EDIT`/`CONFIRM` | P1 long, or Menu → Channels | ESC on the list; green on the list tunes and closes |
+| Channels | `CHS_CLOSED`/`LIST`/`EDIT`/`CONFIRM` | P1 long, or Menu → Channels | ESC on the list; green on the list tunes, closes, and leaves the radio on `MAIN_MEM` |
 | Contacts | `CTS_CLOSED`/`LIST`/`EDIT`/`CONFIRM` | Menu → Contacts | ESC on the list (back to the menu) |
 | Zones | `ZS_CLOSED`/`ZONES`/`ENTRIES` | Menu → Zones | ESC from the zone list (back to the menu); green on an entry tunes and goes to the VFO |
 | Messages | inbox / view / sent / compose / status | Menu → Messages, quick menu `MSGS`/`MSG`, or reply from a received message | ESC from the inbox (to the menu), from sent (to the inbox), from compose (inbox, draft kept) |
@@ -280,6 +281,11 @@ Fields: `CALL` (10 characters, callsign or DMR id), `NAME` (16 characters) and
 composing). UP/DOWN change the character under the caret, P1/P2 move the caret
 or change the transport, green saves, red discards. A contact with an empty
 callsign is never written.
+
+A save that fails is a save that did not happen: the record is taken back out of
+the book and the count restored, so the list never shows a contact that is not
+on flash (`core/contact_store.c`, `tests/unit/user_stores.cpp`). The editor
+answers `WRITE FAILED` and stays open, and both answers agree.
 
 The book lives in the OEM channel partition, 0x8000..0xC000 (two 8 KiB
 ping-pong slots), next to the channel bank; see
@@ -356,7 +362,13 @@ move the cursor, P1/P2 change the highlighted value (long press for the coarse
 step of the rows that declare one), green cycles it or opens its screen, ESC
 closes, digits 1..9 jump to a row, and PTT closes the popup and keys the radio.
 The popup opens unlatched and closes after 15 s without keys; P2 long latches it
-so it stays until ESC.
+-- except on the FM main screen, where a long press is the APRS entry and the
+popup closes: the keypad reports the press and, 700 ms later, the long press, so
+the popup is open by the time the long press arrives, and the APRS entry is
+decided before the popup takes the key. It has to be that way round, or holding
+P2 in FM only latches the popup and the station list cannot be reached from the
+keypad at all (`tests/unit/ui_aprs_entry.cpp`). Anywhere else P2 long latches
+the popup, so it stays until ESC.
 
 The popup covers the screen: header (mode title left, frequency or mode state
 right) in the 8 pt font, a rule, **seven rows of 12 px in the 6 pt font** (the
