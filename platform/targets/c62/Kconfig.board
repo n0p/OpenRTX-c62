@@ -386,15 +386,33 @@ config P25_TX
 	  Turning it off leaves PTT inert in this mode.
 
 config C62_P25_VOCODER
-	bool "P25 IMBE voice decoder (mbelib-neo or op25 imbe_vocoder)"
+	bool "P25 IMBE voice decoder (our lib/imbe_vocoder)"
 	depends on C62_P25
+	default y
+	help
+	  Decode the 88 IMBE parameters of each P25 voice frame into 8 kHz PCM
+	  with lib/imbe_vocoder, this tree's own C port of mbelib-neo's IMBE
+	  decoder: one static instance, no allocation, no libm, every table in
+	  flash.  195 k instructions per 20 ms frame, 3.9-5.2 % of the M33,
+	  against 9.36 M for mbelib.  docs/IMBE.md has the bit allocation, the
+	  verification against the reference, the cost and the licence.
+
+	  Without it the mode decodes and counts frames but plays nothing.
+
+config C62_P25_MBELIB
+	bool "P25 IMBE voice decoder: mbelib-neo instead of ours"
+	depends on C62_P25
+	select C62_P25_VOCODER
 	default n
 	help
-	  Decode the 88 IMBE parameters of each P25 voice frame into 8 kHz PCM.
-	  The decoder itself is not part of this tree: enable this only after
-	  linking one in (mbelib-neo, GPL-2.0-or-later, or op25's fixed-point
-	  imbe_vocoder, GPL-3.0-or-later), and read the licence and patent note in
-	  docs/RX_P25.md first.
+	  Link mbelib-neo's mbe_processImbe4400Data() as the IMBE backend
+	  instead of lib/imbe_vocoder.  It renders the frame in DVSI's 10 ms
+	  subframes rather than TIA-102.BABA 7.5's spec rendering, which is
+	  what a radio hears, but it costs 9.36 M instructions per frame: more
+	  than the 6 M a 20 ms frame has, so the receiver cannot keep up.  Kept
+	  as a reference build for comparing the two on the radio.  Needs the
+	  mbelib sources with their IMBE path (scripts/c62/fetch_mbelib.sh
+	  fetches the DMR-only mbelib, which has no IMBE).
 
 endmenu
 

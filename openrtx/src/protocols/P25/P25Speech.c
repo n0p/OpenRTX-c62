@@ -128,7 +128,13 @@ static void playCall(void)
 
         struct frame frame;
         if (pop(&frame)) {
-            if (frame.valid && p25Vocoder_decode(frame.params, out) == 0)
+            /* A frame the FEC could not fix is handed over with an error count
+             * over the repeat threshold: the decoder then repeats the previous
+             * model or mutes, TIA-102.BABA 7.7-7.8, instead of the gap being
+             * filled with digital silence.  The PHY reports the LDU's total,
+             * not each frame's, so a good frame carries 0. */
+            int nerr = frame.valid ? 0 : 8;
+            if (p25Vocoder_decode_errs(frame.params, nerr, out) >= 0)
                 statPlayed++;
             else
                 memset(out, 0, P25_VOCODER_PCM_SAMPLES * sizeof(*out));

@@ -18,7 +18,7 @@ carries them. Enabled by `CONFIG_P25_TX` (default **y** with `CONFIG_C62_P25`).
 | TDU | done |
 | NID (BCH(63,16) NAC + DUID), status symbols, interleaving | done |
 | C4FM shaper (RRC α=0.2, 10 samples/symbol, 48 kHz) | done, shared with System Fusion (`protocols/C4FM`) |
-| voice (IMBE encoder) | **absent on purpose**, see below: the call goes out as HDU + TSBK + TDU |
+| voice (IMBE encoder) | **absent**, see below: the call goes out as HDU + TSBK + TDU |
 | deviation calibration | **pending**: `P25_TX_LEVEL` is a starting point, not a measurement |
 | on-air test | **pending**: needs a bench and a real P25 receiver |
 | cost | 1.36 M instructions per 180 ms frame, 3.0 – 4.1 % of the M33 |
@@ -54,28 +54,28 @@ talkgroup is read back by dsd-neo as "Group 1 Source 1193046".
 
 ## Voice, and why there is none
 
-P25 Phase 1 voice is IMBE, and there is no free encoder for it:
+P25 Phase 1 voice is IMBE, and this firmware has **no IMBE encoder**: the
+transmitter sends HDU, one TSBK frame every 180 ms and TDU on the PTT release.
+That is a valid, decodable P25 transmission with no voice in it: a receiver
+locks the NAC, shows the talkgroup and the source, and plays silence.
 
-* `mbelib` / `mbelib-neo` and the `op25` vocoder are **decoders**. Both are
-  built from the same analysis of the DVSI AMBE/IMBE bit stream; neither has an
-  encoder half, and the encoder is what the patents and the DVSI licence cover.
-* Writing one would mean reimplementing the IMBE analysis (pitch, V/UV
-  decisions, the 88-parameter quantiser) from scratch against a codec whose
-  specification is not public — months of work, and still encumbered.
-
-So the transmitter sends what it can send legally and correctly: **HDU, then
-one TSBK frame every 180 ms, then TDU on the PTT release**. That is a valid,
-decodable P25 transmission with no voice in it — a receiver locks the NAC, shows
-the talkgroup and the source, and plays silence. It is what the firmware keys
-when `CONFIG_C62_P25_VOCODER` is off on the receive side too.
+The reason is not that no encoder exists — `docs/IMBE.md` §8 documents two,
+mbelib-neo's `imbe7200x4400_enc.c` and Pavel Yazev's fixed-point encoder which
+is already in this tree under `lib/opendmr/encoder/` — but that porting one is a
+work package of the size `lib/dmr_encoder` was, and that the only acceptance
+test that matters ("a real P25 radio decodes it") needs hardware the bench here
+does not have. In short: mbelib-neo's encoder costs 221 k instructions per frame
+on x86-64 with its SIMD kernels, so a few million in scalar C on the M33 —
+affordable in a transmit-only mode (the AMBE+2 encoder measures 1.43 M, 28-38 %
+of the core), not in the receive path.
 
 A platform that has an encoder installs it with `p25Tx_setVoiceSource()`: one
 call per LDU asking for 11 bytes of the 88 IMBE parameters, packed MSB first —
 the layout the receiver's vocoder takes. With it, LDU1/LDU2 go out instead of
 the TSBKs and the call is a normal voice call.
 
-Note the difference from DMR (`docs/DMR_TX.md`), which does speak: AMBE+2 has a
-public C encoder (the OpenDMR one, `lib/dmr_encoder`), IMBE does not.
+Note the difference from DMR (`docs/DMR_TX.md`), which does speak: AMBE+2's
+encoder was already in the tree (`lib/dmr_encoder`) and gets 1.43 M per frame.
 
 ## Deviation: a starting point, not a measurement
 

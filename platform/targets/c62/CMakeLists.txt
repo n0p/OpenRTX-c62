@@ -777,7 +777,45 @@ if(CONFIG_C62_P25)
 
   if(CONFIG_C62_P25_VOCODER)
     target_compile_definitions(app PRIVATE CONFIG_P25_VOCODER)
-    message(STATUS "C62: P25 IMBE vocoder enabled")
+    if(CONFIG_C62_P25_MBELIB)
+      # mbelib-neo instead of lib/imbe_vocoder, for an A/B on the radio; it has
+      # to come from the mbelib source tree the DMR voice path already knows,
+      # built as its own static library (C89-ish, warns on Zephyr's flags).
+      if(NOT EXISTS ${C62_MBELIB}/mbelib.c)
+        message(FATAL_ERROR "CONFIG_C62_P25_MBELIB needs mbelib in "
+                            "${C62_MBELIB}: run scripts/c62/fetch_mbelib.sh")
+      endif()
+      add_library(c62_p25_mbelib STATIC
+        ${C62_MBELIB}/mbelib.c
+        ${C62_MBELIB}/ambe3600x2450.c
+        ${C62_MBELIB}/imbe7200x4400.c
+        ${C62_MBELIB}/mbe_ecc.c)
+      target_compile_options(c62_p25_mbelib PRIVATE
+        $<TARGET_PROPERTY:zephyr_interface,INTERFACE_COMPILE_OPTIONS>)
+      target_compile_definitions(c62_p25_mbelib PRIVATE
+        MBE_THREAD_LOCAL= CONFIG_P25_MBELIB)
+      target_include_directories(c62_p25_mbelib PRIVATE ${C62_MBELIB})
+      target_link_libraries(app PRIVATE c62_p25_mbelib)
+      message(STATUS "C62: P25 IMBE vocoder: mbelib-neo (reference, 9.36 M instr/frame)")
+    else()
+      add_subdirectory(${OPENRTX_ROOT}/lib/imbe_vocoder
+                       ${CMAKE_BINARY_DIR}/imbe_vocoder)
+      # Build it with the Zephyr compiler flags (CPU, FPU, ABI, include paths),
+      # as lib/dmr_vocoder and libtetra are: without them the archive is built
+      # for the default CPU and the link fails on VFP register arguments.
+      target_compile_options(imbe_vocoder PRIVATE
+        $<TARGET_PROPERTY:zephyr_interface,INTERFACE_COMPILE_OPTIONS>)
+      target_compile_definitions(imbe_vocoder PRIVATE
+        $<TARGET_PROPERTY:zephyr_interface,INTERFACE_COMPILE_DEFINITIONS>)
+      target_include_directories(imbe_vocoder PRIVATE
+        $<TARGET_PROPERTY:zephyr_interface,INTERFACE_INCLUDE_DIRECTORIES>)
+      target_include_directories(imbe_vocoder SYSTEM PRIVATE
+        $<TARGET_PROPERTY:zephyr_interface,INTERFACE_SYSTEM_INCLUDE_DIRECTORIES>)
+      target_link_libraries(app PRIVATE imbe_vocoder)
+      message(STATUS "C62: P25 IMBE vocoder: lib/imbe_vocoder (ours, 195 k instr/frame)")
+    endif()
+  else()
+    message(STATUS "C62: P25 IMBE vocoder: none (voice counted, not played)")
   endif()
 endif()
 
