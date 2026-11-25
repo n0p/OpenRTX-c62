@@ -266,7 +266,11 @@ Reglas:
   rojo en la pantalla de memoria) y barre desde ahí: la búsqueda sólo arranca en
   la pantalla de VFO (`core/vfo_search_service.c`).
 - **`Scan` no interrumpe una llamada**: el servicio para el escáner al ver el PTT
-  y devuelve el receptor donde estaba (`docs/SCAN.md`).
+  y devuelve el receptor donde estaba (`docs/SCAN.md`). Abrir el menú **para un
+  scan de memorias en curso**: el menú es la puerta a cambiar de canal, de modo
+  o de frecuencia, y `docs/SCAN.md` pide pararlo antes de cualquier cambio
+  manual; además la fila `Mode` mostraría el modo del canal que el scan está
+  sintonizando en ese momento.
 - **`Spectrum` puede negarse**: un modo digital necesita el discriminador y un
   receptor parado no tiene RSSI para barrer; entonces pita y deja la pantalla
   donde estaba (`docs/SPECTRUM.md`).

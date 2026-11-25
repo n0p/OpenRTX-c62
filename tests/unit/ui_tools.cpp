@@ -404,6 +404,24 @@ TEST_CASE("every row starts the service it names", "[ui][tools]")
         scan_service_stop();
     }
 
+    SECTION("opening the menu stops a running memory scan") {
+        bootBank();
+        resetUi();
+
+        REQUIRE(scan_service_start(SCAN_MODE_MEMORY));
+        struct scanStatus st;
+        REQUIRE(scan_service_status(&st));
+        REQUIRE(st.running);
+
+        /* The menu is the door to a manual change: the scan stops first */
+        pressKey(KEY_F1, true);
+        REQUIRE(ui_tools_isOpen());
+        REQUIRE(scan_service_status(&st));
+        REQUIRE_FALSE(st.running);
+
+        scan_service_stop();
+    }
+
     SECTION("Scan with an empty bank beeps and leaves the radio alone") {
         resetUi();
         openOn("Scan");

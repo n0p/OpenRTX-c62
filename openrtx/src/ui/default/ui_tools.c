@@ -508,6 +508,17 @@ static void listKey(kbd_msg_t *msg, bool *sync_rtx)
 
 void ui_tools_open(void)
 {
+#ifdef CONFIG_SCAN
+    /*
+     * The menu is the door to changing the channel, the mode or the frequency,
+     * and a running memory scan retunes the radio under all three of them:
+     * docs/SCAN.md asks the interface to stop it before any manual change, and
+     * a menu whose Mode row flickered with the channel being scanned would be
+     * lying about what green is going to apply.
+     */
+    scan_service_stop();
+#endif
+
     ts.backScreen = (state.ui_screen == MAIN_MEM) ? MAIN_MEM : MAIN_VFO;
     ts.screen = TS_LIST;
     ts.sel    = 0;
