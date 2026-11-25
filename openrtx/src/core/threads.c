@@ -29,6 +29,21 @@
 /* Mutex for concurrent access to RTX state variable */
 pthread_mutex_t rtx_mutex;
 
+/*
+ * Liveness of the UI thread.
+ *
+ * The RTX thread, the audio worker and the protocol thread can all be working
+ * while the UI thread is stuck: that is what the aeronautical-AM freeze looked
+ * like from outside (receiver working, protocol answering, keyboard and screen
+ * dead). The main thread feeds the watchdog, so a UI thread that never comes
+ * back used to leave the radio like that until the battery was pulled. It is
+ * stamped here, once per pass, and the main loop stops feeding the watchdog
+ * when the stamps stop: the reset is the safe state, because the PA enable
+ * lines are off until a transmission keys them.
+ */
+static volatile uint32_t uiThreadBeat;
+static const uint32_t    UI_THREAD_STALL_MS = 3000;
+
 /**
  * \internal Thread managing user input and UI
  */
@@ -52,6 +67,7 @@ void *ui_threadFunc(void *arg)
     while(state.devStatus != SHUTDOWN)
     {
         time = getTick();
+        uiThreadBeat++;
 
         if(input_scanKeyboard(&kbd_msg))
         {
@@ -193,10 +209,37 @@ void *main_thread(void *arg)
         rtx_supervise();
 
         #if defined(PLATFORM_C62)
-        /* The watchdog is refreshed by this thread and nobody else: if the main
+        /*
+         * The watchdog is refreshed by this thread and nobody else: if the main
          * thread stops running, the radio is not usable and a reset is the safe
-         * state (the PA enable lines are off until a transmission keys them). */
-        platform_wdtFeed();
+         * state (the PA enable lines are off until a transmission keys them).
+         *
+         * And it is refreshed only while the UI thread is alive. A UI thread
+         * parked for ever leaves a radio that still receives and still answers
+         * the cable, which looks like a working radio to everything except the
+         * operator: no key does anything and there is no way back. Stopping the
+         * feed turns that into a reset, and the reset comes up in receive.
+         */
+        static uint32_t lastBeat;
+        static uint32_t beatTime;
+        static bool     stalled;
+
+        uint32_t beat = uiThreadBeat;
+        if (beat != lastBeat) {
+            lastBeat = beat;
+            beatTime = (uint32_t)getTick();
+            stalled = false;
+        } else if ((!stalled)
+                   && (((uint32_t)getTick() - beatTime) > UI_THREAD_STALL_MS)) {
+            stalled = true;
+            printf("UI: thread stalled %u ms, watchdog left to reset\r\n",
+                   (unsigned)UI_THREAD_STALL_MS);
+        }
+
+        if (!stalled)
+            platform_wdtFeed();
+        #else
+        (void)UI_THREAD_STALL_MS;
         #endif
 
         // Run this loop once every 5ms

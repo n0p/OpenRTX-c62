@@ -67,12 +67,20 @@ void csk6codec_terminate(void);
  * The caller handles GPIOs and radio AF muxing, and passes only valid,
  * compatible routes.
  *
+ * Bounded: the route is recorded and the worker applies it, and the call waits
+ * for that only up to CSK6_ROUTE_TIMEOUT_MS. The lock itself is taken with a
+ * deadline too, because the worker holds it across the DSP's shared-memory
+ * calls: a DSP that does not answer costs this route, never the caller's
+ * thread. A negative return means the route was not applied; the board layer
+ * then leaves the path closed so that the next request tries again.
+ *
  * @param source: audio source.
  * @param sink: audio destination.
  * @param enabled: true to enable, false to disable and cancel its stream.
+ * @return zero when the route was applied, -ETIMEDOUT when it was not.
  */
-void csk6codec_setRoute(enum AudioSource source, enum AudioSink sink,
-                        bool enabled);
+int csk6codec_setRoute(enum AudioSource source, enum AudioSink sink,
+                       bool enabled);
 
 /**
  * Install or remove the processing of the radio audio towards the speaker.

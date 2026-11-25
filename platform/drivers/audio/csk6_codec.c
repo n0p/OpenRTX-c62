@@ -69,6 +69,14 @@ BUILD_ASSERT(((int)SOURCE_MIC == (int)SINK_SPK)
 #define DRAIN_MARGIN_MS 20
 /* Longest a route change waits for the worker to apply it */
 #define CSK6_ROUTE_TIMEOUT_MS 250
+/*
+ * Longest a caller waits for the audio lock itself. The worker holds it across
+ * the DSP's shared-memory calls (ICStream_Consumer_fetchRemote(),
+ * AudioTrack_obtainBuffer()), and a DSP that stops answering would otherwise
+ * park the caller for ever: this is the deadline that turns "the radio is hung"
+ * into "this route or this stream failed".
+ */
+#define CSK6_LOCK_TIMEOUT_MS  250
 /* Longest the shutdown waits for the worker to leave */
 #define CSK6_WORKER_JOIN_MS 500
 #define NO_SOURCE (-1)
@@ -335,6 +343,34 @@ static bool waitForChange(int64_t deadline)
 
     k_condvar_wait(&changed, &audioMutex, K_MSEC(remaining));
     return true;
+}
+
+/**
+ * Take the audio lock with a deadline.
+ *
+ * The worker holds this lock across the DSP shared-memory calls, so a DSP that
+ * stops answering must cost the caller its route or its stream, never its
+ * thread. The line is throttled: a wedged worker would otherwise turn the log
+ * into the reason the caller cannot finish.
+ *
+ * @param what: name of the operation, for the log line.
+ * @return true if the lock was taken.
+ */
+static bool lockAudio(const char *what)
+{
+    if (k_mutex_lock(&audioMutex, K_MSEC(CSK6_LOCK_TIMEOUT_MS)) == 0)
+        return true;
+
+    static int64_t lastLog;
+
+    int64_t now = k_uptime_get();
+    if ((now - lastLog) >= 1000) {
+        lastLog = now;
+        LOG_ERR("audio lock busy for %d ms (%s): giving up",
+                CSK6_LOCK_TIMEOUT_MS, what);
+    }
+
+    return false;
 }
 
 /**
@@ -1149,13 +1185,22 @@ void csk6codec_setRxProcessor(csk6codec_rxProcessor processor)
     rxProcessor = processor;
 }
 
-void csk6codec_setRoute(enum AudioSource source, enum AudioSink sink,
-                        bool enabled)
+int csk6codec_setRoute(enum AudioSource source, enum AudioSink sink,
+                       bool enabled)
 {
-    k_mutex_lock(&audioMutex, K_FOREVER);
+    if (!lockAudio("route")) {
+        /*
+         * The worker is inside a DSP call that is not coming back. The route is
+         * not recorded and the caller is told: the board layer keeps the path
+         * closed, so the next request tries again instead of believing in an
+         * audio route that does not exist.
+         */
+        return -ETIMEDOUT;
+    }
+
     if (!running) {
         k_mutex_unlock(&audioMutex);
-        return;
+        return -ENODEV;
     }
 
     if ((sink == SINK_MCU) && (source != SOURCE_MCU)) {
@@ -1182,16 +1227,20 @@ void csk6codec_setRoute(enum AudioSource source, enum AudioSink sink,
     routesDirty = true;
     k_sem_give(&workerWake);
     int64_t deadline = k_uptime_get() + CSK6_ROUTE_TIMEOUT_MS;
+    int ret = 0;
     while (routesDirty && running) {
         int64_t remaining = deadline - k_uptime_get();
         if (remaining <= 0) {
             LOG_WRN("route %d->%d not applied in %d ms: worker stalled",
                     (int)source, (int)sink, CSK6_ROUTE_TIMEOUT_MS);
+            ret = -ETIMEDOUT;
             break;
         }
         k_condvar_wait(&changed, &audioMutex, K_MSEC(remaining));
     }
     k_mutex_unlock(&audioMutex);
+
+    return ret;
 }
 
 /**
@@ -1270,7 +1319,9 @@ static int csk6codec_start(uint8_t channel, const void *config,
                                   &outputs[channel].endpoint;
     int ret = 0;
 
-    k_mutex_lock(&audioMutex, K_FOREVER);
+    if (!lockAudio("stream start"))
+        return -EBUSY;
+
     const bool routed = input ? inputEnabled[channel] :
                                 (outputSource[channel] == SOURCE_MCU);
     if (!running || !routed) {
@@ -1297,7 +1348,9 @@ static int csk6codec_start(uint8_t channel, const void *config,
  */
 static int csk6codec_data(struct streamCtx *ctx, stream_sample_t **buffer)
 {
-    k_mutex_lock(&audioMutex, K_FOREVER);
+    if (!lockAudio("stream data"))
+        return -EBUSY;
+
     struct endpoint *ep = ctx->priv;
     int count = -EIO;
     *buffer = NULL;
@@ -1320,7 +1373,9 @@ static int csk6codec_data(struct streamCtx *ctx, stream_sample_t **buffer)
 static int csk6codec_sync(struct streamCtx *ctx, uint8_t dirty)
 {
     (void)dirty; /* Samples are converted by the worker as it traverses them. */
-    k_mutex_lock(&audioMutex, K_FOREVER);
+    if (!lockAudio("stream sync"))
+        return -EBUSY;
+
     struct endpoint *ep = ctx->priv;
     if ((ep == NULL) || (ep->ctx != ctx) || (ep->error != 0) || ep->busy) {
         k_mutex_unlock(&audioMutex);
@@ -1364,7 +1419,9 @@ static int csk6codec_sync(struct streamCtx *ctx, uint8_t dirty)
  */
 static void csk6codec_halt(struct streamCtx *ctx)
 {
-    k_mutex_lock(&audioMutex, K_FOREVER);
+    if (!lockAudio("stream halt"))
+        return;
+
     struct endpoint *ep = ctx->priv;
     if ((ep != NULL) && (ep->ctx == ctx))
         detach(ep);
@@ -1401,7 +1458,9 @@ static void finishOutputStream(struct endpoint *ep, struct streamCtx *ctx)
  */
 static void csk6codec_stop(struct streamCtx *ctx)
 {
-    k_mutex_lock(&audioMutex, K_FOREVER);
+    if (!lockAudio("stream stop"))
+        return;
+
     struct endpoint *ep = ctx->priv;
     if ((ep != NULL) && (ep->ctx == ctx)) {
         finishOutputStream(ep, ctx);
