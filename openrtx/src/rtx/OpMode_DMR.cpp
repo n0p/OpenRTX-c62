@@ -410,8 +410,13 @@ bool OpMode_DMR::startTx(const rtxStatus_t *status)
          * A destination that cannot be encoded: no call. Block the PTT until
          * it is released and the settings change, instead of returning here
          * and being asked again on the next 30 ms tick for ever.
+         *
+         * The guard goes back to idle: a transmission that never opened must
+         * not leave a phase behind for the supervisor to time out, or a
+         * refused PTT reads as a stuck transmitter 250 ms later.
          */
         txBlocked = true;
+        txg_exit(guard, (uint32_t)getTick(), TXG_REASON_START_FAILED);
         return false;
     }
 
@@ -454,6 +459,11 @@ bool OpMode_DMR::startTx(const rtxStatus_t *status)
 
     txg_streamsOpen(guard, (uint32_t)getTick());
     radio_enableTx();
+    if (radio_getStatus() != TX) {
+        /* The driver refused to key (the gate, or a frequency it cannot use) */
+        stopTx();
+        return false;
+    }
     txg_note(guard, TXG_EV_KEYED, (uint32_t)getTick());
     modeStats_txKey(MS_MODE_DMR, (uint32_t)getTick());
     return true;
@@ -631,11 +641,15 @@ bool OpMode_DMR::txSlot(const rtxStatus_t *status)
 
 bool OpMode_DMR::needDataTx(const rtxStatus_t *status) const
 {
-    if (status->txDisable != 0)
+    /*
+     * A queued message is the only transmission in this radio that starts with
+     * nobody pressing anything, so it is the one that most needs the gate: it
+     * waits for the mode change to end and settle, and it never runs with the
+     * PTT down during it.
+     */
+    if (!rtx_unattendedTxAllowed(status))
         return false;
     if (txBlocked)
-        return false;
-    if (platform_getPttStatus())
         return false;
     if ((status->opStatus != RX) && (status->opStatus != OFF))
         return false;
@@ -649,12 +663,22 @@ bool OpMode_DMR::needDataTx(const rtxStatus_t *status) const
 
 bool OpMode_DMR::startDataTx(const rtxStatus_t *status)
 {
+    /*
+     * The message call is a transmission like any other and the guard has to
+     * see it: without a phase here the supervisor would have nothing to time
+     * out, and a stream that never accepts a block would leave the PA keyed
+     * until the battery died (the failure this path had).
+     */
+    struct txGuard *guard = rtx_getTxGuard();
+    txg_enter(guard, (uint32_t)getTick());
+
 #ifdef CONFIG_DMR_SMS
     /* Ours: the queued message goes into the package's list first */
     smsStartTx(status);
 #endif
 
     if (!startBaseband(status)) {
+        txg_streamsFailed(guard, (uint32_t)getTick());
         stopTx();
         return false;
     }
@@ -669,7 +693,14 @@ bool OpMode_DMR::startDataTx(const rtxStatus_t *status)
     txSilence = 0;
     txAligned = false;
 
+    txg_streamsOpen(guard, (uint32_t)getTick());
     radio_enableTx();
+    if (radio_getStatus() != TX) {
+        stopTx();
+        return false;
+    }
+    txg_note(guard, TXG_EV_KEYED, (uint32_t)getTick());
+    modeStats_txKey(MS_MODE_DMR, (uint32_t)getTick());
     return true;
 }
 
@@ -810,7 +841,12 @@ void OpMode_DMR::update(rtxStatus_t *const rtx, const bool newCfg)
     }
 
 #ifdef CONFIG_DMR_TX
-    if (platform_getPttStatus() && (rtx->txDisable == 0) && !txBlocked) {
+    /*
+     * The gate, not the level of the PTT line: a change of mode cannot key the
+     * transmitter, the press has to be the operator's and to have lasted long
+     * enough. This is the path that used to go on the air on a mode change.
+     */
+    if (rtx_keyingAllowed(rtx) && !txBlocked) {
         stopSampling();
         radio_disableRtx();
         if (startTx(rtx)) {

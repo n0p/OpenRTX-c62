@@ -417,8 +417,7 @@ void OpMode_YSF::update(rtxStatus_t *const rtx, const bool newCfg)
         platform_ledOff(GREEN);
 
 #ifdef CONFIG_YSF_TX
-    if (platform_getPttStatus() && (rtx->txDisable == 0)
-        && (txBlocked == false)) {
+    if (rtx_keyingAllowed(rtx) && (txBlocked == false)) {
         stopSampling();
         radio_disableRtx();
         if (startTx(rtx)) {

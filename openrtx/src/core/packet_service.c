@@ -27,6 +27,7 @@
 #include "core/settings.h"
 #include "core/psram_state.h"
 #include "interfaces/audio.h"
+#include "rtx/rtx.h"
 #include "interfaces/delays.h"
 #include "interfaces/platform.h"
 #include "interfaces/radio.h"
@@ -215,8 +216,19 @@ static bool transmit(const uint8_t *frame, size_t len)
     if ((pkt_modem_info((pkt_modem_t)svc.modem)->caps & PKT_CAP_TX) == 0)
         return false;
 
-    /* The microphone path is the PTT's; never fight it */
+    /*
+     * The microphone path is the PTT's; never fight it. The gate is the other
+     * half: this service keys the PA from its own thread, so it has to ask
+     * exactly like a mode does -- no mode change in progress, the mode settled,
+     * the PTT up. And it only transmits where it belongs: the packet modem
+     * rides on FM (see docs/KISS.md), never inside a digital mode whose own
+     * chain owns the transmitter.
+     */
     if (platform_getPttStatus())
+        return false;
+    if (rtx_currentOpMode() != OPMODE_FM)
+        return false;
+    if (!rtx_unattendedTxAllowed(NULL))
         return false;
 
     rxClose();
@@ -243,6 +255,14 @@ static bool transmit(const uint8_t *frame, size_t len)
     }
 
     radio_enableTx();
+    if (radio_getStatus() != TX)
+    {
+        /* The gate refused: nothing was keyed and the paths go back */
+        audioStream_terminate(txStream);
+        audioPath_release(txPath);
+        radio_enableRx();
+        return false;
+    }
     platform_ledOn(RED);
 
     int16_t *buf  = outputStream_getIdleBuffer(txStream);
@@ -269,6 +289,22 @@ static bool transmit(const uint8_t *frame, size_t len)
         {
             svc.txErrors++;
             break;
+        }
+
+        /*
+         * A mode change revokes the permission while the frame is in flight
+         * (switchMode() unkeys first and closes the veto after). Stop here and
+         * leave the receiver to the RTX thread, which owns it from now on: this
+         * thread must not put the radio back in RX behind a mode that is
+         * starting its own.
+         */
+        if (!rtx_unattendedTxAllowed(NULL))
+        {
+            radio_disableRtx();
+            audioStream_stop(txStream);
+            audioPath_release(txPath);
+            platform_ledOff(RED);
+            return false;
         }
 
         buf = outputStream_getIdleBuffer(txStream);

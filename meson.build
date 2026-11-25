@@ -1760,6 +1760,18 @@ mode_arena_test = executable('mode_arena_test',
                                         'dependencies'       : [catch2_dep],
                                         'link_args'          : linux_l_args})
 
+# The keying rule on its own (rtx/KeyGate.h): a mode change vetoes keying, the
+# PTT has to be released once after it and a press has to last. Header-only, so
+# the test needs nothing but Catch2.
+key_gate_test = executable('key_gate_test',
+                           sources : ['tests/unit/key_gate.cpp'],
+                           kwargs  : {'c_args'             : linux_c_args,
+                                      'cpp_args'           : linux_cpp_args,
+                                      'include_directories': linux_inc +
+                                           ['openrtx/include'],
+                                      'dependencies'       : [catch2_dep],
+                                      'link_args'          : linux_l_args})
+
 # The mode switch through the firmware's own entry points (rtx.cpp): the real
 # modes of the Linux build, every ordered pair of them, on the real arena. The
 # radio driver, the audio paths and the UI come along in unit_test_src, which
@@ -1870,6 +1882,7 @@ test('GFX Text Test',        gfx_text_test)
 test('S-Level Test', slevel_test)
 test('Audio Codec Test',     audio_codec_test)
 test('TX Guard Test',        tx_guard_test)
+test('Key Gate Test',        key_gate_test)
 test('Mode Arena Test',      mode_arena_test)
 test('Mode Switch Test',     mode_switch_test)
 

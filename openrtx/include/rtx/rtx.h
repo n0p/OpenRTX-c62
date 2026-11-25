@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include "core/cps.h"
 #include "rtx/TxGuard.h"
+#include "rtx/KeyGate.h"
 #include <pthread.h>
 
 #ifdef __cplusplus
@@ -174,6 +175,68 @@ void rtx_supervise();
  * @return the guard, never NULL.
  */
 struct txGuard *rtx_getTxGuard();
+
+/**
+ * May the PTT key the transmitter now?
+ *
+ * The one rule every mode asks before it starts a transmission: the radio is
+ * not changing mode, the PTT has been released at least once since the last
+ * change and the press has lasted long enough to be the operator's. It also
+ * carries the per-configuration "no transmit" flag (menus, receive-only
+ * channels, the spectrum analyser).
+ *
+ * @param status: the configuration the caller is acting on, or NULL to skip the
+ *                txDisable check.
+ * @return true only if keying is permitted.
+ */
+bool rtx_keyingAllowed(const rtxStatus_t *status);
+
+/**
+ * May an unattended transmission start now? (a queued short message, the
+ * packet modem: no operator and no PTT.)
+ *
+ * It waits for the mode change to end and settle, and never runs while the PTT
+ * is down during it.
+ *
+ * @param status: the configuration the caller is acting on, or NULL.
+ * @return true only if the transmitter may be keyed without the PTT.
+ */
+bool rtx_unattendedTxAllowed(const rtxStatus_t *status);
+
+/**
+ * Is the transmit path permitted at this instant?
+ *
+ * This is the choke point the platform's radio_enableTx() asks before it drives
+ * the PA: the transmitter is keyed only while the RTX layer says a permitted
+ * transmission is in progress. A path that reaches the driver without going
+ * through the gate -- another thread, a mode that forgot, a call during a mode
+ * change -- is refused instead of keying the radio.
+ *
+ * @return true if the PA may be keyed.
+ */
+bool rtx_txPermitted(void);
+
+/**
+ * True while a mode change is in progress.
+ *
+ * @return true during switchMode(), including the retune, the teardown and the
+ *         construction of the new mode.
+ */
+bool rtx_isSwitching(void);
+
+/**
+ * Get the mode the RTX thread is running.
+ *
+ * @return OPMODE_* of the active mode, OPMODE_NONE while idle.
+ */
+uint8_t rtx_currentOpMode(void);
+
+/**
+ * Get the keying gate, for the diagnostics and the host tests.
+ *
+ * @return the gate, never NULL.
+ */
+struct keyGate *rtx_getKeyGate();
 
 /**
  * Get current RSSI in dBm.

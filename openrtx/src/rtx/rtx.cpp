@@ -70,6 +70,20 @@ static struct txGuard  txGuard;
 static bool            txAbortPending;
 static uint32_t        txAbortTime;
 
+/*
+ * Transmit permission.
+ *
+ * switching is true from the moment a mode change starts until its new mode is
+ * enabled: the gate vetoes every keying attempt in between, whatever the PTT
+ * line says, and the platform's radio_enableTx() refuses to drive the PA.
+ *
+ * The gate itself (rtx/KeyGate.h) is the rule the modes ask: a release of the
+ * PTT since the change and a press that lasts long enough. Both live under
+ * txMutex, which is never held across a call into audio, radio or a mode.
+ */
+static struct keyGate keyGate;
+static bool            switching;
+
 static OpMode  *currMode;               // Pointer to currently active opMode handler
 static OpMode     noMode;               // Empty opMode handler for opmode::NONE
 
@@ -211,22 +225,85 @@ static OpMode *constructMode(uint8_t mode, void *block)
 }
 
 /**
+ * Force the transmitter off and prove it, before a mode change touches anything.
+ *
+ * A mode change reconfigures a half-duplex chip for a different modulation, so
+ * it has to start from a radio that is not transmitting -- and the check has to
+ * be on the PA enable lines, not on the driver's own variable, because the line
+ * that is still high is exactly the one that matters.
+ *
+ * @return true when the transmit path is off.
+ */
+static bool forceTxOff(void)
+{
+    /* The first attempt is the normal one; two retries cover a busy bus */
+    for (unsigned attempt = 0; attempt < 3; attempt++)
+    {
+        radio_disableRtx();
+        if (radio_txPathOff())
+            return true;
+    }
+
+    return false;
+}
+
+/**
+ * Leave the radio idle and receiving, with the PA off.
+ *
+ * The path a mode change takes when it cannot construct the new mode: no
+ * half-configured chip, no streams, the transmitter down and the receiver
+ * available again for the squelch, the scan and the UI.
+ */
+static void leaveRadioIdle(void)
+{
+    forceTxOff();
+    radio_enableRx();
+}
+
+/**
  * Leave the active mode and enter another one, or none.
  *
- * The chip is retuned first (radio_setOpmode() is the driver's contract for a
- * real mode change and it is told before the old mode is shut down), then the
- * old mode stops its streams and the object dies, then the block goes back and
- * the new object is constructed in it. currMode is noMode while the block is
- * free, so a reader on another thread (rxSquelchOpen(), from the UI and the
- * scan) finds "no carrier" instead of memory that is being reused.
+ * The order is the safety property, not a detail:
+ *
+ *  1. keying is vetoed and the PTT the gate had seen is forgotten, so the mode
+ *     that is about to be constructed cannot key on a stale level;
+ *  2. the PA is forced off and read back;
+ *  3. only then is the chip told about the new mode (radio_setOpmode() is the
+ *     driver's contract for a real mode change and it is told before the old
+ *     mode is shut down), the old mode stops its streams and the object dies;
+ *  4. the block goes back, the new object is constructed in it and enabled;
+ *  5. the gate stays closed for KEYGATE_GUARD_MS after that and needs a
+ *     release of the PTT before anything may key.
+ *
+ * currMode is noMode while the block is free, so a reader on another thread
+ * (rxSquelchOpen(), from the UI and the scan) finds "no carrier" instead of
+ * memory that is being reused.
  *
  * A mode that cannot be constructed leaves the radio idle on OPMODE_NONE: no
- * half-configured chip, no streams, and the reason in the log.
+ * half-configured chip, no streams, PA off, receiver available, and the reason
+ * in the log.
  *
  * @param mode: OPMODE_* to enter.
  */
 static void switchMode(uint8_t mode)
 {
+    pthread_mutex_lock(&txMutex);
+    switching = true;
+    keyGate_beginTransition(&keyGate, (uint32_t)getTick());
+    pthread_mutex_unlock(&txMutex);
+
+    /*
+     * 1. Transmitter down and verified, before the chip is reconfigured for a
+     *    mode that may not even exist.
+     */
+    if (!forceTxOff())
+    {
+        #if defined(PLATFORM_C62)
+        printf("MODE %u: PA read-back says still keyed before the change\r\n",
+               (unsigned)mode);
+        #endif
+    }
+
     radio_setOpmode(static_cast< enum opmode >(mode));
 
     currMode->disable();
@@ -241,7 +318,13 @@ static void switchMode(uint8_t mode)
     rtxStatus.opStatus = OFF;
 
     if (mode == OPMODE_NONE)
+    {
+        pthread_mutex_lock(&txMutex);
+        keyGate_endTransition(&keyGate, (uint32_t)getTick());
+        switching = false;
+        pthread_mutex_unlock(&txMutex);
         return;
+    }
 
     OpMode *fresh = nullptr;
     int err = modeArena_acquire(mode);
@@ -271,10 +354,17 @@ static void switchMode(uint8_t mode)
          */
         modeArena_release();
         radio_setOpmode(OPMODE_NONE);
+        leaveRadioIdle();
         rtxStatus.opMode = OPMODE_NONE;
+
+        pthread_mutex_lock(&txMutex);
+        keyGate_endTransition(&keyGate, (uint32_t)getTick());
+        switching = false;
+        pthread_mutex_unlock(&txMutex);
+
         #if defined(PLATFORM_C62)
-        printf("MODE %u: no arena block (%d), staying idle\r\n",
-               (unsigned)mode, err);
+        printf("MODE %u: no arena block (%d), staying idle, PA off, rx=%d\r\n",
+               (unsigned)mode, err, (int)(radio_getStatus() == RX));
         #else
         (void)err;
         #endif
@@ -283,6 +373,11 @@ static void switchMode(uint8_t mode)
 
     currMode = fresh;
     currMode->enable();
+
+    pthread_mutex_lock(&txMutex);
+    keyGate_endTransition(&keyGate, (uint32_t)getTick());
+    switching = false;
+    pthread_mutex_unlock(&txMutex);
 }
 
 
@@ -329,6 +424,8 @@ void rtx_init(pthread_mutex_t *m)
 
     pthread_mutex_lock(&txMutex);
     txg_init(&txGuard, (uint32_t)getTick());
+    keyGate_init(&keyGate, (uint32_t)getTick());
+    switching = false;
     txAbortPending = false;
     pthread_mutex_unlock(&txMutex);
 
@@ -395,7 +492,15 @@ struct txGuard *rtx_getTxGuard()
  */
 static void abortTransmission(uint32_t now, const char *why)
 {
+    /*
+     * PA off first, and confirmed: the mode's abortTx() cancels the streams,
+     * which is what wakes the thread blocked in one of them, and the radio must
+     * already be off the air when that thread resumes.
+     */
     radio_disableRtx();
+    if (!radio_txPathOff())
+        radio_disableRtx();
+
     currMode->abortTx();
 
     #if defined(PLATFORM_C62)
@@ -520,7 +625,16 @@ void rtx_task()
     pthread_mutex_unlock(&txMutex);
 
     if (aborted)
+    {
+        /*
+         * The supervisor unkeyed already; this thread owns the chip, so it
+         * repeats it (idempotent) and makes sure the receiver is what the radio
+         * is left in, even if the mode's own unwind does not reach its RX
+         * branch (that is the case this exists for).
+         */
         rtxStatus.opStatus = OFF;
+        radio_disableRtx();
+    }
 
     // Check if there is a pending new configuration and, in case, read it.
     bool reconfigure = false;
@@ -620,6 +734,15 @@ void rtx_task()
      */
     currMode->update(&rtxStatus, reconfigure);
 
+    /*
+     * After an abort the receiver is the radio's state, whatever the mode did.
+     * A keyed PA that nobody released is what this guards against, and a mode
+     * that unwinds without reaching its RX branch would otherwise leave a
+     * silent radio instead of a working one.
+     */
+    if (aborted && (rtxStatus.opStatus != TX) && (radio_getStatus() != RX))
+        radio_enableRx();
+
     logTxExit();
 }
 
@@ -636,6 +759,86 @@ bool rtx_rxSquelchOpen()
      * before the RTX thread has started (and the host tests never start it).
      */
     return (currMode != NULL) ? currMode->rxSquelchOpen() : false;
+}
+
+/**
+ * A platform that cannot read its PA lines back answers from its own status.
+ * The C62 overrides this with a read of the register that drives them.
+ */
+extern "C" __attribute__((weak)) bool radio_txPathOff(void)
+{
+    return radio_getStatus() != TX;
+}
+
+bool rtx_isSwitching(void)
+{
+    pthread_mutex_lock(&txMutex);
+    const bool value = switching;
+    pthread_mutex_unlock(&txMutex);
+    return value;
+}
+
+uint8_t rtx_currentOpMode(void)
+{
+    return (currMode != NULL) ? (uint8_t)currMode->getID() : (uint8_t)OPMODE_NONE;
+}
+
+struct keyGate *rtx_getKeyGate()
+{
+    return &keyGate;
+}
+
+bool rtx_keyingAllowed(const rtxStatus_t *status)
+{
+    const uint32_t now = (uint32_t)getTick();
+    const bool ptt = platform_getPttStatus() ? true : false;
+
+    pthread_mutex_lock(&txMutex);
+    keyGate_sample(&keyGate, now, ptt);
+    bool allowed = !switching && keyGate_pttKey(&keyGate, now);
+    if ((!allowed) && ptt && (!switching))
+        keyGate_noteVeto(&keyGate);
+    pthread_mutex_unlock(&txMutex);
+
+    if ((status != NULL) && (status->txDisable != 0))
+        allowed = false;
+
+    return allowed;
+}
+
+bool rtx_unattendedTxAllowed(const rtxStatus_t *status)
+{
+    if (status != NULL && status->txDisable != 0)
+        return false;
+
+    const uint32_t now = (uint32_t)getTick();
+    const bool ptt = platform_getPttStatus() ? true : false;
+
+    pthread_mutex_lock(&txMutex);
+    keyGate_sample(&keyGate, now, ptt);
+    const bool allowed = !switching && keyGate_unattended(&keyGate, now);
+    if (allowed)
+        keyGate_grantUnattended(&keyGate, now);
+    pthread_mutex_unlock(&txMutex);
+
+    return allowed;
+}
+
+bool rtx_txPermitted(void)
+{
+    const uint32_t now = (uint32_t)getTick();
+    const bool ptt = platform_getPttStatus() ? true : false;
+
+    pthread_mutex_lock(&txMutex);
+    keyGate_sample(&keyGate, now, ptt);
+    const bool permitted = !switching
+                        && (keyGate_pttKey(&keyGate, now)
+                            || (ptt == false
+                                && keyGate_unattended(&keyGate, now)
+                                && keyGate_unattendedGranted(&keyGate, now)));
+    pthread_mutex_unlock(&txMutex);
+
+    return permitted;
 }
 
 bool opmode_canTransmit(uint8_t mode)

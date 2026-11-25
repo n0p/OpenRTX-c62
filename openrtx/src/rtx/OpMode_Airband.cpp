@@ -146,7 +146,12 @@ void OpMode_Airband::requestTx(rtxStatus_t *const status)
             return;
     }
 
-    if (status->txDisable != 0)
+    /*
+     * The gate, not the level of the PTT line: a change of mode cannot key the
+     * transmitter and the press has to be one the operator made after it. The
+     * confirmation above is already an edge; this is the second lock.
+     */
+    if (!rtx_keyingAllowed(status))
         return;
 
     audioPath_release(rxAudioPath);

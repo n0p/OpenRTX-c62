@@ -9,9 +9,39 @@
 #include <cstdio>
 #include <string>
 
+/*
+ * The emulator's transmitter, with the same choke point as the radio: the PA
+ * only comes up while the RTX layer permits a transmission. The counters are
+ * what the host tests read (tests/unit/mode_switch.cpp): a mode change must
+ * never increment either of them, and a normal PTT keys once.
+ */
+static enum opstatus radioStatus = OFF;
+static unsigned keyed = 0;
+static unsigned keysRefused = 0;
+
+/** How many times the PA was keyed since boot (host tests). */
+unsigned radio_linux_keyCount(void)
+{
+    return keyed;
+}
+
+/** How many keying attempts the gate refused (host tests). */
+unsigned radio_linux_refusedCount(void)
+{
+    return keysRefused;
+}
+
+/** Forget the counters (host tests). */
+void radio_linux_clearCounters(void)
+{
+    keyed = 0;
+    keysRefused = 0;
+}
+
 void radio_init(const rtxStatus_t *rtxState)
 {
     (void) rtxState;
+    radioStatus = OFF;
     puts("radio_linux: init() called");
 }
 
@@ -39,17 +69,30 @@ bool radio_checkRxDigitalSquelch()
 
 void radio_enableRx()
 {
-    puts("radio_linux: enableRx() called");
+    radioStatus = RX;
 }
 
 void radio_enableTx()
 {
-    puts("radio_linux: enableTx() called");
+    /* Same contract as the radio: no permitted transmission, no PA */
+    if (!rtx_txPermitted())
+    {
+        keysRefused++;
+        return;
+    }
+
+    keyed++;
+    radioStatus = TX;
 }
 
 void radio_disableRtx()
 {
-    puts("radio_linux: disableRtx() called");
+    radioStatus = OFF;
+}
+
+bool radio_txPathOff(void)
+{
+    return radioStatus != TX;
 }
 
 void radio_updateConfiguration()
@@ -66,5 +109,5 @@ rssi_t radio_getRssi()
 
 enum opstatus radio_getStatus()
 {
-    return OFF;
+    return radioStatus;
 }

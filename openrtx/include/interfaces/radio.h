@@ -84,6 +84,18 @@ void radio_enableTx();
 void radio_disableRtx();
 
 /**
+ * Check that the transmit path is really off.
+ *
+ * Reading back the PA enable lines (not the driver's own bookkeeping) is what
+ * lets a mode change prove it is starting from a radio that is not
+ * transmitting. A platform that cannot read them back answers from its own
+ * status.
+ *
+ * @return true if the PA and its bias are off.
+ */
+bool radio_txPathOff(void);
+
+/**
  * Update configuration of the radio module to match the one currently described
  * by the rtxStatus_t configuration data structure.
  * This function has to be called whenever the configuration data structure has

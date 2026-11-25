@@ -184,7 +184,7 @@ void OpMode_FM::update(rtxStatus_t *const status, const bool newCfg)
         /* Move what the messaging screen queued into the APRS mailbox. */
         aprs_pumpMessaging(now);
 
-        if(aprs_txPending(now))
+        if((aprs_txPending(now)) && rtx_unattendedTxAllowed(status))
         {
             char       info[128];
             aprs_pkt_t kind = APRS_PKT_NONE;
@@ -198,14 +198,26 @@ void OpMode_FM::update(rtxStatus_t *const status, const bool newCfg)
 #endif
 
     // TX logic
-    if(platform_getPttStatus() && (status->opStatus != TX) &&
-                                  (status->txDisable == 0))
+    /*
+     * The gate decides, not the level of the PTT line: a change of mode cannot
+     * key the radio, and the press has to be one the operator made after it.
+     */
+    if(rtx_keyingAllowed(status) && (status->opStatus != TX))
     {
         audioPath_release(rxAudioPath);
         radio_disableRtx();
 
         txAudioPath = audioPath_request(SOURCE_MIC, SINK_RTX, PRIO_TX);
         radio_enableTx();
+
+        if (radio_getStatus() != TX)
+        {
+            /* The driver refused: do not pretend to be transmitting */
+            audioPath_release(txAudioPath);
+            status->opStatus = OFF;
+            enterRx = true;
+            return;
+        }
 
         /*
          * FM has no stream of its own -- the codec worker moves the microphone
@@ -359,6 +371,16 @@ void OpMode_FM::aprsSendPacket(const char *info)
     }
 
     radio_enableTx();
+    if (radio_getStatus() != TX)
+    {
+        /*
+         * The gate refused: a mode change is in progress, or the radio has not
+         * settled since the last one. Nothing is keyed; put the paths back.
+         */
+        audioStream_stop(txStream);
+        audioPath_release(txPath);
+        return;
+    }
     platform_ledOn(RED);
 
     afsk_mod_t mod;

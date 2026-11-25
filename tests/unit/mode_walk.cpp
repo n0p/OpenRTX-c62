@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <pthread.h>
+#include <unistd.h>
 
 #include "rtx/rtx.h"
 #include "rtx/ModeArena.hpp"
@@ -66,6 +67,23 @@ void selectMode(uint8_t mode)
 void ptt(bool down)
 {
     emulator_state.PTTstatus = down;
+    rtx_task();
+}
+
+/// Let the keying gate's guard after a mode change elapse (rtx/KeyGate.h).
+void settle()
+{
+    usleep((KEYGATE_GUARD_MS + 50) * 1000);
+    rtx_task();
+}
+
+/// Press the PTT and let the gate see the press last: the edge, then a full
+/// 30 ms tick with the line still down.
+void press()
+{
+    emulator_state.PTTstatus = true;
+    rtx_task();
+    usleep(40 * 1000);
     rtx_task();
 }
 
@@ -148,8 +166,9 @@ TEST_CASE("a transmitter still keys and unkeys after the walk",
     /* FM is in every build of this firmware and it transmits */
     selectMode(OPMODE_FM);
     REQUIRE(rtx_getCurrentStatus().opMode == OPMODE_FM);
+    settle();
 
-    ptt(true);
+    press();
     REQUIRE(rtx_getCurrentStatus().opStatus == TX);
 
     ptt(false);
@@ -162,7 +181,7 @@ TEST_CASE("a transmitter still keys and unkeys after the walk",
     REQUIRE(arena->owner() == OPMODE_FM);
 
     /* A second over on the same object, the shape of a QSO */
-    ptt(true);
+    press();
     REQUIRE(rtx_getCurrentStatus().opStatus == TX);
     ptt(false);
     REQUIRE(rtx_getCurrentStatus().opStatus != TX);

@@ -489,8 +489,7 @@ void OpMode_DPMR::update(rtxStatus_t *const rtx, const bool newCfg)
     }
 
     /* PTT: only with the mode selected, a frequency and a destination */
-    if (platform_getPttStatus() && (rtx->txDisable == 0) && startRx
-        && (rtx->opStatus == RX)) {
+    if (rtx_keyingAllowed(rtx) && startRx && (rtx->opStatus == RX)) {
         stopSampling();
         radio_disableRtx();
         if (startTx(rtx)) {

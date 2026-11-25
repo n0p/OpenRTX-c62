@@ -337,7 +337,7 @@ void OpMode_DSTAR::update(rtxStatus_t *const rtx, const bool newCfg)
 
     /* PTT keys the transmitter.  The receiver is stopped first: the BK4819 is
      * half duplex and both directions use the same audio path. */
-    if (platform_getPttStatus() && (rtx->txDisable == 0) && (txBlocked == false)) {
+    if (rtx_keyingAllowed(rtx) && (txBlocked == false)) {
         stopSampling();
         radio_disableRtx();
         if (startTx(rtx)) {

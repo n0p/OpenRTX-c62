@@ -889,6 +889,20 @@ void radio_enableRx()
 void radio_enableTx()
 {
     /*
+     * The PA is keyed only while the RTX layer says a permitted transmission is
+     * in progress (rtx_txPermitted(), rtx.h): a mode change, a PTT that was not
+     * released since the last one, a queued message arriving during it, or any
+     * path that skipped the gate is refused here, before a single line is
+     * driven. The gate is the mode's rule; this is the choke point that makes
+     * it impossible to bypass.
+     */
+    if (!rtx_txPermitted())
+    {
+        printk("PA: keying refused (no permitted transmission)\n");
+        return;
+    }
+
+    /*
      * Broadcast FM has no transmitter by definition: the band is receive only
      * and the mode has no microphone path. Refuse before touching the PA.
      */
@@ -1023,6 +1037,28 @@ void radio_disableRtx()
 
     bk4819_disableRtx(&c62_bk4819);
     radioStatus = OFF;
+}
+
+/**
+ * Check that nothing is driving the PA.
+ *
+ * REG_33 is the register that drives the BK4819 GPIOs the PA enable lines, the
+ * ALC/bias and the two LNA switches hang from, so reading it back proves what
+ * the chip is doing rather than what the driver believes it wrote. Bits 2 (PA
+ * VHF), 3 (PA UHF) and 4 (ALC / TX LED) at zero are the transmit path off.
+ *
+ * @return true if the PA and its bias are off.
+ */
+bool radio_txPathOff(void)
+{
+    if (radioStatus == TX)
+        return false;
+
+    /* The output latch of pin n is bit (0x0040 >> n) of REG_33 */
+    const uint16_t txMask = (0x0040u >> 2) | (0x0040u >> 3) | (0x0040u >> 4);
+    const uint16_t reg = bk4819_readReg(&c62_bk4819, 0x33);
+
+    return (reg & txMask) == 0;
 }
 
 void radio_updateConfiguration()

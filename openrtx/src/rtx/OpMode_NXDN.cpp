@@ -454,7 +454,7 @@ void OpMode_NXDN::update(rtxStatus_t *const rtx, const bool newCfg)
      * destination and a frequency the platform can tune to.  The RAN is the
      * one the receiver filters on, so the two ends of a round trip agree.
      */
-    if (platform_getPttStatus() && (rtx->txDisable == 0)) {
+    if (rtx_keyingAllowed(rtx)) {
         stopSampling();
         radio_disableRtx();
         if (startTx(rtx)) {

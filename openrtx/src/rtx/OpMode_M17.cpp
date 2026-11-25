@@ -198,7 +198,7 @@ void OpMode_M17::offState(rtxStatus_t *const status)
         return;
     }
 
-    if(platform_getPttStatus() && (status->txDisable == 0) && (txBlocked == false))
+    if(rtx_keyingAllowed(status) && (txBlocked == false))
     {
         startTx = true;
         status->opStatus = TX;
