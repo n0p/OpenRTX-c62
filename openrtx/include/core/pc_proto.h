@@ -388,6 +388,8 @@ enum pcProtoTag
     PC_TAG_OFFSET      = 0x00EB, /**< u32 offset in samples or bytes      */
     PC_TAG_RUNNING     = 0x00EC, /**< u8 1 capture or dump in progress    */
     PC_TAG_BB_STATE    = 0x00ED, /**< u8 baseband dump state              */
+    PC_TAG_TX_SECONDS  = 0x00EE, /**< u16 air time since the last release */
+    PC_TAG_TX_REASON   = 0x00EF, /**< str what the transmitter is doing   */
 
     /*
      * Bench namespace, 0x0100-0x011F.  A separate block because these are not
@@ -737,6 +739,19 @@ int pc_proto_platformBbDump(int op, uint8_t *state);
 
 /** Format the live transmit trace into buf (two short lines at most). */
 int pc_proto_platformTxTrace(char *buf, size_t cap);
+
+/**
+ * The absolute transmit clock, as the diagnostics report it
+ * (docs/TX_SAFETY.md).
+ *
+ * @param seconds: filled with the air time since the PA was last released,
+ *                 whole seconds.
+ * @param reason: filled with the pointer to what the transmitter is doing:
+ *                "idle", "ptt", "unattended", "mode" or "timeout".
+ * @return 0 when the platform has a clock to report, negative to leave both
+ *         fields out of the answer.
+ */
+int pc_proto_platformTxWatch(uint16_t *seconds, const char **reason);
 
 /*
  * Bench namespace: one hook with an operation code and a structure in and out,

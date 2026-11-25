@@ -6,18 +6,45 @@
 
 #include "emulator/emulator.h"
 #include "interfaces/radio.h"
+#include "interfaces/delays.h"
 #include <cstdio>
 #include <string>
 
 /*
- * The emulator's transmitter, with the same choke point as the radio: the PA
- * only comes up while the RTX layer permits a transmission. The counters are
- * what the host tests read (tests/unit/mode_switch.cpp): a mode change must
- * never increment either of them, and a normal PTT keys once.
+ * The emulator's transmitter, with the same two choke points as the radio: the
+ * PA only comes up while the RTX layer permits a transmission (rtx_txPermitted,
+ * rtx.h) and while the driver's own transmit clock has air left (rtx/TxWatch.h,
+ * docs/TX_SAFETY.md). The counters are what the host tests read
+ * (tests/unit/mode_switch.cpp): a mode change must never increment any of them,
+ * a normal PTT keys once, and a keying the barrier ended is refused and forced
+ * off however many times it is asked for.
  */
 static enum opstatus radioStatus = OFF;
 static unsigned keyed = 0;
 static unsigned keysRefused = 0;
+static unsigned barrierCuts = 0;
+
+/*
+ * The second barrier. The radio's version also arms a kernel timer; here the
+ * test advances the clock itself (radio_txWatch()) and calls radio_enableTx()
+ * as many times as it likes, which is the loop the barrier has to survive.
+ */
+static struct txWatch hostWatch;
+static bool hostWatchReady = false;
+
+static uint32_t hostNow()
+{
+    return (uint32_t)getTick();
+}
+
+static void hostBarrierUp()
+{
+    if (!hostWatchReady)
+    {
+        txw_init(&hostWatch, hostNow(), TXW_DRIVER_LIMIT_MS);
+        hostWatchReady = true;
+    }
+}
 
 /** How many times the PA was keyed since boot (host tests). */
 unsigned radio_linux_keyCount(void)
@@ -31,18 +58,28 @@ unsigned radio_linux_refusedCount(void)
     return keysRefused;
 }
 
+/** How many keyings the driver's own barrier ended (host tests). */
+unsigned radio_linux_barrierCount(void)
+{
+    return barrierCuts;
+}
+
 /** Forget the counters (host tests). */
 void radio_linux_clearCounters(void)
 {
     keyed = 0;
     keysRefused = 0;
+    barrierCuts = 0;
 }
 
 void radio_init(const rtxStatus_t *rtxState)
 {
     (void) rtxState;
     radioStatus = OFF;
-    puts("radio_linux: init() called");
+    hostWatchReady = false;
+    hostBarrierUp();
+    radio_paForceOff();
+    puts("radio_linux: init() called, PA off");
 }
 
 void radio_terminate()
@@ -81,18 +118,47 @@ void radio_enableTx()
         return;
     }
 
+    /* And the driver's own barrier: spent means no keying, whatever the gate */
+    hostBarrierUp();
+    txw_sample(&hostWatch, hostNow(), radioStatus == TX);
+    if (!txw_keyAllowed(&hostWatch, hostNow()))
+    {
+        txw_tick(&hostWatch, hostNow());
+        barrierCuts++;
+        radio_paForceOff();
+        return;
+    }
+
     keyed++;
     radioStatus = TX;
+    txw_sample(&hostWatch, hostNow(), true);
 }
 
 void radio_disableRtx()
 {
+    if (hostWatchReady)
+        txw_sample(&hostWatch, hostNow(), false);
+
     radioStatus = OFF;
 }
 
 bool radio_txPathOff(void)
 {
     return radioStatus != TX;
+}
+
+bool radio_paForceOff(void)
+{
+    hostBarrierUp();
+    radioStatus = OFF;
+    txw_sample(&hostWatch, hostNow(), false);
+    return true;
+}
+
+struct txWatch *radio_txWatch(void)
+{
+    hostBarrierUp();
+    return &hostWatch;
 }
 
 void radio_updateConfiguration()

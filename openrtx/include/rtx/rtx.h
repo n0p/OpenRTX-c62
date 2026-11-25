@@ -12,6 +12,7 @@
 #include "core/cps.h"
 #include "rtx/TxGuard.h"
 #include "rtx/KeyGate.h"
+#include "rtx/TxWatch.h"
 #include <pthread.h>
 
 #ifdef __cplusplus
@@ -237,6 +238,25 @@ uint8_t rtx_currentOpMode(void);
  * @return the gate, never NULL.
  */
 struct keyGate *rtx_getKeyGate();
+
+/**
+ * Get the absolute transmit clock, for the diagnostics and the host tests.
+ *
+ * It counts the air time since the PA was last released and is what ends a
+ * transmission at TXW_LIMIT_MS (docs/TX_SAFETY.md). The driver keeps a second,
+ * independent one with the margin, reachable through radio_txWatch().
+ *
+ * @return the clock, never NULL.
+ */
+struct txWatch *rtx_getTxWatch();
+
+/**
+ * What the transmitter is doing, as one word, for the diagnostics.
+ *
+ * @return "idle" when off the air, "ptt", "unattended" or "mode" while keyed,
+ *         "timeout" after the clock ended a transmission.
+ */
+const char *rtx_txWatchReason();
 
 /**
  * Get current RSSI in dBm.

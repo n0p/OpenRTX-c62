@@ -243,6 +243,18 @@ void platform_init_csk6()
     bk4819_init(&c62_bk4819);
 
     /*
+     * A radio must not start up transmitting (docs/TX_SAFETY.md): before the
+     * DSP, the audio, the codec or any thread exists, the PA enable lines are
+     * driven low and the chip's own latch (REG_33) is read back to prove it.
+     * The stock latch survived the reset on the radio that came back hot, so
+     * this is the first thing done once the transceiver answers.
+     */
+    if (radio_paForceOff())
+        printk("PA: off at boot, REG_33 latch clear\n");
+    else
+        printk("PA: STILL KEYED AT BOOT: REG_33 latch set\n");
+
+    /*
      * Start the DSP only now, after the BK4819 microphone input has settled.
      * It changes pins while it starts and sets up audio: restore them after
      * audio_init(). Nothing reads the battery ADC before then.

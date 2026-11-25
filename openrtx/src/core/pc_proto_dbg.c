@@ -113,6 +113,14 @@ __attribute__((weak)) int pc_proto_platformTxTrace(char *buf, size_t cap)
     return -1;
 }
 
+__attribute__((weak)) int pc_proto_platformTxWatch(uint16_t *seconds,
+                                                   const char **reason)
+{
+    (void)seconds;
+    (void)reason;
+    return -1;
+}
+
 #ifdef CONFIG_C62_DEBUG_PROTO
 
 /*
@@ -221,6 +229,21 @@ int pc_dbg_info(struct pcReq *r)
         off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_RAM_TOTAL,
                          d.ramTotal);
         off = pc_tlv_u8(r->out, r->outCap, off, PC_TAG_AGC, d.agc);
+
+        /*
+         * The transmit clock: how much air the PA has put out since it was last
+         * released and what it is doing. It goes out whether or not the radio
+         * is transmitting, because the interesting case -- a transmission that
+         * nobody can stop -- is one where the answer must not read as idle.
+         */
+        uint16_t txSeconds = 0;
+        const char *txReason = NULL;
+        if (pc_proto_platformTxWatch(&txSeconds, &txReason) == 0) {
+            off = pc_tlv_u16(r->out, r->outCap, off, PC_TAG_TX_SECONDS,
+                             txSeconds);
+            off = pc_tlv_str(r->out, r->outCap, off, PC_TAG_TX_REASON,
+                             (txReason != NULL) ? txReason : "");
+        }
         if (d.taskCount > 8)
             d.taskCount = 8;
         off = pc_tlv_bytes(r->out, r->outCap, off, PC_TAG_TASK_STACK,

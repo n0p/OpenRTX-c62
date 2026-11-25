@@ -289,6 +289,110 @@ static bool reg43SweepStarted;
 static struct C62Calib calData;  // TX calibration
 static struct C62CalPoint txCal; // TX calibration at the TX frequency
 
+/*
+ * ---------------------------------------------------------------------------
+ * The second transmit barrier (docs/TX_SAFETY.md).
+ *
+ * The RTX supervisor ends a transmission at TXW_LIMIT_MS, but it runs in the
+ * main thread and reads the driver; it is not the driver. This one is: it is
+ * fed by radio_enableTx() and radio_disableRtx() themselves, allows
+ * TXW_MARGIN_MS more, and does not need any other thread to be alive.
+ *
+ * Two halves:
+ *
+ *  - the clock, which refuses a keying and latches the refusal until the PA
+ *    has been off the air for TXW_RELEASE_MS. That half catches the caller
+ *    that keeps trying: radio_enableTx() in a loop keys nothing and puts the
+ *    lines back down every time;
+ *  - the timer, armed at each keying for whatever is left of the bar. Its
+ *    expiry submits a work item that drops the PA from the system workqueue,
+ *    so a keying that nobody ever comes back to unkey still ends at 95 s.
+ *
+ * Nothing here resets on its own: only the release does, and a mode change
+ * does not count as one.
+ */
+static struct txWatch paWatch;
+static struct k_work   paCutWork;
+static struct k_timer  paCutTimer;
+static bool            paBarrierReady;
+
+static void paCut(struct k_work *work);
+
+static void paCutExpiry(struct k_timer *timer)
+{
+    (void)timer;
+    k_work_submit(&paCutWork);
+}
+
+/** Milliseconds of air the driver's clock still has, 0 when it is spent. */
+static uint32_t paAirLeft(uint32_t now)
+{
+    const uint32_t air = txw_airMs(&paWatch, now);
+
+    return (air >= paWatch.limitMs) ? 0 : (paWatch.limitMs - air);
+}
+
+/**
+ * Bring the barrier up. Idempotent: the boot path and radio_init() both ask.
+ *
+ * The kernel objects are initialised here and not with the K_WORK_DEFINE()
+ * macros: this file is C++, and those expand to designated initialisers.
+ */
+static void paBarrierUp(void)
+{
+    if (paBarrierReady)
+        return;
+
+    k_work_init(&paCutWork, paCut);
+    k_timer_init(&paCutTimer, paCutExpiry, NULL);
+    txw_init(&paWatch, k_uptime_get_32(), TXW_DRIVER_LIMIT_MS);
+    paBarrierReady = true;
+}
+
+/**
+ * Arm the barrier for what is left of the bar.
+ *
+ * Called after every keying: one shot, the remaining margin. Re-arming on a
+ * keying that is already keyed (radio_updateConfiguration()) restarts the same
+ * deadline, which is what keeps the timer honest.
+ */
+static void paArm(uint32_t now)
+{
+    const uint32_t msLeft = paAirLeft(now);
+
+    k_timer_start(&paCutTimer, K_MSEC(msLeft), K_NO_WAIT);
+}
+
+static void paDisarm(void)
+{
+    k_timer_stop(&paCutTimer);
+}
+
+/**
+ * Note that the PA is on the air and arm the barrier for what is left.
+ *
+ * Called at the end of both keying paths of radio_enableTx() (the generic one
+ * and the airband amplitude modulator), once the lines are actually up.
+ */
+static void paNoteKeyed(void)
+{
+    const uint32_t now = k_uptime_get_32();
+
+    paBarrierUp();
+    txw_sample(&paWatch, now, true);
+    paArm(now);
+}
+
+/** Note that the PA is off the air: accumulate the air, drop the deadline. */
+static void paNoteOff(void)
+{
+    const uint32_t now = k_uptime_get_32();
+
+    paBarrierUp();
+    txw_sample(&paWatch, now, false);
+    paDisarm();
+}
+
 /* Level control of the AM receive path, see the airband settings above */
 static struct agc amAgc;
 static uint8_t amAfGain1 = AM_RX_AUDIO_GAIN1;
@@ -470,6 +574,15 @@ static void set_tx_power(const uint32_t power)
 
 void radio_init(const rtxStatus_t *rtxState)
 {
+    /*
+     * A radio must not start up transmitting, and the first thing that proves
+     * it is the read-back of the PA latch: the enable lines are driven low and
+     * REG_33 is checked before the driver reads its calibration, resets the
+     * codec or touches anything else.
+     */
+    if (!radio_paForceOff())
+        printk("PA: STILL KEYED AT BOOT, booting anyway\n");
+
     config = rtxState;
     radioStatus = OFF;
     radioMode = OPMODE_FM;
@@ -903,6 +1016,37 @@ void radio_enableTx()
     }
 
     /*
+     * The second barrier, in the driver (docs/TX_SAFETY.md): the keying clock
+     * counts the air this driver has put out since the PA was last released,
+     * and once it has used TXW_LIMIT_MS + TXW_MARGIN_MS it refuses to key
+     * again until the radio has been idle for a release. A caller in a loop
+     * gets the same answer every time, and the lines go back down with it.
+     */
+    paBarrierUp();
+    const uint32_t now = k_uptime_get_32();
+    txw_sample(&paWatch, now, radioStatus == TX);
+    if (!txw_keyAllowed(&paWatch, now))
+    {
+        /*
+         * Spent: latch it and put the lines down, whatever the caller does.
+         * The line is throttled -- a mode that retries every slot would turn
+         * the log into the reason the refusal cannot be seen.
+         */
+        static uint32_t refusedAt = 0;
+
+        txw_tick(&paWatch, now);
+        if ((uint32_t)(now - refusedAt) >= 1000)
+        {
+            refusedAt = now;
+            printk("PA: keying refused (air %lums, barrier %lums)\n",
+                   (unsigned long)txw_airMs(&paWatch, now),
+                   (unsigned long)paWatch.limitMs);
+        }
+        radio_paForceOff();
+        return;
+    }
+
+    /*
      * Broadcast FM has no transmitter by definition: the band is receive only
      * and the mode has no microphone path. Refuse before touching the PA.
      */
@@ -962,6 +1106,7 @@ void radio_enableTx()
         air_tx_key(true);
 
         radioStatus = TX;
+        paNoteKeyed();
         return;
     }
 #endif
@@ -996,10 +1141,19 @@ void radio_enableTx()
 
     bk4819_enableTx(&c62_bk4819);
     radioStatus = TX;
+    paNoteKeyed();
 }
 
 void radio_disableRtx()
 {
+    /*
+     * The air ends here as far as the driver's clock is concerned: it is the
+     * one place that puts the PA down, so it is the one place that tells the
+     * barrier. Doing it first means a slow teardown (a DSP call, a tuner
+     * power-down) is not counted as air.
+     */
+    paNoteOff();
+
 #ifdef CONFIG_C62_AIR_TX
     /*
      * The airband transmitter is stopped before anything else: the modulator
@@ -1040,12 +1194,26 @@ void radio_disableRtx()
 }
 
 /**
- * Check that nothing is driving the PA.
+ * Read the PA enable latch back from the chip.
  *
  * REG_33 is the register that drives the BK4819 GPIOs the PA enable lines, the
  * ALC/bias and the two LNA switches hang from, so reading it back proves what
  * the chip is doing rather than what the driver believes it wrote. Bits 2 (PA
  * VHF), 3 (PA UHF) and 4 (ALC / TX LED) at zero are the transmit path off.
+ *
+ * @return true if the PA and its bias are off in the chip.
+ */
+static bool paLatchOff(void)
+{
+    /* The output latch of pin n is bit (0x0040 >> n) of REG_33 */
+    const uint16_t txMask = (0x0040u >> 2) | (0x0040u >> 3) | (0x0040u >> 4);
+    const uint16_t reg = bk4819_readReg(&c62_bk4819, 0x33);
+
+    return (reg & txMask) == 0;
+}
+
+/**
+ * Check that nothing is driving the PA.
  *
  * @return true if the PA and its bias are off.
  */
@@ -1054,11 +1222,80 @@ bool radio_txPathOff(void)
     if (radioStatus == TX)
         return false;
 
-    /* The output latch of pin n is bit (0x0040 >> n) of REG_33 */
-    const uint16_t txMask = (0x0040u >> 2) | (0x0040u >> 3) | (0x0040u >> 4);
-    const uint16_t reg = bk4819_readReg(&c62_bk4819, 0x33);
+    return paLatchOff();
+}
 
-    return (reg & txMask) == 0;
+/**
+ * Force the transmit path off and prove it.
+ *
+ * Three attempts: one SPI write that got through and one that did not look
+ * exactly the same from the caller, and the latch is what decides. The
+ * driver's own status and its transmit clock follow the lines down.
+ *
+ * @return true when the latch reads back with the three bits at zero.
+ */
+bool radio_paForceOff(void)
+{
+    paBarrierUp();
+
+    /* OUTPUT drives the pin low, whatever the chip had latched before */
+    gpioDev_setMode(PA_VHF_EN, OUTPUT);
+    gpioDev_setMode(PA_UHF_EN, OUTPUT);
+    gpioDev_setMode(ALC_TX_LED_EN, OUTPUT);
+
+    bool off = false;
+    for (unsigned attempt = 0; attempt < 3; attempt++)
+    {
+        gpioDev_clear(PA_VHF_EN);
+        gpioDev_clear(PA_UHF_EN);
+        gpioDev_clear(ALC_TX_LED_EN);
+
+        if (paLatchOff())
+        {
+            off = true;
+            break;
+        }
+    }
+
+    if (radioStatus == TX)
+        radioStatus = OFF;
+
+    /* The lines are down: the keying clock sees the end of the air */
+    paNoteOff();
+
+    return off;
+}
+
+/**
+ * The driver barrier fired: the keying has lasted the limit plus the margin.
+ *
+ * Runs in the system work queue, not in the RTX thread, because the RTX thread
+ * is exactly what may be stuck. The PA goes first and the rest of the teardown
+ * follows the normal unkey path; the clock stays blocked, so nothing keys
+ * again until the radio has been off the air for a release.
+ */
+static void paCut(struct k_work *work)
+{
+    (void)work;
+
+    const uint32_t now = k_uptime_get_32();
+
+    /* Latch the cut before touching anything: a re-key must be refused */
+    txw_sample(&paWatch, now, true);
+    txw_tick(&paWatch, now);
+
+    radio_disableRtx();
+
+    printk("PA: TX BARRIER %us: driver cut the PA, air=%lums cuts=%lu\n",
+           (unsigned int)(TXW_DRIVER_LIMIT_MS / 1000),
+           (unsigned long)txw_airMs(&paWatch, now),
+           (unsigned long)paWatch.cuts);
+}
+
+struct txWatch *radio_txWatch(void)
+{
+    paBarrierUp();
+    return &paWatch;
 }
 
 void radio_updateConfiguration()

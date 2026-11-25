@@ -272,6 +272,22 @@ const char *pc_proto_platformHardware(void)
     return hw;
 }
 
+/*
+ * The transmit clock is reported in both builds: a production image has no
+ * debug namespace, but the answer is three loads and it is what a bench asks
+ * for when a radio comes back hot (docs/TX_SAFETY.md).
+ */
+int pc_proto_platformTxWatch(uint16_t *seconds, const char **reason)
+{
+    struct txWatch *watch = rtx_getTxWatch();
+
+    if (seconds != NULL)
+        *seconds = txw_airSeconds(watch, k_uptime_get_32());
+    if (reason != NULL)
+        *reason = rtx_txWatchReason();
+    return 0;
+}
+
 #ifdef CONFIG_C62_DEBUG_PROTO
 
 /* The linker knows these when the board script provides them; the weak
@@ -514,12 +530,26 @@ int pc_proto_platformBbDump(int op, uint8_t *state)
 int pc_proto_platformTxTrace(char *buf, size_t cap)
 {
     struct txGuard *guard = rtx_getTxGuard();
+    struct txWatch *watch = rtx_getTxWatch();
+    struct txWatch *barrier = radio_txWatch();
     char trace[110];
     char summary[130];
 
     txg_formatTrace(guard, trace, sizeof(trace));
     txg_format(guard, summary, sizeof(summary));
-    snprintf(buf, cap, "%s | %s | pk=%u wa=%d", trace, summary,
+    /*
+     * The live line carries both clocks: the one that ends the transmission
+     * (air, at the RTX limit) and the driver's own, which is what actually
+     * keeps the PA from staying keyed if this one never runs. "cut=%u" of the
+     * barrier is the number that must stay at zero.
+     */
+    snprintf(buf, cap,
+             "%s | %s | tx=%us/%s air=%lums cut=%lu/%lu | pk=%u wa=%d",
+             trace, summary,
+             (unsigned int)txw_airSeconds(watch, k_uptime_get_32()),
+             rtx_txWatchReason(),
+             (unsigned long)txw_airMs(watch, k_uptime_get_32()),
+             (unsigned long)watch->cuts, (unsigned long)barrier->cuts,
              (unsigned int)csk6codec_getTxPeak(),
              (int)csk6codec_getWorkerAge());
     return 0;

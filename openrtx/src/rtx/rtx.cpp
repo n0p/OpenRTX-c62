@@ -71,6 +71,27 @@ static bool            txAbortPending;
 static uint32_t        txAbortTime;
 
 /*
+ * Absolute transmit clock (rtx/TxWatch.h).
+ *
+ * The guard above knows the phases of a transmission because the modes report
+ * them, which means a mode that keys without reporting -- or a keying nobody
+ * has a phase for -- is invisible to it. This clock knows one thing only: the
+ * PA is on the air or it is not, sampled from the driver every 5 ms. It counts
+ * the air, not the transmissions: an unattended chain of messages, a mode that
+ * re-keys straight after its over, and a change of mode all continue the same
+ * count. Only a release -- TXW_RELEASE_MS with the PA off -- puts it back to
+ * zero. At TXW_LIMIT_MS the supervisor ends the transmission whatever the mode
+ * believes, and keying stays refused until that release happens.
+ *
+ * It lives in this file, is sampled by rtx_supervise() (the main thread) and
+ * depends on nothing that can be the thing that is stuck.
+ */
+static struct txWatch  txWatch;
+static const char     *txWatchSource = "idle";
+static bool            txWatchTimedOut;
+static bool            txWatchCutActive;
+
+/*
  * Transmit permission.
  *
  * switching is true from the moment a mode change starts until its new mode is
@@ -425,6 +446,10 @@ void rtx_init(pthread_mutex_t *m)
     pthread_mutex_lock(&txMutex);
     txg_init(&txGuard, (uint32_t)getTick());
     keyGate_init(&keyGate, (uint32_t)getTick());
+    txw_init(&txWatch, (uint32_t)getTick(), TXW_LIMIT_MS);
+    txWatchSource    = "idle";
+    txWatchTimedOut  = false;
+    txWatchCutActive = false;
     switching = false;
     txAbortPending = false;
     pthread_mutex_unlock(&txMutex);
@@ -557,10 +582,44 @@ static void logTxExit(void)
     char summary[130];
     txg_formatTrace(&txGuard, trace, sizeof(trace));
     txg_format(&txGuard, summary, sizeof(summary));
-    printf("TX exit %s | %s | pk=%u\r\n", trace, summary,
+    /*
+     * The exit line carries the transmit clock too: how much air this
+     * transmission put out and, after a cut, that it was the radio and not the
+     * operator who ended it.
+     */
+    printf("TX exit air=%lums/%s %s | %s | pk=%u\r\n",
+           (unsigned long)txw_airMs(&txWatch, (uint32_t)getTick()),
+           rtx_txWatchReason(), trace, summary,
            (unsigned int)csk6codec_getTxPeak());
     /* The next over starts its baseband peak from zero */
     csk6codec_clearTxPeak();
+    #endif
+}
+
+/**
+ * The line the radio leaves behind when it had to stop a transmission itself.
+ *
+ * It says what was keyed, on whose behalf, for how long and what the modes
+ * believed they were doing, because that is what the operator has to report
+ * when the radio comes back hot. Printed once per cut.
+ *
+ * @param now: current time, ms.
+ */
+static void logTxTimeout(uint32_t now)
+{
+    char summary[96];
+    char trace[96];
+    txg_format(&txGuard, summary, sizeof(summary));
+    txg_formatTrace(&txGuard, trace, sizeof(trace));
+
+    #if defined(PLATFORM_C62)
+    printf("TX TIMEOUT %us: mode=%s src=%s air=%lums ph=%s | %s | %s\r\n",
+           (unsigned int)(TXW_LIMIT_MS / 1000),
+           modeArena.nameOf(rtx_currentOpMode()),
+           txWatchSource, (unsigned long)txw_airMs(&txWatch, now),
+           txg_phaseName(txGuard.phase), summary, trace);
+    #else
+    (void)now;
     #endif
 }
 
@@ -568,10 +627,46 @@ void rtx_supervise()
 {
     const uint32_t now = (uint32_t)getTick();
     const bool ptt = platform_getPttStatus() ? true : false;
+    const bool keyed = (radio_getStatus() == TX);
     bool abort = false;
 
     pthread_mutex_lock(&txMutex);
-    if (txg_tick(&txGuard, now, ptt) == TXG_ACTION_ABORT) {
+
+    /*
+     * The absolute clock is fed from the driver's state, not from a mode: a
+     * keying is a keying whoever asked for it, and it starts at the first
+     * sample that finds the PA on the air (within one 5 ms tick).
+     */
+    const bool rising = keyed && (!txWatch.keyed);
+    txw_sample(&txWatch, now, keyed);
+    if (rising)
+    {
+        txWatchSource = ptt ? "ptt"
+                            : (keyGate_unattendedGranted(&keyGate, now)
+                                   ? "unattended"
+                                   : "mode");
+        txWatchTimedOut = false;
+        txWatchCutActive = false;
+    }
+    else if ((!keyed) && (!txWatch.keyed) && (!txWatch.blocked))
+    {
+        txWatchSource = "idle";
+        txWatchCutActive = false;
+    }
+
+    const bool guardAbort = (txg_tick(&txGuard, now, ptt) == TXG_ACTION_ABORT);
+    const bool clockCut = (txw_tick(&txWatch, now) == TXW_ACTION_CUT);
+    /* A transmission that is over its bar and still keyed: keep forcing it */
+    const bool clockStuck = txw_blocked(&txWatch) && keyed;
+
+    if (clockCut)
+    {
+        txWatchTimedOut = true;
+        txWatchCutActive = true;
+    }
+
+    if (guardAbort || clockCut || clockStuck)
+    {
         /*
          * Request the abort once, then repeat it every 20 ms until the mode
          * leaves transmit: the first attempt may have been refused by a radio
@@ -586,10 +681,16 @@ void rtx_supervise()
             abort = true;
         }
     }
+
+    const bool byClock = clockCut || (txWatchCutActive && (!guardAbort));
     pthread_mutex_unlock(&txMutex);
 
+    /* The line goes out once per cut; the abort itself is retried */
+    if (clockCut)
+        logTxTimeout(now);
+
     if (abort)
-        abortTransmission(now, txg_reasonName(txGuard.reason));
+        abortTransmission(now, byClock ? "clock" : txg_reasonName(txGuard.reason));
 }
 
 void rtx_task()
@@ -788,6 +889,16 @@ struct keyGate *rtx_getKeyGate()
     return &keyGate;
 }
 
+struct txWatch *rtx_getTxWatch()
+{
+    return &txWatch;
+}
+
+const char *rtx_txWatchReason()
+{
+    return txWatchTimedOut ? "timeout" : txWatchSource;
+}
+
 bool rtx_keyingAllowed(const rtxStatus_t *status)
 {
     const uint32_t now = (uint32_t)getTick();
@@ -795,7 +906,13 @@ bool rtx_keyingAllowed(const rtxStatus_t *status)
 
     pthread_mutex_lock(&txMutex);
     keyGate_sample(&keyGate, now, ptt);
-    bool allowed = !switching && keyGate_pttKey(&keyGate, now);
+    /*
+     * The absolute clock vetoes keying too: once a transmission has used its
+     * 90 s, nothing keys until the radio has been released, whatever the gate
+     * says about releases and hold times.
+     */
+    bool allowed = (!switching) && txw_keyAllowed(&txWatch, now)
+                && keyGate_pttKey(&keyGate, now);
     if ((!allowed) && ptt && (!switching))
         keyGate_noteVeto(&keyGate);
     pthread_mutex_unlock(&txMutex);
@@ -816,7 +933,8 @@ bool rtx_unattendedTxAllowed(const rtxStatus_t *status)
 
     pthread_mutex_lock(&txMutex);
     keyGate_sample(&keyGate, now, ptt);
-    const bool allowed = !switching && keyGate_unattended(&keyGate, now);
+    const bool allowed = (!switching) && txw_keyAllowed(&txWatch, now)
+                      && keyGate_unattended(&keyGate, now);
     if (allowed)
         keyGate_grantUnattended(&keyGate, now);
     pthread_mutex_unlock(&txMutex);
@@ -831,7 +949,7 @@ bool rtx_txPermitted(void)
 
     pthread_mutex_lock(&txMutex);
     keyGate_sample(&keyGate, now, ptt);
-    const bool permitted = !switching
+    const bool permitted = (!switching) && txw_keyAllowed(&txWatch, now)
                         && (keyGate_pttKey(&keyGate, now)
                             || (ptt == false
                                 && keyGate_unattended(&keyGate, now)

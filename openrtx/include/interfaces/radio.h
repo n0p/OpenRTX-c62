@@ -96,6 +96,31 @@ void radio_disableRtx();
 bool radio_txPathOff(void);
 
 /**
+ * Force the PA and its bias off and prove it.
+ *
+ * The boot path calls this before anything else drives the transceiver -- a
+ * radio must never start up transmitting -- and the driver calls it when its
+ * own transmit clock says the keying has lasted longer than the barrier allows.
+ * It drives the enable lines low and reads the latch back, retrying a few
+ * times; a platform without read-back answers from its status.
+ *
+ * @return true when the transmit path is off, as read back from the chip.
+ */
+bool radio_paForceOff(void);
+
+/**
+ * Get the driver's own transmit clock (rtx/TxWatch.h).
+ *
+ * The second barrier: it is fed by radio_enableTx()/radio_disableRtx()
+ * themselves, with the limit plus a margin, so it stops a keying even when the
+ * RTX supervisor does not run. The diagnostics read it and the tests advance
+ * it (docs/TX_SAFETY.md).
+ *
+ * @return the clock, never NULL.
+ */
+struct txWatch *radio_txWatch(void);
+
+/**
  * Update configuration of the radio module to match the one currently described
  * by the rtxStatus_t configuration data structure.
  * This function has to be called whenever the configuration data structure has

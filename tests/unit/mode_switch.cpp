@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
+#include <string>
 #include <pthread.h>
 
 #include "rtx/rtx.h"
@@ -22,6 +23,7 @@ extern "C" {
 /* Counters of the emulator's transmitter (platform/drivers/baseband/radio_linux.cpp) */
 unsigned radio_linux_keyCount(void);
 unsigned radio_linux_refusedCount(void);
+unsigned radio_linux_barrierCount(void);
 void radio_linux_clearCounters(void);
 
 /*
@@ -339,5 +341,110 @@ TEST_CASE("the transmit supervisor unkeys and leaves the radio in RX",
     REQUIRE(radio_getStatus() == RX);
 
     selectMode(OPMODE_NONE);
+    rtx_terminate();
+}
+
+TEST_CASE("the transmit clock cuts at 90 s with the RTX thread blocked",
+          "[rtx][tx][watchdog]")
+{
+    rtx_init(&cfgMutex);
+    emulator_state.PTTstatus = false;
+    selectMode(OPMODE_FM);
+    ticks(2);
+
+    /* Key it through the normal path */
+    emulator_state.PTTstatus = true;
+    ticks(4);
+    REQUIRE(rtx_getCurrentStatus().opStatus == TX);
+
+    /*
+     * The thread that owns the chip never runs again: the one thing that has
+     * to keep going is the supervisor, in the main thread. The clock is
+     * advanced the way 90 s of air would have advanced it.
+     */
+    struct txWatch *watch = rtx_getTxWatch();
+    watch->keyed = true;
+    watch->airMs = 0;
+    watch->keyedAt = (uint32_t)getTick() - (TXW_LIMIT_MS + 100);
+
+    rtx_supervise();
+
+    /* PA off at the first cut, and the clock latched */
+    REQUIRE(radio_getStatus() != TX);
+    REQUIRE(radio_txPathOff());
+    REQUIRE(txw_blocked(watch));
+    REQUIRE(watch->cuts == 1);
+    REQUIRE(std::string(rtx_txWatchReason()) == "timeout");
+
+    /* Nothing keys again while the bar is spent, whatever the gate says */
+    rtxStatus_t cfg = rtx_getCurrentStatus();
+    REQUIRE_FALSE(rtx_keyingAllowed(&cfg));
+    REQUIRE_FALSE(rtx_txPermitted());
+    REQUIRE_FALSE(rtx_unattendedTxAllowed(&cfg));
+
+    /* The RTX thread comes back: the abort is taken and the radio is in RX */
+    emulator_state.PTTstatus = false;
+    ticks(3);
+    REQUIRE(rtx_getCurrentStatus().opStatus != TX);
+    REQUIRE(radio_getStatus() == RX);
+
+    selectMode(OPMODE_NONE);
+    rtx_terminate();
+}
+
+TEST_CASE("the driver's own barrier cuts a keying in a loop",
+          "[rtx][tx][watchdog]")
+{
+    rtx_init(&cfgMutex);
+    emulator_state.PTTstatus = false;
+    selectMode(OPMODE_FM);
+    ticks(2);
+    radio_linux_clearCounters();
+
+    /* Key it normally, then let the air run past the driver's margin */
+    emulator_state.PTTstatus = true;
+    ticks(4);
+    REQUIRE(radio_getStatus() == TX);
+    const unsigned keyedOnce = radio_linux_keyCount();
+    REQUIRE(keyedOnce >= 1);
+
+    struct txWatch *barrier = radio_txWatch();
+    barrier->keyed = true;
+    barrier->airMs = 0;
+    barrier->keyedAt = (uint32_t)getTick() - (TXW_DRIVER_LIMIT_MS + 100);
+
+    /*
+     * The caller that keeps trying: every one of these is refused and puts the
+     * lines back down, which is what the radio's version does before it even
+     * looks at the frequency.
+     */
+    for (unsigned i = 0; i < 8; i++)
+    {
+        radio_enableTx();
+        REQUIRE(radio_getStatus() != TX);
+        REQUIRE(radio_txPathOff());
+    }
+
+    REQUIRE(radio_linux_barrierCount() == 8);
+    REQUIRE(txw_blocked(barrier));
+
+    /* The key count did not move: not one of those attempts keyed anything */
+    REQUIRE(radio_linux_keyCount() == keyedOnce);
+
+    emulator_state.PTTstatus = false;
+    ticks(3);
+    selectMode(OPMODE_NONE);
+    rtx_terminate();
+}
+
+TEST_CASE("the driver forces the PA off before anything else at init",
+          "[rtx][tx][watchdog]")
+{
+    /* radio_init() is the driver's boot path: nothing may be keyed after it */
+    rtx_init(&cfgMutex);
+    REQUIRE(radio_txPathOff());
+    REQUIRE(radio_getStatus() != TX);
+    REQUIRE(txw_airMs(radio_txWatch(), (uint32_t)getTick()) == 0);
+
     rtx_terminate();
 }

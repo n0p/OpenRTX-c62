@@ -1,10 +1,25 @@
-# Transmit safety: what may key the PA
+# Transmit safety: what may key the PA, and for how long
 
-A change of mode keyed the PA once, on the DMR mode, with nobody pressing the
-PTT, and the radio then stayed on the air until it was switched off. The
-transmitter is the one peripheral that can hurt the radio and the spectrum
+Two things went wrong with the transmitter of this radio, a week apart.
+
+The first was a **change of mode keying the PA**: selecting DMR, with nobody
+pressing the PTT, put the radio on the air and left it there until it was
+switched off. The answer to that is a rule about *who* may key, and it is
+`rtx/KeyGate.h`.
+
+The second was worse, because it happened after the first was fixed: the radio
+**transmitted until the battery was flat** and came back so hot that it would
+not switch on. Nothing had asked it to keep transmitting; the thread that should
+have unkeyed was blocked, and the mode -- or the DMR message path, which keys
+with no PTT at all -- had left the PA keyed with nobody holding a phase for it.
+The answer to that one cannot be a rule about who may key: it has to be a clock
+that only knows whether the PA is on the air, and ends the transmission when it
+has been on the air too long. That is `rtx/TxWatch.h`, this document's subject.
+
+The transmitter is the one peripheral that can hurt the radio and the spectrum
 around it, so the rule is not "the modes are careful": it is that only one
-condition keys the PA and only one function drives it.
+condition keys the PA, only one function drives it, and one clock decides that
+it has been keyed for long enough.
 
 ## The incident
 
@@ -29,7 +44,7 @@ The host tests reproduce it: `tests/unit/mode_switch.cpp` walks all eleven
 modes with the PTT injected as pressed, and with the old rule in `KeyGate.h`
 two of its cases fail with the PA keyed.
 
-## The rule (rtx/KeyGate.h)
+## The rule for keying (rtx/KeyGate.h)
 
 `keyGate_pttKey()` is the only thing a mode may ask before transmitting:
 
@@ -78,28 +93,178 @@ If the mode cannot be constructed -- the arena refuses the block, or the object
 does not match the registry -- the radio is left on `OPMODE_NONE`, PA off and
 **in RX**, and the log says so.
 
-## The watchdog
+## The absolute transmit clock (rtx/TxWatch.h)
 
-`rtx_supervise()` (main thread, every 5 ms) unkeys **first** and then cancels
-the mode's streams, which is what wakes a thread blocked in one of them; the RTX
-thread repeats the unkey when it takes the abort and, after the mode's update,
-puts the radio back in RX if the mode did not. The guard goes back to idle on
-every failed entry to transmit, so a refused PTT cannot read as a stuck
-transmitter 250 ms later.
+`txw_sample(clock, now, keyed)` is fed with one thing: whether the PA is on the
+air. It accumulates **air time** -- not transmission time, not message time --
+since the PA was last released, and `txw_tick()` returns `TXW_ACTION_CUT` at
+`TXW_LIMIT_MS`.
+
+| Constant | Value | What it is |
+|---|---|---|
+| `TXW_LIMIT_MS` | 90 000 ms | the supervisor's cut |
+| `TXW_MARGIN_MS` | 5 000 ms | what the driver's own barrier allows over it |
+| `TXW_DRIVER_LIMIT_MS` | 95 000 ms | the driver barrier's cut |
+| `TXW_RELEASE_MS` | 1 000 ms | off the air this long is a release |
+
+**Only a release puts it back to zero.** A release is the PA being off the air
+for `TXW_RELEASE_MS`. Everything else continues the same count:
+
+- a mode that re-keys immediately after its over (the gap is one slot);
+- a chain of unattended messages -- the count is of the air, not of the
+  message, so forty-five 2 s SMS cannot put 90 s on the PA;
+- a change of mode -- the PA is off for 150 ms while the block is rebuilt, and
+  that is not a release;
+- every status update in between: `txw_sample()` is called every 5 ms and a
+  sample that does not change the level changes nothing.
+
+Once it has cut, the clock is **blocked**: `txw_keyAllowed()` is false, so
+`rtx_keyingAllowed()`, `rtx_unattendedTxAllowed()` and `rtx_txPermitted()` all
+refuse and the driver never keys, whichever mode is running and whatever the
+gate says about releases and hold times. It stays blocked until the radio has
+been off the air for a release, which is the "next release edge" the operator
+has to give it.
+
+### Where the count is taken
+
+`rtx_supervise()` runs in the **main thread** every 5 ms and samples
+`radio_getStatus()`, so the clock starts at the first sample that finds the PA
+keyed -- within 5 ms of the driver driving the lines. It is not told by the
+modes: a mode that keys without reporting a phase, a message path that keys with
+no PTT, and a PTT the operator is holding all look the same from there, which is
+the point. The thread that owns the transmission is the one that may be stuck,
+so the clock cannot live in it.
+
+When it cuts, the supervisor takes the same path as any other abort:
+
+1. `radio_disableRtx()` and a read-back of the PA enable latch (REG_33);
+2. `currMode->abortTx()` -- the mode cancels its streams, which is what wakes
+   the RTX thread if it is blocked in one, and unwinds through its own exit;
+3. `rtxStatus.opStatus = OFF`, and the RTX thread repeats the unkey and puts the
+   radio back in RX when it takes the abort.
+
+and it leaves one line in the log:
+
+```
+TX TIMEOUT 90s: mode=DMR src=ptt air=90105ms ph=run | TX n=7 ab=0 ph=abort ... | 0:enter 31:open ...
+```
+
+`mode` is the mode that was running, `src` is who keyed it (`ptt`, `unattended`
+or `mode`), `air` is the air time at the cut, and the rest is the transmit
+guard's trace of that transmission, so the operator's report says what the radio
+was doing when it stopped itself.
+
+## The transmit guard (rtx/TxGuard.h), and what it is not
+
+The guard is the other half of the picture and it answers a different question:
+*where* a transmission is, not how much air it has put out. The modes report
+their phases as they go -- `starting` (PTT seen, streams opening), `wait_first`
+(streams open, no block handed to the sink yet), `running`, `draining` (PTT
+released, terminator in flight) -- each with a budget (`TXG_START_MS`,
+`TXG_FIRST_MS`, `TXG_DRAIN_MS`), and `txg_tick()` flags the stage that overran.
+That is what catches a stream that never opens or a tail that never drains, and
+its trace is what the `TX TIMEOUT` line and `PC_MSG_DBG_TX_TRACE` print.
+
+It cannot be the last line, because it only knows what the modes tell it: a
+keying nobody reported has no phase to overrun. Its own cap, `TXG_MAX_TX_MS`
+(five minutes), is kept only as a backstop that the 90 s clock now makes
+unreachable in practice.
+
+## The second barrier, in the driver
+
+The supervisor is a thread. The barrier is not: `radio_enableTx()` and
+`radio_disableRtx()` feed a second clock with `TXW_DRIVER_LIMIT_MS`, and it has
+two halves:
+
+- **the clock** refuses a keying once the bar is spent and forces the lines back
+  down, so a caller in a loop -- a mode retrying, a configuration update, a
+  message queue that keeps asking -- gets "no" every time;
+- **a `k_timer`**, armed at each keying for whatever is left of the bar,
+  expires 95 s later and submits a work item to the system work queue, which
+  performs the normal unkey. That half is what covers the case the supervisor
+  cannot: the supervisor not running at all.
+
+So the belt is the supervisor's 90 s, with the mode unwinding; the braces are
+the driver's 95 s, from a timer, with no thread of ours in the path.
+
+Both barriers count from the same events and neither resets on its own: only a
+release does.
+
+## Booting
+
+`platform_init_csk6()` calls `radio_paForceOff()` as soon as the transceiver
+answers -- before the DSP, the audio, the codec and any thread exist -- and
+`radio_init()` repeats it as the driver's own contract. It drives the three
+enable lines (PA VHF, PA UHF, ALC/bias) low and **reads REG_33 back**, three
+times if it has to: what the chip latched is the truth, and the radio that came
+back hot is the proof that a latch can survive a reset. The log says which:
+
+```
+PA: off at boot, REG_33 latch clear
+PA: STILL KEYED AT BOOT: REG_33 latch set
+```
+
+## Why 90 s
+
+Three numbers decided it, and only the first is about policy.
+
+1. **A transmission with nobody holding the PTT is an accident.** The longest
+   legitimate over on this radio is a voice call with a talkgroup, which is
+   tens of seconds; a net control reading out a list is the longest anybody
+   keeps a key down, and that is under a minute. 90 s is one and a half times
+   the longest plausible one, so it never interrupts an operator and it always
+   ends a stuck key before a battery is in danger.
+2. **The PA is not built for a continuous carrier.** It is a handheld PA with a
+   small thermal mass and no temperature sensor of its own: this radio has no
+   way to measure the PA die, so the firmware cannot throttle on temperature
+   and must bound the air time instead. A minute and a half of carrier is
+   already at the edge; the radio that came back too hot to switch on had been
+   keyed for minutes.
+3. **The battery is the second casualty.** A keyed PA draws the receive current
+   plus the transmit current; there is no thermal cut-out, so the first thing
+   the operator notices is that the radio will not turn on.
+
+The 5 s margin between the two barriers exists so that the supervisor is
+normally the one that stops the radio -- with the mode unwinding cleanly, the
+streams cancelled and the log line written -- and the driver's timer is only the
+backstop when the supervisor itself is the thing that died.
 
 ## Tests
 
-- `tests/unit/key_gate.cpp`: the rule itself -- held across a change, a press
-  during it, the release requirement, the hold time, the settle time and the
-  unattended grant.
+- `tests/unit/key_gate.cpp`: the keying rule itself -- held across a change, a
+  press during it, the release requirement, the hold time, the settle time and
+  the unattended grant.
+- `tests/unit/tx_watch.cpp`: the clock. 89 s keep transmitting and 90 s cut; a
+  release at 60 s starts the count again; a 300 ms gap and a change of mode do
+  not; a chain of unattended sends cuts at 90 s of air; after a cut nothing keys
+  until a real release; the driver's margin cuts at its own limit.
 - `tests/unit/mode_switch.cpp`: all eleven modes selected with the PTT injected
   as pressed (no keying); a press during a change (no keying) followed by a
   release and a press (keys once, then back to RX); `radio_enableTx()` called
   outside a permitted transmission (refused); a mode the build lacks (PA off,
-  RX); a simulated supervisor timeout (PA off, RX).
+  RX); a simulated supervisor timeout (PA off, RX); **the 90 s cut with the RTX
+  thread not running** (PA off, clock latched, keying refused, then the thread
+  comes back and the radio is in RX); **the driver's barrier refusing eight
+  keyings in a row** (nothing keyed, PA off each time); and `radio_init()`
+  leaving the PA off.
 - `tests/unit/mode_walk.cpp`: the TX to RX loop over one mode object, after the
   eleven-mode walk.
 
 The DMR transmit chain itself is not linked into the host build (demodulator and
 vocoder), so its call loop is verified on the radio; what the host proves is the
-decision that starts it.
+decision that starts it and the clocks that end it.
+
+## Visibility from the PC
+
+`PC_MSG_DBG_INFO` carries `PC_TAG_TX_SECONDS` (u16, air time since the last
+release) and `PC_TAG_TX_REASON` (`idle`, `ptt`, `unattended`, `mode`,
+`timeout`). `PC_MSG_DBG_TX_TRACE` carries the live guard trace plus
+
+```
+tx=43s/ptt air=43105ms cut=0/0
+```
+
+where the first `cut` is the supervisor's count and the second the driver
+barrier's: the second number must stay at zero, and if it ever is not, the
+supervisor was not running. The serial log carries the same in the `TX exit`
+line of every transmission.

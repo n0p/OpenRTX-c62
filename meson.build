@@ -1772,6 +1772,18 @@ key_gate_test = executable('key_gate_test',
                                       'dependencies'       : [catch2_dep],
                                       'link_args'          : linux_l_args})
 
+# The absolute transmit clock (rtx/TxWatch.h): air counted since the last
+# release, the 90 s cut, the rekey, the unattended chain and the driver's
+# margin. Header-only, so the test needs nothing but Catch2.
+tx_watch_test = executable('tx_watch_test',
+                           sources : ['tests/unit/tx_watch.cpp'],
+                           kwargs  : {'c_args'             : linux_c_args,
+                                      'cpp_args'           : linux_cpp_args,
+                                      'include_directories': linux_inc +
+                                           ['openrtx/include'],
+                                      'dependencies'       : [catch2_dep],
+                                      'link_args'          : linux_l_args})
+
 # The mode switch through the firmware's own entry points (rtx.cpp): the real
 # modes of the Linux build, every ordered pair of them, on the real arena. The
 # radio driver, the audio paths and the UI come along in unit_test_src, which
@@ -1883,6 +1895,7 @@ test('S-Level Test', slevel_test)
 test('Audio Codec Test',     audio_codec_test)
 test('TX Guard Test',        tx_guard_test)
 test('Key Gate Test',        key_gate_test)
+test('TX Watch Test',        tx_watch_test)
 test('Mode Arena Test',      mode_arena_test)
 test('Mode Switch Test',     mode_switch_test)
 
