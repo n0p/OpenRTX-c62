@@ -14,12 +14,23 @@
 /* Constants                                                          */
 /* ------------------------------------------------------------------ */
 
-/** Matched filter: 81 taps, 10 per symbol at 24 kHz, 8 symbols of span. */
-#define NXDN_MF_TAPS 81
-#define NXDN_MF_CENTER 40
+/**
+ * Matched filter: 161 taps, 20 per symbol at 48 kHz, 4 symbols of span each
+ * way.  The taps are spaced at the 48 kHz input rate, which is the rate the
+ * convolution runs at, and the output is decimated by two to the 24 kHz ring
+ * below; the filter is a root raised cosine with alpha 0.2, the pulse NXDN
+ * transmits.  (It used to be the DMR table -- 81 taps designed for ten samples
+ * per symbol -- applied at 48 kHz, where one NXDN symbol is twenty samples:
+ * twice the bandwidth the signal has, so the eye was left with the ISI of an
+ * unmatched root pulse and the slicer ran at an EVM of 0.08 to 0.10 on a
+ * clean signal.  Measured on the loopback of docs/TX_NXDN.md: 0.03 to 0.06
+ * with this one.)
+ */
+#define NXDN_MF_TAPS 161
+#define NXDN_MF_CENTER 80
 
-/** 48 kHz history: 128 doubles up so the filter taps are contiguous. */
-#define NXDN_HIST_LEN 128
+/** 48 kHz history: 256 doubles up so the filter taps are contiguous. */
+#define NXDN_HIST_LEN 256
 
 /**
  * Samples per symbol on the 24 kHz matched filter output stream: 24000 / 2400.
@@ -60,8 +71,8 @@
 #define NXDN_MAX_EVM 0.42f
 
 /** Fractional timing search: phases and span in 48 kHz samples. */
-#define NXDN_TIMING_PHASES 16
-#define NXDN_TIMING_SPAN 5.0f
+#define NXDN_TIMING_PHASES 40
+#define NXDN_TIMING_SPAN 10.0f
 #define NXDN_TIMING_LIMIT 10.0f
 
 /** Symbols of the timing window: the sync and the head of the SACCH. */
@@ -75,34 +86,54 @@
 #define NXDN_SYNC_TIMEOUT_MS 300
 
 /*
- * Root-raised-cosine impulse response, alpha 0.2, 10 samples per symbol,
- * 8 symbols of span, normalised to unit energy -- the same table the DMR mode
- * uses (same symbol rate, same pulse shape).  Computed once from its closed
- * form; here it is a table so that the firmware needs no transcendental at
- * boot.
+ * Root-raised-cosine impulse response, alpha 0.2, 20 samples per symbol at
+ * 48 kHz, 4 symbols of span each way.  Computed once from its closed form;
+ * here it is a table so that the firmware needs no transcendental at boot.
+ * The scale is the one the DMR table had (same DC gain), so the level
+ * estimates and the EVM gates keep their meaning.
  */
 static const float nxdn_rrc[NXDN_MF_TAPS] = {
-    8.656555859e-03f,  6.031442977e-03f,  2.235020933e-03f,  -2.384808633e-03f,
-    -7.330730141e-03f, -1.200305434e-02f, -1.576462128e-02f, -1.801719139e-02f,
-    -1.828097858e-02f, -1.626786627e-02f, -1.193878807e-02f, -5.536830589e-03f,
-    2.410222124e-03f,  1.111211611e-02f,  1.962566710e-02f,  2.685826042e-02f,
-    3.177228436e-02f,  3.346444934e-02f,  3.129596224e-02f,  2.499686974e-02f,
-    1.474070833e-02f,  1.178894526e-03f,  -1.457211399e-02f, -3.099328423e-02f,
-    -4.627240185e-02f, -5.845259980e-02f, -6.560768581e-02f, -6.602845603e-02f,
-    -5.840218720e-02f, -4.196726040e-02f, -1.662647831e-02f, 1.699400444e-02f,
-    5.754840415e-02f,  1.030401309e-01f,  1.509519069e-01f,  1.984273216e-01f,
-    2.424887347e-01f,  2.802725793e-01f,  3.092610513e-01f,  3.274891331e-01f,
-    3.337079221e-01f,  3.274891331e-01f,  3.092610513e-01f,  2.802725793e-01f,
-    2.424887347e-01f,  1.984273216e-01f,  1.509519069e-01f,  1.030401309e-01f,
-    5.754840415e-02f,  1.699400444e-02f,  -1.662647831e-02f, -4.196726040e-02f,
-    -5.840218720e-02f, -6.602845603e-02f, -6.560768581e-02f, -5.845259980e-02f,
-    -4.627240185e-02f, -3.099328423e-02f, -1.457211399e-02f, 1.178894526e-03f,
-    1.474070833e-02f,  2.499686974e-02f,  3.129596224e-02f,  3.346444934e-02f,
-    3.177228436e-02f,  2.685826042e-02f,  1.962566710e-02f,  1.111211611e-02f,
-    2.410222124e-03f,  -5.536830589e-03f, -1.193878807e-02f, -1.626786627e-02f,
-    -1.828097858e-02f, -1.801719139e-02f, -1.576462128e-02f, -1.200305434e-02f,
-    -7.330730141e-03f, -2.384808633e-03f, 2.235020933e-03f,  6.031442977e-03f,
-    8.656555859e-03f,
+    4.334602913e-03f, 3.758219220e-03f, 3.020128412e-03f, 2.134020008e-03f,
+    1.119143503e-03f, -1.235560223e-17f, -1.194146797e-03f, -2.429933482e-03f,
+    -3.670721328e-03f, -4.877564246e-03f, -6.010297299e-03f, -7.028718071e-03f,
+    -7.893829189e-03f, -8.569107126e-03f, -9.021760103e-03f, -9.223936675e-03f,
+    -9.153846435e-03f, -8.796755222e-03f, -8.145819383e-03f, -7.202726859e-03f,
+    -5.978117207e-03f, -4.491757954e-03f, -2.772460825e-03f, -8.577282444e-04f,
+    1.206872110e-03f, 3.368599222e-03f, 5.568683787e-03f, 7.743705373e-03f,
+    9.827173205e-03f, 1.175127529e-02f, 1.344875442e-02f, 1.485486454e-02f,
+    1.590935686e-02f, 1.655844230e-02f, 1.675667575e-02f, 1.646870731e-02f,
+    1.567084777e-02f, 1.435239828e-02f, 1.251669904e-02f, 1.018185757e-02f,
+    7.381124585e-03f, 4.162893458e-03f, 5.903086318e-04f, -3.259521826e-03f,
+    -7.296704232e-03f, -1.142011207e-02f, -1.551928761e-02f, -1.947665646e-02f,
+    -2.317001023e-02f, -2.647520404e-02f, -2.926900877e-02f, -3.143205226e-02f,
+    -3.285177970e-02f, -3.342536094e-02f, -3.306247224e-02f, -3.168788105e-02f,
+    -2.924376564e-02f, -2.569170663e-02f, -2.101429392e-02f, -1.521630090e-02f,
+    -8.325387428e-03f, -3.923040103e-04f, 8.509419030e-03f, 1.828430101e-02f,
+    2.881625029e-02f, 3.997039226e-02f, 5.159535257e-02f, 6.352595059e-02f,
+    7.558624769e-02f, 8.759288577e-02f, 9.935864335e-02f, 1.106961311e-01f,
+    1.214215437e-01f, 1.313583840e-01f, 1.403410731e-01f, 1.482183658e-01f,
+    1.548564897e-01f, 1.601419382e-01f, 1.639838492e-01f, 1.663159163e-01f,
+    1.670977875e-01f, 1.663159163e-01f, 1.639838492e-01f, 1.601419382e-01f,
+    1.548564897e-01f, 1.482183658e-01f, 1.403410731e-01f, 1.313583840e-01f,
+    1.214215437e-01f, 1.106961311e-01f, 9.935864335e-02f, 8.759288577e-02f,
+    7.558624769e-02f, 6.352595059e-02f, 5.159535257e-02f, 3.997039226e-02f,
+    2.881625029e-02f, 1.828430101e-02f, 8.509419030e-03f, -3.923040103e-04f,
+    -8.325387428e-03f, -1.521630090e-02f, -2.101429392e-02f, -2.569170663e-02f,
+    -2.924376564e-02f, -3.168788105e-02f, -3.306247224e-02f, -3.342536094e-02f,
+    -3.285177970e-02f, -3.143205226e-02f, -2.926900877e-02f, -2.647520404e-02f,
+    -2.317001023e-02f, -1.947665646e-02f, -1.551928761e-02f, -1.142011207e-02f,
+    -7.296704232e-03f, -3.259521826e-03f, 5.903086318e-04f, 4.162893458e-03f,
+    7.381124585e-03f, 1.018185757e-02f, 1.251669904e-02f, 1.435239828e-02f,
+    1.567084777e-02f, 1.646870731e-02f, 1.675667575e-02f, 1.655844230e-02f,
+    1.590935686e-02f, 1.485486454e-02f, 1.344875442e-02f, 1.175127529e-02f,
+    9.827173205e-03f, 7.743705373e-03f, 5.568683787e-03f, 3.368599222e-03f,
+    1.206872110e-03f, -8.577282444e-04f, -2.772460825e-03f, -4.491757954e-03f,
+    -5.978117207e-03f, -7.202726859e-03f, -8.145819383e-03f, -8.796755222e-03f,
+    -9.153846435e-03f, -9.223936675e-03f, -9.021760103e-03f, -8.569107126e-03f,
+    -7.893829189e-03f, -7.028718071e-03f, -6.010297299e-03f, -4.877564246e-03f,
+    -3.670721328e-03f, -2.429933482e-03f, -1.194146797e-03f, -1.235560223e-17f,
+    1.119143503e-03f, 2.134020008e-03f, 3.020128412e-03f, 3.758219220e-03f,
+    4.334602913e-03f,
 };
 
 /** Four-level model of one window of symbols. */
@@ -604,7 +635,7 @@ static float refine_timing(long k, int8_t polarity, float centre, float *evmOut,
         float evm = sqrtf(acc / (float)(NXDN_TIMING_WINDOW - NXDN_FSW_SYMBOLS))
                   / levels.outer;
 
-        float metric = (1.0f - distance) + 0.35f * evm;
+        float metric = distance - 0.35f * evm;
 
         if (metric > bestMetric) {
             bestMetric = metric;
@@ -658,6 +689,66 @@ static bool decode_frame(struct nxdnCandidate *c, struct nxdnFrame *out,
     symbol_window(c->symbol, d, NXDN_FRAME_SYMBOLS, phy.win);
     estimate_levels(phy.win, NXDN_FRAME_SYMBOLS, true, &levels);
     evm = frame_evm(&levels);
+
+    /*
+     * The timing the refinement picked is a compromise: its objective is the
+     * sign match of the ten sync symbols, which barely moves over half a
+     * symbol, plus an eye estimate over the first 64 symbols whose level
+     * model has only 64 samples to fit.  On a continuous stream that is worth
+     * up to a quarter of a symbol in the wrong direction, which shows up as
+     * an EVM of 0.2 where the same frame decodes at 0.08 half a sample away.
+     * So the frame is decoded at a handful of offsets around it and the one
+     * with the lowest EVM of the whole 192 symbols -- the objective the frame
+     * is judged by anyway -- is the one that is kept.  Sixteen windows over 192
+     * symbols per frame is a few thousand interpolations every 80 ms.
+     */
+    static const float coarse[9] = { 0.0f, -1.0f, 1.0f, -2.0f, 2.0f, -3.0f, 3.0f,
+                                     -4.0f, 4.0f };
+    float bestD = d;
+    float bestEvm = evm;
+    struct nxdnLevels bestLevels = levels;
+
+    for (int t = 1; t < 9; t++) {
+        symbol_window(c->symbol, d + coarse[t], NXDN_FRAME_SYMBOLS, phy.win);
+        estimate_levels(phy.win, NXDN_FRAME_SYMBOLS, true, &levels);
+
+        float e = frame_evm(&levels);
+
+        if (e < bestEvm) {
+            bestEvm = e;
+            bestD = d + coarse[t];
+            bestLevels = levels;
+        }
+    }
+
+    /* A second pass a quarter of a sample apart around the best of the coarse
+     * one: the eye of a 2400 symbols/s signal is 20 samples wide at 48 kHz, so
+     * the residual that matters is a few tenths of a sample. */
+    for (int t = -3; t <= 3; t++) {
+        if (t == 0)
+            continue;
+
+        symbol_window(c->symbol, bestD + 0.25f * (float)t, NXDN_FRAME_SYMBOLS,
+                      phy.win);
+        estimate_levels(phy.win, NXDN_FRAME_SYMBOLS, true, &levels);
+
+        float e = frame_evm(&levels);
+
+        if (e < bestEvm) {
+            bestEvm = e;
+            bestD = bestD + 0.25f * (float)t;
+            bestLevels = levels;
+        }
+    }
+
+    if (bestD != d) {
+        d = bestD;
+        symbol_window(c->symbol, d, NXDN_FRAME_SYMBOLS, phy.win);
+        levels = bestLevels;
+        evm = bestEvm;
+    } else {
+        evm = bestEvm;
+    }
 
     if (evm > NXDN_MAX_EVM)
         return false;

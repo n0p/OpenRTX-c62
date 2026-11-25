@@ -325,9 +325,19 @@ if(CONFIG_C62_NXDN_RX)
     ${OPENRTX_ROOT}/openrtx/src/protocols/NXDN/NxdnPhy.c
     ${OPENRTX_ROOT}/openrtx/src/protocols/NXDN/NxdnSpeech.c
     ${OPENRTX_ROOT}/openrtx/src/protocols/NXDN/NxdnStatus.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/NXDN/NxdnTx.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/Fsk4Tx.c
     ${OPENRTX_ROOT}/openrtx/src/rtx/OpMode_NXDN.cpp)
   target_compile_definitions(app PRIVATE CONFIG_NXDN)
   message(STATUS "C62: NXDN receive mode enabled")
+
+  # CONFIG_NXDN_TX: the frame builders of NxdnTx.c, the shared 4FSK modulator
+  # and the PTT branch of the mode.  It needs the AMBE+2 encoder and the
+  # deviation/PA chain of CONFIG_DMR_TX, which is what Kconfig records.
+  if(CONFIG_NXDN_TX)
+    target_compile_definitions(app PRIVATE CONFIG_NXDN_TX)
+    message(STATUS "C62: NXDN transmit chain enabled")
+  endif()
 endif()
 
 #
@@ -347,8 +357,18 @@ if(CONFIG_C62_DPMR_RX)
     ${OPENRTX_ROOT}/openrtx/src/protocols/DPMR/DpmrData.c
     ${OPENRTX_ROOT}/openrtx/src/protocols/DPMR/DpmrPhy.c
     ${OPENRTX_ROOT}/openrtx/src/protocols/DPMR/DpmrSpeech.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/DPMR/DpmrTx.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/Fsk4Tx.c
     ${OPENRTX_ROOT}/openrtx/src/rtx/OpMode_DPMR.cpp)
   target_compile_definitions(app PRIVATE CONFIG_DPMR)
+
+  # CONFIG_DPMR_TX: header, superframes and END frame from DpmrTx.c, the same
+  # 4FSK modulator, and the PTT branch of the mode.  It needs CONFIG_DMR_TX for
+  # the AMBE+2 encoder, as NXDN's does.
+  if(CONFIG_DPMR_TX)
+    target_compile_definitions(app PRIVATE CONFIG_DPMR_TX)
+    message(STATUS "C62: dPMR transmit chain enabled")
+  endif()
 
   # The slicer and the sync search decide on margins (EVM, correlation score),
   # so the receiver must not depend on whether the compiler fuses multiply-adds:

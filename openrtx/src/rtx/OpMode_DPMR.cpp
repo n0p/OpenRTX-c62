@@ -22,6 +22,36 @@
 #include "rtx/OpMode_DPMR.hpp"
 #include "core/utils.h"
 
+#ifdef CONFIG_DPMR_TX
+#include "core/state.h"
+#include "interfaces/delays.h"
+#include "protocols/DMR/dmr_enc.h"
+#include "rtx/TxGuard.h"
+
+/*
+ * Transmit level.  dPMR asks for +-1050 Hz on its outer symbols (clause 12.2,
+ * h = 0.29 on a 12.5 kHz channel); the DMR chain's figure, 23000 * 0.3165 *
+ * 1944 / 2400, is the same audio amplitude for +-1944 Hz, so scaling it by
+ * 1050/1944 gives the level this modulator wants.  The absolute deviation is
+ * the radio's shared REG_40 calibration: docs/TX_DPMR.md.
+ */
+#define DPMR_TX_LEVEL (23000.0f * 0.3165f * 1050.0f / 2400.0f)
+/* The C62 transmitter inverts, as for M17 and DMR */
+#define DPMR_TX_INVERT true
+/* PCM one AMBE+2 frame eats, and two per 40 ms half */
+#define VOCODER_PCM_SAMPLES 160
+#define VOCODER_FRAMES_PER_HALF 2
+/*
+ * Preamble frames before the header: two, 160 ms.  The standard only asks for
+ * 72 bits, but a receiver that has to find FS1 by correlation needs enough of
+ * it to ride out the acquisitions it makes on the preamble itself: with one
+ * frame of it this receiver decodes the header, with none it never does.
+ */
+#define DPMR_TX_PREAMBLE_FRAMES 2
+/* Silence halves after the END frame: the pulse tail and the PA ramp-down */
+#define DPMR_TX_TAIL_HALVES 2
+#endif
+
 
 /* 30 ms of baseband at 48 kHz, the same half the other flat RX modes take */
 #define HALF_SAMPLES 1440
@@ -116,6 +146,11 @@ void OpMode_DPMR::onFrame(const struct dpmrFrame *frame)
 }
 
 OpMode_DPMR::OpMode_DPMR()
+#ifdef CONFIG_DPMR_TX
+    : frameHead(0), frameCount(0), txStage(0), txHalf(0), txTail(0),
+      txFrames(0), txRunning(false), txFirstBlock(false),
+      txPath(-1), txId(-1), micPath(-1), micId(-1)
+#endif
 {
 }
 
@@ -158,6 +193,9 @@ void OpMode_DPMR::enable()
 void OpMode_DPMR::disable()
 {
     startRx = false;
+#ifdef CONFIG_DPMR_TX
+    stopTx();
+#endif
     stopSampling();
     dpmrSpeech_stop();
     radio_disableRtx();
@@ -187,6 +225,239 @@ bool OpMode_DPMR::rxSquelchOpen()
     return dpmrPhy_synced();
 }
 
+
+#ifdef CONFIG_DPMR_TX
+/* ------------------------------------------------------------------ */
+/* Transmit                                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Configure the chain for this channel and open the streams.
+ *
+ * The addresses are the 24-bit ones the operator edits for DMR
+ * (rtxStatus_t::dmrSourceId/dmrDestId), which is exactly dPMR's address size.
+ * The channel code is the one clause 6.1.5 puts on the frequency, group A:
+ * the same table the receiver reads back, so a round trip agrees.
+ */
+bool OpMode_DPMR::startBaseband(const rtxStatus_t *status)
+{
+    uint8_t codeBits[12];
+    uint16_t code = 0;
+
+    if ((status->dmrSourceId == 0) || (status->dmrDestId == 0))
+        return false;
+
+    if (dpmrDefs_channelCodeBits(status->rxFrequency, DPMR_GROUP_A,
+                                 codeBits)) {
+        for (int i = 0; i < 12; i++)
+            code = (uint16_t)((code << 1) | codeBits[i]);
+    }
+
+    dpmrTx_setup(&tx, status->dmrSourceId, status->dmrDestId, code);
+    dpmrTx_setCallType(&tx, DPMR_MODE_VOICE, 0,
+                       (status->dmrDestType == DMR_DEST_USER) ? DPMR_FMT_PEER
+                                                              : DPMR_FMT_ALL_CALL);
+    fsk4Mod_init(&txMod, DPMR_TX_SPS, DPMR_TX_LEVEL, DPMR_TX_INVERT);
+
+    txPath = audioPath_request(SOURCE_MCU, SINK_RTX, PRIO_TX);
+    if (txPath < 0)
+        return false;
+
+    txId = audioStream_start(txPath, txSamples, 2 * DPMR_TX_HALF_SAMPLES,
+                             48000, STREAM_OUTPUT | BUF_CIRC_DOUBLE);
+    return (txId >= 0);
+}
+
+bool OpMode_DPMR::startTx(const rtxStatus_t *status)
+{
+    struct txGuard *guard = rtx_getTxGuard();
+
+    txg_enter(guard, (uint32_t)getTick());
+
+    if (!dmrEnc_available())
+        return false;
+
+    if ((status->txFrequency == 0) || (status->txDisable != 0))
+        return false;
+
+    if (!startBaseband(status)) {
+        txg_streamsFailed(guard, (uint32_t)getTick());
+        stopTx();
+        return false;
+    }
+
+    micPath = audioPath_request(SOURCE_MIC, SINK_MCU, PRIO_TX);
+    if (micPath < 0) {
+        stopTx();
+        return false;
+    }
+
+    micId = audioStream_start(micPath, micPcm, 2 * VOCODER_PCM_SAMPLES, 8000,
+                              STREAM_INPUT | BUF_CIRC_DOUBLE);
+    if (micId < 0) {
+        stopTx();
+        return false;
+    }
+
+    dmrEnc_reset();
+    frameHead = 0;
+    frameCount = 0;
+    txStage = 0;
+    txHalf = 0;
+    txTail = 0;
+    txRunning = true;
+
+    txg_streamsOpen(guard, (uint32_t)getTick());
+    radio_enableTx();
+    txg_note(guard, TXG_EV_KEYED, (uint32_t)getTick());
+    return true;
+}
+
+void OpMode_DPMR::stopTx()
+{
+    const bool wasRunning = txRunning;
+
+    txRunning = false;
+
+    if (txId >= 0)
+        audioStream_stop(txId);
+    if (micId >= 0)
+        audioStream_terminate(micId);
+    if (txPath >= 0)
+        audioPath_release(txPath);
+    if (micPath >= 0)
+        audioPath_release(micPath);
+
+    txId = micId = txPath = micPath = -1;
+
+    if (wasRunning)
+        radio_disableRtx();
+
+    txg_exit(rtx_getTxGuard(), (uint32_t)getTick(), TXG_REASON_MODE);
+}
+
+bool OpMode_DPMR::fillMic(unsigned frames)
+{
+    for (unsigned i = 0; (i < frames) && (frameCount < DPMR_TX_QUEUE_FRAMES);
+         i++) {
+        dataBlock_t block = inputStream_getData(micId);
+
+        if ((block.data == NULL) || (block.len < VOCODER_PCM_SAMPLES))
+            break;
+
+        uint8_t *dst = frameQueue[(frameHead + frameCount)
+                                  % DPMR_TX_QUEUE_FRAMES];
+
+        if (!dmrEnc_encode((const int16_t *)block.data, dst))
+            break;
+        frameCount++;
+    }
+    return frameCount > 0;
+}
+
+bool OpMode_DPMR::putHalf()
+{
+    struct txGuard *guard = rtx_getTxGuard();
+    stream_sample_t *idle = outputStream_getIdleBuffer(txId);
+
+    if (idle == NULL)
+        return false;
+
+    memcpy(idle, txSamples, DPMR_TX_HALF_SAMPLES * sizeof(stream_sample_t));
+    outputStream_sync(txId, true);
+
+    if (txFirstBlock) {
+        txg_block(guard, (uint32_t)getTick());
+    } else {
+        txFirstBlock = true;
+        txg_firstBlock(guard, (uint32_t)getTick());
+    }
+    return true;
+}
+
+/**
+ * One 40 ms half of the transmission.
+ *
+ * A dPMR transmission is a preamble, a header frame, superframes of four
+ * payload frames for as long as the PTT is held, and an END frame.  Frames are
+ * 80 ms, so each one is two halves of this function; the END frame is 20 ms
+ * and the second half of its half is silence.
+ */
+bool OpMode_DPMR::txSlot(const rtxStatus_t *status)
+{
+    const bool ptt = platform_getPttStatus();
+    const int halfSymbols = DPMR_TX_HALF_SAMPLES / DPMR_TX_SPS;
+
+    (void)status;
+
+    fillMic(VOCODER_FRAMES_PER_HALF);
+
+    /* PTT released: close the call with the END frame, then the tail */
+    if (!ptt && (txStage == 2)) {
+        txStage = 3;
+        txHalf = 0;
+        txg_finishing(rtx_getTxGuard(), (uint32_t)getTick());
+    }
+
+    if (txStage == 4) {
+        fsk4Mod_levels(&txMod, nullptr, halfSymbols, txSamples);
+        txHalf ^= 1;
+        if (!putHalf())
+            return true;
+        return ++txTail >= DPMR_TX_TAIL_HALVES;
+    }
+
+    if (txStage == 3) {
+        /*
+         * The END frame is 48 symbols -- exactly one write -- and the rest of
+         * its 20 ms is silence, which is also what carries its pulse out.
+         */
+        dpmrTx_end(&tx, -1, levelsBuf);
+        fsk4Mod_levels(&txMod, levelsBuf, DPMR_TX_END_SYMBOLS, txSamples);
+        txStage = 4;
+        return putHalf() ? false : true;
+    }
+
+    if (txHalf == 0) {
+        if (txStage == 0) {
+            dpmrTx_preamble(levelsBuf);
+        } else if (txStage == 1) {
+            dpmrTx_header(&tx, DPMR_HT_START, 0, levelsBuf);
+        } else {
+            uint8_t ambe[DPMR_AMBE_FRAMES][DPMR_AMBE_BYTES];
+
+            memset(ambe, 0, sizeof(ambe));
+            for (unsigned i = 0; i < DPMR_AMBE_FRAMES; i++) {
+                if (frameCount == 0)
+                    break;
+                memcpy(ambe[i], frameQueue[frameHead], DPMR_AMBE_BYTES);
+                frameHead = (frameHead + 1) % DPMR_TX_QUEUE_FRAMES;
+                frameCount--;
+            }
+            dpmrTx_frame(&tx, (const uint8_t (*)[DPMR_AMBE_BYTES])ambe,
+                         levelsBuf);
+        }
+    }
+
+    fsk4Mod_levels(&txMod, &levelsBuf[txHalf * halfSymbols], halfSymbols,
+                   txSamples);
+
+    if (txHalf == (DPMR_TX_FRAME_HALVES - 1)) {
+        if (txStage == 0) {
+            if (++txFrames >= DPMR_TX_PREAMBLE_FRAMES)
+                txStage = 1;
+        } else if (txStage == 1) {
+            txStage = 2;
+        }
+    }
+
+    txHalf = (txHalf + 1) & 3;
+
+    return putHalf() ? false : true;
+}
+
+#endif /* CONFIG_DPMR_TX */
+
 void OpMode_DPMR::update(rtxStatus_t *const rtx, const bool newCfg)
 {
     if (newCfg || (rtx->opStatus == OFF)) {
@@ -199,11 +470,41 @@ void OpMode_DPMR::update(rtxStatus_t *const rtx, const bool newCfg)
         return;
     }
 
-    /* dPMR is receive only: the PTT does nothing here */
+#ifdef CONFIG_DPMR_TX
+    if (rtx->opStatus == TX) {
+        bool finished;
+
+        if (platform_getPttStatus() == false)
+            txg_finishing(rtx_getTxGuard(), (uint32_t)getTick());
+
+        finished = txSlot(rtx);
+
+        if (finished) {
+            stopTx();
+            rtx->opStatus = RX;
+            startRx = true;
+            settle = SETTLE_SAMPLES;
+        }
+        return;
+    }
+
+    /* PTT: only with the mode selected, a frequency and a destination */
+    if (platform_getPttStatus() && (rtx->txDisable == 0) && startRx
+        && (rtx->opStatus == RX)) {
+        stopSampling();
+        radio_disableRtx();
+        if (startTx(rtx)) {
+            rtx->opStatus = TX;
+            return;
+        }
+    }
+#else
+    /* dPMR is receive only without CONFIG_DPMR_TX: the PTT does nothing */
     if (rtx->opStatus == TX) {
         rtx->opStatus = RX;
         return;
     }
+#endif
 
     if (!startRx)
         return;

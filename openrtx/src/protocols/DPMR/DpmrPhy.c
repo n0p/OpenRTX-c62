@@ -377,7 +377,7 @@ static bool decodePayloadAt(uint32_t start, float fraction, float polarity,
     else if (scorePattern(y, syncFs3, 12, polarity) > DPMR_SYNC_SCORE)
         frame->sync = DPMR_SYNC_FS3;
 
-    frame->channelCode = (uint8_t)dpmrDefs_channelCode(dibits);
+    frame->channelCode = dpmrDefs_channelCode(dibits);
 
     frame->cchOk = dpmrFec_cchDecode(dibits + DPMR_SYNC_SYMBOLS, &frame->cch);
     frame->fixes = frame->cch.fixes;
@@ -532,10 +532,38 @@ static bool payloadWithRetries(uint32_t start, float fraction, float polarity,
                                  fraction + fracs[fi], polarity, &frame))
                 continue;
 
+            /*
+             * The whole-sample alignment is the grid's: it stays where the
+             * CRC first closed.  The *fraction* is then searched at a quarter
+             * of a sample, because that is what is left between the 0.5 of
+             * the sweep and the eye: half of the frames used to be a sixteenth
+             * of a symbol off it, which cost the TCH two or three symbols and
+             * took the level error from 0.02 to 0.17.
+             */
+            float bestFrac = fraction + fracs[fi];
+            float bestEvm = frame.evm;
+            struct dpmrFrame best = frame;
+
+            for (int q = -2; q <= 2; q++) {
+                struct dpmrFrame tryFrame;
+
+                if (q == 0)
+                    continue;
+                if (!decodePayloadAt((uint32_t)((int32_t)start + ds),
+                                     bestFrac + 0.125f * (float)q, polarity,
+                                     &tryFrame))
+                    continue;
+                if (tryFrame.evm < bestEvm) {
+                    bestEvm = tryFrame.evm;
+                    bestFrac += 0.125f * (float)q;
+                    best = tryFrame;
+                }
+            }
+
             if (winStart != NULL)
                 *winStart = (uint32_t)((int32_t)start + ds);
             if (out != NULL)
-                *out = frame;
+                *out = best;
             return true;
         }
     }
@@ -812,7 +840,20 @@ static void processNewSample(dpmrFrameHandler handler, void *user)
         if (ok) {
             phy.haveFn = false;
             phy.expectedSync = DPMR_SYNC_FS2;
-            phy.frameStart = winStart + DPMR_FRAME_SAMPLES;
+            /*
+             * The grid is anchored on FS1, and a header frame is 156 symbols
+             * from FS1 to the end of HI1 -- FS1 (24), HI0 (60), the channel
+             * code (12) and HI1 (60) -- with the preamble in front of FS1 and
+             * therefore outside the window the receiver anchors on.  Using a
+             * whole 192-symbol frame here put the next frame 36 symbols late,
+             * which is exactly the first payload frame of every real
+             * transmission: the reference capture of docs/RX_DPMR.md loses it
+             * too.  Clause 4.2.2 and 6.1.
+             */
+            phy.frameStart = winStart
+                           + (uint32_t)((2 * DPMR_SYNC_SYMBOLS + DPMR_HI_SYMBOLS
+                                         + DPMR_SYNC_SYMBOLS + DPMR_HI_SYMBOLS)
+                                        * DPMR_PHY_SPS);
         }
     } else if (phy.expectedSync == DPMR_SYNC_FS3) {
         ok = endWithRetries(phy.frameStart, phy.fraction, phy.polarity,
