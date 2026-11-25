@@ -7,6 +7,10 @@
 #include "core/audio_stream.h"
 #include <errno.h>
 #include <pthread.h>
+#include <stdbool.h>
+#include <stdint.h>
+
+#include "interfaces/delays.h"
 
 #define MAX_NUM_STREAMS 3
 #define MAX_NUM_DEVICES 3
@@ -28,9 +32,41 @@ struct streamState
 static struct streamState streams[MAX_NUM_STREAMS] = {0};
 static pthread_mutex_t streamsLock = PTHREAD_MUTEX_INITIALIZER;
 
-static void lockStreams(void)
+/*
+ * How long a caller waits for the table, and why it is not "until it is free".
+ *
+ * The lock is held across a driver stop and a driver sync (audioStream_stop),
+ * and those are bounded but not short: a stalled codec can spend up to a
+ * second in each.  A plain lock here hands that wait to every other caller,
+ * including the UI thread playing a voice prompt and the RTX supervisor
+ * cancelling a stream -- the thread that is supposed to unblock the owner ends
+ * up behind it.  With a deadline the caller is told that the table is busy and
+ * can answer (the protocol's status poll) or try again on its next pass, while
+ * the owner finishes its driver call and releases.
+ */
+#define STREAMS_LOCK_MS 100
+#define STREAMS_LOCK_STEP_MS 1
+
+/*
+ * Try-lock in a bounded loop rather than pthread_mutex_timedlock(): the host
+ * resolves that one against CLOCK_REALTIME and Zephyr against CLOCK_MONOTONIC,
+ * so the same absolute deadline means two different things.  This is the idiom
+ * state_tryLock() uses, for the same reason.
+ */
+static bool lockStreams(void)
 {
-    pthread_mutex_lock(&streamsLock);
+    if(pthread_mutex_trylock(&streamsLock) == 0)
+        return true;
+
+    uint32_t waited = 0;
+    while(waited < STREAMS_LOCK_MS)
+    {
+        delayMs(STREAMS_LOCK_STEP_MS);
+        waited += STREAMS_LOCK_STEP_MS;
+        if(pthread_mutex_trylock(&streamsLock) == 0)
+            return true;
+    }
+    return false;
 }
 
 static void unlockStreams(void)
@@ -99,7 +135,8 @@ streamId audioStream_start(const pathId path, stream_sample_t * const buf,
     if(pathInfo.status != PATH_OPEN)
         return -EPERM;
 
-    lockStreams();
+    if(!lockStreams())
+        return -EBUSY;
 
     // Search for an audio device serving the correct output endpoint.
     const struct audioDevice *dev  = NULL;
@@ -181,7 +218,15 @@ void audioStream_stop(const streamId id)
     if((id < 0) || (id >= MAX_NUM_STREAMS))
         return;
 
-    lockStreams();
+    /*
+     * If the table is busy the stream keeps running: the caller asked to stop
+     * it and could not, which is a failure the mode has to see (it answers -1
+     * to its own caller) instead of a wait with the PA keyed.  The path is
+     * closed by the mode anyway, which is what validateStream() acts on.
+     */
+    if(!lockStreams())
+        return;
+
     if(streams[id].path != 0)
     {
         streams[id].dev->driver->stop(&(streams[id].ctx));
@@ -201,7 +246,9 @@ void audioStream_terminate(const streamId id)
      * path goes to zero, and a terminate that arrived late would then cancel the
      * new stream. The driver's terminate is the non-blocking one, by contract.
      */
-    lockStreams();
+    if(!lockStreams())
+        return;
+
     if(streams[id].path != 0)
     {
         streams[id].dev->driver->terminate(&(streams[id].ctx));
@@ -222,7 +269,9 @@ dataBlock_t inputStream_getData(streamId id)
      * the lifetime of the stream, and the driver checks that the context is
      * still the one attached to it.
      */
-    lockStreams();
+    if(!lockStreams())
+        return block;
+
     if(validateStream(id) == false)
     {
         unlockStreams();
@@ -262,7 +311,9 @@ dataBlock_t inputStream_getData(streamId id)
 
 stream_sample_t *outputStream_getIdleBuffer(const streamId id)
 {
-    lockStreams();
+    if(!lockStreams())
+        return NULL;
+
     if(validateStream(id) == false)
     {
         unlockStreams();
@@ -282,7 +333,9 @@ stream_sample_t *outputStream_getIdleBuffer(const streamId id)
 
 bool outputStream_sync(const streamId id, const bool bufChanged)
 {
-    lockStreams();
+    if(!lockStreams())
+        return false;
+
     if(validateStream(id) == false)
     {
         unlockStreams();

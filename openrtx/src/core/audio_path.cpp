@@ -5,6 +5,8 @@
  */
 
 #include "core/audio_path.h"
+#include "interfaces/delays.h"
+
 #include <map>
 #include <pthread.h>
 #include <set>
@@ -126,17 +128,40 @@ static int                    pathCounter = 1;  // Counter for path ID generatio
  */
 static pthread_mutex_t pathMutex = PTHREAD_MUTEX_INITIALIZER;
 
+/** How long a caller waits for the table, in bounded steps (see pathLock()). */
+static constexpr uint32_t PATH_LOCK_MS      = 50;
+static constexpr uint32_t PATH_LOCK_STEP_MS = 1;
+
 /**
  * \internal
  * Take the path table's lock. Bounded: this lock is only ever held for a few
  * instructions, so a timeout means the holder died inside the critical section
  * and the caller must not join it.
  *
+ * The bound is what keeps the transmit path honest.  This table is touched by
+ * the RTX thread (the squelch of every mode), by the UI thread (a voice prompt)
+ * and by the DMR speech thread, and a blocking acquisition here is a wait with
+ * no deadline in the middle of the keying path -- exactly the shape that used
+ * to leave the radio with the PA keyed and no way out.  A caller that cannot
+ * get the table now fails its own call (no path, PATH_CLOSED) and asks again on
+ * its next pass.
+ *
  * @return true if the lock was taken.
  */
 static bool pathLock()
 {
-    return pthread_mutex_lock(&pathMutex) == 0;
+    if(pthread_mutex_trylock(&pathMutex) == 0)
+        return true;
+
+    uint32_t waited = 0;
+    while(waited < PATH_LOCK_MS)
+    {
+        delayMs(PATH_LOCK_STEP_MS);
+        waited += PATH_LOCK_STEP_MS;
+        if(pthread_mutex_trylock(&pathMutex) == 0)
+            return true;
+    }
+    return false;
 }
 
 static void pathUnlock()

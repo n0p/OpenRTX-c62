@@ -1777,6 +1777,19 @@ mode_arena_test = executable('mode_arena_test',
 # The keying rule on its own (rtx/KeyGate.h): a mode change vetoes keying, the
 # PTT has to be released once after it and a press has to last. Header-only, so
 # the test needs nothing but Catch2.
+# The radio thread's stack against the deepest chain of the build
+# (rtx/DmrTxPlan.h's encoder path).  The failing combination -- TETRA and
+# DMR_TX in the same image -- is compiled on purpose.
+rtx_stack_test = executable('rtx_stack_budget_test',
+                            sources : ['tests/unit/rtx_stack_budget.cpp'],
+                            kwargs  : {'c_args'             : linux_c_args,
+                                       'cpp_args'           : linux_cpp_args,
+                                       'include_directories': linux_inc +
+                                            ['openrtx/include'],
+                                       'dependencies'       : [catch2_dep],
+                                       'link_args'          : linux_l_args})
+test('RTX Stack Budget Test', rtx_stack_test)
+
 key_gate_test = executable('key_gate_test',
                            sources : ['tests/unit/key_gate.cpp'],
                            kwargs  : {'c_args'             : linux_c_args,
@@ -1990,6 +2003,15 @@ test('M17 Baseband Replay Test', m17_replay_test, timeout : 120) # ~40 s in CI w
 # is optional and the script skips it when the tools are not installed.
 kiss_loop_script = find_program('tests/host/kiss_loop/run.sh')
 test('KISS Packet Modem Loop', kiss_loop_script, timeout : 300)
+
+# The DMR transmitter on the host (tests/host/dmr_tx_host): the mode's own slot
+# machine (rtx/DmrTxPlan.h), its burst builders and its encoder, walked through
+# TUNE(DMR) -> PTT -> three seconds of bursts -> unkey, and the baseband decoded
+# by the repository's reference receiver (work/dmr-rx).  It also runs the same
+# loop against a sink that stops consuming and fails if the thread does not
+# come back.
+dmr_tx_host_script = find_program('tests/host/dmr_tx_host/run.sh')
+test('DMR TX Host Sequence', dmr_tx_host_script, timeout : 300)
 
 # The PC protocol's own harness (tests/host/pc_proto_host): three device builds
 # -- protocol, protocol+debug, protocol+debug+bench -- driven through a pty by

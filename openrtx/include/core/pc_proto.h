@@ -709,6 +709,13 @@ void pc_proto_eventSettings(pcProto_t *p, uint16_t settingsCrc);
  */
 int pc_proto_platformStatus(pcProtoStatus_t *out);
 
+/**
+ * Platform work deferred until after the answer: the bench PTT press is
+ * applied here, from the transport loop, so that keying the radio can never
+ * eat the reply to the frame that asked for it.
+ */
+void pc_proto_platformTick(uint32_t nowMs);
+
 /** Model name, firmware version and hardware revision, or NULL. */
 const char *pc_proto_platformModel(void);
 const char *pc_proto_platformFirmware(void);

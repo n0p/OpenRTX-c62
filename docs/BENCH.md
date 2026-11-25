@@ -97,7 +97,10 @@ llegada y esa es la medida de latencia más fina que el cable puede dar.
 El `TX_STATE` de la respuesta de `BENCH_PTT` es el estado que el banco acaba de
 fijar (2 transmitiendo, 1 recibiendo), no el que la PA tiene en ese
 milisegundo: el hilo rtx tarda hasta un periodo (25 ms) en pulsar, y el momento
-en que la portadora aparece lo mide el SDR.
+en que la portadora aparece lo mide el SDR. La pulsación se aplica después de
+escribir la respuesta (ver abajo), así que la primera lectura que ve
+`tx_state = 2` es el `POLL` siguiente; el flanco del evento lleva la marca del
+milisegundo en que se aplicó.
 
 ### Semántica que importa
 
@@ -128,6 +131,14 @@ en que la portadora aparece lo mide el SDR.
   lo tiene tomado (lo tiene mientras corre su FSM) la respuesta es `busy`, no
   silencio. El comando `status` del CPS no toma ningún cerrojo: es la consulta
   que siempre contesta (docs/PC_PROTO.md).
+- **`BENCH_PTT` contesta antes de clavear.** El manejador *arma* la pulsación y
+  la deja en `bs.pttPending`; el flanco lo aplica `pc_proto_platformTick()` al
+  final del mismo paso del transporte, cuando la respuesta a ese mismo frame ya
+  está en el cable. Clavear dentro del manejador entregaba la radio al hilo rtx
+  —y a su camino de transmisión— mientras la respuesta se estaba formando: en
+  DMR el PTT se quedó sin respuesta y el protocolo enmudeció con él (la radio se
+  reinició por el perro guardián con el camino de TX atascado). Un banco que se
+  queda ciego justo al clavear no sirve como instrumento.
 - **`BENCH_PTT` pulsa el mismo botón que el operador**: `platform_pttOverride()`
   hace que `platform_getPttStatus()` responda "pulsado", y el camino de
   transmisión del modo enciende la PA con su audio, su guardián y su salida.

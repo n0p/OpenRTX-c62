@@ -42,6 +42,10 @@
 #include "core/state.h"
 #include "core/utils.h"
 
+#ifdef __ZEPHYR__
+#include <zephyr/sys/printk.h>
+#endif
+
 #ifdef CONFIG_DMR_TRUNK
 #include "protocols/DMR/trunk/dmr_trunk.h"
 #endif
@@ -101,9 +105,9 @@ OpMode_DMR::OpMode_DMR()
     , txIsData(false)
     , txEnding(false)
     , txStage(0)
-    , txHeaders(DMR_TX_HEADERS)
     , txVoiceBurst(0)
     , txAligned(false)
+    , txSaidStream(false)
     , txSilence(0)
     , micPath(-1)
     , micId(-1)
@@ -392,6 +396,35 @@ bool OpMode_DMR::startBaseband(const rtxStatus_t *status)
     return (txId >= 0);
 }
 
+/**
+ * Refuse this transmission, and refuse it out loud.
+ *
+ * Every way out of startTx() that is not a keyed radio comes here.  Two things
+ * have to happen, and both were missing: the PTT is blocked until it is
+ * released (txBlocked, cleared in update() on the release edge) so the RTX
+ * thread does not try to key again on every 30 ms pass -- a failing keying
+ * retried at that rate is a thread that never yields, and with the same
+ * priority and no time slicing that is the whole radio stopped -- and the
+ * reason is written down, because a PTT that does nothing must be explainable
+ * from the PC (docs/TX_SAFETY.md).
+ */
+bool OpMode_DMR::txRefuse(const char *why)
+{
+    txBlocked = true;
+
+    /* Throttled: retried keyings would otherwise own the serial line */
+    static uint32_t lastPrint;
+
+    const uint32_t now = (uint32_t)getTick();
+    if ((now - lastPrint) >= 1000) {
+        lastPrint = now;
+        printk("[DMR TX] no transmito: %s\n", why);
+    }
+
+    txg_exit(rtx_getTxGuard(), now, TXG_REASON_START_FAILED);
+    return false;
+}
+
 bool OpMode_DMR::startTx(const rtxStatus_t *status)
 {
     struct txGuard *guard = rtx_getTxGuard();
@@ -400,8 +433,7 @@ bool OpMode_DMR::startTx(const rtxStatus_t *status)
 
     if (!dmrEnc_available()) {
         /* No encoder: the chain would send silent frames */
-        txg_streamsFailed(guard, (uint32_t)getTick());
-        return false;
+        return txRefuse("no hay codificador AMBE+2 en esta imagen");
     }
 
     if (!dmrKey_allowed(status->dmrDestType, status->dmrDestId,
@@ -415,39 +447,38 @@ bool OpMode_DMR::startTx(const rtxStatus_t *status)
          * not leave a phase behind for the supervisor to time out, or a
          * refused PTT reads as a stuck transmitter 250 ms later.
          */
-        txBlocked = true;
-        txg_exit(guard, (uint32_t)getTick(), TXG_REASON_START_FAILED);
-        return false;
+        return txRefuse("el destino no se puede codificar (DMRID corto)");
     }
 
     if (!startBaseband(status)) {
         txg_streamsFailed(guard, (uint32_t)getTick());
         stopTx();
-        return false;
+        return txRefuse("la salida al transmisor no se abrio");
     }
 
     micPath = audioPath_request(SOURCE_MIC, SINK_MCU, PRIO_TX);
     if (micPath < 0) {
         stopTx();
-        return false;
+        return txRefuse("la ruta del micro no se abrio");
     }
     micId = audioStream_start(micPath, micPcm, 2 * VOCODER_PCM_SAMPLES, 8000,
                               STREAM_INPUT | BUF_CIRC_DOUBLE);
     if (micId < 0) {
         stopTx();
-        return false;
+        return txRefuse("el flujo del micro no arranco");
     }
 
     dmrEnc_reset();
     frameHead = 0;
     frameCount = 0;
+    txSaidStream = false;
     txRunning = true;
     txFirstBlock = false;
     txIsData = false;
     txEnding = false;
     txStage = 0;
-    txHeaders = DMR_TX_HEADERS;
     txVoiceBurst = 0;
+    dmrTxCall_begin(&txCall, DMR_TX_HEADERS);
 
     /*
      * Ours: a channel with different TX and RX frequencies is a repeater,
@@ -460,9 +491,12 @@ bool OpMode_DMR::startTx(const rtxStatus_t *status)
     txg_streamsOpen(guard, (uint32_t)getTick());
     radio_enableTx();
     if (radio_getStatus() != TX) {
-        /* The driver refused to key (the gate, or a frequency it cannot use) */
+        /* The driver refused to key (the gate, a frequency or a power it
+         * cannot use): it says why, and the mode says which step it was */
+        const char *why = radio_txRefusedReason();
+
         stopTx();
-        return false;
+        return txRefuse((why != NULL) ? why : "el driver no claveo el PA");
     }
     txg_note(guard, TXG_EV_KEYED, (uint32_t)getTick());
     modeStats_txKey(MS_MODE_DMR, (uint32_t)getTick());
@@ -519,6 +553,13 @@ bool OpMode_DMR::fillMic(unsigned slots)
 
 /**
  * Write the rendered half into the stream and wait for it to be played.
+ *
+ * The wait is the driver's, and it has a deadline (csk6_codec's ioDeadline):
+ * what it does not have is a return value anyone looked at.  A sync that fails
+ * -- the DSP stalled, the stream was cancelled by the supervisor, the audio
+ * table was busy -- used to be ignored and the mode carried on transmitting
+ * into a stream that was not moving, one slot after another, for as long as the
+ * PTT was held.  Now it ends the over and says why.
  */
 bool OpMode_DMR::putHalf()
 {
@@ -529,7 +570,8 @@ bool OpMode_DMR::putHalf()
         return false;
 
     memcpy(idle, txSamples, DMR_HALF_SAMPLES * sizeof(stream_sample_t));
-    outputStream_sync(txId, true);
+    if (!outputStream_sync(txId, true))
+        return false;
 
     if (!txFirstBlock) {
         txFirstBlock = true;
@@ -572,33 +614,34 @@ bool OpMode_DMR::txSlot(const rtxStatus_t *status)
     const bool ptt = platform_getPttStatus();
     bool carry = false;
 
-    (void)status;
-
     fillMic(VOCODER_FRAMES_PER_SLOT);
 
     if (!ptt || txEnding)
         txEnding = true;
 
     /*
-     * Only our timeslot carries a burst: the other one goes silent, which is
-     * what an MS does on a TDMA channel.
+     * What this slot carries is the planner's decision (rtx/DmrTxPlan.h): the
+     * headers, the voice, the terminator when the PTT goes up, and the tail.
+     * It is a pure function of the counters, which is what lets the host test
+     * walk the real sequence and decode what it produced.
      */
-    const bool ourSlot = (status->dmrTimeslot != 2)
-                      || ((txVoiceBurst & 1u) == 1u);
+    unsigned step = DMRTX_NOTHING;
 
     if (txSilence >= DMR_HALF_SAMPLES) {
         /* Still in the alignment silence: a whole half of it */
         txSilence -= DMR_HALF_SAMPLES;
-    } else if (txStage == 0) {
-        if (ourSlot && txHeaders > 0) {
+    } else {
+        step = dmrTxNextSlot(&txCall, ptt, txEnding, status->dmrTimeslot,
+                             TX_TAIL_SLOTS);
+    }
+
+    switch (step) {
+        case DMRTX_HEADER:
             dmr_tx_header(&tx, txBurst);
-            txHeaders--;
             carry = true;
-            if (txHeaders == 0)
-                txStage = 1;
-        }
-    } else if (txStage == 1) {
-        if (!txEnding && ourSlot) {
+            break;
+
+        case DMRTX_VOICE: {
             uint8_t ambe[3][9];
 
             memset(ambe, 0, sizeof(ambe));
@@ -614,14 +657,22 @@ bool OpMode_DMR::txSlot(const rtxStatus_t *status)
                 modeStats_txStarve(MS_MODE_DMR);
             dmr_tx_voice(&tx, (const uint8_t (*)[9])ambe, txBurst);
             carry = true;
-            if (++txVoiceBurst >= SUPERFRAME_BURSTS)
-                txVoiceBurst = 0;
+            break;
         }
-    } else if (txStage == 2) {
-        dmr_tx_terminator(&tx, txBurst);
-        carry = true;
-        txStage = 3;
-        txVoiceBurst = 0;
+
+        case DMRTX_TERMINATOR:
+            dmr_tx_terminator(&tx, txBurst);
+            carry = true;
+            break;
+
+        case DMRTX_DONE:
+            /* The terminator and its tail are on the air: leave */
+            renderHalf(&txMod, txSamples, txBurst, false, txSilence);
+            (void)putHalf();
+            return true;
+
+        default:
+            break;
     }
 
     renderHalf(&txMod, txSamples, txBurst, carry, txSilence);
@@ -629,13 +680,20 @@ bool OpMode_DMR::txSlot(const rtxStatus_t *status)
         txSilence = (txSilence > DMR_HALF_SAMPLES) ? txSilence - DMR_HALF_SAMPLES
                                                    : 0;
 
-    if (!putHalf())
+    if (!putHalf()) {
+        /*
+         * The sink is not consuming: this is not a slot to retry, it is the end
+         * of the over.  The PTT stays blocked until it is released, so the
+         * thread does not come straight back into a stream that is not moving.
+         */
+        txBlocked = true;
+        if (!txSaidStream) {
+            txSaidStream = true;
+            printk("[DMR TX] se perdio la salida de audio: vuelvo a RX\n");
+        }
         return true;
-
-    if (txStage == 3) {
-        if (++txVoiceBurst >= TX_TAIL_SLOTS)
-            return true;
     }
+
     return false;
 }
 
@@ -680,7 +738,7 @@ bool OpMode_DMR::startDataTx(const rtxStatus_t *status)
     if (!startBaseband(status)) {
         txg_streamsFailed(guard, (uint32_t)getTick());
         stopTx();
-        return false;
+        return txRefuse("la salida al transmisor no se abrio (datos)");
     }
 
     micPath = -1;
@@ -692,12 +750,15 @@ bool OpMode_DMR::startDataTx(const rtxStatus_t *status)
     txStage = 0;
     txSilence = 0;
     txAligned = false;
+    txSaidStream = false;
 
     txg_streamsOpen(guard, (uint32_t)getTick());
     radio_enableTx();
     if (radio_getStatus() != TX) {
+        const char *why = radio_txRefusedReason();
+
         stopTx();
-        return false;
+        return txRefuse((why != NULL) ? why : "el driver no claveo el PA");
     }
     txg_note(guard, TXG_EV_KEYED, (uint32_t)getTick());
     modeStats_txKey(MS_MODE_DMR, (uint32_t)getTick());
@@ -715,8 +776,16 @@ bool OpMode_DMR::dataTxSlot(const rtxStatus_t *status)
 {
     bool carry = false;
 
+    /*
+     * One slot of every 60 ms TDMA frame is ours, whichever timeslot the call
+     * was set up on: txVoiceBurst counts the 30 ms slots here, so the parity
+     * picks slot 1 or slot 2 (the same rule the voice planner applies).
+     */
+    const bool ourSlot = ((txVoiceBurst & 1u)
+                          == (uint8_t)((status->dmrTimeslot == 2) ? 1u : 0u));
+
     if (txStage == 0) {
-        if ((status->dmrTimeslot != 2) || ((txVoiceBurst & 1u) == 1u)) {
+        if (ourSlot) {
             uint8_t dt = 0;
             uint8_t b[12];
 
@@ -736,7 +805,15 @@ bool OpMode_DMR::dataTxSlot(const rtxStatus_t *status)
     }
 
     renderHalf(&txMod, txSamples, txBurst, carry, 0);
-    return putHalf() ? false : true;
+    if (!putHalf()) {
+        txBlocked = true;
+        if (!txSaidStream) {
+            txSaidStream = true;
+            printk("[DMR TX] se perdio la salida de audio (datos)\n");
+        }
+        return true;
+    }
+    return false;
 }
 #endif /* CONFIG_DMR_TX */
 

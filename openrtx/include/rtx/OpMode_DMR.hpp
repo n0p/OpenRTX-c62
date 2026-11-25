@@ -27,6 +27,7 @@
 #ifdef CONFIG_DMR_TX
 #include "protocols/DMR/dmr_enc.h"
 #include "protocols/DMR/dmr_tx.h"
+#include "rtx/DmrTxPlan.h"
 
 /** AMBE+2 frames queued for transmission: four bursts of margin. */
 #define DMR_TX_QUEUE_FRAMES 12
@@ -112,6 +113,8 @@ private:
 #ifdef CONFIG_DMR_TX
     bool startBaseband(const rtxStatus_t *status);
     bool startTx(const rtxStatus_t *status);
+    /** Refuse this over: block the PTT until it is released, say why. */
+    bool txRefuse(const char *why);
     bool startDataTx(const rtxStatus_t *status);
     void stopTx();
     bool txSlot(const rtxStatus_t *status);
@@ -126,10 +129,13 @@ private:
     bool txFirstBlock;
     bool txIsData;
     bool txEnding;
-    unsigned txStage;     ///< 0 header, 1 voice, 2 terminator, 3 tail
-    unsigned txHeaders;   ///< Voice LC headers still to send
-    unsigned txVoiceBurst; ///< Voice bursts sent in the call
+    /** The voice call's counters and the slot machine (rtx/DmrTxPlan.h) */
+    dmrTxCall_t txCall;
+    /* A data call's own: 0 the list, 1 the tail, and the slots sent */
+    unsigned txStage;
+    unsigned txVoiceBurst;
     bool txAligned;       ///< Through a repeater: aligned to its TS1
+    bool txSaidStream;    ///< The lost-sink line has been printed for this over
     size_t txSilence;     ///< Samples of alignment silence still to write
 
     pathId micPath;
