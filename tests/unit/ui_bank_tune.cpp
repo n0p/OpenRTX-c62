@@ -34,6 +34,7 @@ extern "C" {
 #include "ui/ui_channels.h"
 #include "ui/ui_default.h"
 #include "ui/ui_quickmenu.h"
+#include "ui/ui_tools.h"
 }
 
 extern state_t state;
@@ -137,6 +138,31 @@ void resetUi(void)
     ui_rtxSyncRequest           = false;
 }
 
+
+/**
+ * The channel list, from the main screen.
+ *
+ * P1 long used to open it; it now opens the tools menu, whose last row is the
+ * list (docs/UI.md). The row is found by name, so a build that compiles the
+ * scanner out still lands on it.
+ */
+void openChannels(void)
+{
+    pressKey(KEY_F1, true);
+    REQUIRE(ui_tools_isOpen());
+
+    for (int guard = 0; guard < 8; guard++) {
+        const char *label = ui_tools_rowLabel(ui_tools_selected());
+
+        if ((label != NULL) && (strcmp(label, "Channels") == 0))
+            break;
+        pressKey(KEY_DOWN);
+    }
+
+    pressKey(KEY_ENTER);
+    REQUIRE(ui_channels_isOpen());
+}
+
 void bootBank(void)
 {
     flash = new FakeFlash();
@@ -171,9 +197,8 @@ TEST_CASE("green on a bank entry loads it as a memory channel", "[ui][channels]"
     bootBank();
     resetUi();
 
-    /* P1 long opens the bank from the main screen */
-    pressKey(KEY_F1, true);
-    REQUIRE(ui_channels_isOpen());
+    /* The bank is the last row of the tools menu P1 long opens */
+    openChannels();
 
     pressKey(KEY_ENTER);
 
@@ -224,8 +249,7 @@ TEST_CASE("a channel created with 6.25 kHz selected is saved", "[ui][channels]")
 
     state.channel.bandwidth = BW_6_25;
 
-    pressKey(KEY_F1, true);
-    REQUIRE(ui_channels_isOpen());
+    openChannels();
     pressKey(KEY_F1);                 /* new channel from the VFO */
     pressKey(KEY_F2);                 /* P2: save */
 
@@ -238,7 +262,7 @@ TEST_CASE("tuning a bank entry keeps the VFO it was on", "[ui][channels]")
     bootBank();
     resetUi();
 
-    pressKey(KEY_F1, true);
+    openChannels();
     pressKey(KEY_ENTER);
 
     REQUIRE(state.vfo_channel.rx_frequency == VFO_FREQ);

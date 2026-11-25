@@ -1534,6 +1534,14 @@ ui_zones_test = executable('ui_zones_test',
                            sources : unit_test_src + ['tests/unit/ui_zones.cpp'],
                            kwargs : unit_test_opts)
 
+# El menú de herramientas (P1 largo): abrir y cerrar, recorrer las filas, que
+# cada una arranque el servicio que dice, el submenú de modos y el TX apagado
+# mientras está abierto. Por el FSM real, con el teclado como lo alimenta la
+# matriz (tests/unit/ui_tools.cpp).
+ui_tools_test = executable('ui_tools_test',
+                           sources : unit_test_src + ['tests/unit/ui_tools.cpp'],
+                           kwargs : unit_test_opts)
+
 # Registro de modos: la lista única de la que salen el editor de canales, la
 # tecla lateral, el menú rápido y las páginas de ajustes de cada modo.
 ui_modes_test = executable('ui_modes_test',
@@ -2029,6 +2037,7 @@ test('User Stores Test',     user_stores_test)
 test('UI Messages Test',     ui_messages_test)
 test('UI Layout Test',       ui_layout_test)
 test('UI Zones Test',        ui_zones_test)
+test('UI Tools Test',        ui_tools_test)
 test('UI Modes Test',        ui_modes_test)
 test('DSP Oversampling Test', dsp_oversampling_test)
 test('DSP DC Block Test',    dsp_dcblock_test)

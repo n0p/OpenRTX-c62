@@ -62,6 +62,7 @@ extern "C" {
 #include "interfaces/nvmem.h"
 #include "rtx/rtx.h"
 #include "ui/ui_default.h"
+#include "ui/ui_tools.h"
 #include "ui/ui_quickmenu.h"
 #include "ui/ui_messages.h"
 #include "ui/ui_aprs.h"
@@ -156,6 +157,8 @@ void resetUi(uint8_t mode = OPMODE_FM, freq_t freq = FREQ)
     qm_page_close();
 
     /* Close the modules that draw over the main screen */
+    while (ui_tools_isOpen())
+        pressKey(KEY_ESC);
     while (ui_channels_isOpen())
         pressKey(KEY_ESC);
     while (ui_contacts_isOpen())
@@ -215,6 +218,27 @@ void openMenuRow(uint8_t index)
 {
     ui_menu_select(index);
     pressKey(KEY_ENTER);
+}
+
+/**
+ * The channel list, from the main screen: P1 long opens the tools menu and its
+ * last row is the list (docs/UI.md).
+ */
+void openChannels(void)
+{
+    pressKey(KEY_F1, true);
+    REQUIRE(ui_tools_isOpen());
+
+    for (int guard = 0; guard < 8; guard++) {
+        const char *label = ui_tools_rowLabel(ui_tools_selected());
+
+        if ((label != NULL) && (strcmp(label, "Channels") == 0))
+            break;
+        pressKey(KEY_DOWN);
+    }
+
+    pressKey(KEY_ENTER);
+    REQUIRE(ui_channels_isOpen());
 }
 
 /** Red until the top menu is on screen again, at most `max` times. */
@@ -292,6 +316,8 @@ uint8_t expectedOwner(uint8_t screen, uint32_t key, bool isLong)
         case SPECTRUM:      return UI_CLAIM_SPECTRUM;
         case PKT_CFG:
         case PKT_STATUS:    return UI_CLAIM_PACKET;
+        /* The tools menu owns every key while it is up, MONI included */
+        case TOOLS_MENU:    return UI_CLAIM_TOOLS;
         default:            break;
     }
 
@@ -314,7 +340,7 @@ uint8_t expectedOwner(uint8_t screen, uint32_t key, bool isLong)
         return UI_CLAIM_QM_OPEN;         /* the popup, on the main screens */
 
     if (mainScreen && (key == KEY_F1) && isLong)
-        return UI_CLAIM_CHANNELS_OPEN;   /* P1 long: the channel list */
+        return UI_CLAIM_TOOLS_OPEN;      /* P1 long: the tools menu */
 
     switch (screen) {
         case MENU_CONTACTS: return UI_CLAIM_CONTACTS;
@@ -504,9 +530,9 @@ TEST_CASE("Every Settings page walks its rows and comes back", "[ui][audit][walk
 TEST_CASE("The tool screens open, answer every key and give the radio back",
           "[ui][audit][walk]")
 {
-    /* ---- channel list and editor, from P1 long on the main screen ---- */
+    /* ---- channel list and editor, from the tools menu of P1 long ---- */
     resetUi();
-    pressKey(KEY_F1, true);
+    openChannels();
     REQUIRE(ui_channels_isOpen());
     REQUIRE(state.txDisable);
 
@@ -526,6 +552,56 @@ TEST_CASE("The tool screens open, answer every key and give the radio back",
     REQUIRE_FALSE(ui_channels_isOpen());
     REQUIRE_FALSE(state.txDisable);
     REQUIRE(state.ui_screen == MAIN_VFO);
+
+    /* ---- tools menu: P1 long, every key, red gives the radio back ---- */
+    resetUi();
+    REQUIRE(claimOf(KEY_F1, true) == UI_CLAIM_TOOLS_OPEN);
+    REQUIRE(ui_tools_isOpen());
+    REQUIRE(state.ui_screen == TOOLS_MENU);
+    REQUIRE(state.txDisable);
+
+    for (const KeyName &k : KEYS) {
+        /* Red closes the menu and green runs a row: they have their own
+           checks below, and both would leave this walk mid-way */
+        if ((k.key == KEY_ESC) || (k.key == KEY_ENTER))
+            continue;
+
+        INFO("tools menu <- " << k.name);
+        REQUIRE(claimOf(k.key, k.longPress) == UI_CLAIM_TOOLS);
+        REQUIRE(ui_tools_isOpen());
+        REQUIRE(state.txDisable);
+    }
+
+    /* Back on the first row, which is the mode submenu */
+    while (ui_tools_selected() != 0)
+        pressKey(KEY_UP);
+    pressKey(KEY_ENTER);
+    REQUIRE(ui_tools_inModes());
+
+    /* The submenu answers every key as well; green applies a mode and leaves */
+    for (const KeyName &k : KEYS) {
+        if ((k.key == KEY_ESC) || (k.key == KEY_ENTER))
+            continue;
+
+        INFO("mode submenu <- " << k.name);
+        REQUIRE(claimOf(k.key, k.longPress) == UI_CLAIM_TOOLS);
+        REQUIRE(ui_tools_inModes());
+    }
+
+    /* Red goes back to the list, and from there out to the main screen */
+    pressKey(KEY_ESC);
+    REQUIRE(ui_tools_isOpen());
+    REQUIRE_FALSE(ui_tools_inModes());
+    pressKey(KEY_ESC);
+
+    REQUIRE_FALSE(ui_tools_isOpen());
+    REQUIRE(state.ui_screen == MAIN_VFO);
+    REQUIRE_FALSE(state.txDisable);
+
+    /* And the main screen answers again */
+    REQUIRE(claimOf(KEY_ENTER) == UI_CLAIM_SCREEN);
+    REQUIRE(state.ui_screen == MENU_TOP);
+    pressKey(KEY_ESC);
 
     /* ---- contacts, from the main menu ---- */
     resetUi();
@@ -982,7 +1058,33 @@ TEST_CASE("Every key on every screen is claimed by exactly one block",
     REQUIRE(qm_state.open);
     for (const KeyName &k : KEYS) {
         INFO("quick menu <- " << k.name);
-        REQUIRE(claimOf(k.key, k.longPress) == UI_CLAIM_QM);
+
+        uint8_t expected = UI_CLAIM_QM;
+        bool opensAprs = false;
+
+#ifdef CONFIG_APRS
+        /*
+         * P2 long in FM is the APRS screens even while the popup is up: the
+         * dispatch decides that binding before the popup and closes it
+         * (docs/UI.md, "who takes the key"). The walk has to expect the same,
+         * or it is asserting a rule the firmware does not have.
+         */
+        if ((k.key == KEY_F2) && k.longPress) {
+            expected  = UI_CLAIM_APRS_ENTER;
+            opensAprs = true;
+        }
+#endif
+        REQUIRE(claimOf(k.key, k.longPress) == expected);
+
+        if (opensAprs) {
+            /* Red leaves the APRS screens; the popup comes back on the main
+               screen for the rest of the walk */
+            for (int n = 0; n < 5 && state.ui_screen != MAIN_VFO; n++)
+                pressKey(KEY_ESC);
+
+            REQUIRE(state.ui_screen == MAIN_VFO);
+            qm_close();
+        }
 
         if (!qm_state.open) {
             pressKey(KEY_F2);
