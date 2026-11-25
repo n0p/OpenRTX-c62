@@ -181,3 +181,18 @@ Port Test'`):
   con la regla.
 - La migración del registro de ajustes de la versión 7 a la 8
   (`tests/unit/settings_record.cpp`).
+
+## 6. Coste
+
+Medido en la imagen completa (todas las banderas de modo y `C62_PC_PROTO`,
+`C62_DEBUG_PROTO`, `C62_BENCH_PROTO`, `C62_AIR_TX`), contra el commit base de la
+rama, mismo juego de banderas:
+
+| región | base | con el puerto configurable | diferencia |
+|---|---|---|---|
+| FLASH | 789 684 B (75,31 %) | **791 176 B (75,45 %)** | +1 492 B |
+| RAM | 180 408 B (68,82 %) | **180 448 B (68,84 %)** | +40 B |
+| PSRAM | 653 910 B (35,64 %) | **653 910 B (35,64 %)** | 0 |
+
+Los 40 B de RAM son el detector (`portPttState_t`, 24 B), el modo aplicado y un
+par de contadores; el resto del coste es código.

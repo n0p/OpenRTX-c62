@@ -86,10 +86,13 @@ buscando su indicativo.
 
 ## 4. Tamaño
 
-`sizeof(settings_t)` es 182 B con APRS y los campos nuevos;
-`SETTINGS_RECORD_SIZE` = 190 B, por debajo del límite de 256 B del registro del
-driver (`NVM_RECORD_MAX`). El test comprueba que el registro no pase de 192 B
-para que quede margen antes de tocar la estructura otra vez.
+Con la imagen completa (APRS y el módem de paquetes KISS compilados),
+`sizeof(settings_t)` es **205 B** y `SETTINGS_RECORD_SIZE` = **213 B**, por debajo
+del límite de 256 B del registro del driver (`NVM_RECORD_MAX`). El test de host
+comprueba que el registro no pase de 192 B **en su propia configuración** (sin
+APRS ni KISS, 132 B), que es el margen que hay antes de tocar la estructura otra
+vez; el número de la imagen se lee del DWARF del ELF (`pc_port` cae en el offset
+204) o del propio registro que escribe la radio.
 
 ## 5. Qué campos llevan validación
 
@@ -100,6 +103,7 @@ para que quede margen antes de tocar la estructura otra vez.
 | `dmr_dest_id` | 1..16777215 si el tipo no es `NONE` | `settings_dmrDestValid()` |
 | `sms_format` | 0..7 (`enum dmrSmsFormat`) | `settings_smsFormatValid()` |
 | `dmr_timeslot` | 1 o 2 | `settings_dmrTimeslotValid()` |
+| `pc_port` | 0..2 (`enum portMode`) | `settings_portModeValid()` |
 
 Las funciones son `static inline` en `settings.h`: una pantalla puede validar
 sin llamar a nada. Los nombres cortos para los menús
@@ -123,5 +127,9 @@ interpretarlo. Detalles en `docs/CHANNELS.md`.
    es posicional).
 3. Comprueba el tamaño: `tests/unit/settings_record.cpp` falla si el registro
    pasa de 192 B.
-4. Avisa en las notas de la versión: **un reset de ajustes** es lo esperado al
-   actualizar.
+4. Si el campo nuevo va **detrás de `pc_port`**, la migración de la versión 7 ya
+   no aplica tal cual: `V7_PAYLOAD_LEN` deja de ser `sizeof - 1` y hay que
+   rehacer la cuenta (o dejar de migrar esa versión) en `settings_record.c`.
+5. Avisa en las notas de la versión. Desde la 8, actualizar desde la 7 **no**
+   pierde los ajustes; desde cualquier otra versión, **un reset de ajustes** es
+   lo esperado.
