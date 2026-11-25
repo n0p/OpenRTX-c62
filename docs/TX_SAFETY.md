@@ -263,6 +263,28 @@ power_mw            500
 tx_reason           none
 ```
 
+## What keys the transmitter: the accessory pad (docs/ACCESSORY.md)
+
+`platform_getPttStatus()` is the other way in, and on this radio it is not a
+button: GPIOA_15 is the accessory jack's PTT *and* UART2 RXD, so a level read at
+random is a level that goes low for the start bit of every byte the PC sends.
+Keying from it directly would put the radio on the air on a `HELLO`.
+
+The answer is the same shape as the rest of this document -- one rule, one
+place -- and it lives in `core/port_ptt.h`:
+
+| port mode (`Settings ▸ Radio ▸ PC Port`) | what `platform_getPttStatus()` answers |
+|---|---|
+| `Auto` | the sustained-low detector: low for **more than 30 ms** is a press (a `0x00` byte is 87 µs, a short break a few ms) |
+| `Always` | `false` unless the remote/bench override is set: the pad belongs to the cable |
+| `Never` | `gpio_pin_get_dt(&button_ptt)`, the plain level, because the pad is a plain GPIO with its pull-up |
+
+`Auto` is the default and the only mode where both work at once; the frames that
+arrive while the switch is held are discarded and counted (`PC_TAG_PORT_LOST`),
+and the half frame the parser had is dropped. `docs/ACCESSORY.md` has the wiring,
+the numbers and the limits. The 90 s air clock above still applies to whatever
+this keys: a stuck switch or a shorted pad ends at the same wall as a stuck mode.
+
 ## Why 90 s
 
 Three numbers decided it, and only the first is about policy.

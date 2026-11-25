@@ -35,6 +35,15 @@ La regla es: **si la versión no es la de este firmware, el registro se descarta
 entero y vuelven los valores por defecto**. El CRC se comprueba después de la
 versión, para poder distinguir «escrito por otra versión» de «corrupto».
 
+Hay **una sola excepción**, y es la versión 7: la 8 añadió
+`settings_t.pc_port` como **último byte** del payload, así que el registro que
+escribió la 7 *es* el de hoy un byte más corto, con su propio CRC sobre su propia
+longitud. `settings_recordRead()` lo detecta, comprueba ese CRC y carga el
+prefijo dejando el campo añadido a su valor por defecto (`Auto`). El operador
+conserva indicativo, potencias, scan y todo lo demás al actualizar, y el log dice
+`settings: record v7 migrated to v8`. Cualquier otra versión que no sea la de hoy
+se sigue descartando entera.
+
 | versión | contenido |
 |---|---|
 | 1 | registro original, sin campo de versión en la cabecera (el hueco era relleno a 0) |
@@ -43,6 +52,8 @@ versión, para poder distinguir «escrito por otra versión» de «corrupto».
 | 4 | controles de los modos de solo recepción: filtro RAN de NXDN (`nxdn_ran`) y AGC, raster y ajuste al raster de la banda aérea (`am_agc`, `am_step`, `am_snap`) |
 | 5 | configuración del scan (`scan_*`: regla de reanudación, tiempos, canal prioritario, rango y paso de VFO, ver `docs/SCAN.md`) y retardo de aire del TX de DMR (`dmr_tx_air_delay_us`) |
 | 6 | profundidad de modulación del TX AM de banda aérea (`am_depth`) y bloque del módem de paquetes KISS (`packet_*`, ver `docs/KISS.md`) |
+| 7 | potencia de TX por defecto del VFO (`tx_power`, mW, ver `docs/TX_SAFETY.md`) |
+| 8 | modo del puerto de accesorio (`pc_port`: `Auto`/`Always`/`Never`, ver `docs/ACCESSORY.md`) — **migra** desde la 7 |
 
 Los bloques se **añaden al final** de la estructura, cada uno en su offset, así
 que al fusionar ramas no hay ningún campo que se reinterprete: el que llega
