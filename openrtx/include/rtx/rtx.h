@@ -113,6 +113,16 @@ enum opmode
 };
 
 /**
+ * Longest a change of mode waits for the new mode to put the radio in receive.
+ *
+ * enable() only sets the mode's state; the receiver is started by the mode's
+ * first update(), and switchMode() runs it until the driver reports RX or this
+ * deadline passes. With no receiver in that time the radio goes back to the mode
+ * it came from (rtx.cpp, "a change of mode cannot hang the radio").
+ */
+#define RTX_MODE_START_MS 300
+
+/**
  * \enum opstatus Enumeration type defining the current rtx operating status.
  */
 enum opstatus

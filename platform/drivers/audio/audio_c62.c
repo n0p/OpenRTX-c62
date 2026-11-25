@@ -16,7 +16,17 @@
  * codec worker never takes it, so route changes can wait for the worker.
  * audio_init() and audio_terminate() are called once each, so they don't
  * take it.
+ *
+ * Bounded, not K_FOREVER: a route change is called from the RTX thread (the
+ * squelch of a mode, the mode change itself) and from the UI thread (a beep, a
+ * voice prompt), and one of those callers holding this lock for ever is a dead
+ * radio with a frozen screen. If the lock does not arrive in
+ * BOARD_LOCK_TIMEOUT_MS the path is simply not opened: the mode asks again on
+ * its next 30 ms update, and the caller that was going to wait for ever goes on
+ * to report a missing path instead.
  */
+#define BOARD_LOCK_TIMEOUT_MS 50
+
 static K_MUTEX_DEFINE(boardMutex);
 static bool initialized;
 /* Active routes, by source and sink */
@@ -107,7 +117,12 @@ void audio_setExtSource(const bool on)
     if (!initialized)
         return;
 
-    k_mutex_lock(&boardMutex, K_FOREVER);
+    if (k_mutex_lock(&boardMutex, K_MSEC(BOARD_LOCK_TIMEOUT_MS)) != 0)
+    {
+        printk("AUDIO: board lock busy, external source not set\r\n");
+        return;
+    }
+
     extSource = on;
     updateSpeaker();
     k_mutex_unlock(&boardMutex);
@@ -118,12 +133,28 @@ void audio_connect(const enum AudioSource source, const enum AudioSink sink)
     if (!initialized)
         return;
 
-    k_mutex_lock(&boardMutex, K_FOREVER);
+    if (k_mutex_lock(&boardMutex, K_MSEC(BOARD_LOCK_TIMEOUT_MS)) != 0)
+    {
+        printk("AUDIO: board lock busy, %d->%d not opened\r\n", (int)source,
+               (int)sink);
+        return;
+    }
+
     if (!paths[source][sink]) {
-        paths[source][sink] = true;
-        csk6codec_setRoute(source, sink, true);
-        if ((source == SOURCE_RTX) && (sink == SINK_SPK))
-            radio_enableAfOutput();
+        /*
+         * The path is recorded as open only when the codec applied the route:
+         * a worker that could not take the route in time leaves it closed, so
+         * the next request (the mode asks again on every squelch edge) tries
+         * instead of counting on audio that is not there.
+         */
+        if (csk6codec_setRoute(source, sink, true) == 0) {
+            paths[source][sink] = true;
+            if ((source == SOURCE_RTX) && (sink == SINK_SPK))
+                radio_enableAfOutput();
+        } else {
+            printk("AUDIO: route %d->%d not applied by the codec\r\n",
+                   (int)source, (int)sink);
+        }
         updateSpeaker();
     }
     k_mutex_unlock(&boardMutex);
@@ -134,10 +165,16 @@ void audio_disconnect(const enum AudioSource source, const enum AudioSink sink)
     if (!initialized)
         return;
 
-    k_mutex_lock(&boardMutex, K_FOREVER);
+    if (k_mutex_lock(&boardMutex, K_MSEC(BOARD_LOCK_TIMEOUT_MS)) != 0)
+    {
+        printk("AUDIO: board lock busy, %d->%d not closed\r\n", (int)source,
+               (int)sink);
+        return;
+    }
+
     if (paths[source][sink]) {
         paths[source][sink] = false;
-        csk6codec_setRoute(source, sink, false);
+        (void)csk6codec_setRoute(source, sink, false);
         updateSpeaker();
         if ((source == SOURCE_RTX) && (sink == SINK_SPK))
             radio_disableAfOutput();

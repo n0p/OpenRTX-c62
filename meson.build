@@ -1797,6 +1797,23 @@ mode_switch_test = executable('mode_switch_test',
                                         ['tests/unit/mode_switch.cpp'],
                               kwargs  : unit_test_opts)
 
+# The audio path table on its own: the priorities, the suspend/resume, and the
+# property a change of mode depends on -- that the RTX thread and the UI thread
+# can use it at the same time. The table had no lock, and the loop this test runs
+# is the one that corrupted it (see tests/unit/audio_path.cpp).
+audio_path_test = executable('audio_path_test',
+                             sources : unit_test_src +
+                                       ['tests/unit/audio_path.cpp'],
+                             kwargs  : unit_test_opts)
+
+# FM -> AM (airband) -> FM through rtx_configure()/rtx_task(), with the UI
+# thread's share of a mode change on the same audio path table, and with a
+# driver that refuses to receive. This is the reported freeze, modelled.
+mode_switch_am_test = executable('mode_switch_am_test',
+                                 sources : unit_test_src +
+                                           ['tests/unit/mode_switch_am.cpp'],
+                                 kwargs  : unit_test_opts)
+
 # Scan and vigilance: the state machine (core/scanner.c) is pure — no clock, no
 # radio — so this test drives it with a simulated receiver (synthetic squelch,
 # a bank with SKIP flags, a priority channel) and measures its cost.  settings.c
@@ -1902,7 +1919,9 @@ test('TX Guard Test',        tx_guard_test)
 test('Key Gate Test',        key_gate_test)
 test('TX Watch Test',        tx_watch_test)
 test('Mode Arena Test',      mode_arena_test)
-test('Mode Switch Test',     mode_switch_test)
+test('Mode Switch Test',     mode_switch_test, timeout : 120)
+test('Audio Path Test',      audio_path_test, timeout : 120)
+test('Mode Switch AM Test',  mode_switch_am_test, timeout : 120)
 
 # Los once modos del enum, ida y vuelta, sobre el bloque compartido, y el lazo
 # TX->RX despues del recorrido (tests/unit/mode_walk.cpp). El host tiene cuatro
