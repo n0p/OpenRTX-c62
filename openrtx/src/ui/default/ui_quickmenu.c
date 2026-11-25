@@ -24,6 +24,7 @@
 #include <hwconfig.h>
 #include "core/state.h"
 #include "core/cps.h"
+#include "core/spectrum_service.h"
 #include "core/airband.h"
 #include "core/channel_store.h"
 #include "core/messaging.h"
@@ -827,23 +828,25 @@ void qm_am_applyRaster(void)
 /* ------------------------------------------------------------------------- */
 
 #define QM_ITEM_INT(label, min, max, step, get, set) \
-    { label, QM_INT, min, max, step, 0, get, set, NULL, NULL, 0, 0 }
+    { label, QM_INT, min, max, step, 0, get, set, NULL, NULL, 0, 0, NULL }
 #define QM_ITEM_INT_F(label, min, max, step, get, set, fmt) \
-    { label, QM_INT, min, max, step, 0, get, set, NULL, fmt, 0, 0 }
+    { label, QM_INT, min, max, step, 0, get, set, NULL, fmt, 0, 0, NULL }
 #define QM_ITEM_INT_FF(label, min, max, step, fast, get, set, fmt) \
-    { label, QM_INT, min, max, step, fast, get, set, NULL, fmt, 0, 0 }
+    { label, QM_INT, min, max, step, fast, get, set, NULL, fmt, 0, 0, NULL }
 #define QM_ITEM_ENUM(label, min, max, get, set, names, fmt) \
-    { label, QM_ENUM, min, max, 1, 0, get, set, names, fmt, 0, 0 }
+    { label, QM_ENUM, min, max, 1, 0, get, set, names, fmt, 0, 0, NULL }
 #define QM_ITEM_ENUM_FF(label, min, max, fast, get, set, names, fmt) \
-    { label, QM_ENUM, min, max, 1, fast, get, set, names, fmt, 0, 0 }
+    { label, QM_ENUM, min, max, 1, fast, get, set, names, fmt, 0, 0, NULL }
 #define QM_ITEM_TOGGLE(label, get, set) \
-    { label, QM_TOGGLE, 0, 1, 1, 0, get, set, qm_names_onoff, NULL, 0, 0 }
+    { label, QM_TOGGLE, 0, 1, 1, 0, get, set, qm_names_onoff, NULL, 0, 0, NULL }
 #define QM_ITEM_INFO(label, fmt) \
-    { label, QM_INFO, 0, 0, 1, 0, NULL, NULL, NULL, fmt, 0, 0 }
+    { label, QM_INFO, 0, 0, 1, 0, NULL, NULL, NULL, fmt, 0, 0, NULL }
+#define QM_ITEM_ACTION(label, act) \
+    { label, QM_ACTION, 0, 0, 1, 0, NULL, NULL, NULL, NULL, 0, 0, act }
 #define QM_ITEM_GOTO(label, screen, item) \
-    { label, QM_GOTO, 0, 0, 1, 0, NULL, NULL, NULL, NULL, screen, item }
+    { label, QM_GOTO, 0, 0, 1, 0, NULL, NULL, NULL, NULL, screen, item, NULL }
 #define QM_ITEM_GOTO_F(label, screen, fmt) \
-    { label, QM_GOTO, 0, 0, 1, 0, NULL, NULL, NULL, fmt, screen, 0 }
+    { label, QM_GOTO, 0, 0, 1, 0, NULL, NULL, NULL, fmt, screen, 0, NULL }
 
 /*
  * The two rows every mode shares. MSG opens the composer with the transport of
@@ -854,14 +857,85 @@ void qm_am_applyRaster(void)
  * the old table (docs/UI.md).
  */
 #define QM_ITEM_MSG() \
-    { "MSG", QM_GOTO, 0, 0, 1, 0, NULL, NULL, NULL, NULL, MSG_COMPOSE, 0 }
+    { "MSG", QM_GOTO, 0, 0, 1, 0, NULL, NULL, NULL, NULL, MSG_COMPOSE, 0, NULL }
 
 #ifdef CONFIG_APRS
 #define QM_ITEM_APRS() \
-    { "APRS", QM_GOTO, 0, 0, 1, 0, NULL, NULL, NULL, NULL, APRS_CFG, 0 }
+    { "APRS", QM_GOTO, 0, 0, 1, 0, NULL, NULL, NULL, NULL, APRS_CFG, 0, NULL }
 #else
 #define QM_ITEM_APRS()
 #endif
+
+/*
+ * The spectrum analyser's rows. They belong to the screen, not to a mode, so
+ * this table is opened with qm_openTable() by ui_spectrum.c instead of being
+ * selected by the operating mode. Nothing here retunes the receiver: the span
+ * and the step change the raster of the next sweep, and the sweep itself is the
+ * RTX thread's business (docs/SPECTRUM.md).
+ */
+static const char *const qm_names_span[] = {
+    "200k", "500k", "1M", "2M", "5M", "10M", "20M", "50M"
+};
+
+static const char *const qm_names_scanStep[] = {
+    "12.5k", "25k", "50k", "100k", "250k"
+};
+
+static int  qm_spec_getSpan(void)  { return (int)spectrumService_spanIndex(); }
+static void qm_spec_setSpan(int v) { spectrumService_setSpanIndex((uint8_t)v); }
+static int  qm_spec_getStep(void)  { return (int)spectrumService_stepIndex(); }
+static void qm_spec_setStep(int v) { spectrumService_setStepIndex((uint8_t)v); }
+static int  qm_spec_getHold(void)  { return spectrumService_hold() ? 1 : 0; }
+static void qm_spec_setHold(int v) { spectrumService_setHold(v != 0); }
+static void qm_spec_clear(void)    { spectrumService_clearHold(); }
+
+static void qm_spec_fmtPeak(char *buf, int len)
+{
+    spectrumStatus_t st;
+    spectrumService_status(&st);
+
+    if (!st.valid || (st.peakDbm <= -160))
+        snprintf(buf, len, "--");
+    else
+        snprintf(buf, len, "%d", (int)st.peakDbm);
+}
+
+static void qm_spec_fmtPoint(char *buf, int len)
+{
+    spectrumStatus_t st;
+    spectrumService_status(&st);
+
+    if (st.pointUs == 0)
+        snprintf(buf, len, "--");
+    else
+        snprintf(buf, len, "%luus", (unsigned long)st.pointUs);
+}
+
+static const qm_item_t qm_items_spectrum[] =
+{
+    QM_ITEM_ENUM("SPAN", 0, SPECTRUM_SPAN_COUNT - 1, qm_spec_getSpan,
+                 qm_spec_setSpan, qm_names_span, NULL),
+    QM_ITEM_ENUM("PASO", 0, 4, qm_spec_getStep, qm_spec_setStep,
+                 qm_names_scanStep, NULL),
+    QM_ITEM_TOGGLE("MAX RET", qm_spec_getHold, qm_spec_setHold),
+    QM_ITEM_ACTION("BORRAR MAX", qm_spec_clear),
+    QM_ITEM_INFO("PICO", qm_spec_fmtPeak),
+    QM_ITEM_INFO("MS/PTO", qm_spec_fmtPoint)
+};
+
+static const qm_menu_t spectrum_menu =
+{
+    .mode  = 0,
+    .title = "ESPECTRO",
+    .items = qm_items_spectrum,
+    .count = sizeof(qm_items_spectrum) / sizeof(qm_items_spectrum[0]),
+    .flags = 0
+};
+
+const qm_menu_t *qm_spectrumMenu(void)
+{
+    return &spectrum_menu;
+}
 
 #if defined(CONFIG_DMR) && defined(DMR_ID_MAX)
 #define QM_ITEM_DMR_DEST() \
@@ -894,6 +968,8 @@ static const qm_item_t qm_items_fm[] =
 #endif
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
+    /* The analyser: a screen, not a setting, so it sits with the other ones */
+    QM_ITEM_GOTO("ESPECTRO", SPECTRUM, 0),
     QM_ITEM_MSG(),
     QM_ITEM_APRS()
 };
@@ -1018,6 +1094,7 @@ static const qm_item_t qm_items_airband[] =
 #endif
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
+    QM_ITEM_GOTO("ESPECTRO", SPECTRUM, 0),
     QM_ITEM_MSG()
 };
 #endif /* UI_MODE_AIRBAND */
@@ -1536,6 +1613,21 @@ void qm_open(void)
     vp_playMenuBeepIfNeeded(true);
 }
 
+void qm_openTable(const qm_menu_t *table)
+{
+    if (table == NULL)
+        return;
+
+    qm_state.open = true;
+    qm_state.latched = false;
+    qm_state.lastKeyTick = getTick();
+    qm_state.mode = state.channel.mode;
+    qm_state.qm = table;
+    qm_state.selected = 0;
+    qm_state.first = 0;
+    vp_playMenuBeepIfNeeded(true);
+}
+
 void qm_close(void)
 {
     qm_state.open = false;
@@ -1622,6 +1714,7 @@ static void qm_row_adjust(const qm_item_t *item, int delta, bool coarse)
 
     /* Read only rows: no value to change, but never silently do nothing */
     if ((item->type == QM_INFO) || (item->type == QM_GOTO)
+        || (item->type == QM_ACTION)
         || (item->get == NULL) || (item->set == NULL)) {
         vp_beep(400, SHORT_BEEP);
         return;
@@ -1692,6 +1785,13 @@ static void qm_row_enter(const qm_item_t *item, void (*leave)(void))
             if (leave != NULL)
                 leave();
             ui_open_screen(item->goto_screen, item->goto_item);
+            break;
+
+        case QM_ACTION:
+            /* A row that does something instead of holding a value: it never
+               closes the screen, so its effect can be seen where it applies */
+            if (item->act != NULL)
+                item->act();
             break;
 
         case QM_INFO:

@@ -135,6 +135,8 @@ target_sources(app
     openrtx/src/core/agc.c
     openrtx/src/core/airband.c
     openrtx/src/core/wfm.c
+    openrtx/src/core/spectrum.c
+    openrtx/src/core/spectrum_service.c
     openrtx/src/core/slot_store.c
     openrtx/src/core/contact_store.c
     openrtx/src/core/msg_service.c
@@ -167,6 +169,7 @@ target_sources(app
     openrtx/src/ui/default/ui_channels.c
     openrtx/src/ui/default/ui_contacts.c
     openrtx/src/ui/default/ui_messages.c
+    openrtx/src/ui/default/ui_spectrum.c
 
     subprojects/codec2/src/dump.c
     subprojects/codec2/src/lpc.c

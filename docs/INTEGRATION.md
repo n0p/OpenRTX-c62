@@ -26,6 +26,7 @@ encima fusiona, en este orden:
 | `c62/rx-dpmr` | dPMR (TS 102 490): 4FSK 2400 Bd en 6,25 kHz, CCH, datos cortos y voz AMBE+2 | `OPMODE_DPMR`, `protocols/DPMR/**`, `docs/RX_DPMR.md` |
 | `c62/dstar-voice` | D-STAR DV: cabecera con FEC convolucional, tramas de 96 bits, datos lentos y voz AMBE 3600x2400 (`lib/dstar_vocoder`) | `OPMODE_DSTAR`, `protocols/DSTAR/**`, `docs/RX_DSTAR.md` |
 | `c62/dmr-pkg` | el paquete de protocolo de DMR completo, en lugar de la cadena DMR propia: demodulador con valores soft, FEC (BPTC, Golay, QR, Reed-Solomon, trellis), protocolo y máquina de slots, voz, TX, datos, SMS, LRRP, cifrado y Tier III | `protocols/DMR/**`, `OpMode_DMR`, `docs/DMR_PKG.md` |
+| `c62/spectrum` | analizador de espectro: barrido del receptor con la FI ancha desde el hilo RTX, pantalla propia y gancho de traza para el protocolo de PC | `core/spectrum.*`, `core/spectrum_service.*`, `ui/ui_spectrum.*`, `docs/SPECTRUM.md` |
 
 Una compilación con todo encendido tiene, por tanto, **once modos**: FM, M17,
 DMR, TETRA, NXDN, dPMR, P25, YSF, D-STAR, AM aéreo y WFM. Los once están en el

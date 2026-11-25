@@ -22,6 +22,11 @@ static const ui_hints_t hints_channel = { "Load", NULL, NULL, "Back" };
 static const ui_hints_t hints_reset   = { "Reset", NULL, NULL, "Back" };
 /* A mode's settings page behaves like the popup: green cycles, P1/P2 change */
 static const ui_hints_t hints_modePage = { "Chg", "-", "+", "Back" };
+/*
+ * The analyser: green re-centres the span on the frequency the radio is tuned
+ * to, P1 walks the span, P2 opens its quick menu and red leaves.
+ */
+static const ui_hints_t hints_spectrum = { "Centrar", "Span", "Menu", "Exit" };
 
 const ui_hints_t *ui_hints_for_screen(uint8_t screen)
 {
@@ -51,6 +56,9 @@ const ui_hints_t *ui_hints_for_screen(uint8_t screen)
          */
         case MENU_CHANNEL:
             return &hints_channel;
+
+        case SPECTRUM:
+            return &hints_spectrum;
 
         case SETTINGS_DISPLAY:
         case SETTINGS_RADIO:

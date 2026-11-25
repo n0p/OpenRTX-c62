@@ -59,6 +59,7 @@
 #include "interfaces/display.h"
 #include "interfaces/cps_io.h"
 #include "ui/ui_channels.h"
+#include "ui/ui_spectrum.h"
 #include "ui/ui_contacts.h"
 #include "ui/ui_messages.h"
 #include "interfaces/nvmem.h"
@@ -1551,6 +1552,20 @@ void ui_open_screen(uint8_t screen, uint8_t item)
     ui_state.menu_selected = item;
 
     switch (screen) {
+        case SPECTRUM:
+            /*
+             * The analyser can refuse: a digital mode needs the discriminator
+             * continuously, and a receiver that is not receiving has no RSSI to
+             * sweep. Refusing leaves the screen where it was, which is the
+             * honest answer to "show me a spectrum of this mode".
+             */
+            if (ui_spectrum_enter() == false)
+            {
+                vp_beep(BEEP_KEY_GENERIC, SHORT_BEEP);
+                return;
+            }
+            break;
+
         case MENU_MESSAGES:
             ui_msgs_open();
             break;
@@ -1584,6 +1599,7 @@ void ui_open_screen(uint8_t screen, uint8_t item)
     /* Screens that own the keypad never transmit: same rule as the channels */
     bool ownsKeys = ui_channels_isOpen() || ui_contacts_isOpen()
                  || ui_zones_isOpen() || ui_msgs_isScreen(state.ui_screen)
+                 || (state.ui_screen == SPECTRUM)
 #ifdef CONFIG_APRS
                  || ui_aprs_isScreen(state.ui_screen)
 #endif
@@ -1739,6 +1755,14 @@ void ui_updateFSM(bool *sync_rtx)
     if(qm_tick(now))
         redraw_needed = true;
 
+    /*
+     * The analyser refreshes itself: a new sweep is a redraw, at the rate the
+     * panel can take (ui_spectrum_tick() owns the limit), and a screen change
+     * made behind its back takes the receiver with it.
+     */
+    if(ui_spectrum_tick(now))
+        redraw_needed = true;
+
     /* Delivery states, received messages and the compose draft */
     ui_msgs_tick(now);
 
@@ -1857,6 +1881,21 @@ void ui_updateFSM(bool *sync_rtx)
             if(event.payload != 0)
                 vp_play();
             return;
+        }
+
+        /*
+         * The analyser's screen owns every key while it is on, the way a list
+         * owns them: it consumes them all (so nothing below can act on a key it
+         * did not mean) and the popup, which is opened from inside it, has
+         * already had its turn above.
+         */
+        if (state.ui_screen == SPECTRUM)
+        {
+            if (ui_spectrum_handleEvent(&msg, sync_rtx))
+            {
+                redraw_needed = true;
+                return;
+            }
         }
 
         if((msg.keys & KEY_F2) && !msg.long_press
@@ -3501,6 +3540,12 @@ bool ui_updateGUI()
         ui_zones_draw();
         return true;
     }
+    /*
+     * The analyser owns the whole screen and its own plot: drawn here, but the
+     * hints row and the popup are still the shared ones below.
+     */
+    if((last_state.ui_screen == SPECTRUM) && ui_spectrum_isOpen())
+        ui_spectrum_draw();
     // Draw current GUI page
     switch(last_state.ui_screen)
     {

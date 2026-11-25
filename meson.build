@@ -61,6 +61,8 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/core/scan_service.c',
                'openrtx/src/core/vfo_search.c',
                'openrtx/src/core/vfo_search_service.c',
+               'openrtx/src/core/spectrum.c',
+               'openrtx/src/core/spectrum_service.c',
                'openrtx/src/rtx/ModeReport.c',
                'openrtx/src/core/settings.c',
                'openrtx/src/core/settings_record.c',
@@ -117,7 +119,8 @@ ui_src_default = ['openrtx/src/ui/default/ui.c',
                   'openrtx/src/ui/default/ui_strings.c',
                   'openrtx/src/ui/default/ui_channels.c',
                   'openrtx/src/ui/default/ui_contacts.c',
-                  'openrtx/src/ui/default/ui_messages.c']
+                  'openrtx/src/ui/default/ui_messages.c',
+                  'openrtx/src/ui/default/ui_spectrum.c']
 
 ui_src_module17 = ['openrtx/src/ui/module17/ui.c',
                    'openrtx/src/ui/module17/ui_main.c',
@@ -1390,6 +1393,17 @@ agc_test = executable('agc_test',
                       sources : unit_test_src + ['tests/unit/agc.cpp'],
                       kwargs  : unit_test_opts)
 
+# Analizador de espectro, desde el teclado: la pantalla, sus teclas y su menu
+ui_spectrum_test = executable('ui_spectrum_test',
+                              sources : unit_test_src + ['tests/unit/ui_spectrum.cpp'],
+                              kwargs  : unit_test_opts)
+
+# Analizador de espectro: la rejilla del barrido, la traza contra un receptor
+# sintetico, el pico, la retencion de maximos y el mapeo de nivel a pixel
+spectrum_test = executable('spectrum_test',
+                           sources : unit_test_src + ['tests/unit/spectrum.cpp'],
+                           kwargs  : unit_test_opts)
+
 # FM de radiodifusion: la banda, su rejilla de 100/50 kHz y el nombre de canal
 wfm_test = executable('wfm_test',
                       sources : unit_test_src + ['tests/unit/wfm.cpp'],
@@ -1583,6 +1597,9 @@ test('Zones Test',           zones_test)
 test('AGC Test',             agc_test)
 test('Airband Test',         airband_test)
 test('Broadcast FM Test',    wfm_test)
+
+test('Spectrum Test',        spectrum_test)
+test('UI Spectrum Test',     ui_spectrum_test)
 test('Settings Record Test', settings_record_test)
 test('APRS Config Test',     aprs_config_test)
 test('DMR SMS Format Test',  dmr_sms_format_test)

@@ -129,3 +129,146 @@ TEST_CASE("Every list scrolls the same way", "[ui][layout]")
     ui_list_clamp(&sel, &first, 5, 0);
     REQUIRE(first <= sel);
 }
+
+/*
+ * Right alignment.
+ *
+ * gfx_print() reads the x of a TEXT_ALIGN_RIGHT call as the edge the text ends
+ * at. It used to subtract that x from the screen width instead, so a call that
+ * passed the right margin - CONFIG_SCREEN_WIDTH - UI_TEXT_X, which is what every
+ * list header, every row value and the quick menu do - was laid out at "2 minus
+ * the width": off the panel for anything longer than a couple of characters.
+ * These cases read the framebuffer, so they fail if the arithmetic moves again.
+ */
+
+namespace
+{
+
+struct ink_span
+{
+    int left;      /**< first column with a lit pixel, width if none */
+    int right;     /**< last column with a lit pixel, -1 if none  */
+    unsigned count;
+};
+
+/** Lit pixels of the framebuffer rows [y0, y1). */
+ink_span ink_in_rows(int y0, int y1)
+{
+    const uint16_t *px = static_cast<const uint16_t *>(gfx_framebuffer());
+    ink_span s = { CONFIG_SCREEN_WIDTH, -1, 0 };
+
+    for (int y = y0; y < y1; y++) {
+        for (int x = 0; x < CONFIG_SCREEN_WIDTH; x++) {
+            if (px[x + y * CONFIG_SCREEN_WIDTH] != 0) {
+                if (x < s.left)
+                    s.left = x;
+                if (x > s.right)
+                    s.right = x;
+                s.count++;
+            }
+        }
+    }
+
+    return s;
+}
+
+} /* namespace */
+
+TEST_CASE("Right-aligned text ends at the x it is given", "[ui][layout][gfx]")
+{
+    const color_t white = { 255, 255, 255, 255 };
+    const char *value = "145.1750";
+    const int baseline = 60;
+    const int row_top = baseline - 12;
+    const int row_bot = baseline + 4;
+
+    gfx_init();
+
+    /* The exact call that used to disappear: x is the right margin, 2 px in */
+    SECTION("right margin")
+    {
+        gfx_clearScreen();
+        gfx_print((point_t){ CONFIG_SCREEN_WIDTH - 2, baseline }, FONT_SIZE_5PT,
+                  TEXT_ALIGN_RIGHT, white, "%s", value);
+
+        ink_span s = ink_in_rows(row_top, row_bot);
+        REQUIRE(s.count > 0);                    /* it is on the screen   */
+        REQUIRE(s.right >= 0);
+        REQUIRE(s.right < CONFIG_SCREEN_WIDTH - 2 - 1);  /* ends before x */
+        REQUIRE(s.right > CONFIG_SCREEN_WIDTH - 2 - 80); /* and hugs it    */
+        REQUIRE(s.left >= 0);
+    }
+
+    SECTION("the list margin, as ui_row_text and the headers use")
+    {
+        gfx_clearScreen();
+        gfx_print((point_t){ CONFIG_SCREEN_WIDTH - UI_TEXT_X, baseline },
+                  FONT_SIZE_6PT, TEXT_ALIGN_RIGHT, white, "%s", value);
+
+        ink_span s = ink_in_rows(row_top, row_bot);
+        REQUIRE(s.count > 0);
+        REQUIRE(s.right < CONFIG_SCREEN_WIDTH - UI_TEXT_X - 1);
+        REQUIRE(s.left >= UI_TEXT_X);
+    }
+
+    SECTION("a layout point mirrored by gfx_right_edge")
+    {
+        gfx_clearScreen();
+        gfx_print(gfx_right_edge(layout.line1_pos), FONT_SIZE_6PT,
+                  TEXT_ALIGN_RIGHT, white, "%s", value);
+
+        ink_span s = ink_in_rows(layout.line1_pos.y - 12,
+                                 layout.line1_pos.y + 4);
+        REQUIRE(s.count > 0);
+        REQUIRE(s.right < CONFIG_SCREEN_WIDTH - layout.line1_pos.x - 1);
+    }
+
+    SECTION("a string wider than its margin stays inside the panel")
+    {
+        gfx_clearScreen();
+        gfx_print((point_t){ UI_TEXT_X, baseline }, FONT_SIZE_6PT,
+                  TEXT_ALIGN_RIGHT, white, "MMMMMMMMMMMMMMMMMMMM");
+
+        ink_span s = ink_in_rows(row_top, row_bot);
+        REQUIRE(s.count > 0);
+        REQUIRE(s.left >= 0);
+        REQUIRE(s.right < CONFIG_SCREEN_WIDTH);
+    }
+}
+
+TEST_CASE("The list header keeps its right-hand count inside the screen",
+          "[ui][layout][gfx]")
+{
+    gfx_init();
+    gfx_clearScreen();
+
+    ui_list_header_only("ZX", "12");
+
+    /* Above the rule: the title on the left, the count on the right */
+    ink_span s = ink_in_rows(0, UI_HEADER_RULE_Y);
+
+    REQUIRE(s.count > 0);
+    REQUIRE(s.left >= UI_TEXT_X);
+    REQUIRE(s.right < CONFIG_SCREEN_WIDTH - UI_TEXT_X);
+
+    /* The count really is in the right half, not stacked on the title */
+    ink_span right_half = { CONFIG_SCREEN_WIDTH, -1, 0 };
+
+    for (int y = 0; y < UI_HEADER_RULE_Y; y++) {
+        for (int x = CONFIG_SCREEN_WIDTH / 2; x < CONFIG_SCREEN_WIDTH; x++) {
+            const uint16_t *px =
+                static_cast<const uint16_t *>(gfx_framebuffer());
+
+            if (px[x + y * CONFIG_SCREEN_WIDTH] != 0) {
+                if (x < right_half.left)
+                    right_half.left = x;
+                if (x > right_half.right)
+                    right_half.right = x;
+                right_half.count++;
+            }
+        }
+    }
+
+    REQUIRE(right_half.count > 0);
+    REQUIRE(right_half.right < CONFIG_SCREEN_WIDTH - UI_TEXT_X);
+}
