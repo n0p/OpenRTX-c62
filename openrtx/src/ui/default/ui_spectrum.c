@@ -262,10 +262,31 @@ void ui_spectrum_draw(void)
 
     gfx_clearScreen();
 
-    /* Header: the same band, rule and fonts as every other screen */
-    ui_list_header_only("ESPECTRO", st.paused ? "PAUSA"
-                                             : spectrumService_spanName(
-                                                   spectrumService_spanIndex()));
+    /*
+     * Header: the same band, rule and fonts as every other screen. The right
+     * field is how the sweep is waiting for the receiver, which is what this
+     * pass changed: AUTO is the chip's own glitch indicator, a number is a fixed
+     * wait the operator chose, and 400us with the gate abandoned is the sweep
+     * saying the indicator did not behave and it went back to the datasheet's
+     * worst case (docs/SPECTRUM.md §3.2c and §3.4). The span is in the footer
+     * with the centre frequency, so nothing is lost by using the header here.
+     */
+    char right[10];
+
+    if (st.paused) {
+        strcpy(right, "PAUSA");
+    }
+    else if ((st.settleUs == 0) && !st.gateOn) {
+        strcpy(right, "400us");
+    }
+    else if (st.settleUs > 0) {
+        snprintf(right, sizeof(right), "%luus", (unsigned long)st.settleUs);
+    }
+    else {
+        strcpy(right, "AUTO");
+    }
+
+    ui_list_header_only("ESPECTRO", right);
 
     /* The plot: a 1 px frame and a tick every 25 dB */
     gfx_drawRect((point_t){ SPEC_X, UI_SPEC_PLOT_TOP }, SPEC_W,
@@ -308,7 +329,7 @@ void ui_spectrum_draw(void)
 
     /* Footer: centre and span on the left, the peak with its frequency right */
     char left[24];
-    char right[24];
+    char peak[24];
     char freq[16];
 
     formatFreq(st.centre, freq, sizeof(freq));
@@ -318,18 +339,18 @@ void ui_spectrum_draw(void)
     if (scan->valid)
     {
         formatFreq(st.peakFreq, freq, sizeof(freq));
-        snprintf(right, sizeof(right), "%d %s", (int)st.peakDbm, freq);
+        snprintf(peak, sizeof(peak), "%d %s", (int)st.peakDbm, freq);
     }
     else
     {
-        snprintf(right, sizeof(right), "--");
+        snprintf(peak, sizeof(peak), "--");
     }
 
     gfx_print((point_t){ UI_TEXT_X, SPEC_FOOTER_BASE }, FONT_SIZE_5PT,
               TEXT_ALIGN_LEFT, color_white, "%s", left);
 
     gfx_print((point_t){ CONFIG_SCREEN_WIDTH - UI_TEXT_X, SPEC_FOOTER_BASE },
-              FONT_SIZE_5PT, TEXT_ALIGN_RIGHT, color_white, "%s", right);
+              FONT_SIZE_5PT, TEXT_ALIGN_RIGHT, color_white, "%s", peak);
 
     /* The hints row is the shared one: ui_hints.c owns what the keys mean */
 }

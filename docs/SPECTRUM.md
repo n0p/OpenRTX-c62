@@ -365,6 +365,13 @@ suelo de tiempo de §3.5: la resolución y la velocidad salen del mismo filtro.
   (`AUTO`/50/100/200/400 µs, §3.2c), `MAX RET` (retención de máximos), `BORRAR
   MAX` (acción, no valor), `PICO` (dBm del último barrido) y `MS/PTO` (coste
   medido por punto).
+- **La cabecera dice cómo espera el barrido**, que es lo que hace falta para
+  cerrar el número de §3.4 sin abrir el menú: `AUTO` cuando la puerta del
+  *glitch* está en uso, `50us`/`100us`/`200us`/`400us` cuando se ha fijado una
+  espera, `400us` cuando la puerta se ha abandonado (tres puntos seguidos sin que
+  `REG_63` baje) y `PAUSA` cuando hay una portadora en el centro. El span sigue
+  en el pie, junto a la frecuencia central (`145.5000 +-1M`), así que la cabecera
+  no quita información de la pantalla.
 - La retención guarda el máximo por bin desde que se activó (o desde `BORRAR
   MAX`), y el suavizado opcional del motor es una media exponencial de 2, 4 u 8
   barridos en dB: quita el parpadeo del fondo sin retrasar más de un barrido la
