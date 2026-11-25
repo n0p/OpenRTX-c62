@@ -132,13 +132,19 @@ lo contrario; con las siete de arriba, RAM al 86,5 % — ver
 
 - `master` — lo que se flashea.
 - `c62/dmr-tx` — cadena TX de DMR y encoder, en desarrollo.
+- `c62/tx-c4fm` — TX de P25 y System Fusion (C4FM) y de D-STAR, en desarrollo.
 - `Retevis-c62` — base del port.
 - `docs/` — notas de integración: `UI.md`, `CHANNELS.md`, `APRS.md`, `DMR_TX.md`,
-  `DMR_VOCODER.md`, `DMR_RX.md`, `openrtx_integration.md`.
+  `DMR_VOCODER.md`, `DMR_RX.md`, `TX_P25.md`, `TX_YSF.md`, `TX_DSTAR.md`,
+  `openrtx_integration.md`.
 
 ## Qué falta
 
-- Encoder AMBE+2 para DMR TX (en curso) y calibración de desviación en banco.
+- Encoder AMBE+2 para DMR TX (en curso) y calibración de desviación en banco
+  (`REG_40`), que es lo que falta para los tres TX nuevos: `docs/TX_P25.md`,
+  `docs/TX_YSF.md`, `docs/TX_DSTAR.md`.
+- Encoder IMBE (P25) y AMBE-2020 (D-STAR): no hay ninguno libre, por eso esos
+  dos transmiten sin voz.
 - TX de TETRA: no es viable con este transmisor, la señal se sale de la máscara.
 - Imagen de DSP libre: la de fábrica funciona, pero no es sustituible todavía.
 - APRS: digipeater, igate y SmartBeaconing.

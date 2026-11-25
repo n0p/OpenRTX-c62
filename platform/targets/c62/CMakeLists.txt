@@ -397,6 +397,24 @@ if(CONFIG_C62_YSF)
     ${OPENRTX_ROOT}/openrtx/src/rtx/OpMode_YSF.cpp)
   target_compile_definitions(app PRIVATE CONFIG_YSF)
   message(STATUS "C62: System Fusion (C4FM) receive mode enabled")
+
+  #
+  # CONFIG_YSF_TX (Kconfig, default y with C62_YSF): the transmitter
+  # (protocols/YSF/YsfTx.c) and the shared C4FM shaper.  The voice source needs
+  # the AMBE+2 encoder, which comes with CONFIG_DMR_TX; without it the slots
+  # go out as zeros.
+  #
+  if(CONFIG_YSF_TX)
+    target_sources(app PRIVATE
+      ${OPENRTX_ROOT}/openrtx/src/protocols/C4FM/C4fmMod.c
+      ${OPENRTX_ROOT}/openrtx/src/protocols/YSF/YsfTx.c)
+    target_compile_definitions(app PRIVATE CONFIG_YSF_TX)
+    if(NOT CONFIG_DMR_TX)
+      message(STATUS "C62: System Fusion TX without a vocoder: voice slots "
+                     "go out as zeros (enable CONFIG_DMR_TX for voice)")
+    endif()
+    message(STATUS "C62: System Fusion transmitter enabled")
+  endif()
 endif()
 
 if(CONFIG_C62_DSTAR)
@@ -672,6 +690,21 @@ if(CONFIG_C62_P25)
     ${OPENRTX_ROOT}/openrtx/src/rtx/OpMode_P25.cpp)
   target_compile_definitions(app PRIVATE CONFIG_P25)
   message(STATUS "C62: P25 Phase 1 receive enabled")
+
+  #
+  # CONFIG_P25_TX (Kconfig, default y with C62_P25): the transmitter
+  # (protocols/P25/P25Tx.c, P25Fec.c's encoders and the shared C4FM shaper).
+  # No IMBE encoder exists in this tree, so without a voice source installed
+  # the call is a header, null-information TSBK frames and a terminator: a
+  # valid P25 transmission with no voice (docs/TX_P25.md).
+  #
+  if(CONFIG_P25_TX)
+    target_sources(app PRIVATE
+      ${OPENRTX_ROOT}/openrtx/src/protocols/C4FM/C4fmMod.c
+      ${OPENRTX_ROOT}/openrtx/src/protocols/P25/P25Tx.c)
+    target_compile_definitions(app PRIVATE CONFIG_P25_TX)
+    message(STATUS "C62: P25 transmitter enabled (header, TSBK, terminator)")
+  endif()
 
   if(CONFIG_C62_P25_VOCODER)
     target_compile_definitions(app PRIVATE CONFIG_P25_VOCODER)

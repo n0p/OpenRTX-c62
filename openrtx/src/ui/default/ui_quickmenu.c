@@ -1428,27 +1428,51 @@ static const qm_menu_t uiModes[] =
 #endif
 #ifdef UI_MODE_DMR
     QM_MODE(OPMODE_DMR, "DMR", qm_items_dmr,
-            UI_MODE_CHANNEL | UI_MODE_SELECT),
+            UI_MODE_CHANNEL | UI_MODE_SELECT
+#ifdef CONFIG_DMR_TX
+                | UI_MODE_TX
+#endif
+            ),
 #endif
 #ifdef UI_MODE_NXDN
     QM_MODE(OPMODE_NXDN, "NXDN", qm_items_nxdn,
-            UI_MODE_CHANNEL | UI_MODE_SELECT | UI_MODE_PAGE),
+            UI_MODE_CHANNEL | UI_MODE_SELECT | UI_MODE_PAGE
+#ifdef CONFIG_NXDN_TX
+                | UI_MODE_TX
+#endif
+            ),
 #endif
 #ifdef UI_MODE_DPMR
     QM_MODE(OPMODE_DPMR, "dPMR", qm_items_dpmr,
-            UI_MODE_CHANNEL | UI_MODE_SELECT | UI_MODE_PAGE),
+            UI_MODE_CHANNEL | UI_MODE_SELECT | UI_MODE_PAGE
+#ifdef CONFIG_DPMR_TX
+                | UI_MODE_TX
+#endif
+            ),
 #endif
 #ifdef UI_MODE_P25
     QM_MODE(OPMODE_P25, "P25", qm_items_p25,
-            UI_MODE_CHANNEL | UI_MODE_SELECT | UI_MODE_PAGE),
+            UI_MODE_CHANNEL | UI_MODE_SELECT | UI_MODE_PAGE
+#ifdef CONFIG_P25_TX
+                | UI_MODE_TX
+#endif
+            ),
 #endif
 #ifdef UI_MODE_YSF
     QM_MODE(OPMODE_YSF, "YSF", qm_items_ysf,
-            UI_MODE_CHANNEL | UI_MODE_SELECT | UI_MODE_PAGE),
+            UI_MODE_CHANNEL | UI_MODE_SELECT | UI_MODE_PAGE
+#ifdef CONFIG_YSF_TX
+                | UI_MODE_TX
+#endif
+            ),
 #endif
 #ifdef UI_MODE_DSTAR
     QM_MODE(OPMODE_DSTAR, "DSTAR", qm_items_dstar,
-            UI_MODE_CHANNEL | UI_MODE_SELECT | UI_MODE_PAGE),
+            UI_MODE_CHANNEL | UI_MODE_SELECT | UI_MODE_PAGE
+#ifdef CONFIG_DSTAR_TX
+                | UI_MODE_TX
+#endif
+            ),
 #endif
 #ifdef UI_MODE_AIRBAND
     QM_MODE(OPMODE_AIRBAND, "AM", qm_items_airband,

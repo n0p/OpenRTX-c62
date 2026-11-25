@@ -194,6 +194,16 @@ config C62_YSF
 
 	  Enable it with west build -b c62 ... -- -DCONFIG_C62_YSF=y
 
+config YSF_TX
+	bool "System Fusion transmitter (FICH, V/D mode 1, C4FM)"
+	depends on C62_YSF
+	default y
+	help
+	  The transmit chain of protocols/YSF/YsfTx.c and the shared C4FM
+	  shaper: header, V/D mode 1 voice frames and terminator, keyed on PTT.
+	  Costs about 4 KB of flash and 2.5 KB of PSRAM for the frame buffer.
+	  Turning it off leaves PTT inert in this mode.
+
 endmenu
 
 #
@@ -330,12 +340,27 @@ config C62_P25
 	  NAC and the DUID, IMBE channel decoding, link control (RS(24,12)) and
 	  trunking blocks (trellis, CRC-16).
 
-	  Decode only, and the mode takes one frequency: there is no transmitter
-	  and no trunking follow. Voice needs an IMBE decoder linked in
-	  (C62_P25_VOCODER below); without one the mode decodes and counts the
-	  frames but plays nothing.
+	  Voice needs an IMBE decoder linked in (C62_P25_VOCODER below); without
+	  one the mode decodes and counts the frames but plays nothing.  There is
+	  no trunking follow.
+
+	  CONFIG_P25_TX (default y with this option) builds the transmitter: the
+	  HDU, the LDU1/LDU2 voice frames with their FEC, the TSBK blocks, the
+	  terminator and the C4FM shaper.  No IMBE encoder exists in this tree,
+	  so without a voice source the call is a header, null-information TSBK
+	  frames and a terminator -- a valid transmission with no voice.
 
 	  Enable it with west build -b c62 ... -- -DCONFIG_C62_P25=y
+
+config P25_TX
+	bool "P25 Phase 1 transmitter (HDU, LDU, TSBK, TDU, C4FM)"
+	depends on C62_P25
+	default y
+	help
+	  The transmit chain of protocols/P25/P25Tx.c: the frame builder (BCH
+	  NID, (18,6) Golay header words, RS(24,12) and RS(36,20) over GF(64),
+	  the trellis of the TSBK) and the C4FM shaper shared with System Fusion.
+	  Turning it off leaves PTT inert in this mode.
 
 config C62_P25_VOCODER
 	bool "P25 IMBE voice decoder (mbelib-neo or op25 imbe_vocoder)"

@@ -505,14 +505,39 @@ bool opmode_canTransmit(uint8_t mode)
              */
             return true;
 #else
+            /* Receive only: nothing keys the carrier in this build */
+            return false;
+#endif
+        case OPMODE_P25:
+#ifdef CONFIG_P25_TX
+            /* Header, voice when a source is installed, and the terminator */
+            return true;
+#else
+            return false;
+#endif
+        case OPMODE_YSF:
+#ifdef CONFIG_YSF_TX
+            /* V/D mode 1: header, voice, terminator */
+            return true;
+#else
             return false;
 #endif
         case OPMODE_NXDN:
+#ifdef CONFIG_NXDN_TX
+            /* Preamble, voice, release and tail, on the DMR PA chain */
+            return true;
+#else
+            return false;
+#endif
         case OPMODE_DPMR:
-        case OPMODE_P25:
-        case OPMODE_YSF:
+#ifdef CONFIG_DPMR_TX
+            /* Header, superframes and END frame on the same 4FSK chain */
+            return true;
+#else
+            return false;
+#endif
         case OPMODE_WFM_BC:
-            /* Receive only: there is no transmitter for these modes yet */
+            /* Receive only: there is no transmitter for this mode */
             return false;
         default:
             return false;

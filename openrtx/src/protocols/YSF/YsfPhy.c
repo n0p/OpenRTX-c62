@@ -140,25 +140,6 @@ static const uint8_t syncDibits[YSF_SYNC_SYMBOLS] = {
     3, 1, 1, 0, 1, 3, 0, 1, 3, 0, 2, 1, 1, 2, 0, 3, 1, 0, 3, 1
 };
 
-/** Median of n values, insertion sort (n is 20 here, so it is free). */
-static float median_of(float *v, int n)
-{
-    for (int i = 1; i < n; i++)
-    {
-        float key = v[i];
-        int j = i - 1;
-
-        while ((j >= 0) && (v[j] > key))
-        {
-            v[j + 1] = v[j];
-            j--;
-        }
-        v[j + 1] = key;
-    }
-
-    return 0.5f * (v[n / 2 - 1] + v[n / 2]);
-}
-
 /**
  * Full sync check: slice the 20 sync symbols against levels taken from the
  * sync itself and compare the 40 bits with the expected pattern.
@@ -169,8 +150,20 @@ static float median_of(float *v, int n)
  * about a second before the receiver finds the real carrier (measured: the
  * first 13 frames of the reference capture decoded nowhere).  Forty bits make
  * a false alarm essentially impossible.  The levels come from the sync symbols
- * themselves -- the median of their magnitudes splits the inner and the outer
- * cluster -- so the check works before any frame-wide estimate exists.
+ * themselves, so the check works before any frame-wide estimate exists.
+ *
+ * Two estimates have to be right for the forty bits to mean anything, and the
+ * obvious ones for both are wrong on this pattern:
+ *
+ *   - the DC reference is the midpoint of the sync's extremes, not the median
+ *     of its values.  The sync is 13 outer symbols to 7 inner ones, so the
+ *     median lands on the inner level; using it as zero makes every inner
+ *     positive symbol (dibit 0) read as an inner negative one (dibit 2), which
+ *     is 8 of the 40 bits wrong on a perfect signal -- and it rejected every
+ *     real sync, so the receiver only ever acquired on a chance 5-of-40
+ *     candidate, six frames into the call.
+ *   - the split between the inner and the outer cluster is the largest gap in
+ *     the sorted magnitudes, not their median, for the same 13/7 reason.
  *
  * @return the number of differing bits (0..40), or -1 if the levels cannot be
  *         separated (not a 4-level signal).
@@ -184,14 +177,55 @@ static int sync_verify(float start)
     for (int i = 0; i < YSF_SYNC_SYMBOLS; i++)
         y[i] = sample_at(start + (float)(i * SPS));
 
-    memcpy(v, y, sizeof(v));
-    float centre = median_of(v, YSF_SYNC_SYMBOLS);
+    /* Carrier offset: the sync has both outer levels, so the extremes are a
+     * symmetric pair and their midpoint is the zero of the discriminator. */
+    float lo = y[0], hi = y[0];
+
+    for (int i = 1; i < YSF_SYNC_SYMBOLS; i++)
+    {
+        if (y[i] < lo)
+            lo = y[i];
+        if (y[i] > hi)
+            hi = y[i];
+    }
+
+    float centre = 0.5f * (lo + hi);
 
     for (int i = 0; i < YSF_SYNC_SYMBOLS; i++)
         mag[i] = (y[i] < centre) ? (centre - y[i]) : (y[i] - centre);
 
+    /* Largest gap of the sorted magnitudes separates the two clusters. */
     memcpy(v, mag, sizeof(v));
-    float split = median_of(v, YSF_SYNC_SYMBOLS);
+
+    for (int i = 1; i < YSF_SYNC_SYMBOLS; i++)
+    {
+        float key = v[i];
+        int j = i - 1;
+
+        while ((j >= 0) && (v[j] > key))
+        {
+            v[j + 1] = v[j];
+            j--;
+        }
+        v[j + 1] = key;
+    }
+
+    int at = 0;
+    float gap = 0.0f;
+
+    for (int i = 1; i < YSF_SYNC_SYMBOLS; i++)
+    {
+        if ((v[i] - v[i - 1]) > gap)
+        {
+            gap = v[i] - v[i - 1];
+            at = i;
+        }
+    }
+
+    if ((at == 0) || (at == YSF_SYNC_SYMBOLS))
+        return -1;
+
+    float split = 0.5f * (v[at - 1] + v[at]);
 
     float sumInner = 0.0f, sumOuter = 0.0f;
     int nInner = 0, nOuter = 0;
@@ -465,7 +499,23 @@ static void track(ysfFrameHandler handler, void *user)
     }
     else
     {
-        /* No sync where it should be: coast on the frame cadence for a while */
+        /*
+         * No sync where it should be.  Under a fade or noise the sign score
+         * still lands around half, because the symbols are random; a carrier
+         * that has gone away scores nothing at all, and the frame behind it
+         * would be a certain-garbage 100 ms handed to the layer above (which
+         * only throws it away after the FICH fails).  Go back to hunting
+         * instead of emitting it.
+         */
+        if (bestScore < (YSF_SYNC_SYMBOLS / 4))
+        {
+            phy.hunt = 1;
+            phy.pos = (float)phy.ringIndex;
+            phy.coast = 0;
+            return;
+        }
+
+        /* Coast on the frame cadence for a while */
         phy.coast++;
         best = expected;
         phy.errors = (uint8_t)(YSF_SYNC_SYMBOLS - bestScore);

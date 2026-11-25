@@ -588,7 +588,6 @@ int p25Fec_trellisDecode(const uint8_t *bits, uint8_t out[12])
 }
 
 /* ----------------------------------------------------------------- CRC --- */
-
 uint16_t p25Fec_crc16(const uint8_t *data, int bytes)
 {
     const uint32_t poly = (1u << 12) | (1u << 5) | 1u;
@@ -606,4 +605,215 @@ uint16_t p25Fec_crc16(const uint8_t *data, int bytes)
     }
     crc ^= 0xFFFF;
     return (uint16_t)(crc & 0xFFFF);
+}
+
+/* -------------------------------------------------------------- encoders --- */
+
+/*
+ * BCH(63,16): the generator polynomial is the product of the minimal
+ * polynomials of alpha^1..alpha^22 over GF(64) with x^6 + x + 1, degree 47,
+ * i.e. exactly the roots p25Fec_bchDecode() takes syndromes on.  It was
+ * derived from that root set (not from a table in a standard) and is checked
+ * two ways in tests/host/p25_tx: every codeword has zero syndromes for the 22
+ * roots, and the decoder returns zero corrections for them.
+ */
+#define BCH_GENERATOR 0xCD930BDD3B2BULL
+#define BCH_PARITY_BITS 47
+
+uint64_t p25Fec_bchEncode(uint16_t info)
+{
+    uint64_t v = (uint64_t)info << BCH_PARITY_BITS;
+
+    for (int i = 62; i >= BCH_PARITY_BITS; i--)
+        if ((v >> i) & 1u)
+            v ^= BCH_GENERATOR << (i - BCH_PARITY_BITS);
+
+    return ((uint64_t)info << BCH_PARITY_BITS) | v;
+}
+
+void p25Fec_rsEncode(const uint8_t *info, int k, uint8_t *cw, int n)
+{
+    int npar = n - k;
+
+    gfInit();
+
+    /* Generator g(x) = prod (x - alpha^j), j = 1..npar, coefficients in
+     * descending powers. */
+    uint8_t g[21];
+    int deg = 0;
+
+    g[0] = 1;
+    for (int j = 1; j <= npar; j++)
+    {
+        const uint8_t a = gfPow(j);
+        const uint8_t lead = g[deg];
+
+        /* Descending powers: new[i] = old[i] + a * old[i - 1], the leading
+         * coefficient stays 1 and the new constant is a * old[deg]. */
+        for (int i = deg; i >= 1; i--)
+            g[i] ^= gfMul(g[i - 1], a);
+        g[deg + 1] = gfMul(lead, a);
+        deg++;
+    }
+
+    /* Long division of info(x) * x^npar by g(x): the remainder is the parity */
+    uint8_t rem[21];
+
+    memset(rem, 0, sizeof(rem));
+    for (int i = 0; i < k; i++)
+    {
+        uint8_t fb = (uint8_t)(info[i] ^ rem[0]);
+
+        memmove(&rem[0], &rem[1], (size_t)npar);
+        rem[npar - 1] = 0;
+        if (fb != 0)
+            for (int j = 0; j < npar; j++)
+                rem[j] ^= gfMul(g[j + 1], fb);
+    }
+
+    memcpy(cw, info, (size_t)k);
+    memcpy(&cw[k], rem, (size_t)npar);
+}
+
+void p25Fec_trellisEncode(const uint8_t in[12], uint8_t bits[196])
+{
+    enum { STEPS = 49 };
+    uint8_t block[196];
+    int state = 0;
+
+    for (int k = 0; k < STEPS; k++)
+    {
+        /* 48 dibits of payload, then one flush dibit of zero */
+        int d = 0;
+
+        if (k < 48)
+            d = (in[k >> 2] >> (6 - 2 * (k & 3))) & 3;
+
+        int cw = trellisNext[state][d];
+
+        for (int b = 0; b < 4; b++)
+            block[4 * k + b] = (uint8_t)((cw >> (3 - b)) & 1u);
+
+        state = d;
+    }
+
+    /* The table maps a de-interleaved position to the air position it travels
+     * in, which is how the decoder reads it: r[b] = bits[table[4k + b]]. */
+    for (int i = 0; i < 196; i++)
+        bits[trellisDeinterleave196[i]] = block[i];
+}
+
+uint16_t p25Fec_ham10Encode(uint32_t data)
+{
+    uint8_t d = (uint8_t)(data & 0x3F);
+
+    return (uint16_t)((d << 4) | (hmg1063Enc[d] & 0x0F));
+}
+
+/* ------------------------------------------------- HDU word: Golay(18,6) --- */
+
+/*
+ * The (23,12) code of this file is stored with the data at the top of the
+ * word, which is convenient for the IMBE path.  The HDU word wants it the
+ * other way round (Wallace's form, the one op25 and dsd use: data in the low
+ * twelve bits, check bits above), so the division is written here directly on
+ * the 12-bit data word instead of reusing the basis table.
+ */
+#define GOLAY_POLY 0xAE3u
+
+/** The 24-bit extended codeword of a 12-bit data word, data in bits 11..0. */
+static uint32_t golay24Word(uint32_t data)
+{
+    uint32_t cw = data & 0xFFFu;
+
+    for (int i = 0; i < 12; i++)
+    {
+        if (cw & 1u)
+            cw ^= GOLAY_POLY;
+        cw >>= 1;
+    }
+
+    cw &= 0x7FFu;                     /* eleven check bits */
+    uint32_t word = (cw << 12) | (data & 0xFFFu);
+
+    /* Overall parity of the 23 bits in bit 23 */
+    uint32_t ones = word;
+
+    ones ^= ones >> 16;
+    ones ^= ones >> 8;
+    ones ^= ones >> 4;
+    ones ^= ones >> 2;
+    ones ^= ones >> 1;
+
+    return word | ((ones & 1u) << 23);
+}
+
+void p25Fec_golay18Encode(uint32_t hex, uint8_t air[18])
+{
+    /*
+     * The shortened code's twelve-bit data word puts the *last* transmitted
+     * information bit in bit 11 and the first in bit 6, with bits 5..0 the
+     * implicit zeros: the symbol goes in bit-reversed, which is what op25 and
+     * dsd's decoder expect (checked against dsd's Golay24::decode_6 on all 64
+     * symbols, tests/host/p25_tx and the real capture in docs/TX_P25.md).
+     */
+    uint32_t rev = 0;
+
+    for (int i = 0; i < 6; i++)
+        rev = (rev << 1) | ((hex >> i) & 1u);
+
+    const uint32_t word = golay24Word(rev << 6);
+
+    for (int i = 0; i < 6; i++)
+        air[i] = (uint8_t)((hex >> (5 - i)) & 1u);
+
+    /* Parity, in the order the air carries it: check bit 0 first, the overall
+     * parity bit last (bit 12 of the word up to bit 23). */
+    for (int i = 0; i < 12; i++)
+        air[6 + i] = (uint8_t)((word >> (12 + i)) & 1u);
+}
+
+int p25Fec_golay18Decode(const uint8_t air[18], uint32_t *hex)
+{
+    uint32_t rx = 0;
+
+    /* The 18 received bits are six data then twelve parity: rebuild the 24-bit
+     * word and compare it with the 64 codewords of the code.  Minimum
+     * distance 8 means the nearest one within three bits is unique. */
+    for (int i = 0; i < 18; i++)
+        rx = (rx << 1) | (air[i] & 1u);
+
+    int best = 99;
+    uint32_t bestHex = 0;
+
+    for (uint32_t h = 0; h < 64; h++)
+    {
+        uint8_t cwAir[18];
+        uint32_t w = 0;
+
+        p25Fec_golay18Encode(h, cwAir);
+        for (int i = 0; i < 18; i++)
+            w = (w << 1) | (cwAir[i] & 1u);
+
+        uint32_t d = w ^ rx;
+        int dist = 0;
+
+        while (d != 0)
+        {
+            dist += (int)(d & 1u);
+            d >>= 1;
+        }
+
+        if (dist < best)
+        {
+            best = dist;
+            bestHex = h;
+        }
+    }
+
+    if (best > 3)
+        return -1;
+
+    *hex = bestHex;
+    return best;
 }
