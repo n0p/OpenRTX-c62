@@ -27,6 +27,7 @@ CFLAGS="-std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter"
 SRC="$root/openrtx/src/core/pc_proto.c
      $root/openrtx/src/core/pc_proto_ops.c
      $root/openrtx/src/core/pc_proto_dbg.c
+     $root/openrtx/src/core/pc_proto_bench.c
      $root/openrtx/src/core/channel_store.c
      $root/openrtx/src/core/contact_store.c
      $root/openrtx/src/core/slot_store.c
@@ -47,14 +48,39 @@ STUB="$root/tests/host/pc_proto_host/state_stub.c"
 echo "building pc_proto_device"
 # shellcheck disable=SC2086
 cc $CFLAGS $INC -DCONFIG_C62_DEBUG_PROTO -DTOOLCHAIN_HOST \
-   $SRC "$STUB" -lpthread -o "$out/pc_proto_device"
+   $SRC "$STUB" -lpthread -lm -o "$out/pc_proto_device"
 
 echo "building pc_proto_device_nodebug"
 # shellcheck disable=SC2086
 cc $CFLAGS $INC -DTOOLCHAIN_HOST \
-   $SRC "$STUB" -lpthread -o "$out/pc_proto_device_nodebug"
+   $SRC "$STUB" -lpthread -lm -o "$out/pc_proto_device_nodebug"
+
+# The measurement build: debug plus the bench namespace.  Same sources, one
+# more define; docs/BENCH.md is what it is for.
+echo "building pc_proto_device_bench"
+# shellcheck disable=SC2086
+cc $CFLAGS $INC -DCONFIG_C62_DEBUG_PROTO -DCONFIG_C62_BENCH_PROTO \
+   -DTOOLCHAIN_HOST $SRC "$STUB" -lpthread -lm -o "$out/pc_proto_device_bench"
+
+# Both suites run even when one of them fails: the status at the end is the
+# worst of the two, and a broken CPS expectation must not hide a broken bench.
+status=0
 
 echo "running the pty test"
-PYTHONPATH="$root/tools/cps" exec python3 "$root/tools/cps/tests/test_pcproto.py" \
+PYTHONPATH="$root/tools/cps" python3 "$root/tools/cps/tests/test_pcproto.py" \
      --device "$out/pc_proto_device" \
-     --device-nodebug "$out/pc_proto_device_nodebug"
+     --device-nodebug "$out/pc_proto_device_nodebug" || status=1
+
+echo "running the bench pty test"
+PYTHONPATH="$root/tools/cps:$root/tools/bench" python3 \
+     "$root/tools/bench/tests/test_bench_proto.py" \
+     --device "$out/pc_proto_device_bench" \
+     --device-nodebug "$out/pc_proto_device_nodebug" || status=1
+
+echo "running the correlator test"
+python3 "$root/tools/bench/tests/test_correlate.py" || status=1
+
+echo "running the bench end to end, simulated"
+python3 "$root/tools/bench/tests/test_bench_e2e.py" || status=1
+
+exit $status
