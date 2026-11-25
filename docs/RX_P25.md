@@ -202,6 +202,29 @@ zero corrected bits, byte for byte the same as the reference receiver's own
 dump of the same file, and the control channel still gives 725/725 TSBK blocks
 with a good CRC-16.
 
+**Phase and level.** The cut does not depend on either, and the old and new
+chains were run side by side on the same voice capture, resampled and
+re-levelled:
+
+| capture variant | frames before / after | IMBE frames | corrected bits |
+|---|---|---|---|
+| as recorded | 31 / 31 | 261 | 0 |
+| clipped at 2x amplitude | 29 / 29 | 261 | 1197 |
+| scaled to 0.25 | 31 / 31 | 261 | 0 |
+| + noise, 24 dB | 31 / 31 | 261 | 0 |
+| + noise, 20 dB | 31 / 31 | 261 | 15 |
+| + noise, 16 dB | 31 / 31 | 261 | 85 |
+| + noise, 12 dB | 31 / 31 | 261 | 371 |
+| + noise, 8 dB | 24 / 24 | 207 | 1046 |
+
+Identical in every row, which is the point: the frame length is not a tuning
+constant that trades robustness for cost. One thing that measurement did force:
+on a marginal signal 24 sync symbols are a thin estimate of DC and outer level
+for the first pass, so when the NID does not decode there the cut is retried
+with the levels the previous frame settled on (864 symbols of measurement on
+the same channel). That is what keeps the 8 dB row at 24 frames instead of 23;
+it costs a second BCH decode on candidates that were about to fail anyway.
+
 ## Evidence
 
 Firmware PHY (`tests/host/p25_phy_host`), fed the same files as the prototype:

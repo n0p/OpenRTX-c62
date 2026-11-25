@@ -136,6 +136,13 @@ static const float p25_rrc[P25_MF_TAPS] =
 #define P25_PSRAM
 #endif
 
+/** DC and outer level of one frame. */
+struct p25Levels
+{
+    float dc;
+    float outer;
+};
+
 struct p25PhyState
 {
     /* Matched filter at 48 kHz: touched once per input sample, stays in SRAM */
@@ -152,6 +159,8 @@ struct p25PhyState
     uint32_t frames;              ///< Frames decoded since the reset
     uint32_t syncTries;           ///< Candidate positions examined
     uint32_t gridMisses;          ///< Grid predictions that found nothing
+    bool haveLevels;              ///< lastLevels is worth using
+    struct p25Levels lastLevels;  ///< Levels the previous frame settled on
     bool haveGrid;                ///< A frame decoded, the next sync is known
     int8_t syncPat[P25_SYNC_SYMBOLS]; ///< The sync as +-1
 
@@ -583,13 +592,6 @@ static bool decodeFrame(struct p25Frame *f, p25FrameHandler handler, void *user,
 
 /* ------------------------------------------------------------ frame slice */
 
-/** DC and outer level of one frame. */
-struct p25Levels
-{
-    float dc;
-    float outer;
-};
-
 /**
  * Four-level model of one frame.  The sync field is all outer levels and sign
  * balanced, so it gives the DC and the outer level directly; the refinement
@@ -754,18 +756,34 @@ static enum tryResult tryFrame(long start, struct p25Frame *f)
     for (int k = 0; k < P25_SYNC_NID_SYMBOLS; k++)
         symBuf[k] = ringInterp(fine + (float)k * P25_SPS);
 
-    struct p25Levels Ls = frameLevels(symBuf, 0);
-    for (int k = 0; k < P25_SYNC_NID_SYMBOLS; k++)
-    {
-        int d = sliceSymbol(symBuf[k], Ls, bestPol);
-        bits[2 * k] = (uint8_t)((d >> 1) & 1);
-        bits[2 * k + 1] = (uint8_t)(d & 1);
-    }
-
     uint16_t nac = 0;
     uint8_t duid = 0;
     int ec = -1;
-    if (!decodeNid(bits, &nac, &duid, &ec))
+    bool nidOk = false;
+
+    for (int attempt = 0; attempt < 2 && !nidOk; attempt++)
+    {
+        /*
+         * The sync field alone fixes DC and outer level (24 symbols, all of
+         * them outer).  On a marginal signal that is only 24 symbols of
+         * estimate, so the second attempt uses the levels the frame before
+         * this one ended up with: the same channel, but 864 symbols' worth of
+         * measurement.  Both are free when the first one works.
+         */
+        struct p25Levels Ls = (attempt == 0 || !phy.haveLevels)
+                                  ? frameLevels(symBuf, 0)
+                                  : phy.lastLevels;
+
+        for (int k = 0; k < P25_SYNC_NID_SYMBOLS; k++)
+        {
+            int d = sliceSymbol(symBuf[k], Ls, bestPol);
+            bits[2 * k] = (uint8_t)((d >> 1) & 1);
+            bits[2 * k + 1] = (uint8_t)(d & 1);
+        }
+        nidOk = decodeNid(bits, &nac, &duid, &ec);
+    }
+
+    if (!nidOk)
         return TRY_NONE;
 
     const int nSym = p25_frame_symbols((enum p25Duid)duid);
@@ -800,6 +818,8 @@ static enum tryResult tryFrame(long start, struct p25Frame *f)
     }
 
     phy.lastFine = fine;
+    phy.lastLevels = L;
+    phy.haveLevels = true;
     f->symbol = start / 5;
     f->spanSymbols = (uint16_t)nSym;
     /*
