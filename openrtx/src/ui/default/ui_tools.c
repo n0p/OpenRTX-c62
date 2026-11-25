@@ -139,10 +139,14 @@ static void beepOk(void)
     vp_beep(BEEP_KEY_GENERIC, SHORT_BEEP);
 }
 
+/* Only the two rows that a service can refuse use it: a build with neither the
+   scanner nor the search compiles it out instead of warning about it */
+#if defined(CONFIG_SCAN) || defined(CONFIG_VFO_SEARCH)
 static void beepError(void)
 {
     vp_beep(400, SHORT_BEEP * 2);
 }
+#endif
 
 /** True when the registry entry belongs in the operator's mode list. */
 static bool modeSelectable(const ui_mode_t *m)
@@ -187,6 +191,7 @@ static void modesSelectCurrent(void)
     ts.mfirst = (uint8_t)first;
 }
 
+#ifdef CONFIG_VFO_SEARCH
 /**
  * Give the VFO screen back, the way red on MAIN_MEM does.
  *
@@ -205,6 +210,7 @@ static void toVfoScreen(bool *sync_rtx)
     state.ui_screen = MAIN_VFO;
     *sync_rtx = true;
 }
+#endif /* CONFIG_VFO_SEARCH */
 
 /** Leave the menu for the screen it was opened from. */
 static void closeMenu(bool *sync_rtx)
