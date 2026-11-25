@@ -35,6 +35,10 @@ extern void kiss_uart_init(void);
 #endif
 #include "controller.h"
 #include "dsp.h"
+#include <IOMuxManager.h>
+#include "core/port_ptt.h"
+#include "core/settings.h"
+#include "core/state.h"
 #ifdef C62_PC_PROTO
 void pc_proto_c62_init(void);
 void pc_proto_c62_supervise(void);
@@ -482,9 +486,8 @@ void platform_wdtFeed(void)
 #if defined(C62_REMOTE) || defined(CONFIG_C62_BENCH_PROTO)
 /*
  * Forced PTT, for the remote control and for the bench protocol: in both
- * builds the PTT pad carries a UART RX and there is no button to press, so
- * the transmitter is keyed by whoever is holding the cable.  -1 returns the
- * pad.
+ * builds the PTT pad carries a UART RX and the transmitter is keyed by whoever
+ * is holding the cable.  -1 returns the pad (docs/ACCESSORY.md).
  */
 static volatile int pttOverride = -1;
 
@@ -494,21 +497,95 @@ void platform_pttOverride(int state)
 }
 #endif
 
+/*
+ * ---------------------------------------------------------------------------
+ * The accessory port: one pad, three modes (docs/ACCESSORY.md)
+ * ---------------------------------------------------------------------------
+ *
+ * GPIOA_15 is the accessory jack's PTT contact and UART2 RXD at the same time.
+ * The pad stays muxed to the UART -- that is how the PC talks to the radio --
+ * but its input can still be read through the GPIO block, which is what makes
+ * "Auto" possible: a low level that lasts more than PORT_PTT_HOLD_MS is a
+ * finger on the switch, a 0x00 byte or a break is not (core/port_ptt.h).
+ *
+ * One instance, fed by whoever runs first: the protocol transport every 1 ms
+ * and the key scan every 30 ms.  Feeding it twice in the same millisecond is
+ * harmless.
+ */
+static portPttState_t portPtt;
+
+uint8_t c62_portMode(void)
+{
+    /* Read without the state mutex, as the status and the transmit helpers do:
+     * a mode that is one tick old is still the right answer, and a lock here
+     * would put the key scan behind the UI thread. */
+    const uint8_t mode = state.settings.pc_port;
+
+    return settings_portModeValid(mode) ? mode : (uint8_t)PORT_MODE_AUTO;
+}
+
+portPttState_t *c62_portPttState(void)
+{
+    return &portPtt;
+}
+
+bool c62_portPttPoll(void)
+{
+    /* The device tree declares the key active low, so the logical level is 1
+     * while the pad is grounded. */
+    const bool low = gpio_pin_get_dt(&button_ptt) != 0;
+
+    return port_ptt_update(&portPtt, low, (uint32_t)k_uptime_get_32());
+}
+
+void c62_portPadToUart(bool uart)
+{
+    /*
+     * GPIO first: configuring the pin sets the direction and the pull-up, and
+     * it muxes the pad to its default function, which is plain GPIO.  The mode
+     * register (direction and pull) is separate from the function selector and
+     * survives the switch to UART2 RXD, so the line stays pulled up while the
+     * UART owns it -- that is what makes "a grounded pad" mean "pressed" and
+     * not "floating".
+     */
+    gpio_pin_configure_dt(&button_ptt, GPIO_INPUT);
+
+    if (uart)
+        IOMuxManager_PinConfigure(CSK_IOMUX_PAD_A, 15, CSK_IOMUX_FUNC_ALTER3);
+
+    /* A press cannot survive the change of owner: whatever was held belongs to
+     * the old mode. */
+    port_ptt_reset(&portPtt);
+}
+
 bool platform_getPttStatus()
 {
+#if defined(C62_REMOTE) || defined(CONFIG_C62_BENCH_PROTO)
+    if (pttOverride >= 0)
+        return pttOverride != 0;
+#endif
+
 #if defined(C62_REMOTE)
-    /* The PTT pad carries the remote control's UART RX */
-    if (pttOverride >= 0)
-        return pttOverride != 0;
+    /* The pad is the remote control's UART RX and there is no button to read. */
     return false;
-#elif defined(CONFIG_C62_BENCH_PROTO)
-    /* Same pad, same reason; without an override the pad is read, which
-     * idles high (released) while the UART is not talking. */
-    if (pttOverride >= 0)
-        return pttOverride != 0;
-    return gpio_pin_get_dt(&button_ptt);
 #else
-    return gpio_pin_get_dt(&button_ptt);
+    const uint8_t mode = c62_portMode();
+    const portPttPlan_t plan = port_ptt_plan(mode);
+
+    /*
+     * Never read the raw level in "Auto": while the protocol listens, the pad
+     * goes low for the start bit of every byte, so a raw read would key the
+     * transmitter on a HELLO.  There the answer is the sustained-low rule.
+     */
+    if (plan.useDetector) {
+        c62_portPttPoll();
+        return port_ptt_keyed(mode, port_ptt_pressed(&portPtt), false);
+    }
+
+    if (plan.useButton)
+        return port_ptt_keyed(mode, false, gpio_pin_get_dt(&button_ptt) != 0);
+
+    return false;
 #endif
 }
 

@@ -235,6 +235,16 @@ int pc_dbg_info(struct pcReq *r)
         off = pc_tlv_u16(r->out, r->outCap, off, PC_TAG_TX_POWER, d.txPower);
         off = pc_tlv_str(r->out, r->outCap, off, PC_TAG_TX_REASON,
                          d.txReason[0] != '\0' ? d.txReason : "none");
+        /*
+         * The accessory port: which mode owns the pad, whether its switch is
+         * down and what the transport has thrown away because of it.  With
+         * "Auto" this is the pair a bench session reads first when a
+         * speaker-microphone seems deaf or the CPS stops answering while the
+         * operator keys (docs/ACCESSORY.md).
+         */
+        off = pc_tlv_u8(r->out, r->outCap, off, PC_TAG_PORT_MODE, d.portMode);
+        off = pc_tlv_u8(r->out, r->outCap, off, PC_TAG_PORT_PTT, d.portPtt);
+        off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_PORT_LOST, d.portLost);
 
         /*
          * The transmit clock: how much air the PA has put out since it was last

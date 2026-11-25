@@ -28,13 +28,19 @@ extern "C" {
 
 /*
  * The DMR package appended the transmit air delay, the fourth pass the airband
- * transmit depth and the seventh (settings version 7) the default transmit
- * power.  All three are the end of the payload, so a record of an earlier pass
- * is the same payload shorter and the CRC catches it: the record is dropped as
- * a whole instead of read with the fields missing.
+ * transmit depth, the seventh (settings version 7) the default transmit power
+ * and the eighth the accessory port mode.  All of them are the end of the
+ * payload, so a record of an earlier pass is the same payload shorter and the
+ * CRC catches it: the record is dropped as a whole instead of read with the
+ * fields missing.  Version 7 is the exception the migration covers: the payload
+ * it wrote *is* a prefix of this one.
  */
-#define PRE_DELAY_PAYLOAD_LEN \
-    (sizeof(settings_t) - sizeof(int16_t) - sizeof(uint8_t) - sizeof(uint16_t))
+#define PRE_DELAY_PAYLOAD_LEN                                                  \
+    (sizeof(settings_t) - sizeof(int16_t) - sizeof(uint8_t) -                  \
+     sizeof(uint16_t) - sizeof(uint8_t))
+
+/* What version 7 wrote: today's payload without the appended port mode. */
+#define V7_PAYLOAD_LEN (sizeof(settings_t) - sizeof(uint8_t))
 
 static const settings_t &dflt()
 {
@@ -115,12 +121,15 @@ TEST_CASE("The receive-only modes default to the behaviour they had before",
     REQUIRE(default_settings.am_depth == 60);
 }
 
-TEST_CASE("The DMR air delay and the AM depth end the record", "[settings]")
+TEST_CASE("The DMR air delay, the AM depth and the port mode end the record",
+          "[settings]")
 {
     /* Version 6 adds the airband transmit depth, appended after the air delay */
-    REQUIRE(SETTINGS_VERSION == 7);
-    REQUIRE(sizeof(settings_t) == PRE_DELAY_PAYLOAD_LEN + sizeof(int16_t)
-                                  + sizeof(uint8_t) + sizeof(uint16_t));
+    REQUIRE(SETTINGS_VERSION == 8);
+    REQUIRE(V7_PAYLOAD_LEN + sizeof(uint8_t) == sizeof(settings_t));
+    REQUIRE(sizeof(settings_t) ==
+            PRE_DELAY_PAYLOAD_LEN + sizeof(int16_t) + sizeof(uint8_t) +
+                sizeof(uint16_t) + sizeof(uint8_t));
     REQUIRE(dflt().am_depth == 60);
 
     /*
@@ -136,6 +145,74 @@ TEST_CASE("The DMR air delay and the AM depth end the record", "[settings]")
      */
     REQUIRE(dflt().tx_power == 500);
     REQUIRE(settings_txPowerValid(dflt().tx_power));
+
+    /*
+     * Version 8 appends the accessory port mode: Auto, which is both the
+     * protocol and the speaker-mic PTT (docs/ACCESSORY.md).  A reset must not
+     * silently take the cable away from a radio that was being programmed, nor
+     * leave a speaker-microphone that does nothing.
+     */
+    REQUIRE(dflt().pc_port == PORT_MODE_AUTO);
+    REQUIRE(settings_portModeValid(dflt().pc_port));
+    REQUIRE(std::string(settings_portModeName(dflt().pc_port)) == "Auto");
+}
+
+TEST_CASE("A version 7 record is migrated, not dropped", "[settings]")
+{
+    /*
+     * The upgrade path a radio takes when this firmware lands on one that was
+     * running the previous release: version 7 wrote the same payload one byte
+     * shorter (settings_t.pc_port did not exist), with a CRC over that length
+     * and "7" in the header.  The operator keeps his callsign, his channels'
+     * power and his scan settings, and the appended field comes back at its
+     * default -- Auto.
+     */
+    settings_t s = dflt();
+
+    s.brightness = 33;
+    s.sqlLevel = 7;
+    snprintf(s.callsign, sizeof(s.callsign), "%s", "EA5MIG");
+    s.tx_power = 2500;
+    s.scan_dwell = 22;
+    s.dmr_id = 2142001;
+    s.pc_port = PORT_MODE_NEVER; /* not part of a v7 record: must not survive */
+
+    uint8_t rec[SETTINGS_RECORD_SIZE];
+    std::memset(rec, 0xFF, sizeof(rec));
+    rec[0] = 0x58; rec[1] = 0x54; rec[2] = 0x52; rec[3] = 0x4F; /* "ORTX" */
+    rec[4] = (uint8_t)(crc_ccitt(&s, V7_PAYLOAD_LEN) & 0xFF);
+    rec[5] = (uint8_t)(crc_ccitt(&s, V7_PAYLOAD_LEN) >> 8);
+    rec[6] = 7; rec[7] = 0;
+    std::memcpy(&rec[SETTINGS_RECORD_HDR], &s, V7_PAYLOAD_LEN);
+
+    settings_t out;
+    std::memset(&out, 0x5A, sizeof(out));
+    uint8_t cause = SETTINGS_RESET_VERSION;
+
+    REQUIRE(settings_recordVersion(rec, sizeof(rec)) == 7);
+    REQUIRE(settings_recordLoad(rec, sizeof(rec), &out, &cause) == 0);
+    /* Migrated, not reset: the screen must not tell the operator he lost
+     * everything. */
+    REQUIRE(cause == SETTINGS_NO_RESET);
+
+    REQUIRE(out.brightness == 33);
+    REQUIRE(out.sqlLevel == 7);
+    REQUIRE(std::string(out.callsign) == "EA5MIG");
+    REQUIRE(out.tx_power == 2500);
+    REQUIRE(out.scan_dwell == 22);
+    REQUIRE(out.dmr_id == 2142001);
+    /* The appended field is the default, never the byte that followed it on
+     * flash. */
+    REQUIRE(out.pc_port == PORT_MODE_AUTO);
+
+    /* A v7 record whose CRC does not cover its own length is still corrupt: the
+     * migration must not read a truncated or damaged payload. */
+    uint8_t bad[SETTINGS_RECORD_SIZE];
+    std::memcpy(bad, rec, sizeof(bad));
+    bad[SETTINGS_RECORD_HDR + 2] ^= 0x01;
+    std::memset(&out, 0x5A, sizeof(out));
+    REQUIRE(settings_recordRead(bad, sizeof(bad), &out) ==
+            SETTINGS_RECORD_ERR_CORRUPT);
 }
 
 TEST_CASE("A record of an older version is discarded with a reason", "[settings]")

@@ -27,6 +27,14 @@
  * reinterpreted after the structure grew is worse than a reset, because the
  * fields land at the wrong offset and the radio boots with a plausible but
  * wrong configuration (a squelch level read from a callsign, for instance).
+ *
+ * One exception, and only one: version 8 appended settings_t.pc_port as the
+ * last byte of the payload, so a version 7 record is this payload one byte
+ * shorter *and* a valid prefix of it.  settings_recordRead() loads that prefix
+ * -- after checking its own CRC over its own length -- and fills the appended
+ * field with its default, which is how an operator keeps his callsign, his
+ * power and his scan settings across the upgrade.  Every other version
+ * mismatch is still a reset.
  */
 
 #include <stdbool.h>

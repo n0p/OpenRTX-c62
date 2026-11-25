@@ -40,7 +40,9 @@
 
 #include "core/openrtx.h"
 #include "core/pc_proto.h"
+#include "core/port_ptt.h"
 #include "core/psram_state.h"
+#include "core/settings.h"
 #include "core/state.h"
 #include "rtx/rtx.h"
 #include "rtx/TxGuard.h"
@@ -58,6 +60,10 @@
 #define UART_THR 0x00
 #define UART_LSR 0x14
 #define LSR_DR BIT(0)
+#define LSR_OE BIT(1)
+#define LSR_PE BIT(2)
+#define LSR_FE BIT(3)
+#define LSR_BI BIT(4)
 #define LSR_THRE BIT(5)
 
 #define THREAD_PRIORITY 6
@@ -303,6 +309,15 @@ int pc_proto_platformStatus(pcProtoStatus_t *out)
 
     out->rssi = rtx_getRssi();
     out->squelchOpen = rtx_rxSquelchOpen() ? 1 : 0;
+
+    /*
+     * The accessory port, docs/ACCESSORY.md.  The mode is what the operator
+     * chose, and portLost is the byte count the transport has thrown away
+     * because the speaker-mic PTT was holding the very line it reads: a client
+     * whose requests went unanswered while somebody keyed has the number here.
+     */
+    out->portMode = c62_portMode();
+    out->portLost = c62_portPttState()->lost;
     return 0;
 }
 
@@ -449,6 +464,16 @@ int pc_proto_platformDiag(pcProtoDiag_t *out)
                                                                 : "none";
         }
         snprintf(out->txReason, sizeof(out->txReason), "%s", reason);
+    }
+
+    /* And the accessory port (docs/ACCESSORY.md): who owns the pad, whether the
+     * switch is down at this instant and what that has cost the serial line. */
+    {
+        const portPttState_t *ptt = c62_portPttState();
+
+        out->portMode = c62_portMode();
+        out->portPtt = port_ptt_pressed(ptt) ? 1 : 0;
+        out->portLost = ptt->lost;
     }
     return 0;
 }
@@ -650,6 +675,78 @@ void pc_proto_capturePush(const int16_t *samples, size_t stride, size_t count)
 /* Thread                                                                    */
 /* ------------------------------------------------------------------------- */
 
+/*
+ * The accessory port (docs/ACCESSORY.md).
+ *
+ * The pad at the jack is UART2 RXD and the speaker-mic PTT at once, and the
+ * operator chooses who owns it.  The mode lives in the settings, so it is read
+ * here -- once per pass, 1 ms -- instead of being pushed in from the menu: a
+ * change applies on the next pass without the UI having to know that this file
+ * exists, and a value that arrives from the CPS lands the same way.
+ *
+ * In "Auto" the pad stays muxed to the UART and its input is also sampled as a
+ * GPIO.  A low level that lasts more than PORT_PTT_HOLD_MS is a finger on the
+ * switch (a 0x00 byte holds the line 87 us, a short break a couple of
+ * milliseconds); while that lasts, the bytes and the framing errors the UART
+ * collects are drained, counted and thrown away, and the half frame the parser
+ * had is dropped.  On release the parser waits for the next end delimiter and
+ * everything is normal again.  The cost, and it is real, is that the frames the
+ * client sends while the operator keys are lost -- the counter in the status
+ * says how many.
+ */
+static volatile uint32_t rxLost;
+static uint32_t lostAtPress;
+static int appliedMode = -1;
+
+static uint32_t uartTakeLineErrors(void)
+{
+    /*
+     * Reading the line status clears the error bits on this UART, which is the
+     * only way to acknowledge them: overrun, parity, framing and break are
+     * counted as one event per read, which is what "the switch was holding the
+     * line when a byte was on its way" looks like from the outside.
+     */
+    uint32_t lsr = sys_read32(UART_BASE + UART_LSR);
+    uint32_t errors = 0;
+
+    if (lsr & LSR_OE)
+        errors++;
+    if (lsr & LSR_PE)
+        errors++;
+    if (lsr & LSR_FE)
+        errors++;
+    if (lsr & LSR_BI)
+        errors++;
+    return errors;
+}
+
+static void portApplyMode(uint8_t mode)
+{
+    const portPttPlan_t plan = port_ptt_plan(mode);
+
+    /* The owner of the pad is the point of the setting: UART2 RXD or a plain
+     * GPIO with its pull-up.  This also resets the detector. */
+    c62_portPadToUart(plan.padIsUart);
+
+    if (!plan.useProtocol) {
+        /*
+         * Nothing can arrive any more.  Close the session instead of leaving a
+         * client that thinks it is linked: it will time out either way, but the
+         * log says why, and the console gets the log back.
+         */
+        pc_proto_reset(&proto);
+        rxLost = 0;
+        lostAtPress = 0;
+    }
+
+    /* After the reset, so the line reaches the console even when a client was
+     * linked a moment ago. */
+    printk("port: mode %s, pad %s, PTT %s\n", settings_portModeName(mode),
+           plan.padIsUart ? "UART RX" : "GPIO",
+           plan.useDetector ? "sustained low > 30 ms"
+                            : (plan.useButton ? "button" : "not read"));
+}
+
 static void pcProtoMain(void *a, void *b, void *c)
 {
     (void)a;
@@ -662,22 +759,93 @@ static void pcProtoMain(void *a, void *b, void *c)
         loopSeq++;
         loopMs = k_uptime_get_32();
 
-        size_t n = 0;
-        while (n < sizeof(chunk) &&
-               (sys_read32(UART_BASE + UART_LSR) & LSR_DR)) {
-            chunk[n++] = (uint8_t)sys_read32(UART_BASE + UART_RBR);
+        /* Who owns the pad on this pass, and did that just change? */
+        const uint8_t mode = c62_portMode();
+        if ((int)mode != appliedMode) {
+            portApplyMode(mode);
+            appliedMode = (int)mode;
         }
-        if (n > 0) {
-            rxBytes += (uint32_t)n;
-            uint32_t frames = pc_proto_rx(&proto, chunk, n);
-            /* Anything valid keeps the link alive; the protocol instance
-             * counts the frames itself. */
-            if (frames > 0)
-                lastFrameMs = k_uptime_get_32();
-            /* A client that stops talking gives the console back. */
-            if (pc_proto_linked(&proto) &&
-                (k_uptime_get_32() - lastFrameMs) > PC_PROTO_IDLE_MS) {
-                pc_proto_reset(&proto);
+        const portPttPlan_t plan = port_ptt_plan(mode);
+        portPttState_t *ptt = c62_portPttState();
+
+        /*
+         * Sample the accessory switch every millisecond -- that is what makes
+         * the 30 ms rule work -- and act on its edges exactly once: the frame
+         * the parser was building at the moment of the press is garbage, and
+         * the counters of the press are reported on release.
+         */
+        bool held = false;
+        if (plan.useDetector) {
+            const bool changed = c62_portPttPoll();
+
+            held = port_ptt_pressed(ptt);
+
+            if (changed && held) {
+                lostAtPress = ptt->lost;
+                /* The line went low under the parser: drop the half frame and
+                 * wait for the next end delimiter (pc_proto_rxResync). */
+                pc_proto_rxResync(&proto);
+                printk("port: accessory PTT down, UART discarded until "
+                       "release\n");
+            } else if (changed) {
+                printk("port: accessory PTT up, held %lums, %lu bytes/%lu "
+                       "errors dropped (%lu since boot)\n",
+                       (unsigned long)ptt->lastPressMs,
+                       (unsigned long)(ptt->lost - lostAtPress),
+                       (unsigned long)ptt->glitches,
+                       (unsigned long)ptt->lost);
+                /* Whatever arrived as the key was released is already drained
+                 * below; the parser starts from a delimiter again. */
+                pc_proto_rxResync(&proto);
+            }
+        }
+
+        size_t n = 0;
+        if (plan.useProtocol && held) {
+            /*
+             * The pad is grounded by the switch: everything the UART sees is
+             * break and zeros.  Drain it so the FIFO cannot overflow into the
+             * first frame after the release, count it and parse none of it.
+             */
+            uint32_t dropped = 0;
+            while (n < sizeof(chunk) &&
+                   (sys_read32(UART_BASE + UART_LSR) & LSR_DR)) {
+                (void)sys_read32(UART_BASE + UART_RBR);
+                n++;
+                dropped++;
+            }
+            dropped += uartTakeLineErrors();
+            if (dropped > 0) {
+                rxLost += dropped;
+                rxBytes += (uint32_t)n;
+                port_ptt_noteLost(ptt, dropped);
+            }
+        } else if (plan.useProtocol) {
+            /* Framing errors with nobody pressing are the cable's business:
+             * count them so the supervisor can tell an idle line from a noisy
+             * one, and let the parser decide about the bytes. */
+            uint32_t errors = uartTakeLineErrors();
+            if (errors > 0) {
+                rxLost += errors;
+                port_ptt_noteLost(ptt, errors);
+            }
+
+            while (n < sizeof(chunk) &&
+                   (sys_read32(UART_BASE + UART_LSR) & LSR_DR)) {
+                chunk[n++] = (uint8_t)sys_read32(UART_BASE + UART_RBR);
+            }
+            if (n > 0) {
+                rxBytes += (uint32_t)n;
+                uint32_t frames = pc_proto_rx(&proto, chunk, n);
+                /* Anything valid keeps the link alive; the protocol instance
+                 * counts the frames itself. */
+                if (frames > 0)
+                    lastFrameMs = k_uptime_get_32();
+                /* A client that stops talking gives the console back. */
+                if (pc_proto_linked(&proto) &&
+                    (k_uptime_get_32() - lastFrameMs) > PC_PROTO_IDLE_MS) {
+                    pc_proto_reset(&proto);
+                }
             }
         }
 
@@ -753,13 +921,15 @@ void pc_proto_c62_supervise(void)
 
     stallReported = true;
     stallLastMs = now;
-    printk("pcproto: STALLED %lums | loop=%lu rx=%lu frames=%lu req=%lu "
-           "lastErr=%04x/%04x linked=%u\n",
+    printk("pcproto: STALLED %lums | loop=%lu rx=%lu lost=%lu frames=%lu "
+           "req=%lu lastErr=%04x/%04x linked=%u mode=%s\n",
            (unsigned long)(now - seen), (unsigned long)loopSeq,
-           (unsigned long)rxBytes, (unsigned long)proto.stats.frames,
+           (unsigned long)rxBytes, (unsigned long)rxLost,
+           (unsigned long)proto.stats.frames,
            (unsigned long)proto.stats.requests,
            (unsigned)proto.stats.lastError, (unsigned)proto.stats.lastErrorMsg,
-           (unsigned)pc_proto_linked(&proto));
+           (unsigned)pc_proto_linked(&proto),
+           settings_portModeName(c62_portMode()));
 }
 
 void pc_proto_c62_init(void)
@@ -771,10 +941,17 @@ void pc_proto_c62_init(void)
     pc_proto_init(&proto, &port);
     lastFrameMs = k_uptime_get_32();
 
-    /* GPIOA_15 carries the PTT button and UART2 RXD: the programming cable
-     * uses it as RX, so PTT is not available in this build (as with the
-     * remote control). */
-    IOMuxManager_PinConfigure(CSK_IOMUX_PAD_A, 15, CSK_IOMUX_FUNC_ALTER3);
+    /*
+     * GPIOA_15 is both the accessory PTT and UART2 RXD.  Who owns it is a
+     * setting (enum portMode, docs/ACCESSORY.md) and the settings are not
+     * loaded yet -- this runs before state_init() -- so the pad is routed to
+     * the UART here, which is what the port needs to be a port at all, and the
+     * loop below applies the operator's choice on its first pass, when the
+     * record has been read.  The extra pass is also what prints the mode on the
+     * boot log.
+     */
+    c62_portPadToUart(true);
+    appliedMode = -1;
     while (sys_read32(UART_BASE + UART_LSR) & LSR_DR)
         (void)sys_read32(UART_BASE + UART_RBR);
 

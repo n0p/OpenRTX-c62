@@ -332,6 +332,17 @@ enum pcProtoTag
     PC_TAG_PERIOD_MS    = 0x0088, /**< u16 subscription period, 0 off      */
     PC_TAG_CHANNEL_NAME = 0x0089, /**< str name of the selected channel    */
     PC_TAG_TX_POWER     = 0x008A, /**< u16 mW the radio would key with     */
+    /*
+     * The accessory port (docs/ACCESSORY.md): which mode owns the pad at the
+     * jack, whether its PTT switch is down right now, and how much of the
+     * serial stream that press has cost.  A client that sees portLost grow
+     * knows its own frames were the ones dropped, instead of blaming the cable.
+     */
+    PC_TAG_PORT_MODE    = 0x008B, /**< u8 enum portMode: 0 auto, 1 always,
+                                   *   2 never                             */
+    PC_TAG_PORT_PTT     = 0x008C, /**< u8 1 the accessory PTT is down      */
+    PC_TAG_PORT_LOST    = 0x008D, /**< u32 bytes/errors discarded while it
+                                   *   was down                           */
 
     PC_TAG_MSG_TRANSPORT= 0x00A0, /**< u8  enum msgTransport               */
     PC_TAG_MSG_PEER     = 0x00A1, /**< str peer address                    */
@@ -357,6 +368,7 @@ enum pcProtoTag
     PC_TAG_SET_DMR_TS     = 0x00C9, /**< u8  1 or 2                        */
     PC_TAG_SET_M17_CAN    = 0x00CA, /**< u8                                */
     PC_TAG_SET_M17_DEST   = 0x00CB, /**< str                               */
+    PC_TAG_SET_PC_PORT    = 0x00CC, /**< u8 enum portMode (docs/ACCESSORY.md) */
 
     /* Debug namespace */
     PC_TAG_TOKEN       = 0x00D0, /**< u32 session token for the writes    */
@@ -478,6 +490,15 @@ typedef struct
      */
     uint16_t txPower;
     char     txReason[24];
+    /**
+     * Accessory port (docs/ACCESSORY.md): the mode that owns the pad, whether
+     * its PTT switch is down at this instant and how many bytes the transport
+     * has discarded while it was.  Appended after the transmit block for the
+     * same reason: what came before keeps its offset.
+     */
+    uint8_t  portMode;   /**< enum portMode                                   */
+    uint8_t  portPtt;    /**< 1 the accessory PTT is down right now          */
+    uint32_t portLost;   /**< bytes and framing errors discarded             */
 }
 __attribute__((packed)) pcProtoDiag_t;
 
@@ -552,6 +573,16 @@ typedef struct
      */
     uint16_t txPower;
     char     txReason[24];    /**< "none" or why the keying is refused   */
+    /**
+     * Accessory port (docs/ACCESSORY.md), appended after the transmit block so
+     * a client that predates it still reads everything above where it was:
+     * the mode that owns the pad at the jack, and how many bytes and framing
+     * errors the transport has thrown away because the speaker-mic PTT held
+     * the line low.  A press costs the client frames; this is where it sees
+     * how many, instead of wondering why its requests went unanswered.
+     */
+    uint8_t  portMode;        /**< enum portMode: 0 auto, 1 always, 2 never */
+    uint32_t portLost;        /**< bytes/errors discarded, cumulative     */
 }
 pcProtoStatus_t;
 
@@ -618,6 +649,18 @@ void pc_proto_reset(pcProto_t *p);
  * @return the number of frames that passed the checks.
  */
 uint32_t pc_proto_rx(pcProto_t *p, const uint8_t *data, size_t len);
+
+/**
+ * Drop whatever has been received of a frame that has not ended yet.
+ *
+ * For a transport whose receive line was borrowed by something else -- on the
+ * C62 the accessory PTT grounds the same pad the UART reads, docs/ACCESSORY.md
+ * -- the bytes that arrive while that happens are neither a frame nor a
+ * preamble: the half frame the parser was building has to go, and the parser
+ * has to wait for the next end delimiter before it believes anything again.
+ * The session is untouched: a client that keeps talking is still linked.
+ */
+void pc_proto_rxResync(pcProto_t *p);
 
 /**
  * Time base and housekeeping: stamps the uptime in replies and emits the

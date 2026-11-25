@@ -330,11 +330,20 @@ relleno de alineación): `u8 zone`, `u16 index`, `name[8]`, `u32 rx`, `u32 tx`,
 | 0x0088 `PERIOD_MS` | u16 |
 | 0x0089 `CHANNEL_NAME` | str |
 | 0x008A `TX_POWER` | u16 mW con la que la radio transmitiría (la del canal, o el ajuste) |
+| 0x008B `PORT_MODE` | u8 `enum portMode`: 0 auto, 1 always, 2 never (docs/ACCESSORY.md) |
+| 0x008C `PORT_PTT` | u8, 1 si el pulsador del microaltavoz está abajo ahora mismo (solo en `DBG_INFO`) |
+| 0x008D `PORT_LOST` | u32 bytes y errores de tramado tirados porque el pulsador tenía el pad |
 | 0x00EF `TX_REASON` | str, `none` o por qué no transmitiría (docs/TX_SAFETY.md) |
 
 `TX_POWER` y `TX_REASON` viajan en **todo** estado (respuesta de `STATUS_GET` y
 eventos `EVT_STATUS`), y también en `DBG_INFO`: un PTT que no hace nada se
 diagnostica por el cable, sin abrir la radio.
+
+`PORT_MODE` y `PORT_LOST` viajan con el estado y con `DBG_INFO`; `PORT_PTT` solo
+en `DBG_INFO` (es un instante, no un estado que tenga sentido cachear). Son la
+respuesta a «el CPS se queda callado mientras alguien aprieta el PTT del
+microaltavoz»: el modo dice quién es dueño del pad y el contador, cuántas tramas
+costó. Todo el asunto está en `docs/ACCESSORY.md`.
 
 **Mensajes**: 0x00A0 transporte, 0x00A1 peer (str), 0x00A2 peer id (u32),
 0x00A3 texto, 0x00A4 estado, 0x00A5 flags, 0x00A6 no leídos, 0x00A7 bandeja,
@@ -632,8 +641,14 @@ suelta, el volcado se reanuda y el log vuelve al UART. La radio no se queda
 muda porque el PC se haya ido.
 
 El UART va a 115200 8N1, el mismo que el resto del firmware. El protocolo toma
-la línea RX del pad del PTT (GPIOA_15), así que en estas builds el PTT no está
-disponible, igual que con el control remoto.
+la línea RX del pad del PTT (GPIOA_15), que es **también el pulsador del
+microaltavoz** del accesorio. Quién manda en ese pad lo elige el operador en
+**Ajustes ▸ Radio ▸ Puerto PC** (`Auto` / `Always` / `Never`): con `Auto`, el
+pad sigue siendo UART RX y se lee además como GPIO, y un nivel bajo sostenido más
+de 30 ms se toma por el pulsador, descartando y contando lo que llegue mientras
+tanto; con `Always`, el cable manda y el pulsador no se lee (el comportamiento
+de siempre); con `Never`, el pad es GPIO y esta interfaz no existe. El estado lo
+cuenta en `PORT_MODE`/`PORT_PTT`/`PORT_LOST`; todo, en `docs/ACCESSORY.md`.
 
 ---
 

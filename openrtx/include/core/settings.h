@@ -49,8 +49,13 @@ extern "C" {
  *       bank record written before the channel editor knew the field.  Before
  *       this the VFO keyed at 0 mW: the PA enable lines went up and no RF
  *       came out, with nothing on the screen or in the log to say why.
+ *  - 8: the accessory port mode appended (settings_t.pc_port): whether the
+ *       pad at the accessory jack is the PC serial port, the speaker-mic PTT,
+ *       or both (docs/ACCESSORY.md).  It is the very last byte of the payload,
+ *       which is what makes a version 7 record a prefix of a version 8 one and
+ *       lets settings_record.c migrate it instead of dropping it.
  */
-#define SETTINGS_VERSION 7
+#define SETTINGS_VERSION 8
 
 typedef enum
 {
@@ -72,6 +77,36 @@ typedef enum
     TIMER_1H  = 15
 }
 display_timer_t;
+
+/**
+ * What the pad at the accessory/programming jack is used for.
+ *
+ * The jack carries the speaker-microphone and the programming cable at the
+ * same time: its PTT contact is GPIOA_15, which is also UART2 RXD.  The
+ * speaker and the microphone of the accessory are analog contacts of the jack
+ * and are never affected; what a mode chooses is who owns the switch line.
+ * docs/ACCESSORY.md has the whole story.
+ *
+ *  - AUTO:   the pad is UART2 RXD and the protocol has the cable, but the same
+ *            input is sampled as a GPIO: a low level sustained for more than
+ *            PORT_PTT_HOLD_MS is the accessory PTT, and the bytes that arrive
+ *            during that press are discarded and counted.  Works with a CPS
+ *            connected, at the cost of the frames sent while the key is down.
+ *  - ALWAYS: the pad is UART2 RXD only.  That is what every build did before
+ *            this setting: the protocol always works and the speaker-mic PTT
+ *            does not.  The menu says so while the value is being chosen.
+ *  - NEVER:  the pad is a plain GPIO with its pull-up and the accessory PTT is
+ *            100 % reliable; the serial protocol is not available at all.
+ *
+ * The numeric values are stored in flash: append only.
+ */
+typedef enum
+{
+    PORT_MODE_AUTO   = 0, /**< Protocol and PTT share the pad (default)      */
+    PORT_MODE_ALWAYS = 1, /**< The pad is the serial port, never the PTT     */
+    PORT_MODE_NEVER  = 2  /**< The pad is the PTT switch, no serial protocol */
+}
+portMode_t;
 
 typedef struct
 {
@@ -224,6 +259,15 @@ typedef struct
     uint16_t packet_slottime_ms;  // SLOTTIME: channel access slot
     uint16_t packet_maxframe;     // Longest frame accepted from the host
 #endif
+    /**
+     * Accessory port mode (enum portMode), docs/ACCESSORY.md.
+     *
+     * It has to be the LAST byte of settings_t: settings_record.c migrates a
+     * version 7 record -- which is this payload one byte shorter -- by loading
+     * the prefix and leaving this field at its default.  Anything appended
+     * after it in a later version repeats the same trick with its own size.
+     */
+    uint8_t  pc_port;             // enum portMode: who owns the accessory pad
 }
 __attribute__((packed)) settings_t;
 
@@ -339,6 +383,7 @@ static const settings_t default_settings =
     100,                          // 100 ms SLOTTIME
     330,                          // The AX.25 ceiling, FCS included
 #endif
+    PORT_MODE_AUTO,               // Accessory pad: protocol and PTT share it
 };
 
 /**
@@ -398,6 +443,19 @@ static inline bool settings_scanResumeValid(uint8_t r)
 {
     return r <= 2; /* carrier, timeout, hold */
 }
+
+/**
+ * True if m names one of the accessory port modes of enum portMode.  A record
+ * with anything else -- a corrupted byte, a value from a later firmware -- is
+ * refused by the loader instead of choosing a mode nobody asked for.
+ */
+static inline bool settings_portModeValid(uint8_t m)
+{
+    return m <= (uint8_t)PORT_MODE_NEVER;
+}
+
+/** "Auto", "Always", "Never": short name of a port mode, for the menu. */
+const char *settings_portModeName(uint8_t mode);
 
 /** "none", "group", "user": short name of a destination type, for menus. */
 const char *settings_dmrDestName(uint8_t type);
