@@ -149,6 +149,7 @@ target_sources(app
     openrtx/src/core/pc_proto_ops.c
     openrtx/src/core/pc_proto_dbg.c
     openrtx/src/rtx/rtx.cpp
+    openrtx/src/rtx/ModeArena.cpp
     openrtx/src/rtx/TxGuard.c
     openrtx/src/rtx/OpMode_FM.cpp
     openrtx/src/rtx/OpMode_Airband.cpp

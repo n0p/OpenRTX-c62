@@ -24,16 +24,22 @@
 #endif
 
 /* 30 ms per half buffer: room for libtetra's per-slot decoding */
-#define HALF_SAMPLES 1440
+#define HALF_SAMPLES TETRA_HALF_SAMPLES
 
 /* Samples dropped after starting or retuning: 0.5 s */
 #define SETTLE_SAMPLES (TETRA_DEMOD_IN_RATE / 2)
 
-/* Large state: static, there is only one TETRA mode */
-static int16_t baseband[2 * HALF_SAMPLES];
+/*
+ * The baseband block, the demodulator and the MAC state are in the mode's own
+ * object (struct tetraModeState, OpMode_TETRA.hpp), so they live in the block
+ * the modes share and die with the mode instead of sitting in .bss for the
+ * whole power on (docs/MEMORY.md). `st` is bound to that object here, which is
+ * what keeps the static helpers below unchanged.
+ */
+static struct tetraModeState *st = nullptr;
+
+/* Read and written once per symbol: PSRAM (core/psram_state.h) */
 static int8_t soft[HALF_SAMPLES * 3 / 4 + 8] PSRAM_STATE;
-static struct tetraDemod demod;
-static struct tetra_tmo_rx tmo;
 
 /* Diagnostics and remote control (see TetraStatus.h) */
 static uint32_t crcBase; /* CRC passes of earlier tmo contexts */
@@ -142,9 +148,9 @@ static void afcUpdate(void)
 
     /* Measure only while blocks decode: never steer on noise */
     long long now = getTick();
-    if (tetra_tmo_locked(&tmo) && (now - lastCrcTick) < AFC_CRC_RECENT_MS
-        && tetraDemod_phaseError(&demod) < AFC_ERROR_MAX) {
-        afcSum += tetraDemod_carrierOffset(&demod);
+    if (tetra_tmo_locked(&st->tmo) && (now - lastCrcTick) < AFC_CRC_RECENT_MS
+        && tetraDemod_phaseError(&st->demod) < AFC_ERROR_MAX) {
+        afcSum += tetraDemod_carrierOffset(&st->demod);
         afcCount++;
     }
 
@@ -202,21 +208,25 @@ OpMode_TETRA::OpMode_TETRA()
     , basebandPath(-1)
     , basebandId(-1)
 {
+    /* The mode's state, in the object: see docs/MEMORY.md */
+    st = &state;
 }
 
 OpMode_TETRA::~OpMode_TETRA()
 {
     disable();
+    /* The object is about to be recycled: no helper may touch it now */
+    st = nullptr;
 }
 
 void OpMode_TETRA::reset()
 {
     settle = SETTLE_SAMPLES;
-    tetraDemod_init(&demod);
+    tetraDemod_init(&st->demod);
 #ifdef CONFIG_TETRA_EQ_INIT
     static const float eqInit[TETRA_DEMOD_EQ_TAPS] = CONFIG_TETRA_EQ_INIT;
     if (eqSeed)
-        tetraDemod_setEqualizer(&demod, eqInit);
+        tetraDemod_setEqualizer(&st->demod, eqInit);
 #endif
 
     demodJumps = 0;
@@ -233,13 +243,13 @@ void OpMode_TETRA::reset()
  */
 void OpMode_TETRA::resync(bool overrun)
 {
-    crcBase += tetra_tmo_crc_ok(&tmo);
+    crcBase += tetra_tmo_crc_ok(&st->tmo);
 
     struct tetra_rx_config cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.cb = tetraStatus_onEvent;
     cfg.promiscuous = true;
-    tetra_tmo_init(&tmo, &cfg);
+    tetra_tmo_init(&st->tmo, &cfg);
     tetraStatus_lostSync(overrun);
     modeStats_resync(MS_MODE_TETRA);
 }
@@ -283,7 +293,7 @@ void OpMode_TETRA::disable()
 void OpMode_TETRA::startSampling()
 {
     basebandPath = audioPath_request(SOURCE_RTX, SINK_MCU, PRIO_RX);
-    basebandId = audioStream_start(basebandPath, baseband, 2 * HALF_SAMPLES,
+    basebandId = audioStream_start(basebandPath, st->baseband, 2 * HALF_SAMPLES,
                                    TETRA_DEMOD_IN_RATE,
                                    STREAM_INPUT | BUF_CIRC_DOUBLE);
 }
@@ -364,23 +374,23 @@ void OpMode_TETRA::update(rtxStatus_t *const rtx, const bool newCfg)
     }
 
     modeStats_blockStart(MS_MODE_TETRA);
-    size_t n = tetraDemod_process(&demod, block.data, block.len, soft);
+    size_t n = tetraDemod_process(&st->demod, block.data, block.len, soft);
 
     /* The demodulator followed a timing jump or re-acquired: resync too */
-    uint32_t jumps = tetraDemod_reacquisitions(&demod);
+    uint32_t jumps = tetraDemod_reacquisitions(&st->demod);
     if (jumps != demodJumps) {
         demodJumps = jumps;
         resync(false);
     }
 
-    tetra_tmo_push_soft(&tmo, soft, n);
+    tetra_tmo_push_soft(&st->tmo, soft, n);
     modeStats_block(MS_MODE_TETRA, block.data, block.len);
 
     /* Blocks decode: the demodulator keeps its lock */
-    uint32_t crc = crcBase + tetra_tmo_crc_ok(&tmo);
+    uint32_t crc = crcBase + tetra_tmo_crc_ok(&st->tmo);
     if (crc != lastCrc) {
         lastCrc = crc;
-        tetraDemod_signalOk(&demod);
+        tetraDemod_signalOk(&st->demod);
 #ifdef CONFIG_TETRA_AFC
         lastCrcTick = getTick();
 #endif
@@ -397,9 +407,9 @@ void OpMode_TETRA::update(rtxStatus_t *const rtx, const bool newCfg)
     modeStats_frames(MS_MODE_TETRA, sframes - statFrames);
     modeStats_badCrc(MS_MODE_TETRA, sbad - statBad);
     modeStats_valid(MS_MODE_TETRA, crc - statCrc);
-    modeStats_error(MS_MODE_TETRA, 10u * tetraDemod_phaseError(&demod));
+    modeStats_error(MS_MODE_TETRA, 10u * tetraDemod_phaseError(&st->demod));
     /* Timing loop: drift in samples at 144 kHz, one phase is 1/8 symbol */
-    modeStats_timing(MS_MODE_TETRA, (int32_t)(demod.drift * 125.0f), 125);
+    modeStats_timing(MS_MODE_TETRA, (int32_t)(st->demod.drift * 125.0f), 125);
     modeStats_rssi(MS_MODE_TETRA, (int)rtx_getRssi());
     statFrames = sframes;
     statBad = sbad;
@@ -409,8 +419,8 @@ void OpMode_TETRA::update(rtxStatus_t *const rtx, const bool newCfg)
     afcUpdate();
 #endif
 
-    tetraStatus_setDemod(tetraDemod_phaseError(&demod),
-                         tetraDemod_carrierOffset(&demod));
+    tetraStatus_setDemod(tetraDemod_phaseError(&st->demod),
+                         tetraDemod_carrierOffset(&st->demod));
 
     if (tetraStatus_sync())
         platform_ledOn(GREEN);
@@ -420,17 +430,17 @@ void OpMode_TETRA::update(rtxStatus_t *const rtx, const bool newCfg)
 
 void tetra_getDiag(struct tetraDiag *out)
 {
-    out->crcOk = crcBase + tetra_tmo_crc_ok(&tmo);
-    out->realigned = tetra_tmo_realigned(&tmo, NULL);
-    out->locked = tetra_tmo_locked(&tmo);
-    out->reacquired = demod.reacquired;
-    out->slips = demod.slips;
-    out->symbols = demod.symbols;
-    out->phaseErr = tetraDemod_phaseError(&demod);
-    out->carrierHz = tetraDemod_carrierOffset(&demod);
-    out->clockPpm = tetraDemod_clockOffset(&demod);
+    out->crcOk = crcBase + tetra_tmo_crc_ok(&st->tmo);
+    out->realigned = tetra_tmo_realigned(&st->tmo, NULL);
+    out->locked = tetra_tmo_locked(&st->tmo);
+    out->reacquired = st->demod.reacquired;
+    out->slips = st->demod.slips;
+    out->symbols = st->demod.symbols;
+    out->phaseErr = tetraDemod_phaseError(&st->demod);
+    out->carrierHz = tetraDemod_carrierOffset(&st->demod);
+    out->clockPpm = tetraDemod_clockOffset(&st->demod);
     out->eqSeed = eqSeed;
-    memcpy(out->eq, demod.eq, sizeof(out->eq));
+    memcpy(out->eq, st->demod.eq, sizeof(out->eq));
 }
 
 void tetra_requestReset(bool seedEqualizer)
