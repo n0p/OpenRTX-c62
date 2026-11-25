@@ -56,4 +56,17 @@ bool sdlEngine_ready();
  */
 keyboard_t sdlEngine_getKeys();
 
+/**
+ * Take a screenshot from the SDL thread and wait for it.
+ *
+ * The framebuffer lives in a texture owned by the SDL main loop, so the pixels
+ * cannot be read from another thread: this pushes the request and waits.
+ *
+ * @param path: destination file.
+ * @param png: true to write a PNG (only the simulator build), false for BMP.
+ * @param timeoutMs: how long to wait for the main loop, milliseconds.
+ * @return true when the file was written.
+ */
+bool sdlEngine_capture(const char *path, bool png, int timeoutMs);
+
 #endif /* SDL_ENGINE_H */

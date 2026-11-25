@@ -4,11 +4,18 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include <errno.h>
 #include <stdlib.h>
+#include <string.h>
 #include <pthread.h>
+#include <time.h>
 #include "core/state.h"
 #include "sdl_engine.h"
 #include "emulator.h"
+
+#ifdef PLATFORM_LINUX_SIM
+#include "sim_png.h"
+#endif
 
 chan_t fb_sync;              // Shared channel to receive frame buffer updates
 Uint32 SDL_Screenshot_Event; // Shared custom SDL event to request a screenshot
@@ -20,6 +27,23 @@ static SDL_Texture *displayTexture;
 
 static bool ready = false;  // Signal if the main loop is ready
 static keyboard_t sdl_keys; // Store the keyboard status
+
+/*
+ * One capture in flight.
+ *
+ * The framebuffer is a texture owned by the SDL thread, so a screenshot has to
+ * be taken from that thread. sdlEngine_capture() pushes the request and waits
+ * here for the answer; the main loop takes the lock only to publish the result,
+ * so it is never blocked by a client that is not waiting.
+ */
+static pthread_mutex_t capLock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  capCond;
+static bool capPending = false;
+static bool capDone    = false;
+static bool capResult  = false;
+static bool capPng     = false;
+static char capPath[512];
+static bool capCondReady = false;
 
 static bool sdk_key_code_to_key(SDL_Keycode sym, keyboard_t *key)
 {
@@ -117,7 +141,7 @@ static bool sdk_key_code_to_key(SDL_Keycode sym, keyboard_t *key)
     }
 }
 
-static int screenshot_display(const char *filename)
+static int screenshot_display(const char *filename, bool png)
 {
     /*
      * https://stackoverflow.com/a/48176678
@@ -210,15 +234,41 @@ static int screenshot_display(const char *filename)
     }
 
     /* Save result to an image */
-    st = SDL_SaveBMP(surf, filename);
+    if (png) {
+#ifdef PLATFORM_LINUX_SIM
+        /* The read pixels are RGBA32 in memory order R,G,B,A: pack them as RGB
+           for the PNG encoder. */
+        uint8_t *rgb = malloc((size_t)w * (size_t)h * 3);
+
+        if (rgb == NULL) {
+            err++;
+            goto cleanup;
+        }
+
+        const uint8_t *src = (const uint8_t *)pixels;
+        for (int i = 0; i < w * h; i++) {
+            rgb[i * 3 + 0] = src[i * 4 + 0];
+            rgb[i * 3 + 1] = src[i * 4 + 1];
+            rgb[i * 3 + 2] = src[i * 4 + 2];
+        }
+
+        st = sim_png_write(filename, rgb, w, h) ? 0 : -1;
+        free(rgb);
+#else
+        st = -1;
+        (void)surf;
+#endif
+    } else {
+        st = SDL_SaveBMP(surf, filename);
+    }
 
     if (st != 0) {
-        SDL_Log("Failed saving image: %s\n", SDL_GetError());
+        SDL_Log("Failed saving image: %s\n", filename);
         err++;
         goto cleanup;
     }
 
-    SDL_Log("Saved texture as BMP to \"%s\"\n", filename);
+    SDL_Log("Saved texture as %s to \"%s\"\n", png ? "PNG" : "BMP", filename);
 
 cleanup:
     SDL_FreeSurface(surf);
@@ -264,6 +314,16 @@ void sdlEngine_init()
     // Register SDL custom events to handle screenshot requests and backlight
     SDL_Screenshot_Event = SDL_RegisterEvents(2);
     SDL_Backlight_Event = SDL_Screenshot_Event + 1;
+
+    // The capture handshake needs its own condition variable
+    if (!capCondReady) {
+        pthread_condattr_t attr;
+        pthread_condattr_init(&attr);
+        pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+        pthread_cond_init(&capCond, &attr);
+        pthread_condattr_destroy(&attr);
+        capCondReady = true;
+    }
 
     chan_init(&fb_sync);
 
@@ -315,9 +375,21 @@ void sdlEngine_run()
             }
 
             if (ev.type == SDL_Screenshot_Event) {
-                char *filename = (char *)ev.user.data1;
-                screenshot_display(filename);
-                free(ev.user.data1);
+                char path[sizeof(capPath)];
+                bool png, ok;
+
+                pthread_mutex_lock(&capLock);
+                memcpy(path, capPath, sizeof(path));
+                png = capPng;
+                pthread_mutex_unlock(&capLock);
+
+                ok = screenshot_display(path, png) == 0;
+
+                pthread_mutex_lock(&capLock);
+                capResult = ok;
+                capDone   = true;
+                pthread_cond_broadcast(&capCond);
+                pthread_mutex_unlock(&capLock);
             } else if (ev.type == SDL_Backlight_Event) {
                 set_brightness(*((uint8_t *)ev.user.data1));
                 free(ev.user.data1);
@@ -358,6 +430,53 @@ bool sdlEngine_ready()
      * incurring in data races between threads.
      */
     return ready;
+}
+
+bool sdlEngine_capture(const char *path, bool png, int timeoutMs)
+{
+    if (path == NULL || !ready)
+        return false;
+
+    pthread_mutex_lock(&capLock);
+
+    if (capPending) {
+        pthread_mutex_unlock(&capLock);
+        return false;
+    }
+
+    snprintf(capPath, sizeof(capPath), "%s", path);
+    capPng     = png;
+    capDone    = false;
+    capResult  = false;
+    capPending = true;
+
+    SDL_Event e;
+    SDL_zero(e);
+    e.type = SDL_Screenshot_Event;
+    SDL_PushEvent(&e);
+
+    bool ok = false;
+    struct timespec deadline;
+    clock_gettime(CLOCK_MONOTONIC, &deadline);
+    deadline.tv_sec  += timeoutMs / 1000;
+    deadline.tv_nsec += (long)(timeoutMs % 1000) * 1000000L;
+    if (deadline.tv_nsec >= 1000000000L) {
+        deadline.tv_sec++;
+        deadline.tv_nsec -= 1000000000L;
+    }
+
+    while (!capDone && emulator_state.powerOff == false) {
+        if (pthread_cond_timedwait(&capCond, &capLock, &deadline)
+            == ETIMEDOUT)
+            break;
+    }
+
+    ok = capDone && capResult;
+    capPending = false;
+
+    pthread_mutex_unlock(&capLock);
+
+    return ok;
 }
 
 keyboard_t sdlEngine_getKeys()

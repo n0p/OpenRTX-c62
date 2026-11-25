@@ -150,6 +150,31 @@ uint8_t ui_lastClaim(void);
 /** How many blocks consumed the last key event: 1 when it is correct. */
 uint8_t ui_lastClaimCount(void);
 
+/**
+ * Passes of the drawing loop since power on.
+ *
+ * Counted whether or not the screen changed, so it advances at the UI frame
+ * rate (~40 Hz). The host simulator waits for it before reading a screen: see
+ * docs/SIMULATOR.md.
+ */
+uint32_t ui_frames(void);
+
+/**
+ * Key events queued and not yet dispatched by ui_updateFSM().
+ *
+ * A key press reaches the FSM through the keypad queue *and* the event queue,
+ * and the FSM dispatches one event per pass. The simulator waits for this to
+ * reach zero before it reads a screen, so that "no keys pending" means "the
+ * screen already shows what the keys did".
+ */
+uint8_t ui_pendingEvents(void);
+
+/**
+ * Payload of the last key event dispatched: bit 0 is the long press, the rest
+ * are the KEY_* bits of a kbd_msg_t.
+ */
+uint32_t ui_lastKeyEvent(void);
+
 enum SetRxTx
 {
     SET_RX = 0,

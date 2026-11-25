@@ -32,7 +32,9 @@
 #include <string.h>
 
 #include "core/packet_service.h"
+#include "protocols/KISS/kiss.h"
 #include "core/settings.h"
+#include "core/state.h"
 #include "protocols/DMR/DmrStatus.h"
 #include "protocols/TETRA/TetraStatus.h"
 
@@ -98,14 +100,26 @@ bool packet_service_enabled(void)
 
 void packet_service_setEnabled(bool on)
 {
+    /* The page reads settings_t, so the double has to write it: the real
+       service (core/packet_service.c) does the same, and a stub that only
+       keeps its own copy makes the page look broken on the host. */
     pkt.enabled = on;
+#ifdef CONFIG_KISS
+    state.settings.packet_enable = on;
+#endif
 }
 
 bool packet_service_setModem(uint8_t modem)
 {
     /* The real service bounds-checks against the modem registry; the host has
        no registry, and the page only walks 0..PKT_MODEM_COUNT-1 */
+    if (modem >= PKT_MODEM_COUNT)
+        return false;
+
     pkt.modem = modem;
+#ifdef CONFIG_KISS
+    state.settings.packet_modem = modem;
+#endif
     return true;
 }
 
@@ -113,6 +127,29 @@ void packet_service_setParam(uint8_t cmd, uint8_t value)
 {
     if (cmd < sizeof(pkt.params))
         pkt.params[cmd] = value;
+
+#ifdef CONFIG_KISS
+    switch (cmd)
+    {
+        case KISS_CMD_TXDELAY:
+            state.settings.packet_txdelay_ms = (uint16_t)value * 10u;
+            break;
+        case KISS_CMD_PERSIST:
+            state.settings.packet_persist = value;
+            break;
+        case KISS_CMD_SLOTTIME:
+            state.settings.packet_slottime_ms = (uint16_t)value * 10u;
+            break;
+        case KISS_CMD_TXTAIL:
+            state.settings.packet_txtail_ms = (uint16_t)value * 10u;
+            break;
+        case KISS_CMD_FULLDUP:
+            state.settings.packet_fulldup = (value != 0) ? 1 : 0;
+            break;
+        default:
+            break;
+    }
+#endif
 }
 
 void packet_service_status(packet_status_t *out)

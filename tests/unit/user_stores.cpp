@@ -278,6 +278,46 @@ TEST_CASE("Contact book add, edit, delete and reload", "[store][contacts]")
     REQUIRE(cstore_count() == 0);
 }
 
+TEST_CASE("A contact whose write fails is not added and says so",
+          "[store][contacts]")
+{
+    TestPort p;
+    cstore_bind(&p.ops);
+    cstore_forget();
+    REQUIRE(cstore_init() == 0);
+
+    cstore_contact_t c = {};
+    snprintf(c.call, sizeof(c.call), "EA5ABC-7");
+    snprintf(c.name, sizeof(c.name), "Pepe");
+    REQUIRE(cstore_add(&c) == 0);
+    REQUIRE(cstore_count() == 1);
+
+    /*
+     * The flash refuses the next save. cstore_add() used to keep the record in
+     * RAM and return -EIO anyway: the contact book then showed a contact that
+     * was never written, and it disappeared on the next power cycle. The list
+     * is what the operator believes, so a failed save must not change it.
+     */
+    p.flash.dead = true;
+
+    cstore_contact_t second = {};
+    snprintf(second.call, sizeof(second.call), "EA5DEF");
+    REQUIRE(cstore_add(&second) == -EIO);
+    REQUIRE(cstore_count() == 1);
+
+    /* The failed record is gone, not merely hidden */
+    cstore_contact_t got;
+    REQUIRE(cstore_get(1, &got) < 0);
+    REQUIRE(cstore_findCall("EA5DEF") == CSTORE_NONE);
+
+    /* And the first one is still the one on flash */
+    cstore_forget();
+    p.flash.dead = false;
+    REQUIRE(cstore_init() == 0);
+    REQUIRE(cstore_count() == 1);
+    REQUIRE(cstore_findCall("EA5ABC-7") == 0);
+}
+
 TEST_CASE("Message store keeps inbox, outbox, states and draft",
           "[store][messages]")
 {

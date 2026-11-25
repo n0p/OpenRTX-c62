@@ -335,7 +335,15 @@ bool chstore_valid(const chstore_channel_t *ch)
         ch->mode != OPMODE_DSTAR)
         return false;
 
-    if (ch->bandwidth != BW_12_5 && ch->bandwidth != BW_25)
+    /*
+     * 6.25 kHz is a real channel spacing of this radio: the FM and NXDN quick
+     * menus offer it (docs/UI.md) and the editor carries it into the record, so
+     * refusing it here refused the channel with a message that did not say why
+     * -- "INVALID CHANNEL" for a bandwidth the radio itself had just set. The
+     * field is a byte, so the record has always been able to carry it.
+     */
+    if (ch->bandwidth != BW_12_5 && ch->bandwidth != BW_25
+        && ch->bandwidth != BW_6_25)
         return false;
 
     if (ch->power == 0 || ch->power > 5000)

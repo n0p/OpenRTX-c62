@@ -96,6 +96,17 @@ VFO and the user adds channels from the radio (the factory codeplug is never
 imported). `tests/unit/channel_store.cpp` walks a power cut across a whole save
 (erase included) and checks the invariant at every step.
 
+Tuning a channel is a memory operation, not a VFO one: `tuneChannel()` sets
+`state.channel`, `state.channel_index`, `state.tuner_mode = CH` and the screen
+to `MAIN_MEM` (which draws the name and the index), and keeps the VFO the
+operator was on in `state.vfo_channel` so the way back is the way back. The PC
+protocol reports the channel only when `tuner_mode` is not `VFO`, so leaving it
+at VFO hid the channel from a connected client as well.
+
+A record is valid with `BW_12_5`, `BW_25` or `BW_6_25`: the FM and NXDN quick
+menus walk the three and the editor carries the radio's bandwidth into the new
+channel, so a 6.25 kHz channel has to be storable (`chstore_valid()`).
+
 Erasing and rewriting 8 KiB costs tens of milliseconds, so a channel *tune*
 does not write immediately: the new `last_used` index is only flagged, and
 `chstore_task()` (called from `state_task()`, 100 ms cadence) writes it after
@@ -149,7 +160,7 @@ screen.
 | UP / DOWN | move the selection | previous / next field |
 | UP / DOWN (field being edited) | | previous / next value, long press moves a coarser digit |
 | LEFT / RIGHT | | move inside the name or the frequency |
-| green (ENTER) | tune the channel and close | enter / leave the field |
+| green (ENTER) | tune the channel, close and go to `MAIN_MEM` | enter / leave the field |
 | P1 (F1) | new channel, copied from the selection or the VFO | |
 | P2 (F2) | edit the selected channel; long press deletes | save |
 | red (ESC) | close | cancel, or leave the field |

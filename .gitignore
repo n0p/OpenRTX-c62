@@ -107,3 +107,7 @@ tests/host/*/build/
 # Python bytecode of the reference client
 __pycache__/
 *.pyc
+
+# Host simulator: the settings record of a run and the user store image
+.emulator_userstore.img
+/sim-tour/

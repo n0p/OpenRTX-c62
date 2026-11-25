@@ -22,6 +22,16 @@
 
 #include "qrcode.h"
 
+/*
+ * The simulator's frame recorder (docs/SIMULATOR.md): the text a screen draws,
+ * kept as text so that a script can read a screen without the framebuffer. The
+ * call below compiles to nothing in every firmware build, which does not define
+ * UI_CAPTURE.
+ */
+#ifdef UI_CAPTURE
+#include "core/gfx_capture.h"
+#endif
+
 #include "fonts/adafruit/gfxfont.h"
 #include "fonts/adafruit/TomThumb.h"
 #include "fonts/adafruit/FreeSans6pt7b.h"
@@ -521,6 +531,12 @@ point_t gfx_printBufferClipped(point_t start, fontSize_t size,
                                int16_t clip_top_y, int16_t clip_bot_y)
 {
     GFXfont f = fonts[size];
+
+#ifdef UI_CAPTURE
+    /* Recorded before the clipping walk: the dump wants the string the screen
+       asked for, not the part of it that fitted on the panel. */
+    gfx_capture_text(start, size, alignment, color, buf);
+#endif
 
     size_t len = strlen(buf);
 

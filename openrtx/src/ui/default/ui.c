@@ -87,6 +87,10 @@
 #include "core/vfo_search_service.h"
 #endif
 
+#ifdef UI_CAPTURE
+#include "core/gfx_capture.h"
+#endif
+
 /* UI main screen functions, their implementation is in "ui_main.c" */
 extern void _ui_drawMainBackground();
 extern void _ui_drawMainTop(ui_state_t* ui_state);
@@ -381,6 +385,23 @@ bool ui_edit_mode(void)
 }
 
 /*
+ * Passes of the drawing loop, counted whether or not the screen changed.
+ *
+ * The simulator's control channel waits for this to advance before it reads a
+ * screen or takes a picture (docs/SIMULATOR.md): a key press reaches the UI
+ * thread asynchronously, and "the UI has run at least twice since the key was
+ * queued" is what makes a dump describe the screen after the key and not
+ * before it. It costs one store per pass on the radio.
+ */
+static volatile uint32_t frameCount;
+
+uint32_t ui_frames(void)
+{
+    return frameCount;
+}
+
+
+/*
  * Set by code that changes the radio configuration outside the UI FSM (the
  * quick menu setters, the remote control) so that the UI thread sends it to
  * the rtx thread. Declared in core/ui.h.
@@ -412,6 +433,25 @@ static bool       searchMsgShown;    ///< A stop reason is on screen
 static uint8_t evQueue_rdPos;
 static uint8_t evQueue_wrPos;
 static event_t evQueue[MAX_NUM_EVENTS];
+
+uint8_t ui_pendingEvents(void)
+{
+    return (uint8_t)((evQueue_wrPos + MAX_NUM_EVENTS - evQueue_rdPos)
+                     % MAX_NUM_EVENTS);
+}
+
+/*
+ * The last key event the FSM dispatched, as the keypad delivered it: the keys
+ * and whether it was the long press. The simulator's dump shows it, because
+ * "the key arrived as a short press" and "the key never arrived" look the same
+ * on the screen and are two very different defects (docs/SIMULATOR.md).
+ */
+static volatile uint32_t lastKeyEvent = 0;
+
+uint32_t ui_lastKeyEvent(void)
+{
+    return lastKeyEvent;
+}
 
 
 static void _ui_calculateLayout(layout_t *layout)
@@ -1900,6 +1940,8 @@ void ui_updateFSM(bool *sync_rtx)
     {
         kbd_msg_t msg;
         msg.value = event.payload;
+        if (msg.keys != 0)
+            lastKeyEvent = event.payload;
         bool f1Handled = false;
         enum vpQueueFlags queueFlags = vp_getVoiceLevelQueueFlags();
 
@@ -1967,6 +2009,42 @@ void ui_updateFSM(bool *sync_rtx)
             KEY_CLAIM(UI_CLAIM_UNLOCK);
             return;
         }
+
+#ifdef CONFIG_APRS
+        /*
+         * Entry point to the APRS screens, and the one deliberate exception to
+         * the key map: on the FM main screen a long press of P2 opens them. In
+         * FM that long press used to open the macro grid; the side key (MONI)
+         * still does, short or long, so nothing is lost. Everywhere else P2
+         * keeps its meaning: short opens the quick menu, long opens the macro
+         * grid, and nothing about APRS is reachable by accident.
+         *
+         * This has to be decided *before* the popup, and it has to close the
+         * popup: the keypad reports the press and the long press as two
+         * events, so the popup is already open -- it opens on the press edge --
+         * by the time the long press arrives, and its handler takes every key
+         * while it is up. That is why P2 held on the FM main screen only
+         * latched the popup, and the station list was unreachable from the
+         * keypad (tests/unit/ui_aprs_entry.cpp presses the two events in the
+         * order the keypad delivers them).
+         */
+        if (((state.ui_screen == MAIN_VFO) || (state.ui_screen == MAIN_MEM))
+            && (state.channel.mode == OPMODE_FM)
+            && (msg.keys & KEY_F2) && msg.long_press
+            && !ui_state.input_locked && !ui_state.edit_mode
+            && !ui_channels_isOpen())
+        {
+            if (qm_state.open)
+                qm_close();
+
+            ui_aprs_enter();
+            state.txDisable = true;
+            *sync_rtx = true;
+            redraw_needed = true;
+            KEY_CLAIM(UI_CLAIM_APRS_ENTER);
+            return;
+        }
+#endif /* CONFIG_APRS */
 
         /*
          * Contextual quick menu (P2, KEY_F2). Short press opens the popup on
@@ -2101,31 +2179,6 @@ void ui_updateFSM(bool *sync_rtx)
             KEY_CLAIM(UI_CLAIM_ZONES);
             return;
         }
-
-#ifdef CONFIG_APRS
-        /*
-         * Entry point, and the one deliberate exception to the key map: on the
-         * FM main screen a long press of P2 opens the APRS screens. In FM that
-         * long press used to open the macro grid; the side key (MONI) still
-         * does, short or long, so nothing is lost. Everywhere else P2 keeps
-         * its meaning: short opens the quick menu, long opens the macro grid.
-         * Long press on purpose, so that nothing about APRS is reachable by
-         * accident, and so that the short press stays with the quick menu.
-         */
-        if (((state.ui_screen == MAIN_VFO) || (state.ui_screen == MAIN_MEM))
-            && (state.channel.mode == OPMODE_FM)
-            && (msg.keys & KEY_F2) && msg.long_press
-            && !ui_state.input_locked && !ui_state.edit_mode
-            && !ui_channels_isOpen())
-        {
-            ui_aprs_enter();
-            state.txDisable = true;
-            *sync_rtx = true;
-            redraw_needed = true;
-            KEY_CLAIM(UI_CLAIM_APRS_ENTER);
-            return;
-        }
-#endif /* CONFIG_APRS */
 
         // If MONI is pressed, activate MACRO functions; P2 long keeps the
         // legacy 3x3 grid as its shortcut everywhere APRS does not claim it
@@ -3692,8 +3745,15 @@ void ui_updateFSM(bool *sync_rtx)
 
 bool ui_updateGUI()
 {
+    frameCount++;
+
     if(redraw_needed == false)
         return false;
+
+#ifdef UI_CAPTURE
+    /* A new frame of the simulator's recorder (core/gfx_capture.h) */
+    gfx_capture_begin();
+#endif
 
     if(!layout_ready)
     {
@@ -3708,12 +3768,18 @@ bool ui_updateGUI()
     if(ui_channels_isOpen())
     {
         ui_channels_draw();
+#ifdef UI_CAPTURE
+        gfx_capture_commit();
+#endif
         return true;
     }
     // Zone browser draws itself, with its own header and hint bar
     if(ui_zones_isOpen())
     {
         ui_zones_draw();
+#ifdef UI_CAPTURE
+        gfx_capture_commit();
+#endif
         return true;
     }
     /*
@@ -3889,6 +3955,10 @@ bool ui_updateGUI()
         /* Contextual key hints, in the row reserved above the screen bottom */
         ui_hints_draw_for_screen(last_state.ui_screen);
     }
+
+#ifdef UI_CAPTURE
+    gfx_capture_commit();
+#endif
 
     redraw_needed = false;
     return true;
