@@ -498,7 +498,7 @@ capabilities channels contacts messages settings zones events chan_block
              msg_send settings_fields zone_import debug
 channels     12  (bank format v2)
 contacts     3
-settings     v5, 214 bytes
+settings     v6, 210 bytes
 last used    4
 debug token  0x9c4a1f02
 

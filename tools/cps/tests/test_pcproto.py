@@ -97,7 +97,7 @@ class RadioTest(unittest.TestCase):
         self.assertTrue(h.u32(P.T_CAPS) & P.CAP_EVENTS)
         self.assertEqual(bool(h.u32(P.T_CAPS) & P.CAP_DEBUG), self.expect_debug)
         self.assertEqual(h.u16(P.T_CHCOUNT), 2)
-        self.assertEqual(h.u16(P.T_SETTINGS_VER), 5)
+        self.assertEqual(h.u16(P.T_SETTINGS_VER), 6)
         if self.expect_debug:
             self.assertNotEqual(self.link.token, 0)
         else:
@@ -199,7 +199,7 @@ class RadioTest(unittest.TestCase):
     def test_settings_record_and_fields(self):
         self.link.connect()
         rec = self.link.settings_record()
-        self.assertEqual(rec["version"], 5)
+        self.assertEqual(rec["version"], 6)
         self.assertEqual(len(rec["data"]), rec["size"])
         req = (P.tlv_str(P.T_SET_CALLSIGN, "EA5TEST") +
                P.tlv_u8(P.T_SET_SQLLEVEL, 5) +
