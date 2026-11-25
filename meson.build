@@ -928,8 +928,18 @@ sim_src = linux_default_src + [
 # already turns on the screens of the modes that need an engine
 # (UI_TEST_M17/NXDN/DPMR/P25/YSF/DSTAR/DMR/TETRA). CONFIG_APRS and CONFIG_KISS
 # are the two the C62's Kconfig builds (platform/targets/c62/Kconfig.board).
-sim_def = ['-DPLATFORM_LINUX_SIM', '-DUI_CAPTURE',
-           '-DCONFIG_APRS', '-DCONFIG_KISS']
+#
+# CONFIG_DMR_TX is here, and only here: the C62 image transmits DMR, so the
+# simulator has to show the radio's DMR screens and not a receive-only variant
+# of them (the mode is marked TX in the tools menu, the frequency entry asks for
+# Rx and Tx, PTT is no longer refused). It is *not* in linux_default_def on
+# purpose: that would put it in every test binary, and with it
+# opmode_canTransmit(DMR) and the DMR row of the mode tests would stop
+# describing the receive-only build they were written for. Nothing of the
+# encoder is pulled in -- the host build has no DMR modem sources -- so what
+# changes is the UI and the status module only.
+sim_def = ['-DPLATFORM_LINUX_SIM', '-DUI_CAPTURE', '-DSIM_INJECT',
+           '-DCONFIG_APRS', '-DCONFIG_KISS', '-DCONFIG_DMR_TX']
 
 sim_c_args   = linux_c_args + sim_def
 sim_cpp_args = linux_cpp_args + sim_def
@@ -2133,6 +2143,7 @@ if python3.found() and zlib_dep.found()
        depends : openrtx_c62_sim,
        env : ['OPENRTX_SIM_BIN=' + openrtx_c62_sim.full_path()],
        timeout : 600)
+
 endif
 
 # The PC protocol's own harness (tests/host/pc_proto_host): three device builds

@@ -555,13 +555,15 @@ inserted after the third digit. `FREQ_DIGITS` is 8 and
 `FREQ_DIGIT_RESOLUTION` is 10, both in `ui_default.h`.
 
 Green is **Set**: it applies what has been typed and returns to the VFO, even
-if the field has not reached its eighth digit. In FM and M17 there are two
+if the field has not reached its eighth digit. In FM, M17 and DMR there are two
 fields, RX and TX: the eighth RX digit moves to the TX field, UP/DOWN switch
 between them at any time, and an empty TX field takes a copy of RX, which is
 what makes a simplex entry a single frequency. In a receive-only mode
-(`opmode_canTransmit()` false: TETRA, DMR) there is a single frequency. A
-frequency outside the tuning range is not silently dropped: the radio says so
-and stays in the input screen.
+(`opmode_canTransmit()` false: TETRA, and DMR only in a build without
+`CONFIG_DMR_TX`) there is a single frequency and the eighth digit applies it.
+A frequency outside the tuning range is not silently dropped: the radio says
+so and stays in the input screen. The simulator's tour asserts both shapes, one
+against the other (`phase_dmr_tx`, docs/SIMULATOR.md).
 
 Until the fourth pass green did something else when the RX field was being
 edited: it moved to the TX field and applied nothing, so "I type the frequency
@@ -765,6 +767,14 @@ upstream leftovers: no entry of `menu_items[]` leads to them and `backup.c` need
 the SPI flash of the MD-3x0 family. `MENU_BACKUP_RESTORE` used to walk itself
 with `settings_num` (13) instead of `backup_restore_num` (2), which would have
 run the cursor past the end of a two-row list; it uses the right count now.
+
+The same five are declared in the simulator tour's `UNREACHABLE` list
+(`tools/simulator/tour.py`) and `tests/unit/sim_coverage.cpp` proves they are
+still unreachable: it walks the UI with every key and fails if one of them
+answers. What the simulator's tour adds to this audit is the *drawn* interface:
+one PNG and one text dump per screen, the rows a screen really printed, the
+values that change, and a hard check that the list of screens it covers is the
+one the firmware has (docs/SIMULATOR.md, "The coverage contract").
 
 ## What the walk found
 

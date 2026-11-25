@@ -53,6 +53,32 @@ bool aprs_rxBegin(void);
 void aprs_rxEnd(void);
 
 /**
+ * Our station address: the plaintext callsign of the settings plus the APRS
+ * SSID, in AX.25 form ("N0CALL-9", or "N0CALL" for SSID 0).
+ *
+ * It is what a received frame is compared against to drop our own packets and
+ * what an incoming message must be addressed to, so anything that has to know
+ * "who are we on the air" asks here instead of rebuilding the string.
+ */
+void aprs_ownCallsign(char *out, size_t cap);
+
+#ifdef SIM_INJECT
+/**
+ * Feed one received AX.25 frame to the service, as the demodulator would.
+ *
+ * The simulator's control channel uses it to put a station on the list and a
+ * message in the mailbox without a transmitter on the desk
+ * (docs/SIMULATOR.md, `inject`). It goes through the same path as the air:
+ * our own packets are dropped, the station list is updated, a message
+ * addressed to aprs_ownCallsign() lands in the mailbox and is acknowledged.
+ *
+ * @param nowMs: uptime in milliseconds, as the RX poll would pass it.
+ * @return false when the frame does not parse as an AX.25 UI frame.
+ */
+bool aprs_sim_rxFrame(const uint8_t *frame, size_t len, uint32_t nowMs);
+#endif
+
+/**
  * Wait for one block of discriminator audio and demodulate it. Blocking, and
  * it must only be called while the tap is open: OpMode_FM calls it from its
  * update loop, which is what paces the mode while decoding.

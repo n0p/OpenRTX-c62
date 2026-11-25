@@ -59,13 +59,15 @@ Environment:
 | `OPENRTX_SIM_HEADLESS` | read commands from stdin (any value but `0`) |
 | `OPENRTX_SIM_SOCKET` | create this UNIX socket and serve one client at a time |
 | `OPENRTX_SIM_SHOTS` | directory for auto-numbered screenshots (`shot-0001.png`) |
-| `OPENRTX_SIM_STORE` | file holding the channel bank and the contact book (default `.emulator_userstore.img`) |
+| `OPENRTX_SIM_STORE` | file holding the channel bank, the contact book and the message store (default `.emulator_userstore.img`) |
 | `XDG_STATE_HOME` | where the settings record lives (`$XDG_STATE_HOME/OpenRTX/state.bin`) |
 | `SDL_VIDEODRIVER=dummy` | no window |
 
 The last two matter for a test: the settings record and the user store are
 *state*, and a run that reuses them starts from whatever the previous run left
-behind. `tools/simulator/tour.py` gives itself a temporary directory for both.
+behind. `tools/simulator/tour.py` gives itself a temporary directory for both,
+creates it empty, and asserts on the first screen that the radio it got has no
+channel, no contact and no channel name.
 
 Without `OPENRTX_SIM_HEADLESS` and `OPENRTX_SIM_SOCKET` the emulator keeps the
 readline shell it always had (`key`, `screenshot`, `sleep`, `show`, `quit`).
@@ -98,6 +100,9 @@ client reads until `#begin`, then until `#end`, and ignores everything else.
 | `volume <N\|+N\|-N>` | the analog volume pot, 0..255 |
 | `knob left\|right` | `KNOB_LEFT` / `KNOB_RIGHT` events |
 | `rssi <f>`, `vbat <f>`, `mic <f>`, `channel <f>` | the emulated front end |
+| `inject aprs-station <CALL> <LAT> <LON> <COMMENT>` | one APRS position heard on the air |
+| `inject aprs-message <FROM> <TEXT>` | one APRS message addressed to this station |
+| `inject message <SRC> <TEXT>` | one message in the shared inbox |
 | `screenshot [file]` | PNG of the screen; auto-numbered without a name |
 | `dump [text\|json]` | the screen and the radio |
 | `sync` | wait until the UI has consumed every key and drawn |
@@ -109,6 +114,22 @@ Key names are the radio's: `GREEN` (`KEY_ENTER`), `RED` (`KEY_ESC`), `P1`
 (`KEY_F1`), `P2` (`KEY_F2`), `SIDE` (`KEY_MONI`), `UP`, `DOWN`, `LEFT`,
 `RIGHT`, `0`..`9`, `STAR`, `HASH`, `KNOB_LEFT`, `KNOB_RIGHT`. The `KEY_` prefix
 is optional.
+
+### Filling the radio without a receiver
+
+A screen that only exists once something has been received -- a station, a
+message -- cannot be reached from an empty store, and an empty store is what a
+reproducible run starts from. `inject` puts a packet on the service's own
+receive path (`core/aprs_service.c`, `aprs_sim_rxFrame()`, which is compiled
+only in the simulator): our own packets are dropped, the station list is
+updated, a message addressed to `aprs_ownCallsign()` lands in the mailbox and
+is acknowledged. Nothing is written into the UI.
+
+```sh
+inject aprs-station EA5ABC 38.87 -0.07 Bench station   # lat/lon: 38.87 or 3852.00N
+inject aprs-message EA5XYZ hola desde el aire          # to N0CALL-0 by default
+inject message 1234 hola                               # a message in the inbox
+```
 
 A short press is two entries in the keypad queue (press, release); a long press
 is the same key *held* for 700 ms, which is why `hold` re-feeds the queue: the
@@ -191,26 +212,48 @@ python3 tools/simulator/tour.py --out /tmp/tour
 
 or, from a configured build, `meson test -C build_sim "Simulator Menu Tour"`.
 
-It walks 194 screens and writes a PNG plus a text dump per screen: the main
-screen, the frequency entry, all eleven modes (with the AM page and its popup),
-the P2 popup of every mode (every row selected, every editable value changed),
-the top menu and every row of it, the eighteen Settings pages including the
-per-mode pages, the tools menu of P1 held down (its five rows walked, the row
-labels and values checked, the mode submenu opened, walked and left, and the
-mode applied with green), the channel bank (create, edit the frequency, save,
-tune, open the stored record again), the contact book (create, save, reopen), the messages
-(inbox, sent, composer, typing), the zone browser (list, entries, tune), APRS
-(station list with P2 held, setup page), the packet modem (configuration and
-counters) and the spectrum analyser.
+It walks 282 screens and writes a PNG plus a text dump per screen: the main
+screen, the frequency entry, the top menu and every row of it, the eighteen
+Settings pages (and the clock's digit entry), **each of the eleven modes one by
+one** -- its main screen, its P2 popup with every row selectable and a value
+edited, its own Settings page with all of its rows, and out again -- the FM
+popup in depth (every editable value, LOCK and the red held down that unlocks
+it), the DMR transmit screens (the two-step Rx/Tx entry, against TETRA's
+single one), the tools menu of P1 held down (its five rows walked, the row
+labels and values checked, the mode submenu with the TX/RX mark of all eleven
+modes, opened, walked and applied), the channel bank (create, edit the
+frequency, save, tune, open the stored record again), the contact book (create,
+save, reopen), the messages (inbox, a received message, the view, the
+composer, typing, SEND and the delivery page, the sent folder), the zone
+browser (list, entries, tune), APRS (station list with P2 held, a station's
+detail, the APRS inbox, a message, the reply editor, the setup page), the
+packet modem (configuration and counters), the spectrum analyser, and the low
+battery screen.
 
-It fails — with the step, the screen and the reason — when
+It fails -- with the step, the screen and the reason -- when
 
 - a screen comes out blank (ink below 0.5 % or no text at all);
 - a row of a list or of the popup cannot be selected;
 - a value that should be editable does not change when its key is pressed;
 - a key press is claimed by no block of the UI (`claim == 0`, the "deaf
   screen" defect);
-- after leaving a screen, the main screen no longer answers the keys.
+- after leaving a screen, the main screen no longer answers the keys;
+- the firmware draws a row, a menu or a mode that the tour does not declare,
+  or a declared screen was not visited.
+
+### The coverage it declares
+
+The constants at the top of `tour.py` are the declaration: `MODES` (the eleven
+modes with their quick menu rows, TX/RX and Settings page), `MODE_ORDER`,
+`TOP_MENU`, `SETTINGS_PAGES`, `SCREENS` (every screen walked) and
+`UNREACHABLE` (the screens the enum has and no key reaches, each with its
+reason). The tour checks the declaration against what the firmware draws while
+it runs, and `tests/unit/sim_coverage.cpp` checks it against what the firmware
+registers. See "The coverage contract" below.
+
+Both directions are enforced, so the list cannot rot in silence: a row added to
+a table changes what the popup draws (`... has [...], the coverage declares
+[...]`), and a screen walked without being declared is a failure too.
 
 ### Adding a step
 
@@ -219,10 +262,11 @@ Steps are methods of `Tour`. The helpers do the bookkeeping:
 ```python
 def phase_spectrum(self):
     self.step_name = "spectrum"
+    self.goto_mode("FM")
     self.home()                       # red until the main screen
     if self.qm_goto("ESPECTRO"):      # open the popup and green on that row
         d = self.capture("spectrum", screen="SPECTRUM")
-        self.check(any("ESPECTRO" in l["text"] for l in d["lines"]),
+        self.check("ESPECTRO" in self.text_of(d),
                    "the analyser is not on the screen")
         self.key("RED")
     self.home()
@@ -234,6 +278,9 @@ writes both, and checks the screen name, the ink and that every string in
 `need` appears on the screen. `self.check()` records a failure and keeps going,
 so one run reports everything; `self.finding()` records a firmware issue that
 the tour does not fail on.
+
+A new screen goes in two places: a step that walks it, and its name in
+`SCREENS`. Nothing else -- if you forget, `Simulator Coverage` says which one.
 
 ## Known pending issues
 
@@ -250,6 +297,17 @@ Found by the tour and left alone because they are cosmetic or need a decision:
   CHANNEL". A save refused for the colour code or the power says nothing.
 - **`state.tuner_mode` is only written by the CPS path and by the scanner**;
   other screens that tune a channel do not set it. The bank does now.
+- **Banks and Channels of the top menu draw nothing on the host**: they read
+  the classic codeplug (`cps_readBankHeader`, `cps_readChannel`), which the
+  emulator has no image of. The tour opens both and says they are empty; the
+  in-radio bank of the tools menu is the one with content.
+- **The TETRA Settings page is one row** (AFC) while the TETRA popup has
+  thirteen. It is not a defect of the tour: `_ui_drawSettingsTetra` was written
+  by hand and only ever had the one row.
+- **A receive-only mode applies the typed frequency at the eighth digit** while
+  a mode with a transmitter asks for Rx and then Tx and applies at the
+  sixteenth; the tour asserts both, and it is the only place the difference is
+  visible on a host with no PA.
 
 ## What this does not cover
 
@@ -259,3 +317,11 @@ whether the demodulator decodes, or whether a driver talks to the hardware —
 `docs/BENCH.md` and the QEMU tests are for that. What it does cover is the part
 that the operator touches: every screen, every key, every menu and every value,
 without a radio on the desk.
+
+That is also the limit of the DMR transmit coverage: the simulator is built
+with `CONFIG_DMR_TX` (the image transmits DMR), so the mode is marked TX, the
+PTT is not blocked and the frequency entry asks for the two frequencies, but
+pressing the PTT on the host keys nothing — there is no transmitter to key. The
+DMR bursts themselves are covered by `DMR TX Host Sequence`
+(tests/host/dmr_tx_host), which runs the mode's own slot machine and decodes the
+baseband with the reference receiver.

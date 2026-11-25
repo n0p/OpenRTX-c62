@@ -94,6 +94,11 @@ static void ownCallsign(char *out, size_t cap)
              (unsigned)(state.settings.aprs_ssid & 0x0Fu));
 }
 
+void aprs_ownCallsign(char *out, size_t cap)
+{
+    ownCallsign(out, cap);
+}
+
 static aprs_pos_t localPosition(void)
 {
     aprs_pos_t p;
@@ -245,6 +250,30 @@ static void onFrame(const uint8_t *frame, size_t len, void *user)
 }
 
 /* --------------------------------------------------------------- RX API --- */
+
+#ifdef SIM_INJECT
+bool aprs_sim_rxFrame(const uint8_t *frame, size_t len, uint32_t nowMs)
+{
+    /* The frame the simulator hands over is the one the deframer would have
+       delivered: addresses, control, PID, information field. onFrame() parses
+       it again so that there is one path for the air and for the bench. */
+    ax25_frame_t probe;
+    uint8_t copy[AX25_MAX_INFO + 64u];
+
+    if ((frame == NULL) || (len > sizeof(copy)))
+        return false;
+    if (len < AX25_MIN_FRAME)
+        return false;
+
+    memcpy(copy, frame, len);
+    if (!ax25_parse(copy, len, &probe))
+        return false;
+
+    onFrame(copy, len, NULL);
+    svc.lastRxMs = nowMs;
+    return true;
+}
+#endif
 
 void aprs_service_init(void)
 {

@@ -40,8 +40,12 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "core/aprs_service.h"
+#include "core/messaging.h"
+#include "core/msg_service.h"
 #include "core/state.h"
 #include "core/ui.h"
+#include "protocols/APRS/ax25.h"
 #include "ui/ui_default.h"
 #include "ui/ui_dump.h"
 
@@ -246,7 +250,130 @@ static void cmd_help(void)
     say("sync                 wait for the UI to catch up");
     say("sleep <ms>           wait");
     say("rssi <f>, vbat <f>, mic <f>, channel <f>   the emulated front end");
+    say("inject aprs-station <CALL> <LAT> <LON> <COMMENT>");
+    say("                     one received APRS position (lat/lon: 38.87 or 3852.00N)");
+    say("inject aprs-message <FROM> <TEXT>");
+    say("                     one APRS message addressed to this station");
+    say("inject message <SRC> <TEXT>");
+    say("                     one message in the shared inbox (MSG_VIEW)");
     say("quit                 power the radio off");
+}
+
+/*
+ * Injection: what the receiver would have heard, handed to the services that
+ * act on it. Nothing is written into the UI: the station list and the mailbox
+ * are the service's, and they are filled through the same call the decoder
+ * uses (core/aprs_service.c, aprs_sim_rxFrame), so a screen reached this way
+ * shows what it would show on the air. docs/SIMULATOR.md.
+ */
+
+/** Join argv[from..argc) with single spaces: a message, not a command. */
+static void joinFrom(char *out, size_t cap, int from, int argc, char **argv)
+{
+    size_t pos = 0;
+    out[0] = '\0';
+    for (int i = from; i < argc; i++) {
+        int n = snprintf(out + pos, cap - pos, "%s%s", (pos > 0) ? " " : "",
+                         argv[i]);
+        if (n < 0 || (size_t)n >= cap - pos)
+            break;
+        pos += (size_t)n;
+    }
+}
+
+/** Build an AX.25 UI frame from `call` and `info` and give it to the service. */
+static bool injectFrame(const char *call, const char *info)
+{
+    ax25_frame_t f;
+    memset(&f, 0, sizeof(f));
+    ax25_addr_set(&f.dst, "APRS");
+    ax25_addr_set(&f.src, call);
+    f.control = 0x03;
+    f.pid     = 0xF0;
+    f.info    = (const uint8_t *)info;
+    f.infoLen = strlen(info);
+
+    uint8_t frame[AX25_MAX_INFO + 64];
+    size_t len = ax25_build_ui(frame, sizeof(frame), &f);
+    if (len < 2) {
+        say("#error the frame does not fit");
+        return false;
+    }
+
+    /* The deframer strips the FCS before the service sees a frame */
+    if (!aprs_sim_rxFrame(frame, len - 2, (uint32_t)now_ms())) {
+        say("#error the service refused the frame");
+        return false;
+    }
+
+    say("#inject %s %s", call, info);
+    return true;
+}
+
+static bool cmd_inject(int argc, char **argv)
+{
+    char text[APRS_COMMENT_MAX + 64];
+
+    /*
+     * Build the message store before the first message lands in it: on the
+     * radio state_init() does that at boot, and the screens' own entry point
+     * (msg_service_init) loads the record only if nobody has yet -- a message
+     * injected before that would be cleared by the reload.
+     */
+    msg_service_init();
+
+    if (argc < 2) {
+        say("#error inject aprs-station|aprs-message|message ...");
+        return false;
+    }
+
+    if (strcmp(argv[1], "aprs-station") == 0 && argc > 3) {
+        const char *call = argv[2];
+        aprs_pos_t pos;
+        memset(&pos, 0, sizeof(pos));
+        if (!aprs_parse_lat(argv[3], &pos.lat) ||
+            !aprs_parse_lon(argv[4], &pos.lon)) {
+            say("#error lat/lon not understood");
+            return false;
+        }
+        pos.table  = '/';
+        pos.symbol = '-';
+        joinFrom(pos.comment, sizeof(pos.comment), 5, argc, argv);
+
+        if (aprs_build_position(text, sizeof(text), &pos, true) == 0) {
+            say("#error the position does not fit");
+            return false;
+        }
+        return injectFrame(call, text);
+    }
+
+    if (strcmp(argv[1], "aprs-message") == 0 && argc > 3) {
+        char own[12];
+        char msg[APRS_COMMENT_MAX + 32];
+        aprs_ownCallsign(own, sizeof(own));
+        joinFrom(msg, sizeof(msg), 3, argc, argv);
+        if (aprs_build_message(text, sizeof(text), own, msg, "1") == 0) {
+            say("#error the message does not fit");
+            return false;
+        }
+        return injectFrame(argv[2], text);
+    }
+
+    if (strcmp(argv[1], "message") == 0 && argc > 3) {
+        long src = strtol(argv[2], NULL, 0);
+        joinFrom(text, sizeof(text), 3, argc, argv);
+        int id = messaging_received(MSG_TRANSPORT_APRS, (uint32_t)src, 0,
+                                    text, false, (uint32_t)now_ms());
+        if (id < 0) {
+            say("#error the inbox refused the message");
+            return false;
+        }
+        say("#inject message id=%d", id);
+        return true;
+    }
+
+    say("#error inject needs a station, a message and their arguments");
+    return false;
 }
 
 static bool cmd_key(int argc, char **argv, bool combo)
@@ -469,6 +596,9 @@ static enum cmd_result execute(char *line)
         emulator_state.micLevel = atof(argv[1]);
     } else if (strcmp(cmd, "channel") == 0 && argc > 1) {
         emulator_state.chSelector = atof(argv[1]);
+    } else if (strcmp(cmd, "inject") == 0) {
+        if (!cmd_inject(argc, argv))
+            return CMD_ERR;
     } else if (strcmp(cmd, "screenshot") == 0) {
         cmd_screenshot((argc > 1) ? argv[1] : NULL);
     } else if (strcmp(cmd, "dump") == 0) {
