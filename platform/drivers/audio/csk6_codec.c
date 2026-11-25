@@ -22,6 +22,9 @@
 #ifdef C62_BASEBAND_DUMP
 #include "baseband_dump_c62.h"
 #endif
+#ifdef C62_PC_PROTO
+#include "core/pc_proto.h"
+#endif
 
 /* One worker services the DSP's 48 kHz stereo transport:
  *   capture: microphone left, radio right -> application buffers or FM queues
@@ -747,6 +750,12 @@ static void captureFrame(AudioRecord *rec)
      */
     baseband_dump_pushChannel(&samples[rec->mChannelOutIdx[SOURCE_RTX]],
                               stride, count);
+#endif
+#ifdef C62_PC_PROTO
+    /* RX audio capture asked for over the PC protocol (core/pc_proto.h): it
+     * does nothing unless DBG_CAP_START armed it. */
+    pc_proto_capturePush(&samples[rec->mChannelOutIdx[SOURCE_RTX]], stride,
+                         count);
 #endif
 
     int ret = ICStream_Consumer_releaseFrame(ic, frame);

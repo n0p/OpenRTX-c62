@@ -127,6 +127,14 @@ lo contrario; con las siete de arriba, RAM al 86,5 % — ver
   modo digital que no decodifica; ver `docs/DMR_RX.md`.
 - `C62_DMR_12K5` — DMR en el modo de canal de 12,5 kHz del BK4819 (filtros de FI de
   4,5 kHz, `REG_43 = 0x7e48`) en vez del de 25 kHz (`0x7e28`). Apagada por defecto.
+- `C62_PC_PROTO` — protocolo binario radio-PC por el cable de programación, para
+  un CPS y para el banco: canales, contactos, zonas, ajustes, estado en vivo y
+  eventos. **Apagada por defecto**; ver `docs/PC_PROTO.md` y el cliente de
+  referencia `tools/cps/cps.py`.
+- `C62_DEBUG_PROTO` — además, el espacio de nombres de depuración del protocolo
+  (log en streaming, diagnóstico, registros del BK4819/BK1080, memoria acotada,
+  captura de audio RX, traza de TX). **Apagada por defecto**: una build de
+  producción no la lleva ni la anuncia.
 
 ## Repositorio
 
@@ -136,7 +144,7 @@ lo contrario; con las siete de arriba, RAM al 86,5 % — ver
 - `Retevis-c62` — base del port.
 - `docs/` — notas de integración: `UI.md`, `CHANNELS.md`, `APRS.md`, `DMR_TX.md`,
   `DMR_VOCODER.md`, `DMR_RX.md`, `TX_P25.md`, `TX_YSF.md`, `TX_DSTAR.md`,
-  `openrtx_integration.md`.
+  `PC_PROTO.md`, `openrtx_integration.md`.
 
 ## Qué falta
 
