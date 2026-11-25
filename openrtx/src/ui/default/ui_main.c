@@ -14,6 +14,9 @@
 #ifdef CONFIG_APRS
 #include "ui/ui_aprs.h"
 #endif
+#ifdef CONFIG_KISS
+#include "ui/ui_packet.h"
+#endif
 #include <string.h>
 #include "ui/ui_strings.h"
 #include "core/utils.h"
@@ -727,6 +730,21 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
             {
                 gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
                           yellow_fab413, "%s", aprs_line);
+                break;
+            }
+#endif
+#ifdef CONFIG_KISS
+            /*
+             * Packet modem: the same place, the same colour as the APRS
+             * indicator, so "the receiver is decoding something" reads the
+             * same whichever of the two is running.
+             */
+            char pkt_line[16] = { 0 };
+            ui_packet_statusLine(pkt_line, sizeof(pkt_line));
+            if (pkt_line[0] != '\0')
+            {
+                gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
+                          yellow_fab413, "%s", pkt_line);
                 break;
             }
 #endif

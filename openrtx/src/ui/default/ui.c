@@ -77,6 +77,9 @@
 #include "ui/ui_aprs.h"
 #include "core/aprs_service.h"
 #endif
+#ifdef CONFIG_KISS
+#include "ui/ui_packet.h"
+#endif
 #ifdef CONFIG_VFO_SEARCH
 #include "core/vfo_search.h"
 #include "core/vfo_search_service.h"
@@ -1477,6 +1480,11 @@ void ui_init()
      * it must be initialised before the first frame can arrive. */
     aprs_service_init();
 #endif
+#ifdef CONFIG_KISS
+    /* The packet modem owns its thread, the KISS decoder and the transmit
+     * queue; the transport, if it is the cable one, was bound at boot. */
+    packet_service_init();
+#endif
     last_event_tick = getTick();
     redraw_needed = true;
     _ui_calculateLayout(&layout);
@@ -1566,6 +1574,12 @@ void ui_open_screen(uint8_t screen, uint8_t item)
             break;
 #endif
 
+#ifdef CONFIG_KISS
+        case PKT_CFG:
+            ui_packet_config();
+            break;
+#endif
+
         case MENU_CONTACTS:
             state.ui_screen = MENU_CONTACTS;
             ui_contacts_open();
@@ -1586,6 +1600,9 @@ void ui_open_screen(uint8_t screen, uint8_t item)
                  || ui_zones_isOpen() || ui_msgs_isScreen(state.ui_screen)
 #ifdef CONFIG_APRS
                  || ui_aprs_isScreen(state.ui_screen)
+#endif
+#ifdef CONFIG_KISS
+                 || ui_packet_isScreen(state.ui_screen)
 #endif
                  ;
     if (state.txDisable != ownsKeys) {
@@ -1892,7 +1909,26 @@ void ui_updateFSM(bool *sync_rtx)
                 return;
             }
         }
-
+#endif
+#ifdef CONFIG_KISS
+        /* The packet modem page owns the keypad like the APRS screens: the
+         * radio must not transmit on the PTT while it is being configured. */
+        if (ui_packet_isScreen(state.ui_screen))
+        {
+            if (ui_packet_fsm(msg, sync_rtx))
+            {
+                bool wantDisabled = ui_packet_isScreen(state.ui_screen);
+                if (state.txDisable != wantDisabled)
+                {
+                    state.txDisable = wantDisabled;
+                    *sync_rtx = true;
+                }
+                redraw_needed = true;
+                return;
+            }
+        }
+#endif
+#ifdef CONFIG_APRS
         /*
          * Messaging screens (ui_messages.c) and the contact book
          * (ui_contacts.c) own the keypad and keep the radio from
@@ -3528,6 +3564,12 @@ bool ui_updateGUI()
         case APRS_MSG_EDIT:
         case APRS_CFG:
             ui_aprs_draw(last_state.ui_screen);
+            break;
+#endif
+#ifdef CONFIG_KISS
+        case PKT_CFG:
+        case PKT_STATUS:
+            ui_packet_draw(last_state.ui_screen);
             break;
 #endif
         /* Messaging screens draw themselves, like the APRS ones */

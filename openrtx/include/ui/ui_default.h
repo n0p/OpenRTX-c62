@@ -83,6 +83,12 @@ enum uiScreen
      * folder, composer and delivery status. Owned by their module, the same
      * way the APRS screens are.
      */
+    /*
+     * Packet modem screens (ui_packet.c), same arrangement as the APRS ones:
+     * the configuration page and the counters page.
+     */
+    PKT_CFG,
+    PKT_STATUS,
     MENU_MESSAGES,
     MSG_VIEW,
     MSG_SENT,
