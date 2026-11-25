@@ -68,12 +68,25 @@ menú, y el resto del modo no depende de ellas.
 | deviation, outer/inner | ±350 / ±116.7 Hz (6.25 kHz), ±1050 / ±350 Hz (12.5 kHz) | ±1050 / ±350 Hz |
 
 4FSK with a root-raised-cosine of roll-off 0.2 (TS 1-A 3.4/3.5; ETSI TS 102 658
-clause 14.2.2.2 for the dPMR twin). The transmit pulse is that RRC **times the
-sinc of a symbol held for its period**, so a receiver that is the exact inverse
-sees a clean four-level eye, and any other receiver sees the inner symbols
-pulled towards the outer ones. `dsd-neo`'s filter note (`src/dsp/dsd_filters.c`)
-is the clearest public statement of this and is what this receiver's sync
-detector was written around.
+clause 14.2.2.2 for the dPMR twin). The standard splits the pulse between the
+two ends: the transmitter sends `H(f) P(f)` and the receiver takes `H(f) D(f)`,
+with `H(f)` the root raised cosine, `P(f) = sinc(fT)` **the hold of a symbol for
+its period** and `D(f) = 1/sinc(fT) = pi f T / sin(pi f T)` over
+`|f| <= (1 + 0.2)/2T`. The two together are the Nyquist raised cosine `H(f)^2`,
+zero ISI at the symbol instants. A receiver that stops at `H(f)` -- a plain RRC,
+which is what this mode had until the filter below landed -- is the matched
+filter of half the transmitted pulse: it leaves the pair at `RC(f)/sinc(fT)`,
+which is not Nyquist, and misses the band-edge energy the hold puts there.
+`dsd-neo`'s filter note (`src/dsp/dsd_filters.c`) is the clearest public
+statement of this and is what both this receiver's filter and its sync detector
+were written around.
+
+The receive table in `NxdnPhy.c` is `H(f) D(f)` at 48 kHz, 20 samples per
+symbol, four symbols each way (161 taps, the same count the plain RRC had, so
+the cost did not move). `tools/nxdn_rx_pulse.py` evaluates it by quadrature from
+the specification; the result agrees with `dsd-neo`'s independently generated
+`nxdn_dpmr_rx_taps` to 5e-10 per tap, which is the cross-check that the two
+readings of 3.4/3.5 are the same reading.
 
 **This work implements NXDN48 (2400 symbols/s).** That is the mode used on
 6.25 kHz channels and on most 12.5 kHz Kenwood NEXEDGE traffic. NXDN96 is the
@@ -257,27 +270,34 @@ first thing it needs is a capture of a real short message.
 
 ```
 48 kHz discriminator (BK4819 audio bypass, 12.5 kHz channel, REG_43 = 0x7e48)
-  RRC a=0.2 matched filter, 81 taps, evaluated at 24 kHz (10 samples/symbol)
+  H(f) D(f) matched filter of TS 1-A 3.4/3.5, 161 taps at 48 kHz, decimated
+       by two (10 samples/symbol at 24 kHz)
   pre-gate over 11 instants across one whole symbol period
-  sync search on the 10-symbol FSW, signs only, both polarities
+  sync search on the 10-symbol FSW, signs only, both polarities; a free-running
+       acquisition needs a near-perfect field, a tracked frame does not
   per-frame fractional timing: 16 phases of a 4-point Lagrange interpolation
        over +-2.5 samples, metric = sync correlation + 0.35 * payload EVM
   levels: median DC, then 4-means (outer, inner = outer/3) with a drift term
   slice to dibits, descramble (XOR with the mask, plus the polarity)
   LICH -> parity -> polarity and RF/functional/steal fields
-  SACCH -> de-interleave, de-puncture, Viterbi, CRC-6 -> 18 bits of L3
+  SACCH -> per-bit reliabilities (max-log LLR over the four levels) ->
+       de-interleave, de-puncture, soft Viterbi, CRC-6, hard fallback
   VCH 1..4 -> nxdnFecVchToAmbe() -> 9-byte AMBE+2 frames
   voice -> NxdnSpeech queue -> playback thread -> dmr_vocoder_decode() -> 8 kHz
 ```
 
 Everything is on the AP. `-DCONFIG_C62_NXDN_RX=y` costs 6 828 B of flash and
-15 000 B of RAM over the DMR+APRS build (§6).
+15 000 B of RAM over the DMR+APRS build, plus the 644 B of the transmit pulse
+table in `Fsk4Tx.c` (§6).
 
-The demodulator is the DMR one, and that is not a coincidence: NXDN48 is 2400
-symbols/s with RRC 0.2, which is the same symbol rate and the same pulse shape
-DMR's chain was built and measured for (81 taps at 24 kHz, ten per symbol,
-eight symbols of span). What is new is the frame: one sync word instead of four
-slot words, no CACH, and 192 symbols per frame instead of 144 per slot.
+The demodulator started as the DMR one, and that was not a coincidence: NXDN48
+is 2400 symbols/s with RRC 0.2, which is the same symbol rate and the same pulse
+family DMR's chain was built and measured for (81 taps at 24 kHz, ten per
+symbol, eight symbols of span). What is new is the frame -- one sync word
+instead of four slot words, no CACH, and 192 symbols per frame instead of 144
+per slot -- and, since this work, the half of the pulse the receiver was
+missing: DMR has no symbol hold and a plain RRC is right there, NXDN does and a
+plain RRC is 1.5 dB of matched-filter gain and a closed eye left on the table.
 
 Two things were learned the hard way while bringing the capture up and are worth
 keeping:
@@ -333,18 +353,6 @@ What that pins down:
 
 ### What is *not* proven
 
-* **The capture is noisy, and this front end is behind the reference's.** Golay
-  corrections per frame: 62 frames at 0, 73 at 1, 113 at 2, 131 at 3, and 87
-  above. `dsd-neo` shows `err = [0] [0]` for most frames on the same file. Its
-  receiver has the exact inverse-sinc matched filter of §1 and a *soft-decision*
-  Viterbi; this one has a plain RRC and hard decisions. Measured consequence:
-  44 % of SACCH blocks fail their CRC here where the reference decodes almost
-  all of them, and 13 % of voice frames are error-free against most of them
-  there. The decoded audio is intelligible but has audible artefacts that the
-  number above explains. Closing that gap is the single highest-value
-  improvement and it is two changes: build the matched filter as the inverse of
-  the transmit pulse, and carry per-dibit reliability into the Viterbi (the
-  `match_window`/`energy` numbers are already computed and thrown away).
 * **NXDN96 does not decode.** The 15.3 s capture syncs the frame grid but no
   voice: `NXDN_SPS` is 10 in this build. Wrong symbol rate, so this is expected,
   not a defect — but it means the 12.5 kHz / 9600 bit/s combination is
@@ -358,6 +366,112 @@ What that pins down:
   real C62 hands over — level, bandwidth, continuity — is what
   `scripts/c62_bbdump.py` captures (`docs/DMR_RX.md`, *Capturing what the radio
   hears*); the NXDN mode takes the same path, so the same tool works unchanged.
+* **The capture itself is not in the tree.** The 11.8 s NXDN48 file the numbers
+  above come from is not; what is committed is the 1.5 s slice
+  `tests/unit/assets/nxdn_air_frame.wav`, which is the clean stretch. The
+  sensitivity numbers of §5.1 are measured on that slice and on noise added to
+  it, which is why they can be reproduced without the original.
+
+## 5.1 Sensitivity: frames, LICH and SACCH against Eb/N0
+
+The capture decodes, on a clean signal, with either front end: the receiver's
+weakness was never the clean case. It was that the flat RRC and the hard
+decisions gave up much earlier than the reference on a noisy one, and the first
+thing this work did was make that measurable.
+
+`tests/platform/c62_nxdn_bench.c` pushes the 1.5 s asset through
+`nxdnPhy_push()` with white Gaussian noise added at a chosen Eb/N0:
+
+```
+Eb/N0 = Ps * Fs / (4 * sigma^2 * Rs)   ->   sigma^2 = 5 * Ps / Eb/N0    (48 kHz)
+```
+
+with `Ps` the mean square of the file (DC removed), `Rs` = 2400 symbols/s and
+two bits per symbol. The noise comes from a fixed xorshift64\* stream, so a
+(Eb/N0, seed) pair is the same file on every machine, and `--write-dir` writes
+those files so the reference decoder can be run on exactly the same input
+(`tools/nxdn_ref_compare.py`). 24 seeds per point, mean per point, out of the
+18 frames the slice carries. The clean row is the "no regression" check as
+well: on the committed slice both front ends produce 18 frames, no LICH error,
+18 SACCH blocks and the same VCALL -- `[01][00][20][03][85]...`, source 901,
+destination 0, byte for byte what `dsd-neo` decodes from it -- so the table
+below is a change in how far into the noise the chain works, not in what it
+produces.
+
+| Eb/N0 | flat RRC, hard |  |  | `H(f) D(f)`, hard |  |  | `H(f) D(f)`, soft + fallback |  |  |
+|---|---|---|---|---|---|---|---|---|---|
+| | frames | LICH | SACCH | frames | LICH | SACCH | frames | LICH | SACCH |
+| clean | 18.0 | 18.0 | 18.0 | 18.0 | 18.0 | 18.0 | 18.0 | 18.0 | 18.0 |
+| 18 dB | 17.0 | 15.9 | 14.9 | 18.0 | 18.0 | 18.0 | 18.0 | 18.0 | 18.0 |
+| 16 dB | 17.2 | 16.6 | 15.2 | 18.0 | 18.0 | 18.0 | 18.0 | 18.0 | 18.0 |
+| 14 dB | 16.0 | 14.4 | 12.7 | 18.0 | 18.0 | 17.9 | 18.0 | 18.0 | 18.0 |
+| 12 dB | 14.8 | 12.2 | 10.3 | 18.0 | 18.0 | 17.9 | 18.0 | 18.0 | 18.0 |
+| 10 dB | 15.0 | 12.8 | 10.5 | 17.6 | 17.4 | 16.9 | 17.6 | 17.4 | 17.4 |
+| 8 dB | 10.3 | 6.2 | 3.9 | 18.0 | 18.0 | 16.5 | 18.0 | 18.0 | 18.0 |
+| 6 dB | 11.6 | 8.7 | 4.8 | 17.8 | 17.5 | 13.4 | 17.8 | 17.5 | 17.5 |
+| 4 dB | 12.1 | 9.9 | 3.1 | 16.8 | 16.0 | 7.7 | 16.8 | 16.0 | 12.3 |
+| 2 dB | 9.7 | 7.4 | 1.2 | 15.6 | 14.8 | 3.0 | 15.6 | 14.8 | 6.8 |
+| 0 dB | 11.0 | 9.5 | 0.5 | 14.0 | 12.6 | 0.5 | 14.0 | 12.6 | 1.8 |
+| −2 dB | 7.4 | 5.8 | 0.1 | 9.2 | 7.5 | 0.1 | 9.2 | 7.5 | 0.5 |
+
+Three things this table says, in order of size:
+
+1. **The matched filter is worth far more than its 1.5 dB.** The flat RRC does
+   not mostly lose *bits*: it loses the **frame grid**. Its eye is soft and its
+   inner levels sit pulled towards the outer ones, so a marginal 9-of-10 match
+   somewhere in the payload wins the scan, the grid latches a few symbols early
+   and every frame after it decodes with a dead LICH. That is the 8 dB row: 6.2
+   frames of 18 with a good LICH, where `H(f) D(f)` holds 18 of 18. The
+   matched-filter gain on top of that shows in the SACCH count and in the EVM
+   (0.140 → 0.063 on the clean capture, 0.189 → 0.172 at 8 dB).
+2. **The acquisition gates had to change with it.** Because the new eye makes
+   that marginal match *more* marginal (one fewer sign error at the false
+   position), a free-running acquisition now needs a sync score of 0.92 instead
+   of 0.72 -- a tracked frame still accepts 0.72 -- and a grid whose frames fail
+   their LICH four times in a row is dropped instead of being kept for ever.
+   Without those two, the better filter decodes *fewer* frames than the worse
+   one: it is the same failure, just reached sooner.
+3. **Soft decisions are worth about a decibel at the floor.** They change
+   nothing at 8 dB and above, where the block is already right, and they double
+   the SACCH blocks recovered at 2 dB (3.0 → 6.8 of 18). The gain is in the
+   region where a voice call is breaking up anyway, which is exactly where a
+   SACCH block still matters: it carries the VCALL, the RAN and the release.
+
+### Against the reference decoder, on the same files
+
+`tools/nxdn_ref_compare.py` runs `dsd-neo` v2.13.0 (56cc137, built from source
+in the `dmr-rx` workbench, `ref/dsd-neo`) over the very WAVs the bench wrote, and
+counts its own trace: syncs, `LICH ERR` lines, SACCH segments it did not flag
+`CRC ERR`, and AMBE frames. Four seeds per point, the same four this chain's row is
+measured on:
+
+| Eb/N0 | 16 dB | 12 dB | 8 dB | 4 dB | 0 dB |
+|---|---|---|---|---|---|
+| dsd-neo syncs | 17.5 | 16.5 | 16.2 | 17.2 | 16.2 |
+| dsd-neo LICH errors | 3.8 | 2.2 | 2.8 | 1.8 | 4.0 |
+| dsd-neo SACCH (CRC ok) | 13.8 | 13.0 | 7.2 | 2.0 | 0.0 |
+| **this chain, SACCH (CRC ok)** | **18.0** | **18.0** | **18.0** | **10.2** | **1.8** |
+
+On the clean asset the reference decodes 18 frames, 16 SACCH segments and 60
+AMBE frames with 2 LICH errors; this chain decodes 18, 18 and 72 with 0. On the
+noisy variants it is ahead at every point measured.
+
+That is not a claim that this receiver is better than `dsd-neo` in general, and
+two things have to be said about it:
+
+* **The AMBE counts are not comparable.** `dsd-neo` only synthesises voice --
+  and only logs an AMBE frame -- once a CRC-valid frame has confirmed the call
+  (`nxdn_confirm_is_confirmed()`, `nxdn_frame.c`), so its AMBE count measures
+  its call state machine as much as its demodulator: it reports 0 AMBE frames at
+  0 dB where it still decodes SACCH segments. This chain hands everything it
+  decodes to the vocoder and lets the audio be bad. The comparable number is the
+  SACCH block whose CRC-6 passes.
+* **The file is the clean stretch.** On the full 11.8 s capture of §5 the
+  reference decodes 452 AMBE frames where this chain decodes 466 but only 54 of
+  123 SACCH blocks, and the reason given there -- a plain RRC and hard
+  decisions -- is what this work removed. Re-running that comparison needs the
+  original capture, which is not in the tree; the numbers above are what can be
+  reproduced.
 
 Reproduce it:
 
@@ -377,29 +491,86 @@ block to `/tmp/sacch_bits.txt` and the Golay error count of every decoded frame
 to `/tmp/frames_err.txt`; those are what the two brute-force checks in §5 were
 run on.
 
+The sensitivity numbers of §5.1 have their own harness, built by meson as
+`c62_nxdn_bench` (it is a host program, not a Catch2 test) and by hand with:
+
+```sh
+cc -O2 -ffp-contract=off -I openrtx/include tests/platform/c62_nxdn_bench.c \
+   openrtx/src/protocols/NXDN/{NxdnDefs,NxdnFec,NxdnPhy}.c -lm -o nxdn_bench
+
+# the table of §5.1: 24 noise seeds at each point, CSV for the per-run rows
+./nxdn_bench --seeds 24 --snr 18,16,14,12,10,8,6,4,2,0,-2 \
+              --csv bench.csv tests/unit/assets/nxdn_air_frame.wav
+
+# the same captures, kept, for the reference decoder
+./nxdn_bench --no-clean --seeds 4 --snr 16,12,8,4,0 --write-dir /tmp/wavs \
+              tests/unit/assets/nxdn_air_frame.wav
+tools/nxdn_ref_compare.py /tmp/wavs --dsd-neo /path/to/dsd-neo
+```
+
+`./nxdn_bench --dump ...` prints one line per frame (symbol, sync errors,
+score, EVM, LICH and SACCH), which is how the false-sync lock of §5.1 was found.
+`tests/platform/c62_nxdn_gen.c` synthesises a call with this tree's own
+transmitter (preamble plus N frames, the AMBE payload a counter) for a capture
+whose contents are known -- that is what the locked 12 s cost run below uses.
+`meson test` runs `nxdn_rx_test`, which is the same measurement cut down to
+three assertions: the clean capture unchanged, the grid held at 12 and 8 dB, and
+the reliability path recovering more SACCH blocks than the hard one at 2 dB.
+
 ## 6. Cost
 
 ### Instructions (QEMU `mps2-an505`, Cortex-M33, no DSP extension)
 
-`tests/platform/c62_nxdn_phy_cost.c` pushes 12 s of the real NXDN48 capture
-through `nxdnPhy_push()` and drops a frame marker every second
+`tests/platform/c62_nxdn_phy_cost.c` pushes 12 s of discriminator audio through
+`nxdnPhy_push()` and drops a frame marker every second
 (`qemu-mcu-instruction-profiling`, plugin `work/dsp-probe/common/insnframe.c`).
 The demodulator only: no vocoder, no audio interface.
+`tests/platform/run_nxdn_phy_cost.sh` builds it for the M33 and runs it under
+QEMU; `meson test` runs it on the asset and skips (77) where the toolchain or
+QEMU is missing. Set `NXDN_INSNFRAME` to the plugin to get instructions.
 
-| | instructions per second of audio | % of 300 MHz |
-|---|---|---|
-| this chain, steady state | **13.8 – 14.1 M** | **4.6 – 4.7 %** |
-| this chain, mean over the file (silent lead-in included) | 13.38 M | 4.46 % |
-| DMR PHY, for reference (`docs/DMR_RX.md`) | 20.2 M | 6.7 % |
+Two 12 s inputs, because the two regimes cost very differently, and the same
+input on both sides of the change:
 
-It is cheaper than the DMR demodulator on the same kind of signal because the
-frame is 192 symbols with one sync word and the scan visits each symbol position
-once, where DMR searches four slot words and re-measures five instants per
-symbol. The vocoder is the same code and the same cost as DMR's: 751 k
-instructions per 20 ms frame, 15-20 % of the core (`docs/DMR_VOCODER.md`).
+* **locked** -- `c62_nxdn_gen` framed a call with this tree's transmitter, so
+  all 149 frames decode and the grid is never lost;
+* **re-acquiring** -- the 1.5 s asset repeated eight times, which puts a frame
+  discontinuity every second and makes the scan work for a living.
 
-`-Os` instead of `-O2` (what the Zephyr image uses) was not measured separately;
-the DMR equivalent differs by 2 %.
+| 12 s input | flat RRC, hard | `H(f) D(f)` + soft | delta |
+|---|---|---|---|
+| locked (149 frames) | 34.8 M/s | **34.9 M/s** | **+0.3 %** |
+| re-acquiring (81 frames) | 29.5 M/s | **30.2 M/s** | +2.4 % |
+| noise only (searching, no frames) | 24.5 M/s | 26.2 M/s | +7 % |
+
+Per second of audio and as a share of the 300 MHz core: 34.9 M/s is 11.6 %.
+**The absolute figures do not match the 13.8 – 14.1 M/s this section used to
+quote**, and neither does the old chain's 34.8 M/s on the same input, so that
+row was measured on something this tree no longer has — most likely with the
+81-tap DMR table the comment in `NxdnPhy.c` describes as the filter before the
+161-tap one (the matched filter alone is 3.86 M MAC/s, about 10 M instructions
+per second of audio). What is measured here, on the same input and the same
+toolchain as both builds, is the ratio, and that is what the CPU budget cares
+about: **the two improvements together cost +0.3 % where frames decode.**
+
+In frames: the locked capture decodes 149 frames in 12.08 s, so **2.82 M
+instructions per frame before and 2.83 M after** -- the budget for this work was
+"no more than twice the cost per improvement", and it came in at 1.003x.
+
+Where the money goes: the matched filter is the same 161 taps it was, the
+reliabilities are one small loop over 60 symbols per frame, and the extra
+Viterbi pass only happens on blocks whose CRC fails. The acquisition change
+costs more, but only when the grid is lost -- a stronger sync gate and, after
+four dead frames, a free-running scan over up to 192 symbol positions.
+
+`-Os` instead of `-O2` (what the Zephyr image uses) was measured this time:
+27.4 M/s before and 28.1 M/s after on the re-acquiring input, i.e. the same
++2.6 % at 8 % lower cost.
+
+For scale, the DMR PHY is 20.2 M/s in the same conditions
+(`docs/DMR_RX.md`), and the vocoder is the same code and the same cost as DMR's:
+751 k instructions per 20 ms frame, 15-20 % of the core
+(`docs/DMR_VOCODER.md`).
 
 ### Flash and RAM
 
@@ -415,6 +586,12 @@ sides (`-DCONFIG_C62_DMR_RX=y -DCONFIG_C62_APRS=y`):
 `zephyr.bin` is the figure quoted; the ELF's FLASH region reads the same. The
 118 B of slack against the 518 104 B quoted elsewhere is the `git describe`
 string the image embeds, which depends on the commit it is built from.
+
+The tables of this work cost nothing here: the receive pulse replaced the RRC
+table tap for tap (161 floats, no change) and the soft decisions add no state.
+The one addition is the transmit pulse in `Fsk4Tx.c`, **644 B of flash** (161
+floats of `.rodata`) that only an NXDN image links — the mode is receive-only in
+this fork, so no image that does not transmit NXDN pays for it.
 
 Where the RAM goes:
 
@@ -477,16 +654,25 @@ silence, so the tail of a transmission is not cut.
 ```
 openrtx/include/protocols/NXDN/
     NxdnDefs.h    constants, frame layout, FSW, scrambler mask, LICH fields
-    NxdnFec.h     descrambler, LICH parity, SACCH block, VCH -> AMBE, L3 parse
+    NxdnFec.h     descrambler, LICH parity, SACCH block (hard and soft), VCH
+                  -> AMBE, L3 parse
     NxdnPhy.h     streaming demodulator interface
     NxdnSpeech.h  voice queue and playback thread
     NxdnStatus.h  what the UI shows
 openrtx/src/protocols/NXDN/
     NxdnDefs.c  NxdnFec.c  NxdnPhy.c  NxdnSpeech.c  NxdnStatus.c
+openrtx/include/protocols/Fsk4Tx.h   the transmit pulse, RRC or RRC x sinc
+openrtx/src/protocols/Fsk4Tx.c
 openrtx/include/rtx/OpMode_NXDN.hpp
 openrtx/src/rtx/OpMode_NXDN.cpp
 tests/platform/c62_nxdn_host.c        host harness (PHY + vocoder + PCM out)
+tests/platform/c62_nxdn_bench.c       sensitivity bench: Eb/N0 sweep, noise WAVs
+tests/platform/c62_nxdn_gen.c         synthetic call from this tree's TX
 tests/platform/c62_nxdn_phy_cost.c    bare-metal cost harness (QEMU mps2-an505)
+tests/platform/run_nxdn_phy_cost.sh   builds and runs it, skips without the tools
+tests/unit/nxdn_rx.cpp                the three receive assertions (meson test)
+tools/nxdn_rx_pulse.py                the H D and H sinc tables, by quadrature
+tools/nxdn_ref_compare.py             dsd-neo over the same WAVs
 ```
 
 `DmrDefs.c` is compiled into the NXDN build as well: it holds the AMBE+2 2450

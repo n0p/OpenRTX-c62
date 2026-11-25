@@ -12,7 +12,8 @@ Counts, from dsd-neo's own trace (-Z and --frame-log):
 
     syncs   "Sync: NXDN48" lines          frames it locked on
     lich    "LICH ERR" lines              frames whose LICH failed
-    sacch   "SF Segment #" lines          SACCH blocks it decoded
+    sacch   "SF Segment #" lines minus the "CRC ERR" ones it flags
+                                         SACCH blocks whose CRC-6 passed
     ambe    "FRAME AMBE" lines            AMBE+2 frames it produced
 
 The output is one CSV row per file plus the mean per Eb/N0, in the same shape
@@ -32,6 +33,7 @@ import tempfile
 SYNC = re.compile(r'Sync: NXDN48')
 LICH = re.compile(r'LICH ERR')
 SEG = re.compile(r'SF Segment #')
+CRCERR = re.compile(r'CRC ERR')
 AMBE = re.compile(r'FRAME AMBE')
 
 
@@ -51,7 +53,7 @@ def run_one(dsd, wav):
     return {
         'syncs': len(SYNC.findall(trace)),
         'lich': len(LICH.findall(trace)),
-        'sacch': len(SEG.findall(trace)),
+        'sacch': len(SEG.findall(trace)) - len(CRCERR.findall(trace)),
         'ambe': len(AMBE.findall(trace)),
     }
 

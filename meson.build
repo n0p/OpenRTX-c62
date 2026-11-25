@@ -1773,6 +1773,58 @@ nxdn_tx_test = executable('nxdn_tx_test',
                                     'dependencies' : [catch2_dep],
                                     'link_args' : linux_l_args})
 
+# NXDN receive: la captura del aire y sus versiones con ruido a un Eb/N0
+# conocido (tests/unit/nxdn_rx.cpp).  Fija lo que el filtro adaptado y las
+# decisiones blandas cambiaron: las tramas y la SACCH que sobreviven al ruido,
+# y que la SACCH blanda no pierde ni un bloque que la dura saca.
+nxdn_rx_test = executable('nxdn_rx_test',
+                          sources : ['tests/unit/nxdn_rx.cpp',
+                                     'openrtx/src/protocols/NXDN/NxdnDefs.c',
+                                     'openrtx/src/protocols/NXDN/NxdnFec.c',
+                                     'openrtx/src/protocols/NXDN/NxdnPhy.c'],
+                          kwargs : {'include_directories' : linux_inc,
+                                    'cpp_args' : linux_cpp_args +
+                                        ['-O2',
+                                         '-DREPLAY_ASSET_DIR="' +
+                                         meson.project_source_root() /
+                                         'tests/unit/assets"'],
+                                    'c_args' : linux_c_args + ['-O2',
+                                                               '-ffp-contract=off'],
+                                    'dependencies' : [catch2_dep],
+                                    'link_args' : linux_l_args})
+
+# Las dos herramientas de banco de la recepcion NXDN: la que barre Eb/N0 y
+# escribe las capturas con ruido (c62_nxdn_bench) y la que sintetiza una
+# llamada con el transmisor del arbol (c62_nxdn_gen).  No son tests de Catch2:
+# se compilan para que no se oxiden y se usan a mano, como c62_nxdn_host.c.
+nxdn_bench_exe = executable('c62_nxdn_bench',
+                            sources : ['tests/platform/c62_nxdn_bench.c',
+                                       'openrtx/src/protocols/NXDN/NxdnDefs.c',
+                                       'openrtx/src/protocols/NXDN/NxdnFec.c',
+                                       'openrtx/src/protocols/NXDN/NxdnPhy.c'],
+                            kwargs : {'include_directories' : linux_inc,
+                                      'c_args' : linux_c_args +
+                                                 ['-O2', '-ffp-contract=off'],
+                                      'link_args' : linux_l_args})
+
+nxdn_gen_exe = executable('c62_nxdn_gen',
+                          sources : ['tests/platform/c62_nxdn_gen.c',
+                                     'openrtx/src/protocols/Fsk4Tx.c',
+                                     'openrtx/src/protocols/NXDN/NxdnDefs.c',
+                                     'openrtx/src/protocols/NXDN/NxdnFec.c',
+                                     'openrtx/src/protocols/NXDN/NxdnTx.c'],
+                          kwargs : {'include_directories' : linux_inc,
+                                    'c_args' : linux_c_args +
+                                               ['-O2', '-ffp-contract=off'],
+                                    'link_args' : linux_l_args})
+
+# El coste del demodulador en un Cortex-M33 (QEMU mps2-an505), como el de dPMR:
+# necesita arm-none-eabi-gcc y qemu-system-arm y se salta (exit 77) donde no
+# los haya.  Con NXDN_INSNFRAME apunta al plugin de QEMU y da instrucciones por
+# segundo de audio, que es lo que cita docs/RX_NXDN.md.
+nxdn_phy_cost_run = find_program('tests/platform/run_nxdn_phy_cost.sh')
+nxdn_capture = meson.project_source_root() / 'tests/unit/assets/nxdn_air_frame.wav'
+
 # dPMR transmit: las mitades de codificacion (CCH, HI, END, TCH) cerradas
 # contra sus decodificadores y la cadena completa -- cabecera, supertramas y
 # trama END -- bit a bit por dpmrPhy_push(), en dos llamadas y dos niveles.
@@ -2038,6 +2090,8 @@ test('APRS Config Test',     aprs_config_test)
 test('DMR SMS Format Test',  dmr_sms_format_test)
 test('DMR LC Destination Test', dmr_lc_dest_test)
 test('NXDN TX Test',          nxdn_tx_test)
+test('NXDN RX Test',          nxdn_rx_test, timeout : 120)
+test('NXDN PHY Cost',         nxdn_phy_cost_run, args : [nxdn_capture])
 test('dPMR TX Test',          dpmr_tx_test)
 test('dPMR RX Test',          dpmr_rx_test)
 test('dPMR Host Harness',     dpmr_host_exe, args : [dpmr_capture])

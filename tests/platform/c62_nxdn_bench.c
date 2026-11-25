@@ -197,9 +197,10 @@ static void on_frame(const struct nxdnFrame *f, void *user)
 
     if (dumpFrames) {
         printf("  sym %6ld  err %d  score %.3f  evm %.3f  lich %s (%02X)  "
-               "sacch %s  vch %d\n", f->symbol, f->syncErrors, (double)f->score,
-               (double)f->evm, f->lichOk ? "ok  " : "FAIL",
-               f->lich.raw, f->sacchOk ? "ok  " : "FAIL", f->frameCount);
+               "sacch %s  vch %d\n",
+               f->symbol, f->syncErrors, (double)f->score, (double)f->evm,
+               f->lichOk ? "ok  " : "FAIL", f->lich.raw,
+               f->sacchOk ? "ok  " : "FAIL", f->frameCount);
     }
 }
 
@@ -308,9 +309,11 @@ static struct runResult run_capture(const int16_t *samples, long count,
 
     free(noisy);
 
-    current.evmMean = (current.frames > 0) ? evmAcc / (double)current.frames : 0.0;
-    current.syncErrMean = (current.frames > 0) ? syncAcc / (double)current.frames
-                                               : 0.0;
+    current.evmMean = (current.frames > 0) ? evmAcc / (double)current.frames :
+                                             0.0;
+    current.syncErrMean = (current.frames > 0) ?
+                              syncAcc / (double)current.frames :
+                              0.0;
 
     return current;
 }
@@ -346,7 +349,8 @@ int main(int argc, char **argv)
     if (wavPath == NULL) {
         fprintf(stderr,
                 "usage: %s [--seeds N] [--snr a,b,c] [--csv out.csv] "
-                "[--no-clean] capture.wav\n", argv[0]);
+                "[--no-clean] capture.wav\n",
+                argv[0]);
         return 2;
     }
 
@@ -386,8 +390,10 @@ int main(int argc, char **argv)
         free(copy);
     }
 
-    printf("\n%s %s %s\n", "Eb/N0", "frames  LICHok  LICHbad  SACCHok "
-           " voice  AMBE", "EVM     sync");
+    printf("\n%s %s %s\n", "Eb/N0",
+           "frames  LICHok  LICHbad  SACCHok "
+           " voice  AMBE",
+           "EVM     sync");
 
     if (clean) {
         struct runResult r = run_capture(samples, count, power, 99.0, 0);
@@ -423,8 +429,8 @@ int main(int argc, char **argv)
 
             if (csv != NULL)
                 fprintf(csv, "%.1f,%u,%u,%u,%u,%u,%u,%u,%.4f,%.2f\n", snrs[s],
-                        seed, r.frames, r.lichOk, r.lichBad, r.sacchOk,
-                        r.voice, r.ambe, r.evmMean, r.syncErrMean);
+                        seed, r.frames, r.lichOk, r.lichBad, r.sacchOk, r.voice,
+                        r.ambe, r.evmMean, r.syncErrMean);
         }
 
         printf("%5.1f %6.1f  %6.1f  %7.1f  %7.1f %6.1f %5.1f  %5.3f  %4.2f\n",

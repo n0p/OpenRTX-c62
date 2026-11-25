@@ -123,7 +123,7 @@ aleatorios (los 72 bits, sin excepción: el último bit del plano C también va)
 |---|---|---|
 | símbolos/s | 4800 | 2400 |
 | muestras/símbolo a 48 kHz | 10 | 20 |
-| forma de pulso | RRC α 0.2, 81 taps | RRC α 0.2, 161 taps (±4 símbolos) |
+| forma de pulso | RRC α 0.2, 81 taps | `H(f) sinc(fT)`, 161 taps (±4 símbolos) |
 | tabla dibit → nivel | {+1,+3,−1,−3} | {−1,−3,+1,+3} |
 | rejilla temporal | slot TDMA de 30 ms, CACH, guardas | portadora continua, trama de 80 ms |
 | rampa | guardas de silencio + gate del PA | igual: símbolos a cero + gate del PA |
@@ -137,12 +137,20 @@ suya. La rampa es la de DMR: no hay envolvente en el modulador, se sale con
 símbolos a cero (que arrastran la cola del pulso) y el `radio_c62_gateStart()`
 del driver es el que sube y baja la portadora.
 
-**El pulso del receptor.** El filtro del receptor se cambió de 81 taps (la
-tabla de DMR aplicada a 48 kHz, dos veces más ancha que la señal) a 161 taps
-diseñados para 20 muestras/símbolo. Con el anterior, un transmisor correcto
-dejaba el EVM en 0.08–0.10 —el ISI de un pulso root sin su raíz— y el slicer
-fallaba símbolos sueltos; con el nuevo baja a 0.03–0.06 y el bucle sale **bit a
-bit**. La captura real de `docs/RX_NXDN.md` también mejora: 18 tramas, 18 LICH
+**El pulso, en las dos mitades.** El transmisor de este árbol modulaba con un
+RRC α 0.2 pelado, y el receptor con el mismo RRC: el par funcionaba porque los
+dos se equivocaban igual, pero el aire de NXDN no lleva eso. TS 1-A 3.4/3.5
+reparte el pulso: el transmisor manda `H(f) sinc(fT)` (el RRC por la retención
+de un símbolo durante su periodo) y el receptor toma `H(f) D(f)`, con
+`D(f) = 1/sinc(fT)`; juntos dan el coseno alzado de Nyquist `H(f)²`. Con el RRC
+pelado el par quedaba en `RC(f)/sinc(fT)`, que no es Nyquist, y por eso el lazo
+propio salía a EVM 0.125 mientras una emisión real lo dejaba en 0.08–0.10.
+
+Ahora `Fsk4Tx` aplica la retención (`fsk4Mod_init(..., hold = true)`, la tabla
+`hold_pulse`, 161 taps de `tools/nxdn_rx_pulse.py --tx`) y el receptor recibe
+con `H(f) D(f)`: el lazo propio baja a **EVM 0.051** y sigue saliendo **bit a
+bit**. dPMR se queda con el RRC pelado porque su receptor también lo es; el
+`hold` es un parámetro, no un cambio global. La captura real de `docs/RX_NXDN.md` también mejora: 18 tramas, 18 LICH
 y 18 SACCH, contra 17 y 6 antes, y 72 cuadros de voz contra 68.
 
 ## Desviación y máscara
