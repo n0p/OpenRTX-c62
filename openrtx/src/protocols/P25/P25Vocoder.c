@@ -8,25 +8,50 @@
  * @file P25Vocoder.c
  * @brief IMBE decoder hook, see P25Vocoder.h.
  *
- * Built with CONFIG_P25_VOCODER (CMake option C62_P25_VOCODER), which needs an
- * IMBE backend linked in. The adapter below is written for mbelib-neo
- * (mbe_processImbe4400Data, the decoder the host prototype in work/p25-rx
- * validates bit-exactly against dsd-neo); porting it to op25's imbe_vocoder is
- * the same three calls with array_of_bits/imbe_decode_parameters_4400. Which
- * one to link is the user's call: see docs/RX_P25.md for the licences and the
- * patent family.
+ * Three builds:
+ *   - CONFIG_P25_VOCODER (default): lib/imbe_vocoder, this tree's own decoder
+ *     (docs/IMBE.md);
+ *   - CONFIG_P25_MBELIB: mbelib-neo's mbe_processImbe4400Data(), its DVSI
+ *     10 ms subframe rendering, kept as an option to compare on the radio;
+ *   - neither: the hook reports unavailable and the speech path plays silence.
  */
 
 #include "protocols/P25/P25Vocoder.h"
 
-#ifdef CONFIG_P25_VOCODER
+#if defined(CONFIG_P25_VOCODER)
 
-#include <string.h>
+#include <stddef.h>
+
+#include "imbe_vocoder.h"
+
+void p25Vocoder_reset(void)
+{
+    imbe_vocoder_reset();
+}
+
+bool p25Vocoder_available(void)
+{
+    return true;
+}
+
+int p25Vocoder_decode(const uint8_t params[11], int16_t pcm[P25_VOCODER_PCM_SAMPLES])
+{
+    return p25Vocoder_decode_errs(params, 0, pcm);
+}
+
+int p25Vocoder_decode_errs(const uint8_t params[11], int nerr,
+                           int16_t pcm[P25_VOCODER_PCM_SAMPLES])
+{
+    return imbe_vocoder_decode_errs(params, nerr, pcm);
+}
+
+#elif defined(CONFIG_P25_MBELIB)
 
 #include <mbelib.h>
 
-/* The decoder is stateful and not reentrant: called from the playback thread
- * only. 4.6 KiB of state, in PSRAM with the rest of the non-per-sample data. */
+/* The reference decoder is stateful and not reentrant: called from the
+ * playback thread only. Its three parameter sets are about 4.6 KiB, in PSRAM
+ * with the rest of the mode's non-per-sample data. */
 #ifdef __ZEPHYR__
 static mbe_parms curParms __attribute__((section(".psram_section")));
 static mbe_parms prevParms __attribute__((section(".psram_section")));
@@ -51,23 +76,32 @@ bool p25Vocoder_available(void)
 
 int p25Vocoder_decode(const uint8_t params[11], int16_t pcm[P25_VOCODER_PCM_SAMPLES])
 {
+    return p25Vocoder_decode_errs(params, 0, pcm);
+}
+
+int p25Vocoder_decode_errs(const uint8_t params[11], int nerr,
+                           int16_t pcm[P25_VOCODER_PCM_SAMPLES])
+{
+    char bits[88];
+
     if (!initialised)
         p25Vocoder_reset();
 
     /* mbelib wants the 88 bits one per char, in transmission order */
-    char bits[88];
     for (int i = 0; i < 88; i++)
         bits[i] = (char)((params[i >> 3] >> (7 - (i & 7))) & 1);
 
     mbe_process_result result;
     mbe_initProcessResult(&result);
-    mbe_processImbe4400Data(pcm, &result, bits, &curParms, &prevParms,
-                            &prevEnhanced);
+    /* The parameter-bits entry point has no C0 count, so the error total is
+     * what the repeat and mute decisions see (imbe4400_repeat_required). */
+    result.total_errors = (nerr > 0) ? nerr : 0;
+    mbe_processImbe4400Data(pcm, &result, bits, &curParms, &prevParms, &prevEnhanced);
 
-    return (result.errs == 0) ? 0 : -1;
+    return (result.total_errors > 5) ? 1 : 0;
 }
 
-#else /* CONFIG_P25_VOCODER */
+#else /* no backend */
 
 void p25Vocoder_reset(void)
 {
@@ -78,12 +112,20 @@ bool p25Vocoder_available(void)
     return false;
 }
 
-int p25Vocoder_decode(const uint8_t params[11],
-                      int16_t pcm[P25_VOCODER_PCM_SAMPLES])
+int p25Vocoder_decode(const uint8_t params[11], int16_t pcm[P25_VOCODER_PCM_SAMPLES])
 {
     (void)params;
     (void)pcm;
     return -1;
 }
 
-#endif /* CONFIG_P25_VOCODER */
+int p25Vocoder_decode_errs(const uint8_t params[11], int nerr,
+                           int16_t pcm[P25_VOCODER_PCM_SAMPLES])
+{
+    (void)params;
+    (void)nerr;
+    (void)pcm;
+    return -1;
+}
+
+#endif

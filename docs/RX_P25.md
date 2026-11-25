@@ -22,9 +22,10 @@ west build -b c62 -d build_c62 . -- -DCONFIG_C62_DMR_RX=y -DCONFIG_C62_APRS=y \
 
 `CONFIG_C62_P25` (`platform/targets/c62/Kconfig.board`, CMake option
 `C62_P25`) adds the protocol sources, `OpMode_P25` and `CONFIG_P25` for the rest
-of the firmware. It is off by default. Voice needs an IMBE decoder linked in
-(`CONFIG_C62_P25_VOCODER`, see *Voice* below); without one the mode decodes,
-shows the call and counts frames but plays nothing.
+of the firmware. It is off by default. Voice comes with it: `CONFIG_C62_P25_VOCODER`
+(default **y**, see *Voice* below) builds `lib/imbe_vocoder`, our own decoder.
+Turn it off and the mode still decodes, shows the call and counts frames, but
+plays nothing.
 
 `OPMODE_P25 = 7` in `rtx.h`. The numbering is shared with the other receive
 modes landing in this fork (NXDN 5, dPMR 6, YSF 8, D-STAR 9, airband 10): use
@@ -223,7 +224,8 @@ it, `p25Speech_start()` resets the queue):
 
 The decode tables (`P25Tables.c`, 4 612 B) are `const` and therefore in flash,
 not in RAM. The IMBE decoder state, when one is linked in, belongs in PSRAM too
-(`P25Vocoder.c`); mbelib-neo's `mbe_parms` trio is 4.6 KiB.
+(`P25Vocoder.c`); the built-in decoder's instance is 11.6 KiB there (mbelib-neo's
+`mbe_parms` trio is 4.6 KiB).
 
 If RAM ever needs to be cut further, the candidates in order are: the ring
 (16 384 samples is 3.8 frames; two would do with 8 192, at the cost of the
@@ -233,20 +235,24 @@ speech queue depth, and the discriminator block (10 ms instead of 20 ms).
 ## Voice, licences and patents
 
 `P25Vocoder.c` is the hook: 88 IMBE parameters (11 bytes, packed MSB first,
-already FEC-corrected) in, 160 samples of 8 kHz PCM out. **No decoder ships in
-this tree.** Two candidates were evaluated with the host prototype:
+already FEC-corrected) in, 160 samples of 8 kHz PCM out. **The decoder now ships
+in this tree**: `lib/imbe_vocoder`, our own C port of mbelib-neo's IMBE path,
+**195 k instructions per 20 ms frame (3.9 – 5.2 % of the M33)**, in the default
+`-DCONFIG_C62_P25=y` image. `docs/IMBE.md` has the bit allocation, the
+verification against the reference on 261 real off-air frames plus 1000 encoder
+frames, the sizes, the licence and the encoder verdict.
+
+The two candidates evaluated with the host prototype before that port, one of
+which is kept as a selectable backend (`-DCONFIG_C62_P25_MBELIB=y`):
 
 * **mbelib-neo** — the decoder `work/p25-rx` uses, validated frame by frame
-  against dsd-neo on the captures above. Licence: GPL-2.0-or-later (the
-  library; its `mbe_*` API is what `P25Vocoder.c` already calls, so linking it
-  needs `-DCONFIG_C62_P25_VOCODER=y` and the module in the build, no code
-  change). Cost: about 4.6 KiB of state and 1-2 M instructions per 20 ms frame
-  on the M33 (measured for the AMBE+2 decoder of the same family in
-  `docs/DMR_VOCODER.md`).
-* **op25's `imbe_vocoder`** — fixed-point C++, GPL-3.0-or-later, the same
-  licence as this firmware. Lower cost on an M33 without an FPU-heavy path.
-  Porting the hook is three calls (`array_of_bits()`,
-  `imbe_decode_parameters_4400()`, `imbe_synthesis()`).
+  against dsd-neo on the captures above. Licence: GPL-2.0-or-later. Cost:
+  9.36 M instructions per 20 ms frame, more than the 6 M the frame has, so it
+  cannot run in real time on this MCU; that measurement is what motivated the
+  port. Its rendering (DVSI's 10 ms subframes) is what the port measures itself
+  against in `docs/IMBE.md` §4.
+* **op25's `imbe_vocoder`** — fixed-point C++, GPL-3.0-or-later. Not needed: our
+  port is integer-free float like the AMBE+2 one and already fits.
 
 **Licence compatibility.** The firmware is GPL-3.0-or-later. mbelib-neo as
 GPL-2.0-or-later can be combined with it (GPLv2-or-later code may be taken

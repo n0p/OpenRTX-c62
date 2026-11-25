@@ -15,14 +15,19 @@
  * already FEC-corrected, packed MSB first in 11 bytes (P25Phy.h, voice[]).
  * A backend turns them into 160 samples of 8 kHz PCM.
  *
- * No backend ships in this tree. The two candidates and their terms are in
- * docs/RX_P25.md: mbelib-neo (GPL-2.0-or-later, the one the host prototype in
- * work/p25-rx decodes with) and the fixed-point imbe_vocoder of op25
- * (GPL-3.0-or-later). Both are compatible with this firmware's GPL-3.0-or-later
- * and both implement the IMBE/AMBE patent family that TIA-102.BABA inherits
+ * No backend shipped in this tree until now. Two exist:
+ *   - CONFIG_P25_VOCODER: lib/imbe_vocoder, this tree's own C decoder, a port of
+ *     mbelib-neo's IMBE path with the TIA-102.BABA 7.5 spec rendering
+ *     (GPL-2.0-or-later core, GPL-3.0-or-later wrapper). Default when the P25
+ *     mode is on.
+ *   - CONFIG_P25_MBELIB: mbelib-neo (GPL-2.0-or-later) linked in as before,
+ *     with its own DVSI 10 ms subframe rendering. Off by default: it costs
+ *     9.36 M instructions per frame, more than the 6 M of a 20 ms budget.
+ *
+ * Both implement the IMBE/AMBE patent family that TIA-102.BABA inherits
  * (US 5,701,390 and US 8,359,197, the latter running to about 2028); this is
- * a statement of fact, not a legal opinion, and the decision to link one is the
- * user's.
+ * a statement of fact, not a legal opinion. docs/IMBE.md has the bit
+ * allocation, the verification, the cost and the licences.
  *
  * Without a backend the hook reports unavailable, the speech path plays
  * silence, and the status still counts the frames: the mode is complete from
@@ -58,9 +63,25 @@ void p25Vocoder_reset(void);
  *
  * @param params: the 88 parameters, packed MSB first, 11 bytes.
  * @param pcm: destination, P25_VOCODER_PCM_SAMPLES samples.
- * @return 0 on success, -1 if no decoder is linked in or the frame is bad.
+ * @return 0 on a voice frame, 1 if the frame was repeated or muted (still
+ *         played, the way a P25 receiver covers a lost frame), -1 if no
+ *         decoder is linked in or the arguments are bad.
  */
 int p25Vocoder_decode(const uint8_t params[11], int16_t pcm[P25_VOCODER_PCM_SAMPLES]);
+
+/**
+ * Decode one IMBE frame whose channel decoder reported nerr corrected bits.
+ *
+ * The count drives TIA-102.BABA 7.7's frame repeat and 7.8's muting: a frame
+ * with more than five corrected bits is repeated instead of played, and a run
+ * of them mutes to 7.8's noise. The P25 PHY reports the corrected bits of a
+ * whole LDU, not of each of its nine frames, so the speech path passes 0 for a
+ * frame whose FEC succeeded and a value over the threshold for one that failed.
+ *
+ * @return as p25Vocoder_decode().
+ */
+int p25Vocoder_decode_errs(const uint8_t params[11], int nerr,
+                           int16_t pcm[P25_VOCODER_PCM_SAMPLES]);
 
 #ifdef __cplusplus
 }
