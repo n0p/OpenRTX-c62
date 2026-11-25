@@ -148,6 +148,9 @@ target_sources(app
     openrtx/src/core/pc_proto.c
     openrtx/src/core/pc_proto_ops.c
     openrtx/src/core/pc_proto_dbg.c
+    # The bench namespace: scripted measurements against an external receiver
+    # (docs/BENCH.md).  Compiled in always; served only with C62_BENCH_PROTO.
+    openrtx/src/core/pc_proto_bench.c
     openrtx/src/rtx/rtx.cpp
     openrtx/src/rtx/TxGuard.c
     openrtx/src/rtx/OpMode_FM.cpp

@@ -95,6 +95,9 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/core/pc_proto.c',
                'openrtx/src/core/pc_proto_ops.c',
                'openrtx/src/core/pc_proto_dbg.c',
+               # The bench namespace: scripted measurements against an
+               # external receiver. See docs/BENCH.md.
+               'openrtx/src/core/pc_proto_bench.c',
                'openrtx/src/rtx/rtx.cpp',
                'openrtx/src/rtx/TxGuard.c',
                'openrtx/src/rtx/OpMode_FM.cpp',
@@ -1436,6 +1439,26 @@ pc_proto_dbg_test = executable('pc_proto_dbg_test',
                                sources : unit_test_src + ['tests/unit/pc_proto.cpp'],
                                kwargs  : pc_proto_opts_dbg)
 
+# El banco de medidas (docs/BENCH.md). Igual: dos veces, con el espacio de
+# nombres del banco y sin el, para que "una build de produccion no mueve la
+# radio" sea un test y no una promesa.
+pc_bench_opts = {'c_args' : linux_c_args + ['-DCONFIG_C62_DEBUG_PROTO',
+                                            '-DCONFIG_C62_BENCH_PROTO'],
+                 'cpp_args' : linux_cpp_args + ['-DCONFIG_C62_DEBUG_PROTO',
+                                                '-DCONFIG_C62_BENCH_PROTO'],
+                 'include_directories' : linux_inc,
+                 'dependencies' : [sdl_dep, threads_dep, codec2_dep,
+                                   catch2_dep],
+                 'link_args' : linux_l_args}
+
+pc_bench_test = executable('pc_bench_test',
+                           sources : unit_test_src + ['tests/unit/pc_proto_bench.cpp'],
+                           kwargs  : pc_bench_opts)
+
+pc_bench_nobench_test = executable('pc_bench_nobench_test',
+                                   sources : unit_test_src + ['tests/unit/pc_proto_bench.cpp'],
+                                   kwargs  : unit_test_opts)
+
 # Zonas: los planes de canales como datos (repetidoras R0-R7 y U0-U100, PMR446)
 zones_test = executable('zones_test',
                         sources : unit_test_src + ['tests/unit/zones.cpp'],
@@ -1694,6 +1717,8 @@ test('C62 Calibration Test', c62_calib_test)
 test('Channel Store Test',   channel_store_test)
 test('PC Protocol Test',     pc_proto_test)
 test('PC Protocol Debug Test', pc_proto_dbg_test)
+test('PC Bench Test',        pc_bench_test)
+test('PC Bench Production Test', pc_bench_nobench_test)
 test('Zones Test',           zones_test)
 test('AGC Test',             agc_test)
 test('AM TX Test',           am_tx_test)

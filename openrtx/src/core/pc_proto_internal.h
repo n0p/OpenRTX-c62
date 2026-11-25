@@ -124,6 +124,17 @@ int pc_dbg_bb(struct pcReq *r);
 int pc_dbg_txTrace(struct pcReq *r);
 int pc_dbg_rxCounters(struct pcReq *r);
 
+/* Bench namespace (pc_proto_bench.c).  Same rule as the debug namespace: with
+ * the build option off every one answers PC_ERR_NOT_ALLOWED, and the
+ * dispatcher has already refused them on the capability before that. */
+int pc_bench_arm(struct pcReq *r);
+int pc_bench_tune(struct pcReq *r);
+int pc_bench_ptt(struct pcReq *r);
+int pc_bench_capture(struct pcReq *r);
+int pc_bench_rssi(struct pcReq *r);
+int pc_bench_sweep(struct pcReq *r);
+int pc_bench_report(struct pcReq *r);
+
 #ifdef __cplusplus
 }
 #endif

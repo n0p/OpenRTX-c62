@@ -456,8 +456,13 @@ void platform_wdtFeed(void)
         wdt_feed(wdt_dev, wdtChannel);
 }
 
-#ifdef C62_REMOTE
-/* Forced PTT for the remote control: -1 uses the pad, which has no button */
+#if defined(C62_REMOTE) || defined(CONFIG_C62_BENCH_PROTO)
+/*
+ * Forced PTT, for the remote control and for the bench protocol: in both
+ * builds the PTT pad carries a UART RX and there is no button to press, so
+ * the transmitter is keyed by whoever is holding the cable.  -1 returns the
+ * pad.
+ */
 static volatile int pttOverride = -1;
 
 void platform_pttOverride(int state)
@@ -468,11 +473,17 @@ void platform_pttOverride(int state)
 
 bool platform_getPttStatus()
 {
-#ifdef C62_REMOTE
+#if defined(C62_REMOTE)
     /* The PTT pad carries the remote control's UART RX */
     if (pttOverride >= 0)
         return pttOverride != 0;
     return false;
+#elif defined(CONFIG_C62_BENCH_PROTO)
+    /* Same pad, same reason; without an override the pad is read, which
+     * idles high (released) while the UART is not talking. */
+    if (pttOverride >= 0)
+        return pttOverride != 0;
+    return gpio_pin_get_dt(&button_ptt);
 #else
     return gpio_pin_get_dt(&button_ptt);
 #endif

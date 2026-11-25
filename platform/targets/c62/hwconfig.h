@@ -153,9 +153,11 @@ void platform_wdtFeed(void);
 /**
  * Force the PTT state, for automated tests over the programming cable.
  *
- * Only exists in C62_REMOTE builds, where the PTT pad carries the remote's
- * UART and there is no button to press. With an override set, this is what
- * platform_getPttStatus() returns; clearing it (-1) returns the pad.
+ * Exists in C62_REMOTE builds, where the PTT pad carries the remote's UART and
+ * there is no button to press, and in C62_BENCH_PROTO builds, where the same
+ * pad carries the PC protocol and the bench keys the radio from the PC.  With
+ * an override set, this is what platform_getPttStatus() returns; clearing it
+ * (-1) returns the pad.
  *
  * @param state: -1 to use the pad, 0 for released, 1 for pressed.
  */
