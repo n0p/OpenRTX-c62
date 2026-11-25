@@ -369,7 +369,7 @@ void arch_system_halt(unsigned int reason);
  * thread that had not started) and nothing is reported: a wrong PC in a
  * post-mortem is worse than no PC.
  */
-static void faultFrame(uint32_t *pc, uint32_t *lr)
+static void faultFrame(volatile uint32_t *pc, volatile uint32_t *lr)
 {
     *pc = 0;
     *lr = 0;
