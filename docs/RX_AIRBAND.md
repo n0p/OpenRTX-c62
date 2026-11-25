@@ -383,6 +383,132 @@ audio son automáticos y el operador solo los enciende o los apaga. Guardar una
 frecuencia de la banda en el banco desde el navegador de zonas sigue sin estar
 (`zones_toStore()` + `chstore_add()`), pero el editor de canales ya la escribe.
 
+## 9. La conmutación al modo: qué hace y dónde está su límite
+
+Entrar en AM desde FM, en un VFO cualquiera, dejó una vez la radio con el teclado
+muerto y la pantalla congelada —y con el receptor, el protocolo y el reloj de
+actividad funcionando, que fue lo que permitió localizarlo—. Esta sección es la
+ruta completa de la conmutación, lo que se arregló y el límite que queda.
+
+### La secuencia
+
+La pide la UI (`state.channel.mode`) y la ejecuta el hilo de RTX, que es el dueño
+del chip. `rtx_task()` ve la configuración nueva y llama a `switchMode()`
+(`openrtx/src/rtx/rtx.cpp`), que hace, en este orden:
+
+1. **vetar el PTT** y olvidar la pulsación que hubiera visto (`KeyGate.h`), para
+   que el modo que se va a construir no pueda transmitir por un nivel viejo;
+2. **apagar el PA y leerlo** (`forceTxOff()` → `radio_disableRtx()` y REG_33);
+3. **decirle al driver el modo nuevo** (`radio_setOpmode()`): en AM escribe el
+   perfil AM del BK4819 (REG_43/13/4A/47/2B/28), **instala el AGC de audio del
+   camino AM** con `csk6codec_setRxProcessor(amAudioProcess)` y deja el driver
+   en `OPMODE_AIRBAND`;
+4. **desmontar el modo viejo**: `disable()` (que cierra su camino de audio) y el
+   destructor; el bloque de la arena se devuelve;
+5. **construir y habilitar el nuevo**, y **esperar a que reciba**: como mucho
+   `RTX_MODE_START_MS` (300 ms) de pasadas de `update()`, hasta que el *driver*
+   diga `RX`. Si no llega, se vuelve al modo anterior con una línea en el log
+   (`MODE %u: not receiving after 300 ms, reverting`) y el estado vuelve con él;
+   si no había modo anterior, la radio queda inactiva con el PA apagado;
+6. **reabrir la puerta del PTT** sólo con una liberación posterior y una pulsación
+   de al menos 25 ms (`KEYGATE_GUARD_MS`).
+
+El modo, por su parte, abre el camino de audio cuando su squelch de portadora se
+abre (`audioPath_request(SOURCE_RTX, SINK_SPK, PRIO_RX)`) y lo cierra al
+cerrarse. Ese camino y el del aviso de voz o el beep con el que la UI anuncia el
+modo (`SOURCE_MCU -> SINK_SPK`, `PRIO_PROMPT`) **son la misma tabla**
+(`openrtx/src/core/audio_path.cpp`) y los piden **dos hilos a la vez** justo en
+el cambio de modo: el de RTX al abrir el receptor del modo nuevo y el de UI al
+sonar el anuncio.
+
+### La causa raíz del cuelgue
+
+La tabla de rutas de audio (`activePaths`, `routes`, `pathCounter`) no tenía
+**ningún candado**. Un `std::map` y un `std::set` se insertaban, borraban y
+recorrían desde dos hilos a la vez; una rotación del árbol rojo-negro bajo un
+lector concurrente no da una respuesta equivocada: deja un enlace en ciclo y la
+búsqueda **no termina nunca**, o lanza `std::out_of_range` desde `routes.at()`,
+que en este firmware se compila sin excepciones y aborta.
+
+Con el hilo de UI dentro de `audioPath_getStatus()` —lo llama `vp_tick()` en cada
+pasada mientras hay un aviso en curso— el síntoma es exactamente el medido:
+
+| qué | estado durante el cuelgue |
+|---|---|
+| hilo de UI | girando dentro de una búsqueda de la tabla, sin candado tomado |
+| teclado y pantalla | muertos: el bucle de UI no vuelve a escanear ni a dibujar |
+| hilo de RTX | vivo: no usa la tabla de estado de la UI; el receptor sigue |
+| protocolo PC | vivo: es otro hilo y `status`/`diag` no piden `state_mutex` |
+| perro guardián | no salta: el hilo principal sigue alimentándolo |
+| reloj de actividad | corriendo, sin reinicio |
+
+Por qué AM y no FM: AM es el único modo que (a) abre y cierra su camino de audio
+con un **squelch de portadora** de márgenes 1/2 dB, es decir con cambios de ruta
+frecuentes en cuanto hay una señal en el canal, y (b) hace que la UI anuncie el
+modo («A M») y suene el beep en el mismo instante en que el modo nuevo abre el
+receptor. El cambio a AM es el único momento en que los dos hilos están dentro de
+la tabla a la vez; en FM el anuncio también suena, pero el receptor ya estaba
+abierto y no hay una petición simultánea.
+
+La prueba, en el host y sin radio: el mismo patrón de dos hilos contra
+`audio_path.cpp` **corrompía la tabla 6 de 6 veces** (SIGSEGV o
+`map::at` fuera de rango) antes del arreglo, y con el candado pasa las 200 000
+peticiones con `opens == closes`. Está en `tests/unit/audio_path.cpp`, y la
+secuencia FM → AM → FM con los dos hilos y con un driver que se niega a recibir
+está en `tests/unit/mode_switch_am.cpp`.
+
+### Lo que se arregló, pieza a pieza
+
+| pieza | qué se hizo |
+|---|---|
+| `core/audio_path.cpp` | un mutex para toda la tabla; `open()`/`close()` **fuera** del candado (el driver puede tardar 250 ms); `routes.at()` sustituido por búsquedas con comprobación, porque sin excepciones un `at()` fallido aborta la radio |
+| `platform/drivers/audio/audio_c62.c` | `boardMutex` con plazo (`BOARD_LOCK_TIMEOUT_MS`, 50 ms) en vez de `K_FOREVER`; la ruta sólo se marca abierta si el códec la aplicó, así que un fallo se reintenta en el siguiente flanco de squelch |
+| `platform/drivers/audio/csk6_codec.c` | el candado del códec se toma con plazo (`CSK6_LOCK_TIMEOUT_MS`, 250 ms) en `setRoute`, `start`, `data`, `sync`, `halt` y `stop`: un DSP que no contesta cuesta esa ruta o ese stream, nunca el hilo que llama. `csk6codec_setRoute()` devuelve el resultado |
+| `rtx/rtx.cpp` | la conmutación tiene plazo y es reversible: si el modo nuevo no recibe en `RTX_MODE_START_MS`, se vuelve al anterior y se dice en el log |
+| `core/threads.c` | el perro guardián se alimenta **sólo mientras el hilo de UI avanza** (`UI_THREAD_STALL_MS`, 3 s): un hilo de UI parado deja de alimentarlo y la radio se reinicia en recepción en vez de quedarse tiesta |
+
+### Límites, dichos sin adornos
+
+- **El reinicio es el último recurso, no el arreglo.** Si el hilo de UI se para
+  por una causa que no sea esta (un DSP que no contesta dentro de un `vp_tick`,
+  por ejemplo), el perro guardián reinicia a los ~5 s. Se pierde la sesión, no la
+  radio; el PA está apagado hasta que alguien lo pida, así que el reinicio es
+  seguro.
+- **Un aviso que no se puede abrir se pierde.** Con el candado del códec tomado
+  por un DSP atascado, `audioPath_request(PRIO_PROMPT)` devuelve un id pero el
+  driver no aplica la ruta; el aviso suena mudo hasta el siguiente cambio de
+  ruta. Es el precio acordado: audio perdido antes que hilo perdido.
+- **La reversión no insiste sola.** Después de volver al modo anterior, la UI
+  sigue creyendo que el modo pedido es AM; la radio sólo lo volverá a intentar
+  cuando llegue una configuración nueva (un ajuste, un canal, un cambio de
+  frecuencia). Es a propósito: reintentar cada 30 ms sería un fallo cada 300 ms.
+- **El plazo de arranque son 300 ms.** Es holgado para este hardware (el peor
+  arranque medido es el del WFM, ~300 ms de calibración del BK1080, y ese se paga
+  en `radio_setOpmode()`, no aquí). Un modo que necesite más tiene que decirlo
+  subiendo `RTX_MODE_START_MS`, no esperando en silencio.
+- **El cuelgue se midió con una sola radio.** La corrupción de la tabla está
+  reproducida en el host; que *esta* sea la que disparó aquel cuelgue encaja con
+  todo lo observado (UI muerta, RTX y protocolo vivos, sin reinicio), pero la
+  traza del hilo de UI en la radio no se pudo tomar porque el teclado ya no
+  respondía y el protocolo no expone los hilos. La instrumentación que lo
+  cerraría es un volcado de las pilas de los hilos por el protocolo de depuración.
+
+### Cómo reproducirlo
+
+En la radio: FM en un VFO con una señal presente (por ejemplo 145,500 MHz con un
+repetidor), tecla lateral y `5` para recorrer los modos hasta «AM», con el nivel
+de avisos de voz en beep o superior. Antes de este arreglo: la pantalla se queda
+como está, ninguna tecla responde, y `status`/`diag` por el cable siguen
+contestando con el modo en `airband` y el receptor funcionando.
+
+En el host, sin radio:
+
+```bash
+meson setup build_linux && meson compile -C build_linux
+./build_linux/audio_path_test        # la tabla, con dos hilos
+./build_linux/mode_switch_am_test    # FM -> AM -> FM, y el modo que no arranca
+```
+
 ## Referencias
 
 - Lista de registros del BK4819 V3: `datasheets/BK4819V3_Registers_List_20201218.pdf`
