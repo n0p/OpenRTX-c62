@@ -23,9 +23,11 @@ su contacto de PTT es el mismo pad que la recepción del puerto serie:
 
 El altavoz y el micrófono son contactos analógicos del jack y funcionan siempre:
 lo que se pisa es **solo el pulsador**. `&uart2` de `c62.dts` lleva
-`pinctrl-0 = <&pinctrl_uart2_rx_default &pinctrl_uart2_tx_default>`, así que el
-pad queda muxado a UART RX en todos los builds, y el pulsador del accesorio
-enchufado pone la línea a nivel bajo cada vez que se aprieta.
+`pinctrl-0 = <&pinctrl_uart2_rx_default &pinctrl_uart2_tx_default>`, y
+`pinctrl_uart2_rx_default` (`c62_pinctrl.dtsi`) declara el pad como recepción de
+la consola; el firmware lo remuxa según el modo en vigor (`Never` lo devuelve a
+GPIO). Con el pad en RX, el pulsador del accesorio enchufado pone la línea a
+nivel bajo cada vez que se aprieta.
 
 El problema es eléctrico y no tiene vuelta: un pulsador cerrado y el bit de
 inicio de un byte son **el mismo nivel bajo**. Lo único que los distingue es
@@ -70,7 +72,6 @@ Es la misma distinción que antes, pero medida donde la línea de verdad se ve, 
 con una ventaja: un chorro de `0x00` ya no puede imitar una pulsación, porque
 son caracteres correctos y no cuentan. El nivel de reposo depende del *pull-up*
 del pad (ver abajo): sin él la línea flota y el receptor entrama basura.
-
 
 ## 2. Los tres modos
 
@@ -118,7 +119,6 @@ port: PTT line held at start-up (uart break, gpio 0): unknown, ignored until it 
 ```
 
 y el detector empieza a contar en cuanto la línea se libere y se vuelva a bajar.
-
 
 Con `Always` el menú lo avisa mientras se está eligiendo el valor: la fila
 enseña `Always, no PTT`. Con `Never` el protocolo no puede funcionar porque su
