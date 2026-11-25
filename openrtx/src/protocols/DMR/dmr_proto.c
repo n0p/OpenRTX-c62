@@ -7,6 +7,9 @@
 #include "dmr_proto.h"
 #include "dmr_data.h"
 #include "dmr_sms.h"
+#ifdef CONFIG_KISS
+#include "core/packet_service.h"
+#endif
 #include "dmr_fec.h"
 #include "dmr_port.h"
 #include "dmr_track.h"
@@ -793,6 +796,16 @@ static void apply_lrrp_position(int slot_idx, const dmr_packet_t *pk,
 
 static void apply_packet(int slot_idx, const dmr_packet_t *pk, uint32_t t_ms)
 {
+#ifdef CONFIG_KISS
+    /*
+     * The packet modem's DMR IP mode: the user data of the call goes to the
+     * host as one KISS frame, whether it is a UDP datagram or the raw octets.
+     * See core/packet_service.h and docs/KISS.md.
+     */
+    if (pk->udp && (pk->data != NULL) && (pk->udp_len > 0))
+        packet_service_dmrPayload(pk->data + pk->udp_off, (size_t)pk->udp_len);
+#endif
+
     /* A text message (dmr_sms.c prints it) */
     if (dmrSms_rxPacket(pk, t_ms))
         return;

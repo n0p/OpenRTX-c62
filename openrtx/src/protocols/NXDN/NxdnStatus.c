@@ -16,6 +16,9 @@
 #include <string.h>
 
 #include "protocols/NXDN/NxdnStatus.h"
+#ifdef CONFIG_KISS
+#include "core/packet_service.h"
+#endif
 #include "protocols/NXDN/NxdnPhy.h"
 
 static struct nxdnStatus status;
@@ -84,6 +87,16 @@ void nxdnStatusSacchSegment(int part, bool complete,
     status.message.type = msg->type;
     status.message.source = msg->source;
     status.message.dest = msg->dest;
+
+#ifdef CONFIG_KISS
+    /*
+     * Packet modem, NXDN mode: the nine octets of the layer 3 message go to
+     * the host as one KISS frame. Receive only: this firmware has no NXDN
+     * transmitter and the short data call, which would be the natural payload,
+     * travels in FACCH1 and is not decoded (docs/RX_NXDN.md, docs/KISS.md).
+     */
+    packet_service_nxdnPayload(msg->octets, sizeof(msg->octets));
+#endif
 }
 
 void nxdn_getStatus(struct nxdnStatus *out)
