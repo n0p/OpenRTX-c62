@@ -684,40 +684,72 @@ void pc_proto_capturePush(const int16_t *samples, size_t stride, size_t count)
  * change applies on the next pass without the UI having to know that this file
  * exists, and a value that arrives from the CPS lands the same way.
  *
- * In "Auto" the pad stays muxed to the UART and its input is also sampled as a
- * GPIO.  A low level that lasts more than PORT_PTT_HOLD_MS is a finger on the
- * switch (a 0x00 byte holds the line 87 us, a short break a couple of
- * milliseconds); while that lasts, the bytes and the framing errors the UART
- * collects are drained, counted and thrown away, and the half frame the parser
- * had is dropped.  On release the parser waits for the next end delimiter and
- * everything is normal again.  The cost, and it is real, is that the frames the
- * client sends while the operator keys are lost -- the counter in the status
- * says how many.
+ * In "Auto" the pad stays muxed to the UART and the switch is read from the
+ * receiver's side, not from the GPIO: every character is classified by the line
+ * status it came with, and a break or a missing stop bit means the pad was held
+ * low through a whole character (87 us at 115200).  A run of those longer than
+ * PORT_PTT_HOLD_MS is a finger on the switch.  The GPIO input is *not* usable
+ * for this: with the pad on UART2 RXD its DATAIN reads low always (the first
+ * version of this detector trusted it and keyed the radio from boot), while a
+ * clean 0x00 byte has a stop bit and never counts.  While the switch is held,
+ * the bytes the UART collects are drained, counted and thrown away, and the half
+ * frame the parser had is dropped.  On release the parser waits for the next end
+ * delimiter and everything is normal again.  The cost, and it is real, is that
+ * the frames the client sends while the operator keys are lost -- the counter in
+ * the status says how many.
  */
 static volatile uint32_t rxLost;
 static uint32_t lostAtPress;
 static int appliedMode = -1;
+static bool lineUnknownReported;
 
-static uint32_t uartTakeLineErrors(void)
+/**
+ * Drain what the UART holds and classify it by the line status of each
+ * character.
+ *
+ * @param buf:        where the bytes go (may be NULL to discard them).
+ * @param max:        how many to take at most, so one pass cannot spin.
+ * @param held:       out: characters that were a break or had no stop bit.
+ * @param overruns:   out: overrun errors seen in this pass.
+ * @return characters taken.
+ *
+ * LSR is read *before* RBR on purpose: on this UART the status it carries
+ * describes the character at the head of the FIFO, which is the one the next
+ * RBR read pops.  Reading it the other way round would attribute every error
+ * to the character after it.
+ */
+static size_t uartDrain(uint8_t *buf, size_t max, uint32_t *held,
+                        uint32_t *overruns)
 {
-    /*
-     * Reading the line status clears the error bits on this UART, which is the
-     * only way to acknowledge them: overrun, parity, framing and break are
-     * counted as one event per read, which is what "the switch was holding the
-     * line when a byte was on its way" looks like from the outside.
-     */
+    size_t n = 0;
     uint32_t lsr = sys_read32(UART_BASE + UART_LSR);
-    uint32_t errors = 0;
+
+    *held = 0;
+    *overruns = 0;
+
+    while ((n < max) && (lsr & LSR_DR)) {
+        const uint8_t c = (uint8_t)sys_read32(UART_BASE + UART_RBR);
+
+        if (buf != NULL)
+            buf[n] = c;
+        n++;
+
+        /*
+         * A framing error is a stop bit sampled low, a break is the line low
+         * through the whole character: both are "held", and nothing else that
+         * arrives from a live line produces them.  port_ptt_held_char() is the
+         * rule, in core/port_ptt.h, where it can be tested on a host.
+         */
+        if (port_ptt_held_char((lsr & LSR_FE) != 0, (lsr & LSR_BI) != 0))
+            (*held)++;
+
+        lsr = sys_read32(UART_BASE + UART_LSR);
+    }
 
     if (lsr & LSR_OE)
-        errors++;
-    if (lsr & LSR_PE)
-        errors++;
-    if (lsr & LSR_FE)
-        errors++;
-    if (lsr & LSR_BI)
-        errors++;
-    return errors;
+        (*overruns)++;
+
+    return n;
 }
 
 static void portApplyMode(uint8_t mode)
@@ -727,6 +759,7 @@ static void portApplyMode(uint8_t mode)
     /* The owner of the pad is the point of the setting: UART2 RXD or a plain
      * GPIO with its pull-up.  This also resets the detector. */
     c62_portPadToUart(plan.padIsUart);
+    lineUnknownReported = false;
 
     if (!plan.useProtocol) {
         /*
@@ -739,12 +772,26 @@ static void portApplyMode(uint8_t mode)
         lostAtPress = 0;
     }
 
-    /* After the reset, so the line reaches the console even when a client was
-     * linked a moment ago. */
-    printk("port: mode %s, pad %s, PTT %s\n", settings_portModeName(mode),
-           plan.padIsUart ? "UART RX" : "GPIO",
-           plan.useDetector ? "sustained low > 30 ms"
-                            : (plan.useButton ? "button" : "not read"));
+    /*
+     * After the reset, so the line reaches the console even when a client was
+     * linked a moment ago.  The line names the *source* the mode reads the
+     * switch from, and, in Auto, what the GPIO witness says at this instant:
+     * with the pad on UART2 RXD a low reading there while the line is idle is
+     * how the first version of this detector keyed itself (docs/ACCESSORY.md).
+     */
+    if (plan.useDetector) {
+        printk("port: mode %s, pad %s, PTT sustained break > %d ms (uart LSR "
+               "FE|BI), gpio %d\n",
+               settings_portModeName(mode), plan.padIsUart ? "UART RX" : "GPIO",
+               PORT_PTT_HOLD_MS, (int)c62_portPadLevel());
+    } else if (plan.useButton) {
+        printk("port: mode %s, pad GPIO, PTT button level, gpio %d\n",
+               settings_portModeName(mode), (int)c62_portPadLevel());
+    } else {
+        printk("port: mode %s, pad %s, PTT not read\n",
+               settings_portModeName(mode),
+               plan.padIsUart ? "UART RX" : "GPIO");
+    }
 }
 
 static void pcProtoMain(void *a, void *b, void *c)
@@ -769,18 +816,44 @@ static void pcProtoMain(void *a, void *b, void *c)
         portPttState_t *ptt = c62_portPttState();
 
         /*
+         * Drain the FIFO once per pass, always: those characters are the
+         * protocol's input *and* the only evidence of the switch the line
+         * gives.  Classifying them costs nothing extra.
+         */
+        uint32_t held = 0;
+        uint32_t overruns = 0;
+        size_t n = 0;
+        if (plan.useProtocol) {
+            n = uartDrain(chunk, sizeof(chunk), &held, &overruns);
+            rxBytes += (uint32_t)n;
+        }
+
+        /*
          * Sample the accessory switch every millisecond -- that is what makes
          * the 30 ms rule work -- and act on its edges exactly once: the frame
          * the parser was building at the moment of the press is garbage, and
          * the counters of the press are reported on release.
          */
-        bool held = false;
+        bool up = false;
         if (plan.useDetector) {
-            const bool changed = c62_portPttPoll();
+            const bool changed = port_ptt_update(ptt, held > 0,
+                                                 k_uptime_get_32());
 
-            held = port_ptt_pressed(ptt);
+            up = port_ptt_pressed(ptt);
 
-            if (changed && held) {
+            /*
+             * A line that is already low when the detector starts is unknown,
+             * not pressed: say so once, with both witnesses, instead of keying
+             * the radio for ever or blaming the client.
+             */
+            if (ptt->unknown && !lineUnknownReported) {
+                lineUnknownReported = true;
+                printk("port: PTT line held at start-up (uart break, gpio %d): "
+                       "unknown, ignored until it is released\n",
+                       (int)c62_portPadLevel());
+            }
+
+            if (changed && up) {
                 lostAtPress = ptt->lost;
                 /* The line went low under the parser: drop the half frame and
                  * wait for the next end delimiter (pc_proto_rxResync). */
@@ -800,51 +873,42 @@ static void pcProtoMain(void *a, void *b, void *c)
             }
         }
 
-        size_t n = 0;
-        if (plan.useProtocol && held) {
-            /*
-             * The pad is grounded by the switch: everything the UART sees is
-             * break and zeros.  Drain it so the FIFO cannot overflow into the
-             * first frame after the release, count it and parse none of it.
-             */
-            uint32_t dropped = 0;
-            while (n < sizeof(chunk) &&
-                   (sys_read32(UART_BASE + UART_LSR) & LSR_DR)) {
-                (void)sys_read32(UART_BASE + UART_RBR);
-                n++;
-                dropped++;
-            }
-            dropped += uartTakeLineErrors();
-            if (dropped > 0) {
-                rxLost += dropped;
-                rxBytes += (uint32_t)n;
-                port_ptt_noteLost(ptt, dropped);
-            }
-        } else if (plan.useProtocol) {
-            /* Framing errors with nobody pressing are the cable's business:
-             * count them so the supervisor can tell an idle line from a noisy
-             * one, and let the parser decide about the bytes. */
-            uint32_t errors = uartTakeLineErrors();
-            if (errors > 0) {
-                rxLost += errors;
-                port_ptt_noteLost(ptt, errors);
-            }
+        if (plan.useProtocol) {
+            if (up) {
+                /*
+                 * The pad is grounded by the switch: everything the UART saw is
+                 * break and zeros.  Count it and parse none of it, so the FIFO
+                 * cannot overflow into the first frame after the release.
+                 */
+                uint32_t dropped = (uint32_t)n + overruns;
+                if (dropped > 0) {
+                    rxLost += dropped;
+                    port_ptt_noteLost(ptt, dropped);
+                }
+            } else {
+                /*
+                 * Framing errors and breaks with nobody pressing are the
+                 * cable's business (or the run-up to a press): count them so
+                 * the supervisor can tell an idle line from a noisy one, and
+                 * let the parser decide about the bytes.
+                 */
+                uint32_t errors = held + overruns;
+                if (errors > 0) {
+                    rxLost += errors;
+                    port_ptt_noteLost(ptt, errors);
+                }
 
-            while (n < sizeof(chunk) &&
-                   (sys_read32(UART_BASE + UART_LSR) & LSR_DR)) {
-                chunk[n++] = (uint8_t)sys_read32(UART_BASE + UART_RBR);
-            }
-            if (n > 0) {
-                rxBytes += (uint32_t)n;
-                uint32_t frames = pc_proto_rx(&proto, chunk, n);
-                /* Anything valid keeps the link alive; the protocol instance
-                 * counts the frames itself. */
-                if (frames > 0)
-                    lastFrameMs = k_uptime_get_32();
-                /* A client that stops talking gives the console back. */
-                if (pc_proto_linked(&proto) &&
-                    (k_uptime_get_32() - lastFrameMs) > PC_PROTO_IDLE_MS) {
-                    pc_proto_reset(&proto);
+                if (n > 0) {
+                    uint32_t frames = pc_proto_rx(&proto, chunk, n);
+                    /* Anything valid keeps the link alive; the protocol
+                     * instance counts the frames itself. */
+                    if (frames > 0)
+                        lastFrameMs = k_uptime_get_32();
+                    /* A client that stops talking gives the console back. */
+                    if (pc_proto_linked(&proto) &&
+                        (k_uptime_get_32() - lastFrameMs) > PC_PROTO_IDLE_MS) {
+                        pc_proto_reset(&proto);
+                    }
                 }
             }
         }

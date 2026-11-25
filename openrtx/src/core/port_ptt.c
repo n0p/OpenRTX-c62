@@ -6,8 +6,8 @@
 
 /*
  * The accessory pad's PTT rule and the table of the three port modes.
- * Portable C with no radio in it: the platform reads the pad, the transport
- * discards what arrives while the switch is held, and both ask here.
+ * Portable C with no radio in it: the transport classifies what the receiver
+ * framed, discards what arrives while the switch is held, and both ask here.
  */
 
 #include "core/port_ptt.h"
@@ -28,50 +28,78 @@ void port_ptt_reset(portPttState_t *s)
     s->glitches = 0;
     s->low = false;
     s->pressed = false;
+    /*
+     * Not armed: the first thing the line does is not evidence of anything.
+     * A pad that is already grounded when the detector starts -- a cable with
+     * the switch held, a short, a pad whose pull-up has not been applied yet --
+     * has to be released once before it can press anything.
+     */
+    s->armed = false;
+    s->unknown = false;
 }
 
-bool port_ptt_update(portPttState_t *s, bool low, uint32_t nowMs)
+bool port_ptt_update(portPttState_t *s, bool heldLow, uint32_t nowMs)
 {
     if (s == NULL)
         return false;
 
-    if (low) {
-        if (!s->low) {
-            s->low = true;
-            s->lowSince = nowMs;
-        }
-
+    if (!heldLow) {
         /*
-         * Strictly longer than the hold: a byte, a break and a bouncing
-         * contact are shorter, and a press declared exactly at the threshold
-         * would make the rule impossible to state.
+         * The line came back up long enough for a character to have a stop bit,
+         * or nothing was sent at all.  That is the release, and it is the only
+         * thing that arms the detector: from here on a held line is a press
+         * somebody made, not a level that was already there at start-up.
          */
-        if (!s->pressed && ((uint32_t)(nowMs - s->lowSince) > PORT_PTT_HOLD_MS)) {
-            s->pressed = true;
-            s->pressSince = s->lowSince;
-            s->presses++;
+        s->armed = true;
+        s->unknown = false;
+
+        if (!s->low)
+            return false;
+
+        s->low = false;
+
+        if (s->pressed) {
+            /*
+             * Release: immediate, and the duration is measured from the edge
+             * that started the press, not from the instant it was declared.
+             */
+            s->pressed = false;
+            s->lastPressMs = (uint32_t)(nowMs - s->pressSince);
             return true;
         }
+
+        /* A low that ended before the threshold: a break, a bounce, garbage. */
+        s->glitches++;
         return false;
     }
 
-    if (!s->low)
-        return false;
-
-    s->low = false;
-
-    if (s->pressed) {
+    if (!s->armed) {
         /*
-         * Release: immediate, and the duration is measured from the edge that
-         * started the press, not from the instant it was declared.
+         * Held from the first sample and never released: the level is unknown,
+         * not a press.  Nothing is timed, so the moment the line is released
+         * and held again the 30 ms are counted from scratch.
          */
-        s->pressed = false;
-        s->lastPressMs = (uint32_t)(nowMs - s->pressSince);
+        s->unknown = true;
+        return false;
+    }
+
+    if (!s->low) {
+        s->low = true;
+        s->lowSince = nowMs;
+    }
+
+    /*
+     * Strictly longer than the hold: a break and a bouncing contact are
+     * shorter, and a press declared exactly at the threshold would make the
+     * rule impossible to state.
+     */
+    if (!s->pressed && ((uint32_t)(nowMs - s->lowSince) > PORT_PTT_HOLD_MS)) {
+        s->pressed = true;
+        s->pressSince = s->lowSince;
+        s->presses++;
         return true;
     }
 
-    /* A low that ended before the threshold: a byte, a break or a bounce. */
-    s->glitches++;
     return false;
 }
 

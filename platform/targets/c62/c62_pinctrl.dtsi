@@ -12,9 +12,17 @@
 	};
 
 	/*
-	 * Console RX keeps the SoC default, which maps no pin: UART2_RXD would
-	 * be GPIOA_15, the PTT.
+	 * Console RX is GPIOA_15, the same pad as the accessory jack's PTT switch
+	 * (docs/ACCESSORY.md).  Declaring it here is the truth about the wiring;
+	 * the CSK6 pinctrl binding carries only the function selector, so the
+	 * pull-up that keeps an unplugged line high is asserted in code, after the
+	 * function switch (c62_portPadToUart(), platform.c): the pad's mode bits
+	 * 16..18 share the register with the selector and IOMuxManager_PinConfigure
+	 * rewrites only bits 0..4, but the rest level is asserted last on purpose.
 	 */
+	pinctrl_uart2_rx_default: uart2_rx_default {
+		pinctrls = <UART2_RXD_GPIOA_15>;
+	};
 
 	/* SPI1, the display bus */
 	pinctrl_spi1_cs_default: spi1_cs_default {

@@ -504,13 +504,16 @@ void platform_pttOverride(int state)
  *
  * GPIOA_15 is the accessory jack's PTT contact and UART2 RXD at the same time.
  * The pad stays muxed to the UART -- that is how the PC talks to the radio --
- * but its input can still be read through the GPIO block, which is what makes
- * "Auto" possible: a low level that lasts more than PORT_PTT_HOLD_MS is a
- * finger on the switch, a 0x00 byte or a break is not (core/port_ptt.h).
+ * and the switch is then read from the *receiver's* side: a character that the
+ * UART framed as a break or without a stop bit is a line held low through a
+ * whole character time, and a run of those longer than PORT_PTT_HOLD_MS is a
+ * finger on the switch (core/port_ptt.h).  The GPIO input is not the source:
+ * with the pad on UART2 RXD its DATAIN does not follow the line (it reads low
+ * always, which is what the first port-mode build did in hardware).
  *
- * One instance, fed by whoever runs first: the protocol transport every 1 ms
- * and the key scan every 30 ms.  Feeding it twice in the same millisecond is
- * harmless.
+ * One instance, fed by one context: the protocol transport, every 1 ms, because
+ * it is the only one that may consume the UART FIFO.  Everybody else reads the
+ * verdict.
  */
 static portPttState_t portPtt;
 
@@ -529,13 +532,13 @@ portPttState_t *c62_portPttState(void)
     return &portPtt;
 }
 
-bool c62_portPttPoll(void)
+bool c62_portPadLevel(void)
 {
     /* The device tree declares the key active low, so the logical level is 1
-     * while the pad is grounded. */
-    const bool low = gpio_pin_get_dt(&button_ptt) != 0;
-
-    return port_ptt_update(&portPtt, low, (uint32_t)k_uptime_get_32());
+     * while the pad is grounded.  Only a witness, and the whole truth in
+     * "Never": with the pad muxed to UART2 RXD this bit does not follow the
+     * line, which is why the detector in "Auto" does not use it. */
+    return gpio_pin_get_dt(&button_ptt) != 0;
 }
 
 void c62_portPadToUart(bool uart)
@@ -545,16 +548,27 @@ void c62_portPadToUart(bool uart)
      * it muxes the pad to its default function, which is plain GPIO.  The mode
      * register (direction and pull) is separate from the function selector and
      * survives the switch to UART2 RXD, so the line stays pulled up while the
-     * UART owns it -- that is what makes "a grounded pad" mean "pressed" and
-     * not "floating".
+     * UART owns it -- that is what makes a pad with nothing plugged into it
+     * read high instead of floating.
      */
     gpio_pin_configure_dt(&button_ptt, GPIO_INPUT);
 
-    if (uart)
+    if (uart) {
         IOMuxManager_PinConfigure(CSK_IOMUX_PAD_A, 15, CSK_IOMUX_FUNC_ALTER3);
+        /*
+         * ...and the pull-up once more, after the function switch.  The pad
+         * mode bits (16..18: PULL_DN, PULL_UP, PULL_FRC) live in the same
+         * register as the function selector and IOMuxManager_PinConfigure()
+         * only rewrites bits 0..4, but the rest level of the line is the one
+         * thing this mode cannot get wrong, so it is asserted last and by
+         * name rather than by surviving an unrelated write.
+         */
+        IOMuxManager_ModeConfigure(CSK_IOMUX_PAD_A, 15,
+                                   HAL_IOMUX_PULLUP_MODE);
+    }
 
     /* A press cannot survive the change of owner: whatever was held belongs to
-     * the old mode. */
+     * the old mode, and the new one has to see a release before it keys. */
     port_ptt_reset(&portPtt);
 }
 
@@ -573,17 +587,34 @@ bool platform_getPttStatus()
     const portPttPlan_t plan = port_ptt_plan(mode);
 
     /*
-     * Never read the raw level in "Auto": while the protocol listens, the pad
-     * goes low for the start bit of every byte, so a raw read would key the
-     * transmitter on a HELLO.  There the answer is the sustained-low rule.
+     * Never read the raw level in "Auto": while the protocol listens the pad is
+     * the UART's, its GPIO input does not follow the line, and every byte the
+     * client sends dips it anyway.  There the answer is the detector's, only.
      */
     if (plan.useDetector) {
-        c62_portPttPoll();
+#ifdef C62_PC_PROTO
+        /*
+         * The transport thread is the one context allowed to drain the UART,
+         * and the press evidence lives in the characters it frames.  Draining
+         * from here would steal the client's bytes, so this reads the verdict
+         * and nothing else.  A transport that stops therefore stops the
+         * accessory PTT with it -- pc_proto_c62_supervise() says so in the log.
+         */
         return port_ptt_keyed(mode, port_ptt_pressed(&portPtt), false);
+#else
+        /*
+         * Without the PC protocol nobody muxes the pad: it is a plain GPIO with
+         * its pull-up, so here the level *is* the evidence, and the 30 ms rule
+         * still keeps a bounce from keying.
+         */
+        port_ptt_update(&portPtt, c62_portPadLevel(),
+                        (uint32_t)k_uptime_get_32());
+        return port_ptt_keyed(mode, port_ptt_pressed(&portPtt), false);
+#endif
     }
 
     if (plan.useButton)
-        return port_ptt_keyed(mode, false, gpio_pin_get_dt(&button_ptt) != 0);
+        return port_ptt_keyed(mode, false, c62_portPadLevel());
 
     return false;
 #endif

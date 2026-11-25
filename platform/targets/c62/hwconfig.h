@@ -186,16 +186,19 @@ uint8_t c62_portMode(void);
 portPttState_t *c62_portPttState(void);
 
 /**
- * Sample the pad into the detector.
+ * The pad read as a GPIO: true when it is grounded.
  *
- * @return true when the declared pressed state changed on this sample, so the
- *         transport can abort a half-received frame exactly once.
+ * A witness, and the whole truth only in "Never", where the pad really is a
+ * plain input.  With the pad muxed to UART2 RXD this bit does not follow the
+ * line (docs/ACCESSORY.md), which is why "Auto" takes its evidence from the
+ * receiver instead.
  */
-bool c62_portPttPoll(void);
+bool c62_portPadLevel(void);
 
 /**
  * Route the pad: UART2 RXD when @p uart, plain GPIO with its pull-up otherwise.
- * Resets the detector, because a press cannot survive a change of owner.
+ * Also re-asserts the pull-up after the function switch, and resets the
+ * detector, because a press cannot survive a change of owner.
  */
 void c62_portPadToUart(bool uart);
 
