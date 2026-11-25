@@ -74,6 +74,7 @@
 #include "ui/ui_hints.h"
 #include "ui/ui_zones.h"
 #include "ui/ui_quickmenu.h"
+#include "ui/ui_tools.h"
 #ifdef CONFIG_APRS
 #include "ui/ui_aprs.h"
 #include "core/aprs_service.h"
@@ -1837,6 +1838,7 @@ static void _ui_syncTxDisable(bool *sync_rtx)
 
     if (keyable && (macro_menu || qm_state.open || ui_channels_isOpen()
                     || ui_contacts_isOpen() || ui_zones_isOpen()
+                    || ui_tools_isOpen()
                     || ui_msgs_isScreen(state.ui_screen)
                     || ui_spectrum_isOpen()))
         keyable = false;
@@ -2180,6 +2182,24 @@ void ui_updateFSM(bool *sync_rtx)
             return;
         }
 
+        /*
+         * Tools menu (P1 held down on a main screen, ui_tools.c): the list of
+         * things that had no key of their own and the mode selector. It owns
+         * every key while it is up -- MONI and the long P2 included -- which is
+         * why this block goes before the macro grid: a menu that hands a key to
+         * an overlay the operator cannot see is a key that goes nowhere.
+         */
+        if (ui_tools_isOpen())
+        {
+            ui_tools_handleEvent(&msg, sync_rtx);
+            /* The row may have opened the channel list or the analyser: the
+               one rule re-arms the PTT only when nothing owns it anymore */
+            _ui_syncTxDisable(sync_rtx);
+            redraw_needed = true;
+            KEY_CLAIM(UI_CLAIM_TOOLS);
+            return;
+        }
+
         // If MONI is pressed, activate MACRO functions; P2 long keeps the
         // legacy 3x3 grid as its shortcut everywhere APRS does not claim it
         bool moniPressed = (msg.keys & KEY_MONI)
@@ -2227,20 +2247,23 @@ void ui_updateFSM(bool *sync_rtx)
         }
 
         /*
-         * P1 long press: open the in-radio channel list. The module takes over
-         * the keypad and the screen until it closes; see docs/CHANNELS.md.
+         * P1 long press: open the tools menu (ui_tools.c). It used to open the
+         * channel list directly; the list is now the last row of the menu, so
+         * the shortcut survives and the scanner, the carrier search, the
+         * analyser and the mode selector get a door. The module takes over the
+         * keypad and the screen until it closes; see docs/UI.md.
          */
-        if (!ui_channels_isOpen() && (msg.keys & KEY_F1) && msg.long_press &&
+        if (!ui_tools_isOpen() && (msg.keys & KEY_F1) && msg.long_press &&
             !ui_state.input_locked &&
             (state.ui_screen == MAIN_VFO || state.ui_screen == MAIN_MEM))
         {
-            ui_channels_open();
+            ui_tools_open();
             /*
-             * The list owns the keypad from this moment, so it also owns the
+             * The menu owns the keypad from this moment, so it also owns the
              * transmitter: the PTT is not a key event and would otherwise key
-             * the radio from the channel editor until the next key press. The
-             * menu's Channels row and ui_open_screen() do the same; this path
-             * returned before the block below could.
+             * the radio while a menu is on screen. ui_tools_open() sets
+             * txDisable, and this path returns before the block below could
+             * re-arm it.
              */
             if (state.txDisable != true)
             {
@@ -2248,7 +2271,7 @@ void ui_updateFSM(bool *sync_rtx)
                 *sync_rtx = true;
             }
             redraw_needed = true;
-            KEY_CLAIM(UI_CLAIM_CHANNELS_OPEN);
+            KEY_CLAIM(UI_CLAIM_TOOLS_OPEN);
             return;
         }
 
@@ -3763,6 +3786,15 @@ bool ui_updateGUI()
         /* The keypad backlight follows its setting, not the display level */
         c62_setKeyBacklight(state.settings.keyBacklight);
 #endif
+    }
+    // Tools menu (P1 long): a screen of its own, drawn before anything else
+    if(ui_tools_isOpen())
+    {
+        ui_tools_draw();
+#ifdef UI_CAPTURE
+        gfx_capture_commit();
+#endif
+        return true;
     }
     // Channel list and editor draw on top of whatever screen was open
     if(ui_channels_isOpen())

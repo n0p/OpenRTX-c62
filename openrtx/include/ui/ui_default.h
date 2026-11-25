@@ -100,7 +100,12 @@ enum uiScreen
      * the screens above are reached by number from the quick menu's QM_GOTO
      * rows and from tests, and inserting in the middle renumbers them all.
      */
-    SPECTRUM
+    SPECTRUM,
+    /*
+     * The tools menu (ui_tools.c), P1 held down on a main screen. Also at the
+     * end, for the same reason: it is reached from a key, never by number.
+     */
+    TOOLS_MENU
 };
 
 /**
@@ -128,10 +133,11 @@ enum uiKeyClaim
     UI_CLAIM_ZONES,      /**< The zone browser                             */
     UI_CLAIM_APRS_ENTER, /**< P2 long in FM opened the APRS screens        */
     UI_CLAIM_MACRO,      /**< The macro grid (MONI or P2 long)             */
-    UI_CLAIM_CHANNELS_OPEN, /**< P1 long opened the channel list           */
+    UI_CLAIM_TOOLS_OPEN, /**< P1 long opened the tools menu                 */
     UI_CLAIM_CHANNELS,   /**< The channel list or editor                   */
     UI_CLAIM_SCREEN,     /**< The case of the screen in the big switch     */
-    UI_CLAIM_UNLOCK      /**< Red held down while the keypad was locked    */
+    UI_CLAIM_UNLOCK,     /**< Red held down while the keypad was locked    */
+    UI_CLAIM_TOOLS       /**< The tools menu and its mode submenu          */
 };
 
 /**

@@ -42,6 +42,7 @@
 #include "ui/ui_messages.h"
 #include "ui/ui_modes.h"
 #include "ui/ui_quickmenu.h"
+#include "ui/ui_tools.h"
 #include "ui/ui_zones.h"
 
 /* --------------------------------------------------------------- helpers -- */
@@ -206,6 +207,8 @@ const char *ui_dump_screenName(uint8_t screen)
             return "LOW_BAT";
         case SPECTRUM:
             return "SPECTRUM";
+        case TOOLS_MENU:
+            return "TOOLS_MENU";
         default:
             return "UNKNOWN";
     }
@@ -319,11 +322,25 @@ size_t ui_dump_text(char *buf, size_t len)
 
     append(buf, len, &pos,
            "modules: channels %s  contacts %s (%d)  zones %s  "
-           "msgs %s\n",
+           "msgs %s  tools %s\n",
            ui_channels_isOpen() ? "open" : "closed",
            ui_contacts_isOpen() ? "open" : "closed", cstore_count(),
            ui_zones_isOpen() ? "open" : "closed",
-           ui_msgs_isScreen(state.ui_screen) ? "open" : "closed");
+           ui_msgs_isScreen(state.ui_screen) ? "open" : "closed",
+           ui_tools_isOpen() ? "open" : "closed");
+
+    if (ui_tools_isOpen()) {
+        char value[16];
+
+        append(buf, len, &pos, "tools \"%s\" (%u rows), cursor on %u:\n",
+               ui_tools_title(), ui_tools_rowCount(), ui_tools_selected());
+
+        for (uint8_t i = 0; i < ui_tools_rowCount(); i++)
+            append(buf, len, &pos, "  %s %-10s %s\n",
+                   (i == ui_tools_selected()) ? ">" : " ",
+                   ui_tools_rowLabel(i),
+                   ui_tools_rowValue(i, value, sizeof(value)));
+    }
 
     append(buf, len, &pos, "bank: %d channels, last used %d\n", chstore_count(),
            chstore_lastUsed());
@@ -463,12 +480,37 @@ size_t ui_dump_json(char *buf, size_t len)
 #endif
 
     append(buf, len, &pos,
-           ",\"modules\":{\"channels\":%s,\"contacts\":%s,\"zones\":%s,"
-           "\"messages\":%s}}",
+           ",\"modules\":{\"channels\":%s,\"contacts\":%s,\"zones\":%s,\""
+           "messages\":%s},\"tools\":",
            ui_channels_isOpen() ? "true" : "false",
            ui_contacts_isOpen() ? "true" : "false",
            ui_zones_isOpen() ? "true" : "false",
            ui_msgs_isScreen(state.ui_screen) ? "true" : "false");
+
+    if (ui_tools_isOpen()) {
+        char value[16];
+
+        append(buf, len, &pos, "{\"open\":true,\"title\":");
+        append_json_string(buf, len, &pos, ui_tools_title());
+        append(buf, len, &pos, ",\"modes\":%s,\"selected\":%u,\"rows\":[",
+               ui_tools_inModes() ? "true" : "false", ui_tools_selected());
+
+        for (uint8_t i = 0; i < ui_tools_rowCount(); i++) {
+            append(buf, len, &pos, "%s{\"label\":", (i == 0) ? "" : ",");
+            append_json_string(buf, len, &pos, ui_tools_rowLabel(i));
+            append(buf, len, &pos, ",\"value\":");
+            append_json_string(buf, len, &pos,
+                               ui_tools_rowValue(i, value, sizeof(value)));
+            append(buf, len, &pos, ",\"selected\":%s}",
+                   (i == ui_tools_selected()) ? "true" : "false");
+        }
+
+        append(buf, len, &pos, "]}");
+    } else {
+        append(buf, len, &pos, "{\"open\":false}");
+    }
+
+    append(buf, len, &pos, "}");
 
     return pos;
 }

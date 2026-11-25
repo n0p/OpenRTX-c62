@@ -139,6 +139,7 @@ ui_src_default = ['openrtx/src/ui/default/ui.c',
                   'openrtx/src/ui/default/ui_channels.c',
                   'openrtx/src/ui/default/ui_contacts.c',
                   'openrtx/src/ui/default/ui_messages.c',
+                  'openrtx/src/ui/default/ui_tools.c',
                   'openrtx/src/ui/default/ui_spectrum.c']
 
 ui_src_module17 = ['openrtx/src/ui/module17/ui.c',

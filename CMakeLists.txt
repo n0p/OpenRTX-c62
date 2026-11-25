@@ -185,6 +185,7 @@ target_sources(app
     openrtx/src/ui/default/ui_channels.c
     openrtx/src/ui/default/ui_contacts.c
     openrtx/src/ui/default/ui_messages.c
+    openrtx/src/ui/default/ui_tools.c
     openrtx/src/ui/default/ui_spectrum.c
 
     subprojects/codec2/src/dump.c
