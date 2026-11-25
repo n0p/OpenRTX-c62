@@ -624,15 +624,22 @@ sin filtrar un solo byte.
 
 ## 11. Coste
 
-Medido con la imagen de la rama (`arm-none-eabi-size`, región de la tabla de
-memoria del enlace), misma configuración con y sin las opciones:
+Medido con la tabla de memoria del enlace, misma rama y misma configuración,
+cambiando solo las dos opciones:
 
-| build | FLASH | RAM |
-|---|---|---|
-| sin protocolo | 479 944 B | 166 848 B |
-| `C62_PC_PROTO` + `C62_DEBUG_PROTO` | ver `FLASH.txt` de la entrega | ídem |
+| build | FLASH | RAM | PSRAM |
+|---|---|---|---|
+| sin protocolo | 479 944 B | 166 848 B | 387 156 B |
+| `C62_PC_PROTO=ON` | 490 440 B | 173 000 B | 387 156 B |
+| `C62_PC_PROTO=ON C62_DEBUG_PROTO=ON` | 493 756 B | 173 016 B | 419 156 B |
 
-El grueso del coste en RAM es la instancia del protocolo (~1,7 kB: 400 de
-cuerpo de recepción, 452 de trama de salida, 390 de payload de respuesta y ~550
-del anillo de log). En una build de producción el código del espacio de nombres
-no se enlaza (los handlers quedan en stubs de tres instrucciones).
+Es decir: **+10 496 B de flash y +6 152 B de RAM** por el protocolo, y **+3 316 B
+de flash y +16 B de RAM** por el espacio de nombres de depuración (más 32 000 B
+de PSRAM por el búfer de captura, que es lo único que se lleva la PSRAM).
+
+De esos 6 152 B de RAM, 4 096 son la pila del hilo del transporte y el resto la
+instancia del protocolo (~1,7 kB: 400 de cuerpo de recepción, 452 de trama de
+salida, 390 de payload de respuesta y ~550 del anillo de log), más el estado del
+hilo. En una build de producción sin la segunda opción el código del espacio de
+nombres no se enlaza: los trece handlers quedan en stubs que solo devuelven
+`not_allowed`.
