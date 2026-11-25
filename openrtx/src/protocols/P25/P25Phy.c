@@ -457,7 +457,7 @@ static void decodeTsbk(const uint8_t *bits, struct p25Frame *f, int nSym)
  * @return true when the NID decoded and its DUID parity checks out.
  *
  * The sync and the NID are the only part of a frame whose length does not
- * depend on what the frame turns out to be, so this runs on the first 56
+ * depend on what the frame turns out to be, so this runs on the first 57
  * symbols of the cut, before the rest of the frame is sliced: the DUID it
  * returns is what says how long the frame is.
  */
@@ -740,9 +740,11 @@ static enum tryResult tryFrame(long start, struct p25Frame *f)
     /*
      * The cut, from the frame structure.
      *
-     * The sync and the NID are 56 symbols whatever the frame is, so those are
-     * sliced first, on the levels of the sync field alone (it is all outer
-     * levels and sign balanced, so it fixes DC and outer level by itself).
+     * The sync and the NID are 57 symbols whatever the frame is (the NID's 64
+     * bits carry one status symbol, which is why the payload starts at symbol
+     * 57), so those are sliced first, on the levels of the sync field alone:
+     * that field is all outer levels and sign balanced, so it fixes DC and
+     * outer level by itself.
      * The NID says which data unit this is, and the data unit says how long
      * the frame is: 864 symbols for an LDU, 360 for a control-channel TSDU, 396
      * for a header, 72 or 216 for the terminators.
