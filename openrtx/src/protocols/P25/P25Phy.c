@@ -250,7 +250,7 @@ static float syncScore(const float *w, float *aperture, int *errors, int *pol)
 /* ------------------------------------------------------------ frame decode */
 
 static void decodeLdu(const uint8_t *bits, struct p25Frame *f);
-static void decodeTsbk(const uint8_t *bits, struct p25Frame *f);
+static void decodeTsbk(const uint8_t *bits, struct p25Frame *f, int nSym);
 
 /**
  * IMBE header decode: four Golay(23,12) words and three Hamming(15,11) words
@@ -403,7 +403,7 @@ static void decodeLdu(const uint8_t *bits, struct p25Frame *f)
                 f->lc[8];
 }
 
-static void decodeTsbk(const uint8_t *bits, struct p25Frame *f)
+static void decodeTsbk(const uint8_t *bits, struct p25Frame *f, int nSym)
 {
     /* Three 196-bit blocks: 98 dibits plus three status symbols each. */
     for (int b = 0; b < 3; b++)
@@ -414,7 +414,7 @@ static void decodeTsbk(const uint8_t *bits, struct p25Frame *f)
         for (int s = 0; s < 101 && n < P25_TSBK_BITS; s++)
         {
             int sym = start + s;
-            if (sym >= P25_FRAME_SYMBOLS)
+            if (sym >= nSym)
                 break;
             if ((sym % 36) == 35)
                 continue;   /* status symbol, not payload */
@@ -438,10 +438,22 @@ static void decodeTsbk(const uint8_t *bits, struct p25Frame *f)
 }
 
 /**
- * Decode a complete frame body: NID first (it carries the NAC and the DUID),
- * then whatever that DUID announces.
+ * Decode the NID of the frame in @p bits: BCH(63,16), the DUID parity bit and
+ * the parity that the DUID itself announces.
+ *
+ * @param bits: the frame, one byte per bit, sync first.
+ * @param nac: receives the network access code.
+ * @param duid: receives the data unit ID.
+ * @param ec: receives the bits corrected by the BCH decoder, -1 if it failed.
+ * @return true when the NID decoded and its DUID parity checks out.
+ *
+ * The sync and the NID are the only part of a frame whose length does not
+ * depend on what the frame turns out to be, so this runs on the first 56
+ * symbols of the cut, before the rest of the frame is sliced: the DUID it
+ * returns is what says how long the frame is.
  */
-static bool decodeFrame(struct p25Frame *f, p25FrameHandler handler, void *user)
+static bool decodeNid(const uint8_t *bits, uint16_t *nac, uint8_t *duid,
+                      int *ec)
 {
     uint32_t w = p25_gather(bits, p25_imbe_nid_bits, 32);
     uint32_t w2 = p25_gather(bits, &p25_imbe_nid_bits[32], 32);
@@ -449,20 +461,21 @@ static bool decodeFrame(struct p25Frame *f, p25FrameHandler handler, void *user)
 
     int parity = (int)(nid & 1);
     uint64_t cw = nid >> 1;         /* 63 BCH bits, bit i = x^i */
-    int ec = p25Fec_bchDecode(&cw);
+    int e = p25Fec_bchDecode(&cw);
 #ifdef P25_PHY_TRACE
-    fprintf(stderr, "[nid] %016llx ec=%d\n", (unsigned long long)nid, ec);
+    fprintf(stderr, "[nid] %016llx ec=%d\n", (unsigned long long)nid, e);
 #endif
-    if (ec < 0 || ec > 4)
+    *ec = e;
+    if (e < 0 || e > 4)
         return false;
 
     uint64_t fixed = (cw << 1) | (uint64_t)parity;
-    uint16_t nac = (uint16_t)((fixed >> 52) & 0xFFF);
-    uint8_t duid = (uint8_t)((fixed >> 48) & 0xF);
+    *nac = (uint16_t)((fixed >> 52) & 0xFFF);
+    *duid = (uint8_t)((fixed >> 48) & 0xF);
 
     /* The last bit of the NID is the parity of the DUID (TIA-102.BAAC). */
     bool parityOk;
-    switch (duid)
+    switch (*duid)
     {
         case P25_DUID_HDU:
         case P25_DUID_TDU:
@@ -479,7 +492,24 @@ static bool decodeFrame(struct p25Frame *f, p25FrameHandler handler, void *user)
             parityOk = false;
             break;
     }
-    if (!parityOk)
+    return parityOk;
+}
+
+/**
+ * Decode a complete frame body: NID first (it carries the NAC and the DUID),
+ * then whatever that DUID announces.
+ *
+ * @param nSym: symbols the frame occupies on the air, sync included, as
+ *              announced by its DUID (p25_frame_symbols()).
+ */
+static bool decodeFrame(struct p25Frame *f, p25FrameHandler handler, void *user,
+                        int nSym)
+{
+    uint16_t nac = 0;
+    uint8_t duid = 0;
+    int ec = -1;
+
+    if (!decodeNid(bits, &nac, &duid, &ec))
         return false;
 
     f->duid = (enum p25Duid)duid;
@@ -494,7 +524,7 @@ static bool decodeFrame(struct p25Frame *f, p25FrameHandler handler, void *user)
             break;
 
         case P25_DUID_TSBK:
-            decodeTsbk(bits, f);
+            decodeTsbk(bits, f, nSym);
             break;
 
         case P25_DUID_HDU:
@@ -617,6 +647,16 @@ static int sliceSymbol(float y, struct p25Levels L, int pol)
 }
 
 /**
+ * What trying a candidate frame start produced.
+ */
+enum tryResult
+{
+    TRY_NONE = 0,   ///< Not a frame: the sync or the NID did not hold up
+    TRY_DONE,       ///< A frame was decoded
+    TRY_WAIT,       ///< The frame is longer than what the ring holds so far
+};
+
+/**
  * Try to decode the frame whose sync starts at ring sample @p start.
  *
  * The frame start comes from the ring grid, which steps in whole symbols, so
@@ -632,7 +672,7 @@ static int sliceSymbol(float y, struct p25Levels L, int pol)
  * to clear the aperture threshold, so the true sync was thrown away by the
  * gate before the refinement could run.
  */
-static bool tryFrame(long start, struct p25Frame *f)
+static enum tryResult tryFrame(long start, struct p25Frame *f)
 {
     float bestScore = -2.0f, bestAp = 0.0f;
     int bestErrs = P25_SYNC_MAX_ERRORS + 1, bestPol = 1;
@@ -667,7 +707,7 @@ static bool tryFrame(long start, struct p25Frame *f)
         }
     }
     if (!found)
-        return false;
+        return TRY_NONE;
 
     /* Fine: the correlation does not distinguish +-0.1 symbol, where the eye
      * is attenuated but every sign is still right. */
@@ -695,18 +735,64 @@ static bool tryFrame(long start, struct p25Frame *f)
         }
     }
 
-    for (int k = 0; k < P25_FRAME_SYMBOLS; k++)
-        symBuf[k] = ringInterp(fine + k * P25_SPS);
+    /*
+     * The cut, from the frame structure.
+     *
+     * The sync and the NID are 56 symbols whatever the frame is, so those are
+     * sliced first, on the levels of the sync field alone (it is all outer
+     * levels and sign balanced, so it fixes DC and outer level by itself).
+     * The NID says which data unit this is, and the data unit says how long
+     * the frame is: 864 symbols for an LDU, 360 for a control-channel TSDU, 396
+     * for a header, 72 or 216 for the terminators.
+     *
+     * Cutting a fixed 864 symbols for every frame is what left the control
+     * channel unable to predict its own frames: a TSDU is 360 symbols, so
+     * two thirds of every window were the frames that follow it, the levels
+     * were fitted over 2.4 frames, and the next sync was predicted 504 symbols
+     * (140 %) too far, which the search then had to walk back symbol by symbol.
+     */
+    for (int k = 0; k < P25_SYNC_NID_SYMBOLS; k++)
+        symBuf[k] = ringInterp(fine + (float)k * P25_SPS);
 
-    struct p25Levels L = frameLevels(symBuf, P25_FRAME_SYMBOLS);
+    struct p25Levels Ls = frameLevels(symBuf, 0);
+    for (int k = 0; k < P25_SYNC_NID_SYMBOLS; k++)
+    {
+        int d = sliceSymbol(symBuf[k], Ls, bestPol);
+        bits[2 * k] = (uint8_t)((d >> 1) & 1);
+        bits[2 * k + 1] = (uint8_t)(d & 1);
+    }
+
+    uint16_t nac = 0;
+    uint8_t duid = 0;
+    int ec = -1;
+    if (!decodeNid(bits, &nac, &duid, &ec))
+        return TRY_NONE;
+
+    const int nSym = p25_frame_symbols((enum p25Duid)duid);
+
+    /*
+     * The window can only be as long as the ring is deep: slicing past the
+     * newest sample would read what was written a ring ago instead of the
+     * frame.  The caller keeps this position and tries it again once the rest
+     * of the frame has arrived.
+     */
+    if ((long)fine + (long)(nSym - 1) * (long)P25_SPS + 3 > phy.ringCount)
+        return TRY_WAIT;
+
+    for (int k = P25_SYNC_NID_SYMBOLS; k < nSym; k++)
+        symBuf[k] = ringInterp(fine + (float)k * P25_SPS);
+
+    /* Levels refitted on the frame's own span, then the whole cut. */
+    struct p25Levels L = frameLevels(symBuf, nSym);
 #ifdef P25_PHY_TRACE
-    fprintf(stderr, "[sy] start %ld ph %.2f sc %.2f ap %.2f e %d pol %d span %d\n",
+    fprintf(stderr, "[sy] start %ld ph %.2f sc %.2f ap %.2f e %d pol %d "
+                    "duid %X span %d ec %d\n",
             start, (double)(fine - (float)start), bestScore, bestAp, bestErrs,
-            bestPol, P25_FRAME_SYMBOLS);
+            bestPol, (unsigned)duid, nSym, ec);
 #else
     (void)bestAp;
 #endif
-    for (int k = 0; k < P25_FRAME_SYMBOLS; k++)
+    for (int k = 0; k < nSym; k++)
     {
         int d = sliceSymbol(symBuf[k], L, bestPol);
         bits[2 * k] = (uint8_t)((d >> 1) & 1);
@@ -715,12 +801,21 @@ static bool tryFrame(long start, struct p25Frame *f)
 
     phy.lastFine = fine;
     f->symbol = start / 5;
-    f->spanSymbols = P25_FRAME_SYMBOLS;
-    f->syncErrors = bestErrs;
+    f->spanSymbols = (uint16_t)nSym;
+    /*
+     * The sign errors of the sync at the phase the frame was actually cut at,
+     * on the frame's own levels: the ones the coarse pass counted belong to a
+     * candidate up to one sample away and describe the search, not the frame.
+     */
+    int syncErrs = 0;
+    for (int k = 0; k < P25_SYNC_SYMBOLS; k++)
+        if (((symBuf[k] - L.dc) > 0.0f) != (phy.syncPat[k] * bestPol > 0))
+            syncErrs++;
+    f->syncErrors = syncErrs;
     f->inverted = (bestPol < 0);
     f->bchErrors = -1;
     f->lcRsErrors = -1;
-    return decodeFrame(f, phy.handler, phy.user);
+    return decodeFrame(f, phy.handler, phy.user, nSym) ? TRY_DONE : TRY_NONE;
 }
 
 /* ------------------------------------------------------------------- API */
@@ -738,22 +833,39 @@ void p25Phy_reset(void)
     memset(bits, 0, sizeof(bits));
     memset(symBuf, 0, sizeof(symBuf));
     p25_sync_symbols(phy.syncPat);
-    phy.search = -(long)P25_RING_LEN;
+    /*
+     * The search starts at the first sample the demodulator will ever see, not
+     * at the bottom of the ring: a negative position has nothing written in it,
+     * so every candidate down there interpolates sample 0 and the acquisition
+     * pays a few thousand candidates for nothing (5 ms of audio's worth of
+     * them per hunt).  The ring wrap itself is handled by the index mask.
+     */
+    phy.search = 0;
 }
 
 /**
  * A frame decoded at @p start: resume the search after it.
  *
  * The grid prediction is one frame later than the integer position the frame
- * was found at.  The rescan position comes from the interpolated phase of the
- * sync, one sample past it: any start up to a symbol period before that phase
- * would find this same frame again, and a demodulator that decodes the same
- * frame twice shows two calls for one transmission.
+ * was found at, and that frame is @p nSym symbols long (its DUID says so, not
+ * the length of the longest frame: a control channel's TSDUs are 360 symbols
+ * and predicting 864 put every one of them off the grid).  The rescan position
+ * comes from the interpolated phase of the sync, one sample past it: any start
+ * up to a symbol period before that phase would find this same frame again,
+ * and a demodulator that decodes the same frame twice shows two calls for one
+ * transmission.
  */
-static void frameDecoded(long start, bool grid)
+static void frameDecoded(long start, bool grid, int nSym)
 {
     phy.frames++;
-    phy.search = start + (long)P25_FRAME_SYMBOLS * 5;
+    /*
+     * Predict from the phase the sync was found at, not from the integer ring
+     * position the search started at: the two differ by up to a symbol, and
+     * adding that error to the frame length is what left the +-8 sample grid
+     * with almost no margin against the symbol clock's own drift (every frame
+     * whose phase sat late was predicted too early and re-acquired by hand).
+     */
+    phy.search = (long)(phy.lastFine + 0.5f) + (long)nSym * 5;
     phy.rescan = (long)phy.lastFine + 4;
     phy.haveGrid = grid;
     phy.lastFrameAt = phy.ringCount;
@@ -806,9 +918,12 @@ static void pushDecimated(float mf)
         for (long pos = from; pos <= to; pos++)
         {
             memset(&f, 0, sizeof(f));
-            if (tryFrame(pos, &f))
+            enum tryResult r = tryFrame(pos, &f);
+            if (r == TRY_WAIT)
+                return;         /* the frame is longer than the ring holds */
+            if (r == TRY_DONE)
             {
-                frameDecoded(pos, true);
+                frameDecoded(pos, true, f.spanSymbols);
                 return;
             }
         }
@@ -824,9 +939,12 @@ static void pushDecimated(float mf)
         return;
     }
 
-    if (tryFrame(phy.search, &f))
+    enum tryResult r = tryFrame(phy.search, &f);
+    if (r == TRY_WAIT)
+        return;                 /* the frame is longer than the ring holds */
+    if (r == TRY_DONE)
     {
-        frameDecoded(phy.search, true);
+        frameDecoded(phy.search, true, f.spanSymbols);
         return;
     }
 

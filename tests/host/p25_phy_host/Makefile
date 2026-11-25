@@ -24,7 +24,9 @@ SRCS := main.c \
         $(OPENRTX)/src/protocols/P25/P25Defs.c \
         $(OPENRTX)/src/protocols/P25/P25Tables.c
 
-$(BUILD)/p25_phy_host: $(SRCS) | $(BUILD)
+HDRS := $(wildcard $(OPENRTX)/include/protocols/P25/*.h)
+
+$(BUILD)/p25_phy_host: $(SRCS) $(HDRS) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $(SRCS) -lm
 
 $(BUILD):

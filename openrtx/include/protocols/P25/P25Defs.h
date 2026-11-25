@@ -36,11 +36,13 @@ extern "C" {
 enum p25Geometry
 {
     P25_SYMBOL_RATE = 4800,      ///< Symbols per second
-    P25_FRAME_BITS = 1728,       ///< One 180 ms frame
+    P25_FRAME_BITS = 1728,       ///< One 180 ms voice frame
     P25_FRAME_SYMBOLS = 864,     ///< Same frame in symbols
     P25_SYNC_SYMBOLS = 24,       ///< Frame sync field
     P25_SYNC_BITS = 48,          ///< Same field in bits
     P25_NID_BITS = 64,           ///< NAC + DUID + BCH parity + parity bit
+    P25_NID_SYMBOLS = 32,        ///< Same field in symbols
+    P25_SYNC_NID_SYMBOLS = 57,   ///< Sync, NID and the status symbol inside it
     P25_STATUS_SYMBOLS = 24,     ///< One per 36 symbols, never payload
     P25_IMBE_BITS = 144,         ///< One IMBE codeword on the air (7200 bit/s)
     P25_IMBE_PARAMS = 88,        ///< Vocoder parameters inside it (4400 bit/s)
@@ -96,6 +98,20 @@ const char *p25_duid_name(enum p25Duid duid);
  * @return true if it announces a voice frame (LDU1 or LDU2).
  */
 bool p25_duid_is_voice(enum p25Duid duid);
+
+/**
+ * @param duid: data unit ID.
+ * @return the symbols the frame occupies on the air, sync included.
+ *
+ * A P25 frame is not always 864 symbols: 864 is the voice frame (an LDU is
+ * 1728 bits), while a control-channel TSDU is 720 bits (360 symbols), a header
+ * 790 bits plus its status symbols (396) and the terminators 144 or 432 bits.
+ * The demodulator has to cut the frame it found, and predict the next sync,
+ * with this length and not with the longest frame's; see P25Phy.c.  The values
+ * below are the ones the reference captures show between two syncs, to within
+ * the one symbol the symbol clock drifts over a frame.
+ */
+int p25_frame_symbols(enum p25Duid duid);
 
 /**
  * Gather bits at the given frame positions into a value, MSB first.
