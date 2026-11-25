@@ -9,9 +9,12 @@
 #include "core/spectrum_service.h"
 #include "core/utils.h"
 #include "hwconfig.h"
+#include <errno.h>
+#include <new>
 #include <stdio.h>
 #include <string.h>
 #include "rtx/rtx.h"
+#include "rtx/ModeArena.hpp"
 #include "rtx/OpMode_FM.hpp"
 #include "rtx/OpMode_Airband.hpp"
 #include "rtx/OpMode_M17.hpp"
@@ -69,33 +72,218 @@ static uint32_t        txAbortTime;
 
 static OpMode  *currMode;               // Pointer to currently active opMode handler
 static OpMode     noMode;               // Empty opMode handler for opmode::NONE
-static OpMode_FM  fmMode;               // FM mode handler
-static OpMode_Airband airbandMode;      // Airband AM mode handler
-static OpMode_WFM     wfmMode;          // Broadcast FM receive mode handler
+
+/*
+ * The modes' objects, in one block (docs/MEMORY.md).
+ *
+ * A radio runs one mode at a time, and every mode's object is large: sample
+ * buffers for the whole 30 ms block, the transmit queues, the call state. Only
+ * the active mode's object is constructed, in place, and it is destroyed when
+ * the mode is left, so the block costs the size of the largest mode instead of
+ * the sum of all of them.
+ *
+ * The registry is the single list of the modes this build has: size and
+ * alignment come from the class, so a member added to a mode grows the block
+ * by itself. A mode compiled out is not in it and does not count.
+ */
+namespace
+{
+
+constexpr modeArenaEntry modeEntries[] = {
+    { OPMODE_FM, "FM", sizeof(OpMode_FM), alignof(OpMode_FM) },
+    { OPMODE_AIRBAND, "AM airband", sizeof(OpMode_Airband),
+      alignof(OpMode_Airband) },
+    { OPMODE_WFM_BC, "WFM broadcast", sizeof(OpMode_WFM),
+      alignof(OpMode_WFM) },
 #ifdef CONFIG_M17
-static OpMode_M17 m17Mode;              // M17 mode handler
+    { OPMODE_M17, "M17", sizeof(OpMode_M17), alignof(OpMode_M17) },
 #endif
 #ifdef CONFIG_TETRA
-static OpMode_TETRA tetraMode;          // TETRA mode handler
+    { OPMODE_TETRA, "TETRA", sizeof(OpMode_TETRA), alignof(OpMode_TETRA) },
 #endif
 #ifdef CONFIG_DMR
-static OpMode_DMR dmrMode;              // DMR mode handler
+    { OPMODE_DMR, "DMR", sizeof(OpMode_DMR), alignof(OpMode_DMR) },
 #endif
 #ifdef CONFIG_NXDN
-static OpMode_NXDN nxdnMode;            // NXDN mode handler
+    { OPMODE_NXDN, "NXDN", sizeof(OpMode_NXDN), alignof(OpMode_NXDN) },
 #endif
 #ifdef CONFIG_DPMR
-static OpMode_DPMR dpmrMode;            // dPMR mode handler
+    { OPMODE_DPMR, "dPMR", sizeof(OpMode_DPMR), alignof(OpMode_DPMR) },
 #endif
 #ifdef CONFIG_P25
-static OpMode_P25 p25Mode;              // P25 Phase 1 mode handler
+    { OPMODE_P25, "P25", sizeof(OpMode_P25), alignof(OpMode_P25) },
 #endif
 #ifdef CONFIG_DSTAR
-static OpMode_DSTAR dstarMode;          // D-STAR mode handler
+    { OPMODE_DSTAR, "D-STAR", sizeof(OpMode_DSTAR),
+      alignof(OpMode_DSTAR) },
 #endif
 #ifdef CONFIG_YSF
-static OpMode_YSF ysfMode;              // System Fusion mode handler
+    { OPMODE_YSF, "YSF", sizeof(OpMode_YSF), alignof(OpMode_YSF) },
 #endif
+};
+
+/// Bytes of the largest mode in the registry: what the block has to be.
+constexpr size_t largestModeBytes(void)
+{
+    size_t largest = 0;
+    for (const modeArenaEntry &e : modeEntries)
+        if (e.size > largest)
+            largest = e.size;
+    return largest;
+}
+
+/// Strictest alignment in the registry.
+constexpr size_t strictestModeAlign(void)
+{
+    size_t strictest = 1;
+    for (const modeArenaEntry &e : modeEntries)
+        if (e.align > strictest)
+            strictest = e.align;
+    return strictest;
+}
+
+/*
+ * SRAM, not PSRAM: what the objects hold is the mode's sample buffers -- the
+ * 30 ms block being demodulated, the one being modulated -- and those are
+ * touched inside the sample loop (docs/MEMORY.md has the split).
+ */
+alignas(strictestModeAlign()) uint8_t modeArenaStorage[largestModeBytes()];
+
+ModeArena modeArena(modeArenaStorage, sizeof(modeArenaStorage), modeEntries,
+                    sizeof(modeEntries) / sizeof(modeEntries[0]));
+
+} /* namespace */
+
+/**
+ * Construct a mode's object in the block the arena just handed out.
+ *
+ * Placement new, so no allocation happens here: the memory is the arena's and
+ * the object only runs its constructor over it.
+ *
+ * @param mode: OPMODE_* of the mode to construct.
+ * @param block: the arena's block.
+ * @return the object, or nullptr if this build has no such mode.
+ */
+static OpMode *constructMode(uint8_t mode, void *block)
+{
+    switch (mode) {
+        case OPMODE_FM:
+            return new (block) OpMode_FM();
+        case OPMODE_AIRBAND:
+            return new (block) OpMode_Airband();
+        case OPMODE_WFM_BC:
+            return new (block) OpMode_WFM();
+#ifdef CONFIG_M17
+        case OPMODE_M17:
+            return new (block) OpMode_M17();
+#endif
+#ifdef CONFIG_TETRA
+        case OPMODE_TETRA:
+            return new (block) OpMode_TETRA();
+#endif
+#ifdef CONFIG_DMR
+        case OPMODE_DMR:
+            return new (block) OpMode_DMR();
+#endif
+#ifdef CONFIG_NXDN
+        case OPMODE_NXDN:
+            return new (block) OpMode_NXDN();
+#endif
+#ifdef CONFIG_DPMR
+        case OPMODE_DPMR:
+            return new (block) OpMode_DPMR();
+#endif
+#ifdef CONFIG_P25
+        case OPMODE_P25:
+            return new (block) OpMode_P25();
+#endif
+#ifdef CONFIG_DSTAR
+        case OPMODE_DSTAR:
+            return new (block) OpMode_DSTAR();
+#endif
+#ifdef CONFIG_YSF
+        case OPMODE_YSF:
+            return new (block) OpMode_YSF();
+#endif
+        default:
+            return nullptr;
+    }
+}
+
+/**
+ * Leave the active mode and enter another one, or none.
+ *
+ * The chip is retuned first (radio_setOpmode() is the driver's contract for a
+ * real mode change and it is told before the old mode is shut down), then the
+ * old mode stops its streams and the object dies, then the block goes back and
+ * the new object is constructed in it. currMode is noMode while the block is
+ * free, so a reader on another thread (rxSquelchOpen(), from the UI and the
+ * scan) finds "no carrier" instead of memory that is being reused.
+ *
+ * A mode that cannot be constructed leaves the radio idle on OPMODE_NONE: no
+ * half-configured chip, no streams, and the reason in the log.
+ *
+ * @param mode: OPMODE_* to enter.
+ */
+static void switchMode(uint8_t mode)
+{
+    radio_setOpmode(static_cast< enum opmode >(mode));
+
+    currMode->disable();
+
+    OpMode *dying = currMode;
+    currMode = &noMode;
+    /* noMode is a plain object with no block behind it: it is never destroyed */
+    if (dying != &noMode)
+        dying->~OpMode(); /* virtual: the derived destructor runs */
+    modeArena_release();
+
+    rtxStatus.opStatus = OFF;
+
+    if (mode == OPMODE_NONE)
+        return;
+
+    OpMode *fresh = nullptr;
+    int err = modeArena_acquire(mode);
+    if (err == 0)
+        fresh = constructMode(mode, modeArena.block());
+
+    /*
+     * The registry and the switch above are two lists of the same modes; a
+     * mode in one and not the other would hand out a block nobody fills.
+     */
+    if (fresh != nullptr && fresh->getID() != mode) {
+        fresh->~OpMode();
+        fresh = nullptr;
+        err = -EINVAL;
+    }
+
+    if (fresh == nullptr) {
+        /*
+         * Nothing to run: give the block back, leave the driver on NONE and
+         * say so. The UI keeps working, the radio is simply idle.
+         *
+         * opMode goes back to NONE with it: otherwise every update would find
+         * "active mode differs from the requested one" and try again, which is
+         * a log line every 30 ms until the operator leaves the mode. A new
+         * configuration that asks for it again is one attempt, which is what
+         * an operator changing something expects.
+         */
+        modeArena_release();
+        radio_setOpmode(OPMODE_NONE);
+        rtxStatus.opMode = OPMODE_NONE;
+        #if defined(PLATFORM_C62)
+        printf("MODE %u: no arena block (%d), staying idle\r\n",
+               (unsigned)mode, err);
+        #else
+        (void)err;
+        #endif
+        return;
+    }
+
+    currMode = fresh;
+    currMode->enable();
+}
 
 
 void rtx_init(pthread_mutex_t *m)
@@ -131,6 +319,12 @@ void rtx_init(pthread_mutex_t *m)
     rtxStatus.dmrSourceId   = 0;   /* set from settings.dmr_id on the first sync */
     rtxStatus.dmrDestId     = 9;   /* matches default_settings */
     rtxStatus.dmrDestType   = DMR_DEST_GROUP;
+    /*
+     * The modes' block: poison it before the first acquire, so that an acquire
+     * that finds it written to is a bug and not the boot's own leftovers.
+     */
+    modeArena_bind(&modeArena);
+    modeArena_release();
     currMode = &noMode;
 
     pthread_mutex_lock(&txMutex);
@@ -156,6 +350,16 @@ void rtx_terminate()
     rtxStatus.opStatus = OFF;
     rtxStatus.opMode   = OPMODE_NONE;
     currMode->disable();
+    /*
+     * The object dies with the firmware: the block goes back so a terminate
+     * and init cycle starts from poison, and the mode's destructor runs while
+     * everything it may touch (the audio paths, the codec) is still there.
+     */
+    OpMode *dying = currMode;
+    currMode = &noMode;
+    if (dying != &noMode)
+        dying->~OpMode();
+    modeArena_release();
     radio_terminate();
 }
 
@@ -356,46 +560,12 @@ void rtx_task()
          */
         if(currMode->getID() != rtxStatus.opMode)
         {
-            // Forward opMode change also to radio driver
-            radio_setOpmode(static_cast< enum opmode >(rtxStatus.opMode));
-
-            currMode->disable();
-            rtxStatus.opStatus = OFF;
-
-            switch(rtxStatus.opMode)
-            {
-                case OPMODE_NONE: currMode = &noMode;  break;
-                case OPMODE_FM:   currMode = &fmMode;  break;
-                case OPMODE_AIRBAND: currMode = &airbandMode; break;
-                case OPMODE_WFM_BC:  currMode = &wfmMode;     break;
-                #ifdef CONFIG_M17
-                case OPMODE_M17:  currMode = &m17Mode; break;
-                #endif
-                #ifdef CONFIG_DMR
-                case OPMODE_DMR:   currMode = &dmrMode;   break;
-                #endif
-                #ifdef CONFIG_DPMR
-                case OPMODE_DPMR:  currMode = &dpmrMode;  break;
-                #endif
-                #ifdef CONFIG_TETRA
-                case OPMODE_TETRA: currMode = &tetraMode; break;
-                #endif
-#ifdef CONFIG_NXDN
-                case OPMODE_NXDN:  currMode = &nxdnMode;  break;
-#endif
-                #ifdef CONFIG_P25
-                case OPMODE_P25:  currMode = &p25Mode;  break;
-                #endif
-                #ifdef CONFIG_YSF
-                case OPMODE_YSF:   currMode = &ysfMode;   break;
-                #endif
-                #ifdef CONFIG_DSTAR
-                case OPMODE_DSTAR: currMode = &dstarMode; break;
-                #endif
-                default:   currMode = &noMode;
-            }
-
-            currMode->enable();
+            /*
+             * One block, one mode: the old object is destroyed and its memory
+             * given back before the new one is constructed in it, so the radio
+             * never holds two modes' state (docs/MEMORY.md).
+             */
+            switchMode(rtxStatus.opMode);
         }
 
         // Tell radio driver that there was a change in its configuration.

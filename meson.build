@@ -96,6 +96,7 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/core/pc_proto_ops.c',
                'openrtx/src/core/pc_proto_dbg.c',
                'openrtx/src/rtx/rtx.cpp',
+               'openrtx/src/rtx/ModeArena.cpp',
                'openrtx/src/rtx/TxGuard.c',
                'openrtx/src/rtx/OpMode_FM.cpp',
                'openrtx/src/rtx/OpMode_Airband.cpp',
@@ -1636,6 +1637,34 @@ tx_guard_test = executable('tx_guard_test',
                                       'dependencies'       : [catch2_dep],
                                       'link_args'          : linux_l_args})
 
+# The modes share one block of memory, the size of the largest of them
+# (rtx/ModeArena.hpp, docs/MEMORY.md). The arena takes its storage and its
+# registry as arguments, so this test needs no radio, no mode implementation
+# and no protocol package: it drives the eleven sizes measured on the C62 image
+# and sweeps all 121 ordered pairs of modes. Built against OpMode.hpp for the
+# stub objects only.
+mode_arena_test = executable('mode_arena_test',
+                             sources : ['tests/unit/mode_arena.cpp',
+                                        'openrtx/src/rtx/ModeArena.cpp',
+                                        # OpMode::update() sleeps: the vtable
+                                        # of the stubs pulls it in
+                                        'platform/mcu/x86_64/drivers/delays.c'],
+                             kwargs  : {'c_args'             : linux_c_args,
+                                        'cpp_args'           : linux_cpp_args,
+                                        'include_directories': linux_inc +
+                                             ['openrtx/include'],
+                                        'dependencies'       : [catch2_dep],
+                                        'link_args'          : linux_l_args})
+
+# The mode switch through the firmware's own entry points (rtx.cpp): the real
+# modes of the Linux build, every ordered pair of them, on the real arena. The
+# radio driver, the audio paths and the UI come along in unit_test_src, which
+# is what the emulator runs too.
+mode_switch_test = executable('mode_switch_test',
+                              sources : unit_test_src +
+                                        ['tests/unit/mode_switch.cpp'],
+                              kwargs  : unit_test_opts)
+
 # Scan and vigilance: the state machine (core/scanner.c) is pure — no clock, no
 # radio — so this test drives it with a simulated receiver (synthetic squelch,
 # a bank with SKIP flags, a priority channel) and measures its cost.  settings.c
@@ -1723,6 +1752,8 @@ test('GFX Text Test',        gfx_text_test)
 test('S-Level Test', slevel_test)
 test('Audio Codec Test',     audio_codec_test)
 test('TX Guard Test',        tx_guard_test)
+test('Mode Arena Test',      mode_arena_test)
+test('Mode Switch Test',     mode_switch_test)
 
 # Per-mode statistics (core/mode_stats.h). The layer takes everything it
 # measures as an argument and its cycle counter is a weak symbol, so this links
