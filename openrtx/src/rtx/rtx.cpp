@@ -505,8 +505,6 @@ void rtx_task()
     if (spectrumService_poll())
         return;
 
-    const uint32_t now = (uint32_t)getTick();
-
     /*
      * A transmission the supervisor had to abort: it already unkeyed the PA and
      * cancelled the streams, so all that is left is to leave the mode's
