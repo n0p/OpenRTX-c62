@@ -369,9 +369,14 @@ config C62_P25
 
 	  CONFIG_P25_TX (default y with this option) builds the transmitter: the
 	  HDU, the LDU1/LDU2 voice frames with their FEC, the TSBK blocks, the
-	  terminator and the C4FM shaper.  No IMBE encoder exists in this tree,
-	  so without a voice source the call is a header, null-information TSBK
-	  frames and a terminator -- a valid transmission with no voice.
+	  terminator and the C4FM shaper.  No voice source is installed by
+	  default: p25Tx_setVoiceSource() is the hook an IMBE encoder plugs
+	  into, and until one is ported the call is a header, null-information
+	  TSBK frames and a terminator -- a valid transmission with no voice in
+	  it.  Free IMBE encoders do exist (mbelib-neo 2.6's imbe7200x4400_enc
+	  and Pavel Yazev's, already in this tree under lib/opendmr/encoder/),
+	  which is why silence is a missing work package and not a limit of the
+	  format: docs/TX_P25.md, "Voice, and why there is none".
 
 	  Enable it with west build -b c62 ... -- -DCONFIG_C62_P25=y
 
