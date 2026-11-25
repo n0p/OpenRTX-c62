@@ -142,9 +142,21 @@ static inline void conv_encode_step(int state, int input, int *g1, int *g2)
 }
 
 /**
- * Hard-decision Viterbi over the depunctured block.  The trellis is tiny (36
- * steps, 16 states) and terminates in state 0 through the four tail bits, so a
- * full-traceback table costs 36 bytes and nothing else.
+ * Viterbi over the depunctured block, on signed soft values.
+ *
+ * coded[] is one entry per coded bit: positive means "this bit is a 1, and by
+ * this much", negative means "a 0, by this much", and zero is an erasure (a
+ * punctured position) and costs nothing.  A hard decision is the special case
+ * +-1, so the hard path through this decoder is bit for bit what it always
+ * was.  The branch metric adds the soft value when the transition's coded bit
+ * matches the observed sign and subtracts it when it does not, which is the
+ * maximum-likelihood metric of a memoryless channel: the decoder now weighs a
+ * bit read at the edge of a level as much as it deserves and not the same as
+ * one read cleanly.
+ *
+ * The trellis is tiny (36 steps, 16 states) and terminates in state 0 through
+ * the four tail bits, so a full-traceback table costs 36 bytes and nothing
+ * else.
  */
 static void sacch_viterbi(const int8_t coded[72], uint8_t out[SACCH_STEPS])
 {
@@ -170,11 +182,9 @@ static void sacch_viterbi(const int8_t coded[72], uint8_t out[SACCH_STEPS])
                 conv_encode_step(s, u, &g1, &g2);
 
                 int32_t m = metric[s];
-                /* coded[] holds -1 for an erasure, which costs nothing */
-                if (coded[2 * t] >= 0)
-                    m += (coded[2 * t] == g1) ? 1 : -1;
-                if (coded[2 * t + 1] >= 0)
-                    m += (coded[2 * t + 1] == g2) ? 1 : -1;
+
+                m += (g1 != 0) ? coded[2 * t] : -coded[2 * t];
+                m += (g2 != 0) ? coded[2 * t + 1] : -coded[2 * t + 1];
 
                 int ns = ((s << 1) | u) & (SACCH_STATES - 1);
                 if (m > next[ns]) {
@@ -195,7 +205,11 @@ static void sacch_viterbi(const int8_t coded[72], uint8_t out[SACCH_STEPS])
     }
 }
 
-bool nxdnFecSacch(const uint8_t bits[NXDN_SACCH_BITS], uint8_t out[26])
+/**
+ * Decode one block from signed soft values: de-interleave, un-puncture, run
+ * the Viterbi and check the CRC-6.  shared by the hard and soft entry points.
+ */
+static bool sacch_decode(const int8_t soft[NXDN_SACCH_BITS], uint8_t out[26])
 {
     int8_t deint[60];
     int8_t coded[72];
@@ -207,7 +221,7 @@ bool nxdnFecSacch(const uint8_t bits[NXDN_SACCH_BITS], uint8_t out[26])
      * bit is column n/5 of row n%5.
      */
     for (int t = 0; t < NXDN_SACCH_BITS; t++)
-        deint[(t % 5) * 12 + (t / 5)] = (int8_t)(bits[t] & 1u);
+        deint[(t % 5) * 12 + (t / 5)] = soft[t];
 
     /*
      * Un-puncture.  Every G1 bit of the 72 survives, and so does the G2 bit of
@@ -223,7 +237,7 @@ bool nxdnFecSacch(const uint8_t bits[NXDN_SACCH_BITS], uint8_t out[26])
     static const int8_t group_is_g2[10] = { 0, 1, 0, 1, 0, 0, 1, 0, 1, 0 };
 
     for (int i = 0; i < 72; i++)
-        coded[i] = -1;
+        coded[i] = 0;
 
     for (int p = 0; p < 6; p++) {
         for (int b = 0; b < 10; b++) {
@@ -242,6 +256,21 @@ bool nxdnFecSacch(const uint8_t bits[NXDN_SACCH_BITS], uint8_t out[26])
         out[i] = decoded[i];
 
     return true;
+}
+
+bool nxdnFecSacch(const uint8_t bits[NXDN_SACCH_BITS], uint8_t out[26])
+{
+    int8_t soft[NXDN_SACCH_BITS];
+
+    for (int i = 0; i < NXDN_SACCH_BITS; i++)
+        soft[i] = (bits[i] & 1u) ? 1 : -1;
+
+    return sacch_decode(soft, out);
+}
+
+bool nxdnFecSacchSoft(const int8_t soft[NXDN_SACCH_BITS], uint8_t out[26])
+{
+    return sacch_decode(soft, out);
 }
 
 /* ------------------------------------------------------------------ */

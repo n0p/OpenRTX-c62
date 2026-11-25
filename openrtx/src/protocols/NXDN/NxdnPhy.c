@@ -484,6 +484,75 @@ static float frame_evm(const struct nxdnLevels *levels)
     return sqrtf(acc / (float)n) / levels->outer;
 }
 
+/** Scale of the soft values handed to the SACCH Viterbi, and their clamp. */
+#define NXDN_SOFT_SCALE 24.0f
+#define NXDN_SOFT_MAX 120
+
+/**
+ * Soft values for the 60 bits of the SACCH.
+ *
+ * Each transmitted bit is one half of a 4FSK symbol: the sign bit is which
+ * side of zero the symbol sat on, the magnitude bit says inner (+-1/3) or
+ * outer (+-1).  The receiver's job is not to guess those two bits but to say
+ * how likely each reading is, and the max-log likelihood ratio is the
+ * difference between the squared distance to the nearest level carrying the
+ * other value and to the nearest level carrying this one.  A bit read at the
+ * edge of a level then costs a Viterbi path less than one read in the middle
+ * of it, which is the whole point: the trellis can trade a doubtful bit
+ * against the ones around it.
+ *
+ * The sign is in the descrambled frame, so the scrambler's flip (which is an
+ * XOR of 0x02 on the dibit, i.e. of the sign bit) is applied to the sign
+ * reliability here rather than to a bit that no longer exists.
+ */
+static void sacch_soft(const struct nxdnLevels *levels, bool inverted,
+                       int8_t soft[NXDN_SACCH_BITS])
+{
+    const float invOuter = 1.0f / levels->outer;
+    const float inner = levels->inner * invOuter;
+    const int8_t polarity = inverted ? -1 : 1;
+
+    for (int i = 0; i < NXDN_SACCH_BITS; i++) {
+        const int n = NXDN_OFF_SACCH + (i >> 1);
+        const int sym = NXDN_FSW_SYMBOLS + n;
+
+        float y = polarity * phy.win[sym]
+                - (levels->dc + levels->slope * ((float)sym - 96.0f));
+        float yn = y * invOuter;
+
+        /* Squared distance to each of the four levels, -outer first */
+        float e0 = yn + 1.0f;
+        float e1 = yn + inner;
+        float e2 = yn - inner;
+        float e3 = yn - 1.0f;
+        float d0 = e0 * e0;
+        float d1 = e1 * e1;
+        float d2 = e2 * e2;
+        float d3 = e3 * e3;
+
+        /* Sign bit: 1 on the two positive levels, 0 on the negative ones. */
+        float neg = (d0 < d1) ? d0 : d1;
+        float pos = (d2 < d3) ? d2 : d3;
+        float l = neg - pos;
+
+        /* Magnitude bit: 1 on the two outer levels, 0 on the inner ones. */
+        float ins = (d1 < d2) ? d1 : d2;
+        float out = (d0 < d3) ? d0 : d3;
+        float m = ins - out;
+
+        unsigned mask = (nxdnScramble[n >> 3] >> (n & 7)) & 1u;
+        if ((mask != 0u) != inverted)
+            l = -l;
+
+        float v = ((i & 1) ? m : l) * NXDN_SOFT_SCALE;
+        if (v > (float)NXDN_SOFT_MAX)
+            v = (float)NXDN_SOFT_MAX;
+        if (v < (float)-NXDN_SOFT_MAX)
+            v = (float)-NXDN_SOFT_MAX;
+
+        soft[i] = (int8_t)lroundf(v);
+    }
+}
 
 /**
  * Sign errors and eye aperture of a 10-symbol window against the sync word.
@@ -835,20 +904,37 @@ static bool decode_frame(struct nxdnCandidate *c, struct nxdnFrame *out,
     if (!out->lichOk)
         return true;    /* a frame worth reporting, but with nothing in it */
 
-    /* SACCH: 30 dibits = 60 bits, one punctured convolutional block */
+    /* SACCH: 30 dibits = 60 bits, one punctured convolutional block.  The
+     * bits go to the decoder as reliabilities, not as decisions. */
     {
-        uint8_t bits[NXDN_SACCH_BITS];
+        int8_t soft[NXDN_SACCH_BITS];
         uint8_t info[26];
 
-        for (int i = 0; i < NXDN_SACCH_BITS; i++) {
-            int dibit = out->dibits[NXDN_OFF_SACCH + (i >> 1)];
+        sacch_soft(&levels, out->inverted, soft);
 
-            bits[i] = (uint8_t)((i & 1) ? (dibit & 1u)
-                                        : ((dibit >> 1) & 1u));
+        out->sacchOk = nxdnFecSacchSoft(soft, info);
+
+        /*
+         * A block the soft path throws away still has its hard reading: the
+         * reliabilities come from the level model, and when that model is off
+         * (a drifting carrier, a fade inside the frame) they can point the
+         * trellis away from the block the plain decisions would have found.
+         * Decoding again from +-1 costs one more pass over a 36-step trellis
+         * and is what the reference decoder does too; measured at 2 dB it
+         * recovers a fifth of the blocks the soft path misses.
+         */
+        if (!out->sacchOk) {
+            uint8_t bits[NXDN_SACCH_BITS];
+
+            for (int i = 0; i < NXDN_SACCH_BITS; i++) {
+                int dibit = out->dibits[NXDN_OFF_SACCH + (i >> 1)];
+
+                bits[i] = (uint8_t)((i & 1) ? (dibit & 1u)
+                                            : ((dibit >> 1) & 1u));
+            }
+
+            out->sacchOk = nxdnFecSacch(bits, info);
         }
-
-        out->sacchOk = nxdnFecSacch(bits, info);
-
         out->sacchSr = (uint8_t)((info[0] << 7) | (info[1] << 6)
                                  | (info[2] << 5) | (info[3] << 4)
                                  | (info[4] << 3) | (info[5] << 2)

@@ -110,6 +110,23 @@ bool nxdnFecLich(const uint8_t dibits[NXDN_LICH_DIBITS], struct nxdnLich *lich);
 bool nxdnFecSacch(const uint8_t bits[NXDN_SACCH_BITS], uint8_t out[26]);
 
 /**
+ * @brief Decode one SACCH block from soft decisions instead of bits.
+ *
+ * @param soft 60 signed reliabilities, one per transmitted bit, in the order
+ *             they went over the air: positive for a 1, negative for a 0, and
+ *             the magnitude is how far the symbol sat from the decision
+ *             boundary (zero is an erasure).  NxdnPhy.c builds these from the
+ *             4FSK eye: the sign bit of a symbol from its signed distance to
+ *             zero, the magnitude bit from its distance to the inner/outer
+ *             boundary, both as max-log likelihood ratios.
+ * @param out  26 information bits, one per byte: 8 of SR, then 18 of L3.
+ * @return true if the 6-bit CRC of the block matches.
+ *
+ * The hard entry point is this one with every value at +-1.
+ */
+bool nxdnFecSacchSoft(const int8_t soft[NXDN_SACCH_BITS], uint8_t out[26]);
+
+/**
  * @brief Map the 36 dibits of a VCH to one canonical AMBE+2 frame.
  *
  * The 72 on-air bits go through the same dibit schedule DMR uses (a private
