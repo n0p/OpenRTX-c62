@@ -877,6 +877,71 @@ linux_mod17_opts = {
     'link_args'          : linux_l_args
 }
 
+##
+## The C62 simulator
+##
+## The host emulator, built with the radio's own UI configuration instead of the
+## generic Linux one: every mode's screens, the quick menu rows that only exist
+## when the platform defines the feature (the keypad backlight, the fine RX
+## tuning), APRS and the packet modem page. It adds the frame recorder
+## (core/gfx_capture.c) and the text dump of the screen (ui/ui_dump.c), and the
+## scriptable control channel that replaces the readline shell
+## (platform/targets/linux/emulator/sim_control.c). docs/SIMULATOR.md.
+##
+## It is a host-only target: the firmware builds of the radio get the same
+## screens from its Kconfig options, and none of this code is compiled into an
+## image.
+##
+zlib_dep = dependency('zlib', required : false)
+
+sim_src = linux_default_src + [
+  'openrtx/src/core/gfx_capture.c',
+  'openrtx/src/core/aprs_service.c',
+  'openrtx/src/core/messaging_aprs.c',
+  'openrtx/src/protocols/APRS/ax25.c',
+  'openrtx/src/protocols/APRS/hdlc.c',
+  'openrtx/src/protocols/APRS/afsk.c',
+  'openrtx/src/protocols/APRS/aprs.c',
+  'openrtx/src/protocols/APRS/aprs_msg.c',
+  # The packet modem's protocol layer is freestanding: the host bench
+  # (tests/host/kiss_loop) runs the same three files. The service on top of it
+  # (core/packet_service.c) needs the audio streams and a thread of its own, so
+  # it stays the double in platform/targets/linux/emulator/ui_mode_status.c.
+  'openrtx/src/protocols/KISS/kiss.c',
+  'openrtx/src/protocols/KISS/afsk9600.c',
+  'openrtx/src/protocols/KISS/packet_modem.c',
+  'openrtx/src/ui/default/ui_aprs.c',
+  'openrtx/src/ui/default/ui_packet.c',
+  'openrtx/src/ui/default/ui_dump.c',
+  'platform/targets/linux/emulator/sim_control.c',
+  'platform/targets/linux/emulator/sim_png.c',
+  # The channel bank and the contact book, in a file instead of a partition
+  'platform/targets/linux/emulator/user_store_host.c',
+]
+
+# The radio's own feature flags, as -D on top of linux_default_def, which
+# already turns on the screens of the modes that need an engine
+# (UI_TEST_M17/NXDN/DPMR/P25/YSF/DSTAR/DMR/TETRA). CONFIG_APRS and CONFIG_KISS
+# are the two the C62's Kconfig builds (platform/targets/c62/Kconfig.board).
+sim_def = ['-DPLATFORM_LINUX_SIM', '-DUI_CAPTURE',
+           '-DCONFIG_APRS', '-DCONFIG_KISS']
+
+sim_c_args   = linux_c_args + sim_def
+sim_cpp_args = linux_cpp_args + sim_def
+
+if zlib_dep.found()
+  openrtx_c62_sim = executable('openrtx_c62_sim',
+                               sources             : sim_src + main_src,
+                               include_directories : linux_inc,
+                               dependencies        : [sdl_dep, threads_dep,
+                                                      codec2_dep, zlib_dep],
+                               c_args              : sim_c_args,
+                               cpp_args            : sim_cpp_args,
+                               link_args           : linux_l_args)
+  alias_target('simulator', openrtx_c62_sim)
+endif
+
+
 md3x0_opts = {
   'sources'            : md3x0_src,
   'include_directories': md3x0_inc,
