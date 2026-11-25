@@ -33,7 +33,6 @@
 #include <zephyr/sys/printk.h>
 #include <zephyr/sys/reboot.h>
 #include <zephyr/storage/flash_map.h>
-#include <zephyr/fatal.h>
 #include <zephyr/devicetree.h>
 
 #include "core/blackbox.h"
@@ -352,51 +351,96 @@ K_THREAD_DEFINE(bb_supervisor, BB_SUP_STACK, bbSupervisor, NULL, NULL, NULL,
                 BB_SUP_PRIO, 0, BB_SUP_DELAY_MS);
 
 /* ------------------------------------------------------------------------- */
-/* Fault handler                                                             */
+/* Fault path                                                                */
 /* ------------------------------------------------------------------------- */
 
+/* The kernel's weak hook (kernel/include/kernel_arch_interface.h), which the
+ * CSK6 fatal handler ends in.  Declared here rather than by including kernel
+ * internals. */
+void arch_system_halt(unsigned int reason);
+
 /**
- * A fault, an assert or a stack overflow: the record, then the reset.
+ * The exception frame the hardware pushed when the fault was taken.
  *
- * Zephyr's default either parks the thread (leaving a half-working radio) or
- * spins forever with the console owned by the transport, which is exactly the
- * "no byte comes out" report.  Neither is acceptable when the radio is in the
- * operator's hands, and both are avoidable: write what happened and come back
- * up in receive.
- *
- * The supervisor is suspended first, so that its watchdog feed stops: if this
- * handler wedges -- a fault inside the flash driver is a real possibility --
- * the hardware watchdog still resets the radio, and the record is simply the
- * one from the previous crash.
+ * On Cortex-M a fault from a thread stacks {r0-r3, r12, lr, pc, xpsr} on the
+ * thread's PSP, and handler mode runs on the MSP, so during the fault handler
+ * the PSP still points at that frame.  If the value is not inside the current
+ * thread's stack the frame was not on it (a fault inside an interrupt, or a
+ * thread that had not started) and nothing is reported: a wrong PC in a
+ * post-mortem is worse than no PC.
  */
-void k_sys_fatal_error_handler(unsigned int reason, const z_arch_esf_t *esf)
+static void faultFrame(uint32_t *pc, uint32_t *lr)
 {
-    if (bbInFatal) {
-        /*
-         * Fault inside the handler: nothing left to try.  The kernel calls
-         * this with interrupts already locked, so the only thing that can
-         * still reset the radio is the hardware watchdog -- which is why the
-         * first pass stopped feeding it.  Spin rather than sleep: this is
-         * handler mode, and sleeping here would need a scheduler that the
-         * fault may well have been in.
-         */
-        k_fatal_halt(reason);
+    *pc = 0;
+    *lr = 0;
+
+    uint32_t psp;
+    __asm__ volatile("mrs %0, psp" : "=r"(psp));
+
+#if defined(CONFIG_THREAD_STACK_INFO)
+    const struct k_thread *self = k_current_get();
+    uint32_t base = (uint32_t)self->stack_info.start;
+    uint32_t size = (uint32_t)self->stack_info.size;
+
+    if ((base == 0) || (size == 0))
+        return;
+    if ((psp < base) || ((psp + 0x20U) > (base + size)))
+        return;
+
+    const volatile uint32_t *frame = (const volatile uint32_t *)psp;
+
+    if (looksLikeCode(frame[6]))
+        *pc = frame[6];
+    if (looksLikeCode(frame[5]))
+        *lr = frame[5];
+#else
+    (void)psp;
+#endif
+}
+
+/**
+ * Where every fatal path ends.
+ *
+ * The CSK6 SoC port installs its own k_sys_fatal_error_handler
+ * (csk/soc/arm/csk6/fatal.c): it prints a backtrace and then calls
+ * arch_system_halt(), the kernel's weak "stop this CPU" hook.  That hook is
+ * the one seam the application can take without patching a module, and it is a
+ * complete one: a fault, an assert, a stack overflow and a panic all reach it.
+ *
+ * The default implementation spins with interrupts locked and leaves the radio
+ * dead until the volume knob.  This one writes the record first, then reboots
+ * into receive -- the same recovery as a detected stall, so a crash is one
+ * reboot and not a dead radio.
+ *
+ * The supervisor is suspended before the write, so that its watchdog feed
+ * stops: if this path wedges -- a fault inside the flash driver is a real
+ * possibility -- the hardware watchdog still resets the radio, and the record
+ * it will show is the one from the previous crash.
+ */
+void arch_system_halt(unsigned int reason)
+{
+    if (!bbInFatal) {
+        bbInFatal = true;
+        bb_suspend();
+
+        bbFaultThread = (const void *)k_current_get();
+        faultFrame(&bbFaultPc, &bbFaultLr);
+
+        bb_mark(BB_M_HANG);
+        bb_capture(BB_REASON_FATAL, (uint32_t)reason, k_uptime_get_32());
     }
-
-    bbInFatal = true;
-    bb_suspend();
-
-    bbFaultThread = (const void *)k_current_get();
-    bbFaultPc = (esf != NULL) ? esf->basic.pc : 0;
-    bbFaultLr = (esf != NULL) ? esf->basic.lr : 0;
-
-    bb_mark(BB_M_HANG);
-    bb_capture(BB_REASON_FATAL, (uint32_t)reason, k_uptime_get_32());
 
     sys_reboot(SYS_REBOOT_COLD);
 
-    /* Only reached if the SoC did not take the reset: the watchdog will. */
-    k_fatal_halt(reason);
+    /*
+     * Only reached when the SoC did not take the reset.  Interrupts are locked
+     * here (z_fatal_error took them), so the hardware watchdog is the only way
+     * out: spin, and do not sleep -- a watchdog reset is not an interrupt and
+     * would never wake an idle core.
+     */
+    for (;;) {
+        __asm__ volatile("nop");
+    }
 }
 
 /* ------------------------------------------------------------------------- */
