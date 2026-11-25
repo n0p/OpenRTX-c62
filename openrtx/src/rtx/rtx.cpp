@@ -479,10 +479,22 @@ bool opmode_canTransmit(uint8_t mode)
             /* Receive only: nothing keys the carrier in this build */
             return false;
 #endif
+        case OPMODE_P25:
+#ifdef CONFIG_P25_TX
+            /* Header, voice when a source is installed, and the terminator */
+            return true;
+#else
+            return false;
+#endif
+        case OPMODE_YSF:
+#ifdef CONFIG_YSF_TX
+            /* V/D mode 1: header, voice, terminator */
+            return true;
+#else
+            return false;
+#endif
         case OPMODE_NXDN:
         case OPMODE_DPMR:
-        case OPMODE_P25:
-        case OPMODE_YSF:
         case OPMODE_AIRBAND:
         case OPMODE_WFM_BC:
             /* Receive only: there is no transmitter for these modes yet */

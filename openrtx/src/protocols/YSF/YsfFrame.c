@@ -74,8 +74,7 @@ static void ensure_ready(void)
 /** Expand dibits to bits, MSB first, the order they go on the air in. */
 static void dibits_to_bits(const uint8_t *dibits, int count, uint8_t *bits)
 {
-    for (int i = 0; i < count; i++)
-    {
+    for (int i = 0; i < count; i++) {
         bits[2 * i] = (uint8_t)((dibits[i] >> 1) & 1);
         bits[2 * i + 1] = (uint8_t)(dibits[i] & 1);
     }
@@ -101,8 +100,7 @@ static uint16_t crc16(const uint8_t *bits, int len)
 {
     uint32_t crc = 0;
 
-    for (int i = 0; i < len; i++)
-    {
+    for (int i = 0; i < len; i++) {
         crc = ((crc << 1) | (bits[i] & 1u)) & 0x1FFFFu;
         if (crc & 0x10000u)
             crc = (crc & 0xFFFFu) ^ 0x1021u;
@@ -144,10 +142,9 @@ static void dewhiten(uint8_t *bits, int n)
  */
 
 /** Parity of a 5-bit window, as a 32-entry table. */
-static const uint8_t parity32[32] = {
-    0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0,
-    1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1
-};
+static const uint8_t parity32[32] = { 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0,
+                                      1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1,
+                                      1, 0, 0, 1, 1, 0, 1, 0, 0, 1 };
 
 #define TRELLIS_STATES 16
 #define TRELLIS_MAX_STEPS 200
@@ -169,29 +166,25 @@ static int viterbi(const uint8_t *bits, int steps, uint8_t *decoded)
         metric[s] = inf;
     metric[0] = 0;
 
-    for (int t = 0; t < steps; t++)
-    {
+    for (int t = 0; t < steps; t++) {
         uint8_t r0 = bits[2 * t];
         uint8_t r1 = bits[2 * t + 1];
 
         for (int s = 0; s < TRELLIS_STATES; s++)
             next[s] = inf;
 
-        for (int s = 0; s < TRELLIS_STATES; s++)
-        {
+        for (int s = 0; s < TRELLIS_STATES; s++) {
             if (metric[s] >= inf)
                 continue;
 
-            for (int b = 0; b < 2; b++)
-            {
+            for (int b = 0; b < 2; b++) {
                 uint8_t reg = (uint8_t)(((s << 1) | b) & 0x1F);
                 uint8_t o0 = parity32[reg & 0x19];
                 uint8_t o1 = parity32[reg & 0x17];
                 uint8_t ns = (uint8_t)(reg & 0x0F);
                 uint16_t m = (uint16_t)(metric[s] + (o0 != r0) + (o1 != r1));
 
-                if (m < next[ns])
-                {
+                if (m < next[ns]) {
                     next[ns] = m;
                     trellisHist[t][ns] = (uint8_t)((s << 1) | b);
                 }
@@ -207,8 +200,7 @@ static int viterbi(const uint8_t *bits, int steps, uint8_t *decoded)
             best = s;
 
     int state = best;
-    for (int t = steps - 1; t >= 0; t--)
-    {
+    for (int t = steps - 1; t >= 0; t--) {
         uint8_t v = trellisHist[t][state];
         decoded[t] = (uint8_t)(v & 1u);
         state = v >> 1;
@@ -222,8 +214,7 @@ static int viterbi(const uint8_t *bits, int steps, uint8_t *decoded)
 /* ------------------------------------------------------------------ */
 
 /** Bit field of the FICH information, most significant first. */
-struct ysfFich
-{
+struct ysfFich {
     uint8_t fi, cs, cm, bn, bt, fn, ft, mr, vp, dt, st, sc;
 };
 
@@ -254,8 +245,7 @@ static bool fich_decode(const uint8_t *dibits, struct ysfFich *fich)
     if (viterbi(bits, 100, decoded) > FICH_MAX_METRIC)
         return false;
 
-    for (int g = 0; g < 4; g++)
-    {
+    for (int g = 0; g < 4; g++) {
         uint32_t w = 0;
         uint32_t data = 0;
 
@@ -305,8 +295,7 @@ static void copy_field(char *dst, const uint8_t *src, int len)
 {
     int n = (len > YSF_CALLSIGN_LEN) ? YSF_CALLSIGN_LEN : len;
 
-    for (int i = 0; i < n; i++)
-    {
+    for (int i = 0; i < n; i++) {
         uint8_t c = src[i];
 
         dst[i] = ((c >= 0x20) && (c < 0x7F)) ? (char)c : ' ';
@@ -388,8 +377,7 @@ static void text_block(const uint8_t *info, int length)
 {
     /* A new message starts whenever the sequence restarts or the last one
      * was already delivered */
-    if ((call.fn == 0) || text.complete)
-    {
+    if ((call.fn == 0) || text.complete) {
         memset(text.text, 0, sizeof(text.text));
         text.length = 0;
         text.received = 0;
@@ -397,8 +385,7 @@ static void text_block(const uint8_t *info, int length)
         text.expected = call.ft;
     }
 
-    for (int i = 0; i < length; i++)
-    {
+    for (int i = 0; i < length; i++) {
         uint8_t c = info[i];
 
         if (text.length >= YSF_TEXT_MAX)
@@ -408,14 +395,12 @@ static void text_block(const uint8_t *info, int length)
 
     text.received++;
 
-    if (call.fn == call.ft)
-    {
+    if (call.fn == call.ft) {
         while ((text.length > 0) && (text.text[text.length - 1] == ' '))
             text.length--;
         text.text[text.length] = '\0';
 
-        if (text.length > 0)
-        {
+        if (text.length > 0) {
             text.complete = true;
             text.messages++;
             out.textChanged = true;
@@ -461,14 +446,13 @@ static bool voice49(const uint8_t *dibits, struct ysfVoiceSlot *slot)
 
     slot->nbits = 49;
 
-    for (int j = 0; j < 27; j++)
-    {
-        uint8_t votes = (uint8_t)((ordered[3 * j] << 2) |
-                                  (ordered[3 * j + 1] << 1) |
-                                  ordered[3 * j + 2]);
+    for (int j = 0; j < 27; j++) {
+        uint8_t votes = (uint8_t)((ordered[3 * j] << 2)
+                                  | (ordered[3 * j + 1] << 1)
+                                  | ordered[3 * j + 2]);
         /* majority of three: 000->0, 001->0, 010->0, 011->1,
          * 100->0, 101->1, 110->1, 111->1 */
-        static const uint8_t majority[8] = {0, 0, 0, 1, 0, 1, 1, 1};
+        static const uint8_t majority[8] = { 0, 0, 0, 1, 0, 1, 1, 1 };
 
         slot->bits[j] = majority[votes & 7];
     }
@@ -505,6 +489,21 @@ const struct ysfText *ysfFrame_text(void)
     return &text;
 }
 
+/**
+ * Hand the snapshot out with the call information in it.
+ *
+ * The frame's own fields live in the static `call` (which the UI reads with
+ * ysfFrame_call() between frames); the structure a decode returns carries a
+ * copy, and it used to be left at its zeroed state because only `call` was
+ * being written -- a caller reading decoded->call saw nothing.
+ */
+static const struct ysfDecoded *snapshot(void)
+{
+    out.call = call;
+
+    return &out;
+}
+
 const struct ysfDecoded *ysfFrame_decode(const struct ysfFrame *frame)
 {
     struct ysfFich fich;
@@ -518,15 +517,14 @@ const struct ysfDecoded *ysfFrame_decode(const struct ysfFrame *frame)
     if (frame == NULL)
         return NULL;
 
-    if (!fich_decode(&frame->dibits[YSF_SYNC_SYMBOLS], &fich))
-    {
+    if (!fich_decode(&frame->dibits[YSF_SYNC_SYMBOLS], &fich)) {
         call.badFich++;
         /*
          * A frame whose FICH did not verify still carries voice, and the
          * previous frame's layout is the best guess for it, but the frame
          * does not update what the transmission says.
          */
-        return &out;
+        return snapshot();
     }
 
     out.fichOk = true;
@@ -542,8 +540,7 @@ const struct ysfDecoded *ysfFrame_decode(const struct ysfFrame *frame)
     call.dgid = fich.sc;
 
     /* A header opens the transmission: start from a clean state */
-    if (fich.fi == 0)
-    {
+    if (fich.fi == 0) {
         memset(call.dest, 0, sizeof(call.dest));
         memset(call.source, 0, sizeof(call.source));
         memset(call.uplink, 0, sizeof(call.uplink));
@@ -553,8 +550,7 @@ const struct ysfDecoded *ysfFrame_decode(const struct ysfFrame *frame)
 
     const uint8_t *payload = &frame->dibits[YSF_SYNC_SYMBOLS + 100];
 
-    if ((fich.fi == 0) || (fich.fi == 2) || (fich.dt == 1))
-    {
+    if ((fich.fi == 0) || (fich.fi == 2) || (fich.dt == 1)) {
         /*
          * Header, terminator and full-rate data: ten 36-dibit blocks, which
          * are two 180-dibit data channel blocks taken alternately.
@@ -562,50 +558,42 @@ const struct ysfDecoded *ysfFrame_decode(const struct ysfFrame *frame)
         uint8_t block[180];
         uint8_t info[192];
 
-        for (int b = 0; b < 2; b++)
-        {
+        for (int b = 0; b < 2; b++) {
             for (int i = 0; i < 5; i++)
                 memcpy(&block[i * 36], &payload[(i * 2 + b) * 36], 36);
 
             int n = dch_decode(block, 180, 20, 9, info);
-            if (n == 160)
-            {
+            if (n == 160) {
                 uint8_t bytes[20];
 
                 call.dataBlocks++;
                 bits_to_bytes(info, 160, bytes);
 
-                if (b == 0)
-                {
+                if (b == 0) {
                     copy_field(call.dest, bytes, 10);
                     copy_field(call.source, &bytes[10], 10);
-                }
-                else
-                {
+                } else {
                     copy_field(call.downlink, bytes, 10);
                     copy_field(call.uplink, &bytes[10], 10);
                 }
             }
         }
 
-        return &out;
+        return snapshot();
     }
 
-    if (fich.dt == 3)
-    {
+    if (fich.dt == 3) {
         /* Voice FR: full-rate voice, 144 bits per slot, not AMBE+2 2450 */
         call.unsupported += YSF_VOICE_SLOTS;
-        return &out;
+        return snapshot();
     }
 
-    if (fich.dt == 0)
-    {
+    if (fich.dt == 0) {
         /* V/D mode 1: five pairs of 36-dibit CSD and voice */
         uint8_t csd[180];
         uint8_t info[192];
 
-        for (int i = 0; i < YSF_VOICE_SLOTS; i++)
-        {
+        for (int i = 0; i < YSF_VOICE_SLOTS; i++) {
             memcpy(&csd[i * 36], &payload[i * 72], 36);
             voice72(&payload[i * 72 + 36], &out.voice[i]);
         }
@@ -614,86 +602,104 @@ const struct ysfDecoded *ysfFrame_decode(const struct ysfFrame *frame)
         call.voices += YSF_VOICE_SLOTS;
 
         int n = dch_decode(csd, 180, 20, 9, info);
-        if (n == 160)
-        {
+        if (n == 160) {
             uint8_t bytes[20];
 
             call.dataBlocks++;
             bits_to_bytes(info, 160, bytes);
 
-            if (fich.bn == 2)
-            {
+            if (fich.bn == 2) {
                 text_block(bytes, 20);
-            }
-            else if (fich.bn == 0)
-            {
+            } else if (fich.bn == 0) {
                 copy_field(call.dest, bytes, 10);
                 copy_field(call.source, &bytes[10], 10);
-            }
-            else if (fich.bn == 1)
-            {
+            } else if (fich.bn == 1) {
                 copy_field(call.uplink, bytes, 10);
                 copy_field(call.downlink, &bytes[10], 10);
             }
         }
 
-        return &out;
+        return snapshot();
     }
 
-    if (fich.dt == 2)
-    {
+    if (fich.dt == 2) {
         /* V/D mode 2: five pairs of 20-dibit DCH and 52-dibit voice */
         uint8_t dch[100];
         uint8_t info[96];
 
-        for (int i = 0; i < YSF_VOICE_SLOTS; i++)
-        {
+        for (int i = 0; i < YSF_VOICE_SLOTS; i++) {
             memcpy(&dch[i * 20], &payload[i * 72], 20);
 
-            if (voice49(&payload[i * 72 + 20], &out.voice[out.voiceCount]))
-            {
+            if (voice49(&payload[i * 72 + 20], &out.voice[out.voiceCount])) {
                 out.voiceCount++;
                 call.voices++;
             }
         }
 
         int n = dch_decode(dch, 100, 20, 5, info);
-        if (n == 80)
-        {
+        if (n == 80) {
             uint8_t bytes[10];
 
             call.dataBlocks++;
             bits_to_bytes(info, 80, bytes);
 
-            if (fich.bn == 2)
-            {
+            if (fich.bn == 2) {
                 text_block(bytes, 10);
-            }
-            else
-            {
+            } else {
                 /* The data channel cycles its fields with the frame number */
-                switch (fich.fn)
-                {
-                    case 0: copy_field(call.dest, bytes, 10); break;
-                    case 1: copy_field(call.source, bytes, 10); break;
-                    case 2: copy_field(call.uplink, bytes, 10); break;
-                    case 3: copy_field(call.downlink, bytes, 10); break;
-                    default: break;
+                switch (fich.fn) {
+                    case 0:
+                        copy_field(call.dest, bytes, 10);
+                        break;
+                    case 1:
+                        copy_field(call.source, bytes, 10);
+                        break;
+                    case 2:
+                        copy_field(call.uplink, bytes, 10);
+                        break;
+                    case 3:
+                        copy_field(call.downlink, bytes, 10);
+                        break;
+                    default:
+                        break;
                 }
             }
         }
 
-        return &out;
+        return snapshot();
     }
+
+    return snapshot();
+}
+
+#else  /* CONFIG_YSF */
+
+void ysfFrame_reset(void)
+{
+}
+const struct ysfCallInfo *ysfFrame_call(void)
+{
+    return NULL;
+}
+const struct ysfText *ysfFrame_text(void)
+{
+    return NULL;
+}
+/**
+ * Hand the snapshot out with the call information in it.
+ *
+ * The frame's own fields live in the static `call` (which the UI reads with
+ * ysfFrame_call() between frames); the structure a decode returns carries a
+ * copy, and it used to be left at its zeroed state because only `call` was
+ * being written -- a caller reading decoded->call saw nothing.
+ */
+static const struct ysfDecoded *snapshot(void)
+{
+    out.call = call;
 
     return &out;
 }
 
-#else /* CONFIG_YSF */
-
-void ysfFrame_reset(void) {}
-const struct ysfCallInfo *ysfFrame_call(void) { return NULL; }
-const struct ysfText *ysfFrame_text(void) { return NULL; }
 const struct ysfDecoded *ysfFrame_decode(const struct ysfFrame *frame)
 {
     (void)frame;

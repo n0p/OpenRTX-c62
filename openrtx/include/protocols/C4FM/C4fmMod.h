@@ -42,17 +42,31 @@ extern "C" {
 /** Samples per symbol at 48 kHz. */
 #define C4FM_MOD_SPS 10
 
+/**
+ * Pulse the shaper convolves the symbol levels with.
+ *
+ * RRC is the P25 transmitter filter of TIA-102.BAAA: the receiver runs the same
+ * pulse as a matched filter, so transmitter times receiver is a raised cosine
+ * and the eye is open at the sampling instants.  System Fusion's receiver in
+ * YsfPhy.c has no matched filter (the radio's IF filter is expected to shape
+ * the eye), so its transmitter needs a pulse that is already Nyquist on its
+ * own: RC.  Same bandwidth, same ten samples per symbol, same deviation.
+ */
+typedef enum c4fmPulse {
+    C4FM_PULSE_RRC = 0, ///< Root raised cosine (P25)
+    C4FM_PULSE_RC = 1,  ///< Raised cosine, Nyquist on its own (System Fusion)
+} c4fmPulse_t;
+
 /** Taps of the RRC pulse: +-4 symbols at ten samples per symbol. */
 #define C4FM_MOD_TAPS 81
 
 /** Modulator state. */
-typedef struct c4fmMod
-{
+typedef struct c4fmMod {
     float taps[C4FM_MOD_TAPS]; ///< RRC, already scaled by gain
     float hist[16];            ///< Symbol history, power of two: wraps by mask
     unsigned histPos;
     float gain;
-    bool invert;               ///< Flip the deviation sense (bench option)
+    bool invert; ///< Flip the deviation sense (bench option)
 } c4fmMod_t;
 
 /**
@@ -61,8 +75,9 @@ typedef struct c4fmMod
  * @param mod: state.
  * @param gain: full-scale units per unit of symbol level (see the file note).
  * @param invert: reverse the level polarity.
+ * @param pulse: RRC or RC (see c4fmPulse_t).
  */
-void c4fmMod_init(c4fmMod_t *mod, float gain, bool invert);
+void c4fmMod_init(c4fmMod_t *mod, float gain, bool invert, c4fmPulse_t pulse);
 
 /**
  * @brief Shape one or more symbols.

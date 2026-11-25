@@ -43,7 +43,7 @@
 
 /* Deviation scale handed to the FM exciter.  The BK4819 maps the baseband to
  * frequency with the same REG_40 calibration the DMR transmitter uses, and that
- * number is still a bench item: docs/DSTAR_TX.md says how to calibrate it and
+ * number is still a bench item: docs/TX_DSTAR.md says how to calibrate it and
  * what the specification asks for (h = 0.5, so 1200 Hz of peak deviation at
  * 4800 bit/s, inside a 6.25 kHz channel). */
 #define DSTAR_TX_AMPLITUDE 24000

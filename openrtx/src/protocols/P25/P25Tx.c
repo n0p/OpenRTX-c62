@@ -30,8 +30,7 @@
 #define P25TX_PSRAM
 #endif
 
-enum p25TxStage
-{
+enum p25TxStage {
     TX_IDLE = 0,
     TX_HDU,
     TX_VOICE,
@@ -87,8 +86,7 @@ static void appendBits(uint8_t *dst, int *n, uint64_t value, int width)
 /** The DUID parity bit of the NID (TIA-102.BAAC). */
 static uint8_t duidParity(enum p25Duid duid)
 {
-    switch (duid)
-    {
+    switch (duid) {
         case P25_DUID_LDU1:
         case P25_DUID_LDU2:
             return 1;
@@ -108,16 +106,16 @@ static void frameStart(enum p25Duid duid)
     memset(frameBits, 0, sizeof(frameBits));
 
     for (int i = 0; i < P25_SYNC_BITS; i++)
-        frameBits[i] = (uint8_t)((P25_SYNC_WORD >> (P25_SYNC_BITS - 1 - i)) & 1u);
+        frameBits[i] = (uint8_t)((P25_SYNC_WORD >> (P25_SYNC_BITS - 1 - i))
+                                 & 1u);
 
-    uint64_t cw = p25Fec_bchEncode((uint16_t)(((config.nac & 0xFFFu) << 4)
-                                              | (uint8_t)duid));
+    uint64_t cw = p25Fec_bchEncode(
+        (uint16_t)(((config.nac & 0xFFFu) << 4) | (uint8_t)duid));
     uint64_t nid = (cw << 1) | duidParity(duid);
 
     putField(p25_imbe_nid_bits, P25_NID_BITS, nid, P25_NID_BITS);
 
-    for (int s = 0; s < P25_STATUS_SYMBOLS; s++)
-    {
+    for (int s = 0; s < P25_STATUS_SYMBOLS; s++) {
         /* dibit 01: first bit 0, second 1 */
         frameBits[p25_status_bits[2 * s]] = 0;
         frameBits[p25_status_bits[2 * s + 1]] = 1;
@@ -134,20 +132,19 @@ static void frameStart(enum p25Duid duid)
  * words and seven unprotected bits: TIA-102.BABA-A, the inverse of
  * decodeImbe() in P25Phy.c.
  */
-static void imbeEncode(const uint8_t params[P25_IMBE_BYTES], uint8_t air[P25_IMBE_BITS])
+static void imbeEncode(const uint8_t params[P25_IMBE_BYTES],
+                       uint8_t air[P25_IMBE_BITS])
 {
     uint32_t u[7];
     uint32_t u7;
     int p = 0;
 
-    for (int i = 0; i < 4; i++)
-    {
+    for (int i = 0; i < 4; i++) {
         u[i] = 0;
         for (int b = 0; b < 12; b++, p++)
             u[i] = (u[i] << 1) | ((params[p >> 3] >> (7 - (p & 7))) & 1u);
     }
-    for (int i = 4; i <= 6; i++)
-    {
+    for (int i = 4; i <= 6; i++) {
         u[i] = 0;
         for (int b = 0; b < 11; b++, p++)
             u[i] = (u[i] << 1) | ((params[p >> 3] >> (7 - (p & 7))) & 1u);
@@ -156,18 +153,15 @@ static void imbeEncode(const uint8_t params[P25_IMBE_BYTES], uint8_t air[P25_IMB
     for (int b = 0; b < 7; b++, p++)
         u7 = (u7 << 1) | ((params[p >> 3] >> (7 - (p & 7))) & 1u);
 
-    uint32_t pn = u[0] << 4;    /* 16-bit LFSR, advanced per word */
+    uint32_t pn = u[0] << 4; /* 16-bit LFSR, advanced per word */
 
-    for (int i = 0; i < 4; i++)
-    {
+    for (int i = 0; i < 4; i++) {
         uint32_t w = p25Fec_golayEncode(u[i]);
 
-        if (i > 0)
-        {
+        if (i > 0) {
             uint32_t m = 0;
 
-            for (int b = 22; b >= 0; b--)
-            {
+            for (int b = 22; b >= 0; b--) {
                 pn = (173u * pn + 13849u) & 0xFFFFu;
                 if (pn & 0x8000u)
                     m |= 1u << b;
@@ -179,12 +173,10 @@ static void imbeEncode(const uint8_t params[P25_IMBE_BYTES], uint8_t air[P25_IMB
             air[23 * i + b] = (uint8_t)((w >> (22 - b)) & 1u);
     }
 
-    for (int i = 4; i <= 6; i++)
-    {
+    for (int i = 4; i <= 6; i++) {
         uint32_t m = 0;
 
-        for (int b = 14; b >= 0; b--)
-        {
+        for (int b = 14; b >= 0; b--) {
             pn = (173u * pn + 13849u) & 0xFFFFu;
             if (pn & 0x8000u)
                 m |= 1u << b;
@@ -205,8 +197,7 @@ static void buildLdu(enum p25Duid duid)
 {
     frameStart(duid);
 
-    for (int n = 0; n < P25_IMBE_PER_LDU; n++)
-    {
+    for (int n = 0; n < P25_IMBE_PER_LDU; n++) {
         uint8_t params[P25_IMBE_BYTES];
         uint8_t air[P25_IMBE_BITS];
         bool ok = false;
@@ -214,8 +205,7 @@ static void buildLdu(enum p25Duid duid)
         if (voiceSrc != NULL && voiceSrc(params, voiceUser) == 0)
             ok = true;
 
-        if (!ok)
-        {
+        if (!ok) {
             /* No encoder (or it failed): a frame of zero parameters.  It is
              * not a defined silence frame -- P25 has none in the public
              * standard -- it is the FEC-valid encoding of "no parameters",
@@ -234,8 +224,7 @@ static void buildLdu(enum p25Duid duid)
     uint8_t sym[24];
     memset(sym, 0, sizeof(sym));
 
-    if (duid == P25_DUID_LDU1)
-    {
+    if (duid == P25_DUID_LDU1) {
         uint8_t lc[9];
         uint8_t cw[24];
 
@@ -259,8 +248,7 @@ static void buildLdu(enum p25Duid duid)
         for (int i = 0; i < 9; i++)
             appendBits(bits, &n, lc[i], 8);
 
-        for (int i = 0; i < 12; i++)
-        {
+        for (int i = 0; i < 12; i++) {
             uint8_t s = 0;
 
             for (int b = 0; b < 6; b++)
@@ -272,8 +260,7 @@ static void buildLdu(enum p25Duid duid)
         memcpy(sym, cw, sizeof(cw));
     }
 
-    for (int i = 0; i < P25_LC_HEXBITS; i++)
-    {
+    for (int i = 0; i < P25_LC_HEXBITS; i++) {
         uint16_t w = p25Fec_ham10Encode(sym[i]);
 
         putField(&p25_ldu_ls_bits[10 * i], 10, w, 10);
@@ -292,14 +279,13 @@ static void buildHdu(void)
 
     /* Message indicator: 72 bits.  A clear call has none, and ALGID says so. */
     appendBits(bits, &n, 0, 72);
-    appendBits(bits, &n, 0x00, 8);      /* MFID: standard */
-    appendBits(bits, &n, 0x80, 8);      /* ALGID: unencrypted */
-    appendBits(bits, &n, 0x0000, 16);   /* Key ID */
+    appendBits(bits, &n, 0x00, 8);    /* MFID: standard */
+    appendBits(bits, &n, 0x80, 8);    /* ALGID: unencrypted */
+    appendBits(bits, &n, 0x0000, 16); /* Key ID */
     appendBits(bits, &n, config.group, 16);
 
     uint8_t sym[20];
-    for (int i = 0; i < 20; i++)
-    {
+    for (int i = 0; i < 20; i++) {
         uint8_t s = 0;
 
         for (int b = 0; b < 6; b++)
@@ -310,8 +296,7 @@ static void buildHdu(void)
     uint8_t rs[36];
     p25Fec_rsEncode(sym, 20, rs, 36);
 
-    for (int i = 0; i < 36; i++)
-    {
+    for (int i = 0; i < 36; i++) {
         /* Six information bits and the twelve parity bits of the (18,6) code:
          * TIA-102.BAAC, the inverse of p25Fec_golay18Decode(). */
         uint8_t air[18];
@@ -328,8 +313,7 @@ static void buildTsbk(void)
 {
     frameStart(P25_DUID_TSBK);
 
-    for (int b = 0; b < 3; b++)
-    {
+    for (int b = 0; b < 3; b++) {
         uint8_t air[P25_TSBK_BITS];
 
         p25Fec_trellisEncode(tsbkData, air);
@@ -338,15 +322,13 @@ static void buildTsbk(void)
         int s = 0;
         const int start = 57 + 101 * b;
 
-        while ((s < 101) && (n < P25_TSBK_BITS))
-        {
+        while ((s < 101) && (n < P25_TSBK_BITS)) {
             const int sym = start + s;
 
             if (sym >= P25_FRAME_SYMBOLS)
                 break;
-            if ((sym % 36) == 35)
-            {
-                s++;    /* status symbol, not payload */
+            if ((sym % 36) == 35) {
+                s++; /* status symbol, not payload */
                 continue;
             }
 
@@ -362,8 +344,7 @@ static void buildTsbk(void)
 
 static void buildNextFrame(void)
 {
-    switch (stage)
-    {
+    switch (stage) {
         case TX_IDLE:
             break;
 
@@ -422,8 +403,7 @@ void p25Tx_begin(const struct p25TxConfig *cfg)
 {
     config = *cfg;
 
-    if (!tsbkSet)
-    {
+    if (!tsbkSet) {
         /* Null information: no data, and the CRC field filled in the way this
          * CRC closes to zero, which is the CRC of the block with the field
          * left at zero (P25Fec.c, crc16). */
@@ -436,7 +416,7 @@ void p25Tx_begin(const struct p25TxConfig *cfg)
 
     memset(frameBits, 0, sizeof(frameBits));
     framesSent = 0;
-    symbolInFrame = P25_FRAME_SYMBOLS;   /* forces the first frame on demand */
+    symbolInFrame = P25_FRAME_SYMBOLS; /* forces the first frame on demand */
     carryLen = 0;
     nextIsLdu1 = true;
     stage = TX_HDU;
@@ -453,8 +433,8 @@ void p25Tx_end(void)
  *          let the shaper settle, then stop). */
 bool p25Tx_done(void)
 {
-    return ((stage == TX_DONE) && (symbolInFrame >= P25_FRAME_SYMBOLS)) ||
-           (stage == TX_IDLE);
+    return ((stage == TX_DONE) && (symbolInFrame >= P25_FRAME_SYMBOLS))
+        || (stage == TX_IDLE);
 }
 
 uint32_t p25Tx_frames(void)
@@ -464,23 +444,22 @@ uint32_t p25Tx_frames(void)
 
 int p25Tx_samples(int16_t *out, int count, float gain)
 {
-    if (!modReady)
-    {
-        c4fmMod_init(&mod, gain, false);
+    if (!modReady) {
+        c4fmMod_init(&mod, gain, false, C4FM_PULSE_RRC);
         modReady = true;
     }
 
     int n = 0;
 
-    while (n < count)
-    {
+    while (n < count) {
         /* Finish a symbol the previous call left half-emitted */
-        if (carryLen > 0)
-        {
-            const int take = (count - n < (int)carryLen) ? count - n : (int)carryLen;
+        if (carryLen > 0) {
+            const int take = (count - n < (int)carryLen) ? count - n :
+                                                           (int)carryLen;
 
             memcpy(&out[n], carry, (size_t)take * sizeof(int16_t));
-            memmove(carry, &carry[take], (carryLen - (size_t)take) * sizeof(int16_t));
+            memmove(carry, &carry[take],
+                    (carryLen - (size_t)take) * sizeof(int16_t));
             carryLen -= (unsigned)take;
             n += take;
             continue;
@@ -489,20 +468,16 @@ int p25Tx_samples(int16_t *out, int count, float gain)
         int16_t sym[C4FM_MOD_SPS];
 
         /* Silence before a call starts, and once the TDU has left the shaper */
-        const bool over = ((stage == TX_DONE) &&
-                           (symbolInFrame >= P25_FRAME_SYMBOLS)) ||
-                          (stage == TX_IDLE);
+        const bool over = ((stage == TX_DONE)
+                           && (symbolInFrame >= P25_FRAME_SYMBOLS))
+                       || (stage == TX_IDLE);
 
-        if (over)
-        {
+        if (over) {
             /* The transmission is over: keep the shaper fed with silence so
              * the last pulse leaves the filter instead of being cut. */
             c4fmMod_dibits(&mod, NULL, 1, sym);
-        }
-        else
-        {
-            if (symbolInFrame >= P25_FRAME_SYMBOLS)
-            {
+        } else {
+            if (symbolInFrame >= P25_FRAME_SYMBOLS) {
                 buildNextFrame();
                 symbolInFrame = 0;
             }
@@ -516,8 +491,7 @@ int p25Tx_samples(int16_t *out, int count, float gain)
         const int take = (count - n < C4FM_MOD_SPS) ? count - n : C4FM_MOD_SPS;
 
         memcpy(&out[n], sym, (size_t)take * sizeof(int16_t));
-        if (take < C4FM_MOD_SPS)
-        {
+        if (take < C4FM_MOD_SPS) {
             memcpy(carry, &sym[take], (C4FM_MOD_SPS - take) * sizeof(int16_t));
             carryLen = (unsigned)(C4FM_MOD_SPS - take);
         }

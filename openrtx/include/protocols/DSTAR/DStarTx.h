@@ -27,7 +27,7 @@
  * radio's discriminator and the exciter's deviation are scaled by the
  * transceiver calibration, so the caller passes the amplitude in Q15 units of
  * full scale; on the C62 that is the same `REG_40` deviation register the DMR
- * transmitter uses, and it is still a bench item (docs/DSTAR_TX.md).
+ * transmitter uses, and it is still a bench item (docs/TX_DSTAR.md).
  *
  * Voice: the 72-bit frame is an AMBE-2020 (3600x2400) channel frame.  Without
  * an encoder the chain sends the D-STAR null frame, which is what an Icom radio

@@ -21,33 +21,49 @@
 #include <math.h>
 #include <string.h>
 
-void c4fmMod_init(c4fmMod_t *mod, float gain, bool invert)
+/** Root raised cosine, unit energy pulse, t in symbol periods. */
+static float rrcPulse(float t)
 {
     const float pi = 3.14159265358979f;
     const float a = 0.2f;
+
+    if (fabsf(t) < 1e-6f)
+        return 1.0f - a + 4.0f * a / pi;
+
+    if (fabsf(fabsf(t) - 1.0f / (4.0f * a)) < 1e-6f)
+        return a / sqrtf(2.0f)
+             * ((1.0f + 2.0f / pi) * sinf(pi / (4.0f * a))
+                + (1.0f - 2.0f / pi) * cosf(pi / (4.0f * a)));
+
+    return (sinf(pi * t * (1.0f - a))
+            + 4.0f * a * t * cosf(pi * t * (1.0f + a)))
+         / (pi * t * (1.0f - (4.0f * a * t) * (4.0f * a * t)));
+}
+
+/**
+ * Raised cosine: Nyquist on its own, so a receiver with no matched filter sees
+ * the eye the transmitter means.  Same alpha and bandwidth as the RRC above.
+ */
+static float rcPulse(float t)
+{
+    const float pi = 3.14159265358979f;
+    const float a = 0.2f;
+    const float sinc = (fabsf(t) < 1e-6f) ? 1.0f : sinf(pi * t) / (pi * t);
+
+    /* The one-sided singularity at |t| = 1 / (2 alpha) */
+    if (fabsf(fabsf(t) - 1.0f / (2.0f * a)) < 1e-5f)
+        return 0.5f * a * sinf(pi / (2.0f * a)) / (pi / (2.0f * a));
+
+    return sinc * cosf(pi * a * t) / (1.0f - (2.0f * a * t) * (2.0f * a * t));
+}
+
+void c4fmMod_init(c4fmMod_t *mod, float gain, bool invert, c4fmPulse_t pulse)
+{
     float sum = 0.0f;
 
-    for (int i = 0; i < C4FM_MOD_TAPS; i++)
-    {
+    for (int i = 0; i < C4FM_MOD_TAPS; i++) {
         const float t = ((float)i - (C4FM_MOD_TAPS - 1) / 2.0f) / C4FM_MOD_SPS;
-        float h;
-
-        if (fabsf(t) < 1e-6f)
-        {
-            h = 1.0f - a + 4.0f * a / pi;
-        }
-        else if (fabsf(fabsf(t) - 1.0f / (4.0f * a)) < 1e-6f)
-        {
-            h = a / sqrtf(2.0f)
-              * ((1.0f + 2.0f / pi) * sinf(pi / (4.0f * a))
-                 + (1.0f - 2.0f / pi) * cosf(pi / (4.0f * a)));
-        }
-        else
-        {
-            h = (sinf(pi * t * (1.0f - a))
-                 + 4.0f * a * t * cosf(pi * t * (1.0f + a)))
-              / (pi * t * (1.0f - (4.0f * a * t) * (4.0f * a * t)));
-        }
+        const float h = (pulse == C4FM_PULSE_RC) ? rcPulse(t) : rrcPulse(t);
 
         mod->taps[i] = h;
         sum += h;
@@ -70,19 +86,16 @@ void c4fmMod_dibits(c4fmMod_t *mod, const uint8_t *dibits, int n, int16_t *out)
     static const float sym[4] = { +1.0f, +3.0f, -1.0f, -3.0f };
     const int span = (C4FM_MOD_TAPS + C4FM_MOD_SPS - 1) / C4FM_MOD_SPS;
 
-    for (int k = 0; k < n; k++)
-    {
+    for (int k = 0; k < n; k++) {
         mod->histPos = (mod->histPos + 1) & 15u;
         mod->hist[mod->histPos] = (dibits != NULL) ? sym[dibits[k] & 3u] : 0.0f;
 
-        for (int p = 0; p < C4FM_MOD_SPS; p++)
-        {
+        for (int p = 0; p < C4FM_MOD_SPS; p++) {
             /* Zero-stuffed symbols through the filter: one tap in ten meets
              * a symbol, so the inner loop walks the taps that matter. */
             float y = 0.0f;
 
-            for (int j = 0; j < span; j++)
-            {
+            for (int j = 0; j < span; j++) {
                 const int t = p + C4FM_MOD_SPS * j;
 
                 if (t >= C4FM_MOD_TAPS)
