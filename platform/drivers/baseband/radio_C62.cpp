@@ -39,6 +39,15 @@ static enum opstatus radioStatus; // Current operating status
 static enum opmode radioMode;     // Current operating mode
 
 /*
+ * Why the last keying was refused by this driver, as a short word the status
+ * of the PC protocol reports.  "none" when the last attempt was accepted.
+ * A refusal here used to be a bare `return`: the PA lines dropped, the LED
+ * dark, no RF and nothing said, which from the outside is indistinguishable
+ * from a broken radio (docs/TX_SAFETY.md).
+ */
+static const char *txRefusedReason = "none";
+
+/*
  * CTCSS TX gain of the stock C62 firmware, REG_51 <6:0> "CTCSS/CDCSS Tx Gain1
  * Tuning" (0 = min, 127 = max) in the BK4819 notes of
  * https://github.com/egzumer/uv-k5-firmware-custom/blob/7607f0a4bd6203d1f06b70556fc1ce0d7399d6b3/driver/bk4819.c#L463-L471
@@ -378,6 +387,7 @@ static void paNoteKeyed(void)
 {
     const uint32_t now = k_uptime_get_32();
 
+    txRefusedReason = "none";
     paBarrierUp();
     txw_sample(&paWatch, now, true);
     paArm(now);
@@ -1051,16 +1061,25 @@ void radio_enableTx()
      * and the mode has no microphone path. Refuse before touching the PA.
      */
     if (radioMode == OPMODE_WFM_BC)
+    {
+        txRefusedReason = "wfmbc rx only";
         return;
+    }
 
     // TETRA has no transmitter, and neither has the airband without the
     // amplitude modulator built in
     if ((config->txDisable == 1) || (radioMode == OPMODE_TETRA))
+    {
+        txRefusedReason = "tx disabled";
         return;
+    }
 
 #ifndef CONFIG_C62_AIR_TX
     if (radioMode == OPMODE_AIRBAND)
+    {
+        txRefusedReason = "no am modulator";
         return;
+    }
 #else
     /*
      * Airband AM: the BK4819 transmits a bare carrier -- the codec's
@@ -1117,11 +1136,51 @@ void radio_enableTx()
     gpioDev_clear(PA_UHF_EN);
     gpioDev_clear(ALC_TX_LED_EN);
 
+    /*
+     * Nothing is driven for a power of 0: the PA would come up with no carrier
+     * behind it, which is the "keys into nothing" failure this check exists to
+     * end.  The gate should have refused first; this is the driver's own.
+     */
+    if (config->txPower == 0)
+    {
+        static uint32_t refusedAt = 0;
+        const uint32_t nowMs = k_uptime_get_32();
+
+        txRefusedReason = "no tx power";
+        if ((uint32_t)(nowMs - refusedAt) >= 1000)
+        {
+            refusedAt = nowMs;
+            printk("PA: keying refused, TX power is 0 mW\n");
+        }
+        return;
+    }
+
     //Before enable TX path delay to allow hardware to settle
     delayMs(5);
 
     if (config->txFrequency < 136000000 || config->txFrequency > 600000000)
+    {
+        /*
+         * Out of the PA's band, and loud about it (docs/TX_SAFETY.md).  This
+         * used to be a bare return: the lines had already been dropped, the
+         * mode saw radio_getStatus() still OFF, and the operator got a PTT
+         * that did nothing -- no LED, no RF, no message.  It happens on a VFO
+         * whose record carries no transmit frequency, which is why state.c
+         * derives one from the receiver and this check stays as the last
+         * barrier.
+         */
+        static uint32_t refusedAt = 0;
+        const uint32_t nowMs = k_uptime_get_32();
+
+        txRefusedReason = "tx freq out of range";
+        if ((uint32_t)(nowMs - refusedAt) >= 1000)
+        {
+            refusedAt = nowMs;
+            printk("PA: keying refused, TX %lu Hz outside 136-600 MHz\n",
+                   (unsigned long)config->txFrequency);
+        }
         return;
+    }
 
     bk4819_setFrequency(&c62_bk4819, config->txFrequency);
 
@@ -1142,6 +1201,11 @@ void radio_enableTx()
     bk4819_enableTx(&c62_bk4819);
     radioStatus = TX;
     paNoteKeyed();
+}
+
+const char *radio_txRefusedReason(void)
+{
+    return txRefusedReason;
 }
 
 void radio_disableRtx()

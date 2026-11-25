@@ -35,8 +35,21 @@
  *    rounded to something else.  The SDR is what measures the deviation it
  *    produces.
  *
+ *  - The transmit power is set by TUNE (PC_TAG_BENCH_POWER, milliwatts) and
+ *    lands in state.channel.power, which is the field the rtx thread copies
+ *    into the configuration the driver keys with.  On a VFO that field starts
+ *    at 0, so before this a bench run keyed the PA with no power behind it and
+ *    measured nothing, with the answer claiming a transmission (docs/BENCH.md).
+ *    A keying at 0 mW is refused here and by the core, never performed.
+ *
  * Nothing here measures the carrier: the radio has no reference for that, and
  * PC_TAG_BENCH_DELTA stays 0.
+ *
+ * Locking: every state_mutex acquisition here is bounded (state_tryLock).  The
+ * transport thread answers the client, and it must not park because the UI
+ * holds the lock across ui_updateFSM(): a busy radio answers PC_ERR_BUSY and
+ * the client retries, instead of the whole protocol going silent
+ * (docs/PC_PROTO.md).
  */
 
 #include <stdbool.h>
@@ -68,6 +81,12 @@
 /* The CTCSS table is in tenths of Hz; a tone that matches an entry within 1 %
  * is programmed as that entry, anything else is refused. */
 #define TONE_TOLERANCE_TENTHS 10
+
+/** How long a bench handler will wait for state_mutex before answering BUSY. */
+#define BENCH_LOCK_MS 20
+
+/** Return value for "the radio was busy": the core turns it into PC_ERR_BUSY. */
+#define BENCH_BUSY (-(int)PC_ERR_BUSY)
 
 /** What the bench left programmed, so it can be put back. */
 static struct
@@ -150,13 +169,17 @@ static void benchRestore(void)
     bs.level = 0;
 
     if (bs.toneOn) {
-        pthread_mutex_lock(&state_mutex);
-        if (bs.toneSaved) {
-            state.channel.fm.txToneEn = bs.savedToneEn;
-            state.channel.fm.txTone = bs.savedToneIdx;
+        if (state_tryLock(BENCH_LOCK_MS)) {
+            if (bs.toneSaved) {
+                state.channel.fm.txToneEn = bs.savedToneEn;
+                state.channel.fm.txTone = bs.savedToneIdx;
+            }
+            state_unlock();
+            ui_rtxSyncRequest = true;
         }
-        pthread_mutex_unlock(&state_mutex);
-        ui_rtxSyncRequest = true;
+        /* A lock that could not be taken leaves the tone in the channel: the
+         * next RELEASE or the session reset puts it back.  Tearing the PA down
+         * is what this function is for and that already happened above. */
     }
     bs.toneOn = false;
     bs.toneHz = 0;
@@ -184,6 +207,7 @@ int pc_proto_platformBench(uint8_t op, pcProtoBenchArgs_t *a)
             a->ptt = bs.ptt ? 1 : 0;
             a->toneHz = bs.toneOn ? bs.toneHz : 0;
             a->level = bs.level;
+            a->power = (uint16_t)s.txPower;
 
             if (s.opStatus == TX)
                 benchLandTxSettings();
@@ -193,7 +217,10 @@ int pc_proto_platformBench(uint8_t op, pcProtoBenchArgs_t *a)
         case PC_BENCH_OP_TUNE: {
             if (a->rxHz == 0)
                 return -1;
-            pthread_mutex_lock(&state_mutex);
+            if (a->power > SETTINGS_TX_POWER_MAX)
+                return -1;
+            if (!state_tryLock(BENCH_LOCK_MS))
+                return BENCH_BUSY;
             state.channel.mode = a->mode != 0 ? a->mode : state.channel.mode;
             /* The wire carries bw + 1 so that 0 can mean "keep"; 1..3 map onto
              * the rtx bandwidth enum. */
@@ -202,11 +229,31 @@ int pc_proto_platformBench(uint8_t op, pcProtoBenchArgs_t *a)
             state.channel.rx_frequency = a->rxHz;
             state.channel.tx_frequency = a->txHz != 0 ? a->txHz : a->rxHz;
             state.channel.rx_only = false; /* a bench run keys the PA */
+            /*
+             * The power the run asked for.  It lives in the channel because
+             * that is the one field the rtx thread copies into the
+             * configuration the driver keys with; 0 keeps what is in force, so
+             * a client that does not send the tag inherits the radio's own
+             * power (and a radio with none is refused at PTT).
+             */
+            if (a->power != 0)
+                state.channel.power = (uint16_t)a->power;
+
+            /*
+             * The power the run will key with, written where the rtx thread
+             * reads it: the channel's own, or the setting when the channel has
+             * none (a VFO).  A resulting 0 is kept as 0 -- it is the refusal
+             * PTT answers with, and it must not become a silent minimum.
+             */
+            if (state.channel.power == 0)
+                state.channel.power = state.settings.tx_power;
+            a->power = state.channel.power;
+
             a->mode = state.channel.mode;
             a->bw = (uint8_t)(state.channel.bandwidth + 1);
             a->rxHz = state.channel.rx_frequency;
             a->txHz = state.channel.tx_frequency;
-            pthread_mutex_unlock(&state_mutex);
+            state_unlock();
             ui_rtxSyncRequest = true;
             return 0;
         }
@@ -221,6 +268,18 @@ int pc_proto_platformBench(uint8_t op, pcProtoBenchArgs_t *a)
                 return 0;
             }
 
+            /*
+             * No power, no keying.  The core refuses this before the call, and
+             * it is refused here too: the PA enable lines going up with 0 mW
+             * behind them is exactly the silent failure this bench namespace
+             * exists to make impossible (docs/TX_SAFETY.md).  The answer
+             * carries the power that was in force, so the client can say what
+             * it asked for and what the radio had.
+             */
+            a->power = (uint16_t)state_txPowerMw();
+            if (a->power == 0)
+                return -1;
+
             /* Tone first: it has to be in the channel fields before the rtx
              * thread builds a new configuration, or the keying would use the
              * previous sub-tone. */
@@ -228,8 +287,9 @@ int pc_proto_platformBench(uint8_t op, pcProtoBenchArgs_t *a)
                 int idx = nearestCtcss(a->toneHz);
                 if (idx < 0) {
                     a->toneHz = 0; /* refused, and said so */
+                } else if (!state_tryLock(BENCH_LOCK_MS)) {
+                    return BENCH_BUSY;
                 } else {
-                    pthread_mutex_lock(&state_mutex);
                     if (!bs.toneOn) {
                         bs.savedToneEn = state.channel.fm.txToneEn;
                         bs.savedToneIdx = state.channel.fm.txTone;
@@ -237,7 +297,7 @@ int pc_proto_platformBench(uint8_t op, pcProtoBenchArgs_t *a)
                     }
                     state.channel.fm.txToneEn = 1;
                     state.channel.fm.txTone = (uint8_t)idx;
-                    pthread_mutex_unlock(&state_mutex);
+                    state_unlock();
                     ui_rtxSyncRequest = true;
                     bs.toneOn = true;
                     bs.toneHz = (uint16_t)(ctcss_tone[idx] / 10u);
@@ -247,13 +307,14 @@ int pc_proto_platformBench(uint8_t op, pcProtoBenchArgs_t *a)
             if (a->toneHz == 0 && bs.toneOn) {
                 /* Keying without a tone after keying with one: put the
                  * operator's sub-tone back before the PA goes up. */
-                pthread_mutex_lock(&state_mutex);
-                if (bs.toneSaved) {
-                    state.channel.fm.txToneEn = bs.savedToneEn;
-                    state.channel.fm.txTone = bs.savedToneIdx;
+                if (state_tryLock(BENCH_LOCK_MS)) {
+                    if (bs.toneSaved) {
+                        state.channel.fm.txToneEn = bs.savedToneEn;
+                        state.channel.fm.txTone = bs.savedToneIdx;
+                    }
+                    state_unlock();
+                    ui_rtxSyncRequest = true;
                 }
-                pthread_mutex_unlock(&state_mutex);
-                ui_rtxSyncRequest = true;
                 bs.toneOn = false;
                 bs.toneHz = 0;
                 bs.toneSaved = false;
@@ -267,6 +328,9 @@ int pc_proto_platformBench(uint8_t op, pcProtoBenchArgs_t *a)
             a->txState = (uint8_t)rtx_getCurrentStatus().opStatus;
             a->toneHz = bs.toneHz;
             a->level = bs.level; /* 0 until the scaling lands on the PA */
+            /* What the driver will actually key with, after the rtx thread has
+             * taken the new configuration. */
+            a->power = (uint16_t)rtx_getCurrentStatus().txPower;
             return 0;
         }
 

@@ -58,6 +58,11 @@ T_TONE = 0x0104
 T_LEVEL = 0x0105
 T_BW = 0x0106
 T_BLOCK = 0x0107
+# The transmit power of the run, mW: TUNE in, TUNE/PTT/ARM out
+# (docs/BENCH.md).  A run that does not send it keys with the radio's own
+# power, and one whose radio has none is refused at PTT instead of keying at
+# 0 mW.
+T_POWER = 0x0113
 T_BLOCKS = 0x0108
 T_STEP = 0x0109
 T_F0 = 0x010A
@@ -118,6 +123,11 @@ class BenchLink(P.Link):
         super().__init__(port, client_caps=P.CAP_EVENTS, verbose=verbose)
         self.clock_pairs = []   # (radio_ms, host_ns_mid, rtt_ns)
         self.last = {}          # last answer per message, for the report
+        # Power every TUNE carries unless the case asks for another one.  The
+        # CLI sets it from --power (500 mW by default): a bench run keys the
+        # PA, and on a VFO the radio has no channel power to fall back on
+        # (docs/BENCH.md, docs/TX_SAFETY.md).
+        self.default_power = 0
 
     # -- the part that makes it a measurement ------------------------------
 
@@ -159,9 +169,10 @@ class BenchLink(P.Link):
             "tick": f.u32(T_TICK),
             "rate": f.u16(T_RATE),
             "max_ms": f.u16(T_LENGTH),
+            "power_mw": f.u16(T_POWER),
         }
 
-    def tune(self, freq, mode=None, bw=None, tx=None):
+    def tune(self, freq, mode=None, bw=None, tx=None, power=None):
         self.require_bench()
         p = P.tlv_u32(T_RX_FREQ, int(freq))
         if tx:
@@ -170,12 +181,17 @@ class BenchLink(P.Link):
             p += P.tlv_u8(T_MODE, mode)
         if bw is not None:
             p += P.tlv_u8(T_BW, bw)
+        if power is None:
+            power = self.default_power
+        if power:
+            p += P.tlv_u16(T_POWER, int(power))
         f = self._request(MSG_BENCH_TUNE, p + self.token_tlv())
         return {
             "rx": f.u32(T_RX_FREQ),
             "tx": f.u32(T_TX_FREQ),
             "mode": f.u8(T_MODE),
             "bw": f.u8(T_BW),
+            "power_mw": f.u16(T_POWER),
             "delta_hz": struct.unpack("<i", struct.pack("<I", f.u32(T_DELTA)))[0],
             "tick": f.u32(T_TICK),
         }
@@ -195,6 +211,7 @@ class BenchLink(P.Link):
             "tx_state": f.u8(T_TX_STATE),
             "tone": f.u16(T_TONE),
             "level": f.u8(T_LEVEL),
+            "power_mw": f.u16(T_POWER),
             "tick": f.u32(T_TICK),
         }
 

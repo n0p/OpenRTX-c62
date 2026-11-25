@@ -92,6 +92,14 @@ static bool            txWatchTimedOut;
 static bool            txWatchCutActive;
 
 /*
+ * Why the last keying attempt was refused, as rtx_keyingAllowed() decided it.
+ * "none" when the gate would let a press through.  It is what the status of
+ * the PC protocol reports, so a PTT that does nothing is never silent
+ * (docs/TX_SAFETY.md).
+ */
+static const char *keyVeto = "none";
+
+/*
  * Transmit permission.
  *
  * switching is true from the moment a mode change starts until its new mode is
@@ -911,16 +919,50 @@ bool rtx_keyingAllowed(const rtxStatus_t *status)
      * 90 s, nothing keys until the radio has been released, whatever the gate
      * says about releases and hold times.
      */
-    bool allowed = (!switching) && txw_keyAllowed(&txWatch, now)
-                && keyGate_pttKey(&keyGate, now);
+    const bool clockOk = txw_keyAllowed(&txWatch, now);
+    bool allowed = (!switching) && clockOk && keyGate_pttKey(&keyGate, now);
     if ((!allowed) && ptt && (!switching))
         keyGate_noteVeto(&keyGate);
     pthread_mutex_unlock(&txMutex);
 
-    if ((status != NULL) && (status->txDisable != 0))
-        allowed = false;
+    /*
+     * The reason, in the order the gate applies them.  "A press nobody made
+     * yet" is not a refusal and stays "none": the field says why a
+     * transmission cannot happen, not that the operator has not pressed.
+     */
+    const char *reason = "none";
+    if (switching)
+        reason = "mode change";
+    else if (!clockOk)
+        reason = "air limit";
 
+    if ((status != NULL) && (status->txDisable != 0))
+    {
+        reason = "tx disabled";
+        allowed = false;
+    }
+
+    /*
+     * No power means no transmission (docs/TX_SAFETY.md).  A driver handed
+     * 0 mW either refuses the keying (and, on the C62, used to do it in
+     * silence: no LED, no RF, no error) or, worse, keys the PA at its minimum
+     * because it clamps.  The gate is the last place that can say no while
+     * there is still someone to tell: the reason goes into the status the
+     * protocol reports and into the log.
+     */
+    if ((status != NULL) && (status->txPower == 0))
+    {
+        reason = "no tx power";
+        allowed = false;
+    }
+
+    keyVeto = reason;
     return allowed;
+}
+
+const char *rtx_keyingVetoReason(void)
+{
+    return keyVeto;
 }
 
 bool rtx_unattendedTxAllowed(const rtxStatus_t *status)

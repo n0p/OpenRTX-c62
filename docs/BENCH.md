@@ -82,9 +82,9 @@ entregan audio piden el **testigo de sesión** (`PC_TAG_TOKEN`) que da `HELLO`.
 
 | id | nombre | petición | respuesta |
 |---|---|---|---|
-| 0x0601 | `BENCH_ARM` | token | `EPOCH`, `TICK`, `RATE`, `LENGTH` (ms máximos de captura) |
-| 0x0602 | `BENCH_TUNE` | `RX_FREQ`, `TX_FREQ`?, `MODE`?, `BENCH_BW`?, token | `RX_FREQ`, `TX_FREQ`, `MODE`, `BENCH_BW`, `BENCH_DELTA`, `TICK` |
-| 0x0603 | `BENCH_PTT` | `TX_STATE` (1/0), `BENCH_TONE`?, `BENCH_LEVEL`?, token | `TX_STATE`, `BENCH_TONE`, `BENCH_LEVEL`, `TICK` + evento `EVT_BENCH_EDGE` |
+| 0x0601 | `BENCH_ARM` | token | `EPOCH`, `TICK`, `RATE`, `LENGTH` (ms máximos de captura), `BENCH_POWER` |
+| 0x0602 | `BENCH_TUNE` | `RX_FREQ`, `TX_FREQ`?, `MODE`?, `BENCH_BW`?, `BENCH_POWER`?, token | `RX_FREQ`, `TX_FREQ`, `MODE`, `BENCH_BW`, `BENCH_POWER`, `BENCH_DELTA`, `TICK` |
+| 0x0603 | `BENCH_PTT` | `TX_STATE` (1/0), `BENCH_TONE`?, `BENCH_LEVEL`?, token | `TX_STATE`, `BENCH_TONE`, `BENCH_LEVEL`, `BENCH_POWER`, `TICK` + evento `EVT_BENCH_EDGE` |
 | 0x0604 | `BENCH_CAPTURE` | `BENCH_WINDOW` (ms) + token, o `OFFSET`+`LENGTH` + token | `T0`, `RATE`, `WRITTEN`, `BLOCK`, `BLOCKS`, `RUNNING`, `OVERFLOW`, `DATA` |
 | 0x0605 | `BENCH_RSSI` | `COUNT` (1..32) + token; sin `COUNT` lee la serie en curso | `BENCH_RSSI_TS` (n × `u32 tick, i16 dBm`), `WRITTEN` |
 | 0x0606 | `BENCH_SWEEP` | `BENCH_F0`, `F1`, `STEP`, `DWELL`?, token; sin tags lee los puntos | `BENCH_F0/F1/STEP/DWELL/POINTS`, `RUNNING`, `BENCH_POINTS_TS` (n × `u32 Hz, i16 dBm`) |
@@ -109,6 +109,25 @@ en que la portadora aparece lo mide el SDR.
   espera a que el estado aplicado (`POLL`) coincida con la frecuencia pedida.
 - **`BENCH_BW` en el cable es `enum bandwidth + 1`** (1 = 12,5 kHz, 2 = 25 kHz,
   3 = 6,25 kHz) para que 0 pueda significar "la que tenga".
+- **`BENCH_POWER` (0x0113) es la potencia de transmisión del run, en mW**, y es
+  obligatoria en la práctica: un PTT clavea con la potencia del canal, y fuera
+  de un canal de memoria (`state.channel.power = 0`, el VFO) no había ninguna,
+  así que la PA subía sin nada detrás: `tx_state=2`, cero RF, ningún aviso.
+  `BENCH_TUNE` la escribe en `state.channel.power` —el campo del que el hilo rtx
+  saca la configuración que el driver usa para pulsar— y la devuelve; `BENCH_ARM`
+  la siembra con la potencia efectiva de la radio (la del canal o la del ajuste
+  `settings.tx_power`), para que un cliente que no conoce el tag clavee con lo
+  que la radio usaría de todos modos. Rango 0-5000 mW; por encima se rechaza con
+  `invalid_value`.
+- **Potencia 0 no clavea**: `BENCH_PTT` con `BENCH_POWER = 0` responde
+  `invalid_value` y la PA no se toca. Es la única respuesta honesta: una
+  transmisión de 0 mW es indistinguible de una radio rota, y el informe del run
+  diría "keyed" mientras el SDR mide silencio (docs/TX_SAFETY.md).
+- **Todos los mensajes del banco responden, incluso con la radio ocupada.** Un
+  `TUNE` o un `PTT` que necesita `state_mutex` espera como mucho 20 ms; si la UI
+  lo tiene tomado (lo tiene mientras corre su FSM) la respuesta es `busy`, no
+  silencio. El comando `status` del CPS no toma ningún cerrojo: es la consulta
+  que siempre contesta (docs/PC_PROTO.md).
 - **`BENCH_PTT` pulsa el mismo botón que el operador**: `platform_pttOverride()`
   hace que `platform_getPttStatus()` responda "pulsado", y el camino de
   transmisión del modo enciende la PA con su audio, su guardián y su salida.
@@ -135,8 +154,8 @@ en que la portadora aparece lo mide el SDR.
 ### Ejemplo de sesión (cliente Python)
 
 ```
-$ tools/bench/bench.py --device /dev/ttyUSB0 --sdr rtl run carrier stability
-bench: radio c62, firmware OpenRTX c62 | RTL-SDR (uncalibrated: relative levels only) | 145.500000 MHz
+$ tools/bench/bench.py --device /dev/ttyUSB0 --sdr rtl --power 500 run carrier stability
+bench: radio c62, firmware OpenRTX c62 | RTL-SDR (uncalibrated: relative levels only) | 145.500000 MHz | 500 mW
   carrier      ok
   stability    ok
 ...
@@ -297,8 +316,8 @@ común sirve para algo: si las dos capturas no se solapan como dice el reloj, el
 
 ```
 tools/bench/bench.py [--device /dev/ttyUSB0] [--sdr rtl|soapy|anritsu|sim]
-                     [--freq 145.5M] [--tone 88] [--level 0] [--out DIR]
-                     run [caso ... | all]
+                     [--freq 145.5M] [--tone 88] [--level 0] [--power 500]
+                     [--out DIR] run [caso ... | all]
 tools/bench/bench.py --sim run all          # nada enchufado
 tools/bench/bench.py --sim cases            # qué casos hay
 tools/bench/bench.py --device ... info      # qué sabe hacer la radio del cable
@@ -315,6 +334,28 @@ captures/*.npy    cada captura, para rehacer una figura sin la radio
 y guarda la captura de la radio (`align_radio.npy`) con su `t0`, su tasa y la
 forma de sus bloques (`BLOCK`/`BLOCKS`: si los bloques no son todos iguales, la
 captura no es contigua y el número `block` vale 0 para decirlo).
+
+`--power` (por defecto **500 mW**) es la potencia que lleva cada `TUNE` del run.
+Un run clavea la PA, y fuera de un canal de memoria la radio no tiene potencia
+de canal que heredar; con 500 mW y los 50 dB de atenuación del banco el SDR ve
+la señal en su rango útil. Un `--power 0` no es "mínima": el primer `PTT`
+responde `invalid_value` y el run lo dice en vez de medir silencio.
+
+### Cuando el run no emite
+
+Si el `PTT` no produce RF, el orden de lectura es:
+
+1. `tools/cps/cps.py -d <puerto> status` — el campo `power_mw` y `tx_reason` de
+   la respuesta dicen si la radio tiene potencia y, si no, por qué
+   (`no tx power`, `tx freq out of range`, `tx disabled`). NO toca ningún
+   cerrojo del estado: contesta siempre, incluso con la UI ocupada.
+2. El log del cable: `PA: keying refused, TX power is 0 mW` o
+   `PA: keying refused, TX <n> Hz outside 136-600 MHz` son las dos negativas
+   del driver, ahora dichas en voz alta (docs/TX_SAFETY.md).
+3. El número: con 50 dB de atenuación entre la radio y el SDR, por debajo de
+   ~300 mW la portadora cae cerca del ruido del receptor y el SDR mide
+   silencio sin que la radio tenga nada roto. Es la razón del valor por defecto
+   de 500 mW.
 
 ### Receptores
 

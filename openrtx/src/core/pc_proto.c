@@ -11,6 +11,15 @@
  * touch the stores in pc_proto_ops.c.
  *
  * The frame and the rules are in core/pc_proto.h and docs/PC_PROTO.md.
+ *
+ * One thread answers every frame, so anything that can block in it can silence
+ * the radio completely: no reply, no log line, no fault.  The rule the whole
+ * file is written to is therefore that no handler waits for a lock the rest of
+ * the firmware owns, and that the status snapshot takes none at all.  Where a
+ * wait is unavoidable (a write that has to see a consistent state.channel) the
+ * platform uses state_tryLock() and answers PC_ERR_BUSY rather than parking.
+ * The transport counts its own iterations and the supervisor reports a stall
+ * instead of leaving the operator with a cable that does nothing.
  */
 
 #include <string.h>
@@ -427,6 +436,14 @@ size_t pc_proto_statusTlv(const pcProtoStatus_t *s, uint8_t *buf, size_t cap,
     off = pc_tlv_u16(buf, cap, off, PC_TAG_BATTERY_MV, s->batteryMv);
     off = pc_tlv_u8(buf, cap, off, PC_TAG_SQUELCH, s->squelchOpen);
     off = pc_tlv_str(buf, cap, off, PC_TAG_CHANNEL_NAME, s->channelName);
+    /*
+     * The power the radio would key with, and why it would not.  Both travel
+     * with every status, so a PTT that does nothing is diagnosable from the
+     * PC without opening the radio (docs/TX_SAFETY.md).
+     */
+    off = pc_tlv_u16(buf, cap, off, PC_TAG_TX_POWER, s->txPower);
+    off = pc_tlv_str(buf, cap, off, PC_TAG_TX_REASON,
+                     (s->txReason[0] != '\0') ? s->txReason : "none");
     return off;
 }
 

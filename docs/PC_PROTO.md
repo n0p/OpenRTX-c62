@@ -329,6 +329,12 @@ relleno de alineación): `u8 zone`, `u16 index`, `name[8]`, `u32 rx`, `u32 tx`,
 | 0x0087 `SQUELCH` | u8 |
 | 0x0088 `PERIOD_MS` | u16 |
 | 0x0089 `CHANNEL_NAME` | str |
+| 0x008A `TX_POWER` | u16 mW con la que la radio transmitiría (la del canal, o el ajuste) |
+| 0x00EF `TX_REASON` | str, `none` o por qué no transmitiría (docs/TX_SAFETY.md) |
+
+`TX_POWER` y `TX_REASON` viajan en **todo** estado (respuesta de `STATUS_GET` y
+eventos `EVT_STATUS`), y también en `DBG_INFO`: un PTT que no hace nada se
+diagnostica por el cable, sin abrir la radio.
 
 **Mensajes**: 0x00A0 transporte, 0x00A1 peer (str), 0x00A2 peer id (u32),
 0x00A3 texto, 0x00A4 estado, 0x00A5 flags, 0x00A6 no leídos, 0x00A7 bandeja,
@@ -570,6 +576,49 @@ refused: not_allowed (dbg_reg_read)
 
 ---
 
+## 8.bis El transporte nunca espera para siempre
+
+Una sola hebra —`pcProtoMain` en `platform/targets/c62/pc_proto_c62.c`— lee el
+UART, despacha y escribe la respuesta. Es el único sitio del firmware que puede
+contestar a un `HELLO`, así que **cualquier cosa que la bloquee deja la radio
+muda entera**: sin respuesta, sin traza, sin línea de log que lo explique. Eso
+es exactamente lo que se vio con un canal guardado aplicado al arrancar: la
+pantalla en NFM 145.5, las teclas respondiendo, el log del SDK saliendo una vez
+por segundo y ni un `HELLO`, ni en crudo, obteniendo contestación.
+
+Las reglas que se derivan de ahí, y que el código cumple ahora:
+
+1. **La instantánea de estado no toma `state_mutex`.** `pc_proto_platformStatus()`
+   lee palabras alineadas y las copia; un valor de un tick antes sigue siendo la
+   respuesta correcta. La UI tiene ese mutex mientras corre `ui_updateFSM()` y la
+   tarea de estado mientras lee la batería: esperarlo es aceptar quedar muda. Es
+   el mismo trato que `vfo_search_service.c` da al mismo estado.
+2. **Donde el cerrojo es imprescindible** (una escritura que tiene que ver un
+   `state.channel` coherente: `TUNE`, el tono del banco, los ajustes) se toma con
+   `state_tryLock(20)` y, si no llega, se contesta `busy`. Un cliente que
+   reintenta acaba servido; una radio bloqueada no acaba nunca.
+3. **El hilo se vigila desde fuera.** Cuenta sus vueltas (`loopSeq`) y los bytes
+   que ha leído (`rxBytes`); `pc_proto_c62_supervise()`, llamada desde el hilo
+   principal junto al refresco del watchdog, imprime una línea si no ha dado una
+   vuelta en 2 s:
+
+   ```
+   pcproto: STALLED 2043ms | loop=184322 rx=512 frames=3 req=1 lastErr=0000/0000 linked=0
+   ```
+
+   `rx` dice si el cable y el pad están vivos, `frames` si el tramado valida, y
+   `req` si fue un handler el que se quedó. Es la primera cosa que hay que mirar
+   si el CPS vuelve a quedarse callado.
+
+4. **La frecuencia y la potencia de TX no se leen del canal a pelo**: salen de
+   `state_txFrequency()` y `state_txPowerMw()`, que tampoco toman cerrojo
+   (docs/TX_SAFETY.md).
+
+Las pruebas de host lo fijan: `tests/host/pc_proto_host` arranca la radio con un
+canal guardado, en VFO, en VFO con potencia 0, y con `state_mutex` tomado por
+otra hebra durante 1,5 s. En los cuatro casos `HELLO` y `status` contestan, y las
+escrituras que necesitan el cerrojo contestan `busy` en vez de callarse.
+
 ## 9. Convivencia con el log y con el volcado
 
 Mientras no hay cliente, el cable es el de siempre: arranque, `printk`, y el
@@ -612,7 +661,7 @@ sin la capacidad.
 simulada que es el código real compilado para el host):
 
 ```
-$ tests/host/pc_proto_host/run.sh    # 39 casos
+$ tests/host/pc_proto_host/run.sh    # 43 casos
 ```
 
 Es el que prueba el par: tramado, sesión, almacenes, eventos, flujo de log con

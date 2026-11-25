@@ -152,6 +152,17 @@ rssi_t radio_getRssi();
  */
 enum opstatus radio_getStatus();
 
+/**
+ * Why the driver refused the last keying, or "none" when it accepted it.
+ *
+ * The keying path has several barriers (no permitted transmission, the air
+ * clock, an out-of-band frequency, a power of 0, a receive-only mode) and each
+ * of them used to be a bare return: the PA lines dropped, the LED dark and no
+ * RF, with nothing said (docs/TX_SAFETY.md).  This is the short word the
+ * diagnostics and the PC protocol report instead.
+ */
+const char *radio_txRefusedReason(void);
+
 /*
  * Spectrum analyser.
  *

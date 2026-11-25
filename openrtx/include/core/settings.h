@@ -43,8 +43,14 @@ extern "C" {
  *  - 6: the packet modem block appended (enable, modem, KISS parameters), see
  *       docs/KISS.md and core/packet_service.h.  c62/mega stopped at 5, so 6
  *       is the next free number and no branch has to be renumbered.
+ *  - 7: the default transmit power appended (settings_t.tx_power, mW), see
+ *       docs/TX_SAFETY.md.  It is what the radio transmits with when the
+ *       channel it is on does not carry a power of its own -- the VFO, and a
+ *       bank record written before the channel editor knew the field.  Before
+ *       this the VFO keyed at 0 mW: the PA enable lines went up and no RF
+ *       came out, with nothing on the screen or in the log to say why.
  */
-#define SETTINGS_VERSION 6
+#define SETTINGS_VERSION 7
 
 typedef enum
 {
@@ -183,6 +189,22 @@ typedef struct
      * not take it without moving the scan fields of an older record.
      */
     uint8_t  am_depth;            // Airband TX modulation depth, percent
+    /**
+     * Transmit power used when the channel does not name one, mW.
+     *
+     * A channel carries its own power, but the VFO is not a channel: it has a
+     * frequency and a mode and nothing else.  Before this field the VFO
+     * inherited state.channel.power, which a blank record leaves at 0, and the
+     * radio keyed the PA with a power of zero -- the enable lines came up, the
+     * LED did not, no RF left the antenna and no message said why
+     * (docs/TX_SAFETY.md).  This is the value the operator gets instead.
+     *
+     * Range 0..5000, the PA's own ceiling.  0 is accepted and stored (an
+     * operator may want a listen-only radio) but it never keys: the keying
+     * gate refuses and the reason is visible in the status, because "the
+     * button does nothing" is the one failure mode that must never be silent.
+     */
+    uint16_t tx_power;            // Default TX power, mW, 0 = never key
 #ifdef CONFIG_KISS
     /*
      * Packet modem (KISS TNC), docs/KISS.md.
@@ -305,6 +327,7 @@ static const settings_t default_settings =
     146000000U,
     0,                            // Air delay 0: the measured default
     60,                           // AM: 60 % modulation depth on transmit
+    500,                          // Default TX power 500 mW (docs/TX_SAFETY.md)
 #ifdef CONFIG_KISS
     false,                        // Packet modem off until the operator asks
     0,                            // PKT_MODEM_AFSK1200: what an FM channel carries
@@ -326,6 +349,18 @@ static const settings_t default_settings =
 static inline bool settings_dmrIdValid(uint32_t id)
 {
     return (id >= DMR_ID_MIN) && (id <= DMR_ID_MAX);
+}
+
+/**
+ * Ceiling of the transmit power setting, milliwatts: the PA's own ceiling, the
+ * same one chstore_valid() applies to a channel.  A value above it is clamped
+ * by the settings loader and refused by the protocol, never transmitted.
+ */
+#define SETTINGS_TX_POWER_MAX 5000u
+
+static inline bool settings_txPowerValid(uint16_t mw)
+{
+    return mw <= SETTINGS_TX_POWER_MAX;
 }
 
 /**

@@ -65,3 +65,8 @@ enum opstatus radio_getStatus()
 {
     return OFF;
 }
+
+const char *radio_txRefusedReason()
+{
+    return "none";
+}

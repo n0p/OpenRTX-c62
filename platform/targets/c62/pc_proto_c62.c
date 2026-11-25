@@ -64,6 +64,12 @@
 #define THREAD_STACK 4096
 #define POLL_US 1000
 
+/** No pass of the loop for this long is a stall, not a slow frame. */
+#define PROTO_STALL_MS 2000
+
+/** One stall line every this long: the log shares the cable with the client. */
+#define PROTO_STALL_REPORT_MS 5000
+
 /** A link with no valid frame for this long goes away and frees the log. */
 #define PC_PROTO_IDLE_MS 15000
 
@@ -76,6 +82,27 @@ static struct k_thread thread;
 static K_THREAD_STACK_DEFINE(thread_stack, THREAD_STACK);
 static bool started;
 static uint32_t lastFrameMs;
+
+/*
+ * Liveness of the transport thread, in ordinary .bss.
+ *
+ * The thread is the only thing that can answer a frame, so "is it still
+ * running?" is a question the rest of the firmware has to be able to ask: a
+ * radio whose screen and keys work while the CPS gets silence is
+ * indistinguishable from a broken cable, and the last time it happened (a
+ * stored channel applied at boot) there was no fault, no log line and no way
+ * to tell where it had stopped.  loopSeq advances once per pass of the loop;
+ * pc_proto_c62_supervise(), called from the main thread's watchdog feed,
+ * reports a stall and dumps what the transport last saw, which is also the
+ * first thing a hardware session needs.  rxBytes is the other half of it: if
+ * bytes arrive and no frame comes out of them the problem is the framing, and
+ * if nothing arrives at all it is the pad, the cable or the client.
+ */
+static volatile uint32_t loopSeq;
+static volatile uint32_t loopMs;
+static volatile uint32_t rxBytes;
+static volatile bool     stallReported;
+static uint32_t          stallLastMs;
 
 /* Log capture: the hook appends characters here, the transport thread turns
  * complete lines into pc_proto_logPush() calls.  Guarded by irq_lock() because
@@ -222,13 +249,48 @@ extern void *__printk_get_hook(void);
 
 int pc_proto_platformStatus(pcProtoStatus_t *out)
 {
-    pthread_mutex_lock(&state_mutex);
+    /*
+     * No lock here, on purpose (docs/PC_PROTO.md, "The transport never waits").
+     *
+     * This runs in the transport thread, and it used to take state_mutex.  The
+     * UI thread holds that same mutex across ui_updateFSM() and the state task
+     * across the battery read, so a slow holder -- or one that blocks, which is
+     * what applying a stored channel at boot made possible -- parked the only
+     * thread that can answer a frame: the screen kept working, the keys kept
+     * working, the log kept coming out, and the CPS got nothing, ever, with no
+     * fault to show for it.  A status is a set of aligned words read to make a
+     * picture; it does not need a transaction, and a value that is one tick old
+     * is still the right answer.  vfo_search_service.c reads state the same way
+     * and for the same reason.
+     */
     out->rxFreq = state.channel.rx_frequency;
-    out->txFreq = state.channel.tx_frequency;
+    out->txFreq = state_txFrequency();
     out->mode = state.channel.mode;
     out->channelIdx = (state.tuner_mode == VFO) ? 0xFFFF : state.channel_index;
     out->batteryMv = state.v_bat;
     out->txState = (uint8_t)state.rtxStatus;
+
+    /*
+     * The power the radio would key with and, when it is none or the driver
+     * refused, why.  A PTT that does nothing must be explainable from the PC
+     * (docs/TX_SAFETY.md).
+     */
+    out->txPower = (uint16_t)state_txPowerMw();
+    const char *reason;
+    if (out->txPower == 0) {
+        reason = "no tx power";
+    } else {
+        /* What the gate said about the last press, and then what the driver
+         * said about the last keying: the first is why it did not try, the
+         * second is why the try came to nothing. */
+        reason = rtx_keyingVetoReason();
+        if (reason == NULL || strcmp(reason, "none") == 0)
+            reason = radio_txRefusedReason();
+        if (reason == NULL)
+            reason = "none";
+    }
+    snprintf(out->txReason, sizeof(out->txReason), "%s", reason);
+
     if (state.tuner_mode != VFO) {
         size_t n = 0;
         while (n + 1 < sizeof(out->channelName) &&
@@ -238,7 +300,6 @@ int pc_proto_platformStatus(pcProtoStatus_t *out)
         }
         out->channelName[n] = '\0';
     }
-    pthread_mutex_unlock(&state_mutex);
 
     out->rssi = rtx_getRssi();
     out->squelchOpen = rtx_rxSquelchOpen() ? 1 : 0;
@@ -376,6 +437,19 @@ int pc_proto_platformDiag(pcProtoDiag_t *out)
     }
 #endif
     out->agc = 0xFF;
+
+    /* The transmit side of the same picture (docs/TX_SAFETY.md). */
+    out->txPower = (uint16_t)state_txPowerMw();
+    {
+        const char *reason = out->txPower == 0 ? "no tx power"
+                                              : radio_txRefusedReason();
+        if (reason == NULL || strcmp(reason, "none") == 0) {
+            const char *veto = rtx_keyingVetoReason();
+            reason = (veto != NULL && strcmp(veto, "none") != 0) ? veto
+                                                                : "none";
+        }
+        snprintf(out->txReason, sizeof(out->txReason), "%s", reason);
+    }
     return 0;
 }
 
@@ -585,12 +659,16 @@ static void pcProtoMain(void *a, void *b, void *c)
     uint8_t chunk[64];
 
     for (;;) {
+        loopSeq++;
+        loopMs = k_uptime_get_32();
+
         size_t n = 0;
         while (n < sizeof(chunk) &&
                (sys_read32(UART_BASE + UART_LSR) & LSR_DR)) {
             chunk[n++] = (uint8_t)sys_read32(UART_BASE + UART_RBR);
         }
         if (n > 0) {
+            rxBytes += (uint32_t)n;
             uint32_t frames = pc_proto_rx(&proto, chunk, n);
             /* Anything valid keeps the link alive; the protocol instance
              * counts the frames itself. */
@@ -642,6 +720,46 @@ static void pcProtoMain(void *a, void *b, void *c)
         pc_proto_tick(&proto, k_uptime_get_32());
         k_usleep(POLL_US);
     }
+}
+
+/**
+ * Report a transport thread that has stopped passing through its loop.
+ *
+ * Called from the main thread, next to the watchdog feed, every 5 ms: it is
+ * the one context that is known to run (it feeds the hardware watchdog), so it
+ * is the right place to notice that the thread which answers the cable no
+ * longer runs.  Two seconds without a pass is not a slow frame -- the loop
+ * sleeps 1 ms between passes -- it is a thread parked somewhere it should never
+ * park, and the numbers printed are what says where: bytes received (the pad
+ * and the client are fine), frames parsed (the framing is fine), requests
+ * dispatched (the handler is where it stopped) and the last error sent.
+ *
+ * Throttled to one line every five seconds, because the log shares the cable.
+ */
+void pc_proto_c62_supervise(void)
+{
+    if (!started)
+        return;
+
+    const uint32_t now = k_uptime_get_32();
+    const uint32_t seen = loopMs;
+
+    if ((now - seen) < PROTO_STALL_MS) {
+        stallReported = false;
+        return;
+    }
+    if (stallReported && (now - stallLastMs) < PROTO_STALL_REPORT_MS)
+        return;
+
+    stallReported = true;
+    stallLastMs = now;
+    printk("pcproto: STALLED %lums | loop=%lu rx=%lu frames=%lu req=%lu "
+           "lastErr=%04x/%04x linked=%u\n",
+           (unsigned long)(now - seen), (unsigned long)loopSeq,
+           (unsigned long)rxBytes, (unsigned long)proto.stats.frames,
+           (unsigned long)proto.stats.requests,
+           (unsigned)proto.stats.lastError, (unsigned)proto.stats.lastErrorMsg,
+           (unsigned)pc_proto_linked(&proto));
 }
 
 void pc_proto_c62_init(void)

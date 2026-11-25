@@ -316,6 +316,12 @@ def main(argv=None):
     ap.add_argument("--level", type=int, default=0,
                     help="level setting for the deviation case, 0 = the "
                          "standard steps")
+    ap.add_argument("--power", type=int, default=500,
+                    help="transmit power every TUNE asks the radio for, mW "
+                         "(default 500).  A run keys the PA, and outside a "
+                         "memory channel there is no channel power to inherit: "
+                         "0 refuses the keying instead of transmitting into "
+                         "nothing")
     ap.add_argument("--out", default=None)
     ap.add_argument("--sim", action="store_true",
                     help="simulated radio: nothing plugged in")
@@ -343,6 +349,9 @@ def main(argv=None):
 
     freq = _parse_freq(args.freq)
     radio, radio_desc = open_radio(args)
+    if hasattr(radio, "default_power"):
+        # Every case's TUNE carries it unless the case asks for another one.
+        radio.default_power = int(args.power)
 
     if args.cmd == "info":
         print("radio:      %s" % radio_desc)
@@ -360,6 +369,7 @@ def main(argv=None):
         "radio": radio_desc,
         "receiver": recv_desc,
         "frequency": _fmt_hz(freq),
+        "power": "%d mW" % args.power,
         "tone": "%d Hz" % args.tone,
         "started": time.strftime("%Y-%m-%d %H:%M:%S"),
         "simulated": "yes" if (args.sim or args.sdr == "sim") else "no",
@@ -370,7 +380,8 @@ def main(argv=None):
     names = args.names or ["all"]
     if "all" in names:
         names = list(CS.CASES.keys()) + ["align"]
-    print("bench: %s | %s | %s" % (radio_desc, recv_desc, _fmt_hz(freq)))
+    print("bench: %s | %s | %s | %d mW"
+          % (radio_desc, recv_desc, _fmt_hz(freq), args.power))
 
     want_align = "align" in names
     names = [n for n in names if n != "align"]

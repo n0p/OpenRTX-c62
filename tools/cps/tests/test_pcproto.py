@@ -34,10 +34,10 @@ import pcproto as P  # noqa: E402
 class Radio:
     """A device binary on a pty, with the client attached to the other end."""
 
-    def __init__(self, binary):
+    def __init__(self, binary, args=()):
         self.master, self.slave = pty.openpty()
         self.slave_name = os.ttyname(self.slave)
-        self.proc = subprocess.Popen([binary, self.slave_name],
+        self.proc = subprocess.Popen([binary, self.slave_name, *args],
                                      stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL)
         # The client side is the master of the pty: the slave belongs to the
@@ -97,7 +97,7 @@ class RadioTest(unittest.TestCase):
         self.assertTrue(h.u32(P.T_CAPS) & P.CAP_EVENTS)
         self.assertEqual(bool(h.u32(P.T_CAPS) & P.CAP_DEBUG), self.expect_debug)
         self.assertEqual(h.u16(P.T_CHCOUNT), 2)
-        self.assertEqual(h.u16(P.T_SETTINGS_VER), 6)
+        self.assertEqual(h.u16(P.T_SETTINGS_VER), 7)
         if self.expect_debug:
             self.assertNotEqual(self.link.token, 0)
         else:
@@ -199,7 +199,7 @@ class RadioTest(unittest.TestCase):
     def test_settings_record_and_fields(self):
         self.link.connect()
         rec = self.link.settings_record()
-        self.assertEqual(rec["version"], 6)
+        self.assertEqual(rec["version"], 7)
         self.assertEqual(len(rec["data"]), rec["size"])
         req = (P.tlv_str(P.T_SET_CALLSIGN, "EA5TEST") +
                P.tlv_u8(P.T_SET_SQLLEVEL, 5) +
@@ -225,6 +225,9 @@ class RadioTest(unittest.TestCase):
         self.assertEqual(s["rssi"], -73)
         self.assertEqual(s["tx_state"], 1)
         self.assertEqual(s["name"], "TEST1")
+        # The power the radio would key with travels with the status.
+        self.assertEqual(s["power_mw"], 500)
+        self.assertEqual(s["tx_reason"], "none")
 
     # -- events ------------------------------------------------------------
 
@@ -407,6 +410,92 @@ class ProductionTest(RadioTest):
         self.assertEqual(len(self.link.chan_list()), 2)
 
 
+class BootShapeTest(unittest.TestCase):
+    """
+    The radio the firmware actually boots as, and the cable has to survive it.
+
+    Two shapes, both of them reported from hardware, and one failure mode that
+    used to take the whole protocol down:
+
+      --boot-channel   a stored channel applied at boot (PC_MSG_CHAN_LASTUSED
+                       left at 0).  On the real radio the screen and the keys
+                       kept working and every protocol message, HELLO included,
+                       got no answer at all, with no fault to show for it.
+      --vfo            a VFO with no channel power and no transmit frequency of
+                       its own: the PTT must still have a frequency and a
+                       power to go to, and say 0 only when the setting is 0.
+      --hold-lock-ms   the state lock held by another thread, which is what the
+                       UI does while it runs its FSM: the protocol has to keep
+                       answering, with PC_ERR_BUSY where a write really needs
+                       the lock, never with silence.
+    """
+
+    binary = None
+
+    def _radio(self, *args):
+        radio = Radio(self.binary, args)
+        radio.link.connect()
+        return radio
+
+    def test_boot_on_a_stored_channel_still_serves_hello(self):
+        radio = self._radio("--boot-channel")
+        try:
+            h = radio.link.connect()
+            self.assertEqual(h.u16(P.T_LASTUSED), 0)
+            self.assertEqual(h.u16(P.T_CHCOUNT), 2)
+            s = radio.link.status()
+            self.assertEqual(s["rx_freq"], 145500000)
+            self.assertEqual(s["power_mw"], 1000)   # the channel's own
+        finally:
+            radio.close()
+
+    def test_vfo_transmit_frequency_and_power(self):
+        radio = self._radio("--vfo")
+        try:
+            s = radio.link.status()
+            # No transmit frequency in the record: simplex, the RX frequency.
+            self.assertEqual(s["tx_freq"], 145500000)
+            # No channel power: the setting, never zero.
+            self.assertEqual(s["power_mw"], 500)
+            self.assertEqual(s["tx_reason"], "none")
+        finally:
+            radio.close()
+
+    def test_vfo_with_zero_power_says_why(self):
+        radio = self._radio("--vfo", "--zero-power")
+        try:
+            s = radio.link.status()
+            self.assertEqual(s["tx_freq"], 145500000)
+            self.assertEqual(s["power_mw"], 0)
+            self.assertEqual(s["tx_reason"], "no tx power")
+        finally:
+            radio.close()
+
+    def test_protocol_answers_with_the_state_lock_held(self):
+        # Longer than any timeout the handlers use, so a plain lock would park
+        # the transport for the whole test.
+        radio = self._radio("--hold-lock-ms", "1500")
+        try:
+            t0 = time.time()
+            # HELLO and STATUS take no lock at all: they answer at once.
+            s = radio.link.status()
+            self.assertLess(time.time() - t0, 1.0)
+            self.assertEqual(s["rx_freq"], 145500000)
+            # A read that does need the lock answers BUSY, not silence, and
+            # the link is still alive afterwards.
+            busy = False
+            for _ in range(3):
+                try:
+                    radio.link.settings_record()
+                except P.ProtoError as exc:
+                    busy = busy or exc.code == 8   # PC_ERR_BUSY
+                time.sleep(0.1)
+            self.assertTrue(busy, "a held state lock must answer PC_ERR_BUSY")
+            self.assertEqual(radio.link.status()["mode"], 1)
+        finally:
+            radio.close()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--device", required=True)
@@ -415,9 +504,10 @@ def main():
 
     ProtocolTest.binary = args.device
     ProductionTest.binary = args.device_nodebug
+    BootShapeTest.binary = args.device
 
     suite = unittest.TestSuite()
-    for case in (ProtocolTest, ProductionTest):
+    for case in (ProtocolTest, ProductionTest, BootShapeTest):
         suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(case))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     return 0 if result.wasSuccessful() else 1

@@ -82,13 +82,22 @@ static void emitEvents(void)
 int pc_proto_platformStatus(pcProtoStatus_t *out)
 {
     memset(out, 0, sizeof(*out));
-    out->rxFreq = 145500000;
-    out->txFreq = 145500000;
-    out->mode = 1;
+    /*
+     * The same rule the firmware's platform hook follows, and the same absence
+     * of locks: what the radio would transmit with, from the channel when it
+     * carries it and from the settings when it does not (docs/TX_SAFETY.md).
+     */
+    out->rxFreq = state.channel.rx_frequency != 0
+                      ? state.channel.rx_frequency : 145500000;
+    out->txFreq = state_txFrequency() != 0 ? state_txFrequency() : 145500000;
+    out->mode = state.channel.mode != 0 ? state.channel.mode : 1;
     out->rssi = -73;
     out->channelIdx = 1;
     out->batteryMv = 7400;
     out->txState = 1;
+    out->txPower = (uint16_t)state_txPowerMw();
+    snprintf(out->txReason, sizeof(out->txReason), "%s",
+             out->txPower == 0 ? "no tx power" : "none");
     strcpy(out->channelName, "TEST1");
     return 0;
 }
@@ -118,6 +127,9 @@ int pc_proto_platformDiag(pcProtoDiag_t *out)
     strcpy(out->tasks[1].name, "pcproto");
     out->tasks[1].unused = 3000;
     out->tasks[1].size = 4096;
+    out->txPower = (uint16_t)state_txPowerMw();
+    snprintf(out->txReason, sizeof(out->txReason), "%s",
+             out->txPower == 0 ? "no tx power" : "none");
     return 0;
 }
 
@@ -254,7 +266,8 @@ static struct
     uint8_t ptt;
     uint16_t tone;      /* Hz the radio really generates               */
     uint8_t level;      /* deviation percentage in force               */
-} radio = { 145500000, 145500000, 1, 2, 0, 0, 0 };
+    uint16_t power;     /* mW the PA is driven with                    */
+} radio = { 145500000, 145500000, 1, 2, 0, 0, 0, 0 };
 
 /** The tone the simulated receiver puts in the discriminator, in Hz. */
 #define RADIO_TONE_HZ 1000
@@ -281,6 +294,7 @@ int pc_proto_platformBench(uint8_t op, pcProtoBenchArgs_t *a)
             a->txState = radio.ptt ? 2 : 1;
             a->toneHz = radio.tone;
             a->level = radio.level;
+            a->power = radio.power;
             a->rssi = simRssi();
             a->rssiRaw = (int16_t)(a->rssi - 3);
             a->deltaHz = 0;
@@ -295,13 +309,20 @@ int pc_proto_platformBench(uint8_t op, pcProtoBenchArgs_t *a)
                 radio.mode = a->mode;
             if (a->bw >= 1 && a->bw <= 3)
                 radio.bw = a->bw;
+            /* The power of the run, in the channel field the firmware keys
+             * from; 0 keeps what is in force. */
+            if (a->power != 0)
+                radio.power = a->power;
             a->mode = radio.mode;
             a->bw = radio.bw;
             a->rxHz = radio.rxHz;
             a->txHz = radio.txHz;
+            a->power = radio.power;
             return 0;
 
         case PC_BENCH_OP_PTT:
+            if (a->ptt && radio.power == 0)
+                return -1; /* nothing to transmit with: never keyed */
             radio.ptt = a->ptt;
             if (a->ptt) {
                 /* The generator only does the standard CTCSS range. */
@@ -314,6 +335,7 @@ int pc_proto_platformBench(uint8_t op, pcProtoBenchArgs_t *a)
             }
             a->toneHz = radio.tone;
             a->level = radio.level;
+            a->power = radio.power;
             a->txState = radio.ptt ? 2 : 1;
             return 0;
 
@@ -403,11 +425,46 @@ static void pushBootLog(void)
     pc_proto_logPush(&proto, PC_LOG_ERROR, "dmr", "sync lost");
 }
 
+/*
+ * How long, and how, the fake radio's UI holds the state lock: the failure the
+ * transport has to survive (docs/PC_PROTO.md).  The firmware's UI thread holds
+ * state_mutex across ui_updateFSM() and the state task across the battery read;
+ * a radio whose boot path blocks while holding it used to silence the whole
+ * protocol, with no fault and no log line.  With --hold-lock-ms the device
+ * reproduces exactly that from another thread, and the test checks that HELLO,
+ * STATUS and the bench still answer.
+ */
+static void *holdStateLock(void *arg)
+{
+    long ms = (long)arg;
+    pthread_mutex_lock(&state_mutex);
+    usleep((useconds_t)ms * 1000);
+    pthread_mutex_unlock(&state_mutex);
+    return NULL;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        fprintf(stderr, "usage: %s <char-device> [--debug]\n", argv[0]);
+        fprintf(stderr,
+                "usage: %s <char-device> [--vfo] [--zero-power] "
+                "[--hold-lock-ms N] [--boot-channel]\n", argv[0]);
         return 2;
+    }
+
+    bool vfoBoot = false;
+    bool zeroPower = false;
+    bool bootChannel = false;
+    long holdLockMs = 0;
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--vfo") == 0)
+            vfoBoot = true;
+        else if (strcmp(argv[i], "--zero-power") == 0)
+            zeroPower = true;
+        else if (strcmp(argv[i], "--boot-channel") == 0)
+            bootChannel = true;
+        else if (strcmp(argv[i], "--hold-lock-ms") == 0 && i + 1 < argc)
+            holdLockMs = strtol(argv[++i], NULL, 10);
     }
 
     /* Non-blocking: the loop has to keep ticking (events, log drain) even
@@ -469,6 +526,42 @@ int main(int argc, char **argv)
     regs4819[0x67] = 0x00A5;
     for (size_t i = 0; i < sizeof(memWindow); i++)
         memWindow[i] = (uint8_t)i;
+
+    /*
+     * The two boot shapes that matter, both of them reported from hardware:
+     * a radio that comes up on a stored channel (the one that used to silence
+     * the protocol) and one that comes up on the VFO, with no channel power and
+     * no transmit frequency of its own (the one that keyed nothing).
+     */
+    if (bootChannel) {
+        /* Last used = 0, as PC_MSG_CHAN_LASTUSED leaves it, and the record
+         * applied to state the way core/state.c does at boot. */
+        chstore_setLastUsed(0);
+        chstore_commit();
+        chstore_toChannel(0, &state.channel);
+        state.channel_index = 0;
+        state.tuner_mode = CH;
+    } else if (vfoBoot) {
+        memset(&state.channel, 0, sizeof(state.channel));
+        state.channel.mode = 1;               /* OPMODE_FM */
+        state.channel.bandwidth = 1;
+        state.channel.rx_frequency = 145500000;
+        state.channel.tx_frequency = 0;       /* what the VFO record carries */
+        state.channel.power = 0;              /* ...and what it does not    */
+        strcpy(state.channel.name, "VFO");
+        state.tuner_mode = VFO;
+    }
+
+    if (zeroPower)
+        state.settings.tx_power = 0;
+    else if (state.settings.tx_power == 0)
+        state.settings.tx_power = default_settings.tx_power;
+
+    if (holdLockMs > 0) {
+        pthread_t holder;
+        if (pthread_create(&holder, NULL, holdStateLock, (void *)holdLockMs) == 0)
+            pthread_detach(holder);
+    }
 
     pc_proto_init(&proto, &port);
     pushBootLog();

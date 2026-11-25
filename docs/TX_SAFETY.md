@@ -204,6 +204,65 @@ PA: off at boot, REG_33 latch clear
 PA: STILL KEYED AT BOOT: REG_33 latch set
 ```
 
+## What the radio transmits with: frequency and power (the VFO case)
+
+A channel carries its own transmit frequency and its own power, so a radio on a
+memory channel always had something to key with. A **VFO has neither**: it is a
+frequency and a mode, and `state.channel` is the record the UI happens to be
+editing, which for a VFO comes from flash and can be as empty as the day it was
+written. That produced the worst kind of failure, reported from a radio with an
+empty bank and reproducible every time:
+
+- `state.channel.tx_frequency == 0` → `radio_enableTx()` refused it with a bare
+  `return` **after** dropping the enable lines and before driving PA_VHF_EN,
+  ALC_TX_LED_EN or the chip's TX: no RF, no red LED, nothing in the log.
+- `state.channel.power == 0` → the PA came up at the driver's minimum duty (it
+  clamps to 1 W) or, on the bench, keyed with nothing behind it and
+  `tx_state = 2` in the status.
+
+Both numbers now come from one place, `core/state.c`, and neither can be zero by
+accident:
+
+| what | rule |
+|---|---|
+| `state_txFrequency()` | the channel's TX if it has one, otherwise RX (a VFO is simplex). It is what `threads.c` puts in the RTX configuration. |
+| `state_txPowerMw()` | the channel's power if it has one, otherwise `settings_t.tx_power` (default **500 mW**, `SETTINGS_VERSION` 7). |
+| `state_keyingPowerOk()` | false when the result is 0: `rtx_keyingAllowed()` then refuses and `rtx_keyingVetoReason()` says `no tx power`. |
+
+`state_init()` also fills `tx_frequency` from `rx_frequency` when a VFO record
+comes up without one, so the value is right even for a record written by an
+older firmware (which is discarded as a whole on the version bump anyway).
+
+A power of 0 is still allowed in the setting, on purpose: an operator may want a
+radio that cannot transmit. What is not allowed is a *silent* zero. Three places
+refuse it and all three say so:
+
+1. `rtx_keyingAllowed()` -- the gate, with `rtx_keyingVetoReason()` = `no tx
+   power`, which the protocol status and the diagnostics report.
+2. `pc_bench_ptt()` -- the bench answers `invalid_value` and does not key.
+3. `radio_enableTx()` -- the driver's own check, `PA: keying refused, TX power
+   is 0 mW` in the log, throttled to one line a second.
+
+The same treatment for the frequency: `radio_enableTx()` used to drop out of
+band silently. It now prints `PA: keying refused, TX <n> Hz outside 136-600 MHz`
+and leaves `radio_txRefusedReason()` = `tx freq out of range` for the status.
+
+### Visible from the PC
+
+`PC_MSG_STATUS_GET` (and every status event) carries `PC_TAG_TX_POWER` (u16, mW
+the radio would key with) and `PC_TAG_TX_REASON` (`none`, `no tx power`, `tx
+disabled`, `tx freq out of range`, `wfmbc rx only`, or what the key gate is
+waiting for). `PC_MSG_DBG_INFO` carries the same two fields. `cps.py status`
+prints them, so "the PTT does nothing" is answered by one command over the
+cable, without opening the radio:
+
+```
+$ tools/cps/cps.py -d /dev/ttyUSB0 status
+...
+power_mw            500
+tx_reason           none
+```
+
 ## Why 90 s
 
 Three numbers decided it, and only the first is about policy.
@@ -249,6 +308,14 @@ backstop when the supervisor itself is the thing that died.
   leaving the PA off.
 - `tests/unit/mode_walk.cpp`: the TX to RX loop over one mode object, after the
   eleven-mode walk.
+- `tests/unit/tx_power.cpp`: the VFO route -- a blank VFO record gets its TX
+  frequency from RX, its power from the settings and its keying permitted; a
+  channel keeps its own both; a setting of 0 is kept as 0, the gate refuses with
+  `no tx power` and no minimum is ever conjured.
+- `tests/host/pc_proto_host` (the Python suite): the radio booting on a stored
+  channel still answers HELLO and reports its frequency and power; a VFO reports
+  a valid TX frequency and 500 mW; a VFO with the setting at 0 reports
+  `power_mw 0` and `tx_reason no tx power`.
 
 The DMR transmit chain itself is not linked into the host build (demodulator and
 vocoder), so its call loop is verified on the radio; what the host proves is the
@@ -258,7 +325,7 @@ decision that starts it and the clocks that end it.
 
 `PC_MSG_DBG_INFO` carries `PC_TAG_TX_SECONDS` (u16, air time since the last
 release) and `PC_TAG_TX_REASON` (`idle`, `ptt`, `unattended`, `mode`,
-`timeout`). `PC_MSG_DBG_TX_TRACE` carries the live guard trace plus
+`timeout`; and, since the VFO fix, the refusal words of the section above). `PC_MSG_DBG_TX_TRACE` carries the live guard trace plus
 
 ```
 tx=43s/ptt air=43105ms cut=0/0

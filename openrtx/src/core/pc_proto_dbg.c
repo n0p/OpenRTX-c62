@@ -229,6 +229,12 @@ int pc_dbg_info(struct pcReq *r)
         off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_RAM_TOTAL,
                          d.ramTotal);
         off = pc_tlv_u8(r->out, r->outCap, off, PC_TAG_AGC, d.agc);
+        /* The power the radio would key with: in the diagnostics as well as in
+         * the status, because "the PTT does nothing" is the first thing a bench
+         * session asks about (docs/TX_SAFETY.md). */
+        off = pc_tlv_u16(r->out, r->outCap, off, PC_TAG_TX_POWER, d.txPower);
+        off = pc_tlv_str(r->out, r->outCap, off, PC_TAG_TX_REASON,
+                         d.txReason[0] != '\0' ? d.txReason : "none");
 
         /*
          * The transmit clock: how much air the PA has put out since it was last

@@ -126,6 +126,17 @@ void state_init()
         }
     }
 
+    /*
+     * A VFO record written before settings_t.tx_power existed carries neither
+     * a transmit frequency nor a power: the operator who boots on it gets a
+     * radio that keys nothing and says nothing (docs/TX_SAFETY.md).  Fill the
+     * gaps from what the radio does know, once, here, so every consumer sees
+     * the same numbers -- and leave a real channel alone: a channel's power of
+     * 0 is the operator's own "do not transmit" and it is not overwritten.
+     */
+    if (state.channel.tx_frequency == 0)
+        state.channel.tx_frequency = state.channel.rx_frequency;
+
 /*
      * Initialise remaining fields
      */
@@ -148,6 +159,11 @@ void state_init()
     if (state.settings.brightness > 100) {
         state.settings.brightness = 100;
     }
+
+    /* A power above the PA's ceiling is not transmitted: fall back, never clamp
+     * to maximum, so a corrupt record does not become a 5 W setting. */
+    if (!settings_txPowerValid(state.settings.tx_power))
+        state.settings.tx_power = default_settings.tx_power;
 
 #ifdef NVMEM_DEBOUNCED_WRITE
     settingsDebouncer.crc = crc_ccitt(&state.settings, sizeof(settings_t));
@@ -324,4 +340,65 @@ uint8_t state_settingsResetCause(void)
 void state_settingsResetAck(void)
 {
     state.settings_reset = SETTINGS_NO_RESET;
+}
+
+/*
+ * ----------------------------------------------------------------------------
+ * Transmit frequency, transmit power, and the bounded state lock
+ * ----------------------------------------------------------------------------
+ */
+
+freq_t state_txFrequency(void)
+{
+    /* A VFO says nothing about transmit: simplex, i.e. the receive frequency.
+     * A channel carries its own, offset included.  0 is never returned when
+     * the receiver is on a real frequency, which is what keeps the driver's
+     * range check from refusing the keying in silence. */
+    freq_t tx = state.channel.tx_frequency;
+    return (tx != 0) ? tx : state.channel.rx_frequency;
+}
+
+uint32_t state_txPowerMw(void)
+{
+    /*
+     * The channel wins, the setting is what a VFO (or a channel record from
+     * before the field existed, power 0) falls back to.  A setting of 0 means
+     * the operator asked for no transmit at all: the gate refuses the keying
+     * and the status says so (docs/TX_SAFETY.md).
+     */
+    if (state.channel.power != 0)
+        return (uint32_t)state.channel.power;
+    return (uint32_t)state.settings.tx_power;
+}
+
+/** Polling step of the bounded lock below, ms. */
+#define STATE_LOCK_STEP_MS 2
+
+bool state_tryLock(uint32_t timeoutMs)
+{
+    /*
+     * A bounded acquisition, for the callers that must keep answering while the
+     * radio is busy: the PC protocol's transport thread is one frame away from
+     * a client at any moment, and a plain pthread_mutex_lock() parks it for as
+     * long as the UI or the state task holds the lock -- across ui_updateFSM()
+     * or across the battery read, and, if that holder ever blocks, for ever.
+     * A radio that goes mute with no fault and no log line is exactly what that
+     * costs (docs/PC_PROTO.md, "The transport never waits for ever").
+     */
+    if (pthread_mutex_trylock(&state_mutex) == 0)
+        return true;
+
+    uint32_t waited = 0;
+    while (waited < timeoutMs) {
+        delayMs(STATE_LOCK_STEP_MS);
+        waited += STATE_LOCK_STEP_MS;
+        if (pthread_mutex_trylock(&state_mutex) == 0)
+            return true;
+    }
+    return false;
+}
+
+void state_unlock(void)
+{
+    pthread_mutex_unlock(&state_mutex);
 }

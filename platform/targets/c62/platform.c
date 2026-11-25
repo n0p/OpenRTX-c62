@@ -37,6 +37,7 @@ extern void kiss_uart_init(void);
 #include "dsp.h"
 #ifdef C62_PC_PROTO
 void pc_proto_c62_init(void);
+void pc_proto_c62_supervise(void);
 #endif
 #include <string.h>
 #include <stdint.h>
@@ -466,6 +467,16 @@ void platform_wdtFeed(void)
 {
     if (wdtArmed)
         wdt_feed(wdt_dev, wdtChannel);
+
+#ifdef C62_PC_PROTO
+    /*
+     * Next to the watchdog, because it is the same question one level up: this
+     * thread is known to be running (it just fed the hardware), so it is the
+     * one that can notice the transport thread is not.  Cheap: two loads and a
+     * comparison, and the report is throttled inside.
+     */
+    pc_proto_c62_supervise();
+#endif
 }
 
 #if defined(C62_REMOTE) || defined(CONFIG_C62_BENCH_PROTO)

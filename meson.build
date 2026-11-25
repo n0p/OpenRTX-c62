@@ -1463,6 +1463,10 @@ channel_store_test = executable('channel_store_test',
 # Protocolo binario con el PC. Se compila dos veces: la primera con el espacio
 # de nombres de depuracion, la segunda sin el, para que "una build de produccion
 # responde NOT_ALLOWED y no filtra nada" sea un test y no una promesa.
+tx_power_test = executable('tx_power_test',
+                           sources : unit_test_src + ['tests/unit/tx_power.cpp'],
+                           kwargs  : unit_test_opts)
+
 pc_proto_test = executable('pc_proto_test',
                            sources : unit_test_src + ['tests/unit/pc_proto.cpp'],
                            kwargs  : unit_test_opts)
@@ -1858,6 +1862,7 @@ test('M17 Packet Frame Test', m17_packet_test)
 test('M17 Frame Decoder Test', m17_decoder_test)
 test('C62 Calibration Test', c62_calib_test)
 test('Channel Store Test',   channel_store_test)
+test('TX Power Test',        tx_power_test)
 test('PC Protocol Test',     pc_proto_test)
 test('PC Protocol Debug Test', pc_proto_dbg_test)
 test('PC Bench Test',        pc_bench_test)

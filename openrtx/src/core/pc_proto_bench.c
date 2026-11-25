@@ -50,6 +50,7 @@
 #include <string.h>
 
 #include "core/pc_proto.h"
+#include "core/settings.h"
 #include "pc_proto_internal.h"
 
 #ifdef CONFIG_C62_BENCH_PROTO
@@ -146,6 +147,18 @@ typedef struct
     /* Report text, built on demand. */
     char     report[BENCH_REPORT_LEN];
     uint16_t reportLen;
+
+    /**
+     * Transmit power of the run, mW (PC_TAG_BENCH_POWER).
+     *
+     * A run keys the PA, and on a VFO there is no channel to inherit it from:
+     * this used to be whatever state.channel.power held, which is 0 outside a
+     * memory channel, and the radio keyed into nothing (docs/BENCH.md,
+     * docs/TX_SAFETY.md).  TUNE sets it; ARM seeds it from what the radio
+     * would use anyway, so a client that does not know the tag still keys with
+     * the radio's own power instead of with zero.
+     */
+    uint16_t power;
 } benchState_t;
 
 static benchState_t bench;
@@ -246,6 +259,14 @@ int pc_bench_arm(struct pcReq *r)
     bench.armed = true;
     bench.armTick = benchNow();
 
+    /* Seed the power with what the radio would key with anyway: a client that
+     * never sends PC_TAG_BENCH_POWER then runs at the radio's own power, and
+     * one whose radio has none gets the refusal at PTT instead of a silent
+     * 0 mW transmission. */
+    pcProtoStatus_t s;
+    if (pc_proto_status(&s) == 0)
+        bench.power = s.txPower;
+
     /* What a capture can offer, so a client sizes its windows without
      * guessing.  rate 0 means this platform has no capture at all. */
     pcProtoCapture_t st;
@@ -264,6 +285,7 @@ int pc_bench_arm(struct pcReq *r)
     off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_UPTIME_MS, bench.armTick);
     off = pc_tlv_u16(r->out, r->outCap, off, PC_TAG_RATE, rate);
     off = pc_tlv_u16(r->out, r->outCap, off, PC_TAG_LENGTH, maxMs);
+    off = pc_tlv_u16(r->out, r->outCap, off, PC_TAG_BENCH_POWER, bench.power);
     if (off == 0) {
         r->err = PC_ERR_TOO_LARGE;
         return -1;
@@ -281,6 +303,7 @@ int pc_bench_arm(struct pcReq *r)
 int pc_bench_tune(struct pcReq *r)
 {
     uint32_t rx = 0, tx = 0;
+    uint16_t power = 0;
     uint8_t mode = 0, bw = 0;
 
     if (!benchTokenOk(r))
@@ -299,6 +322,23 @@ int pc_bench_tune(struct pcReq *r)
     mode = bench.mode;
     bw = bench.bw;
 
+    /*
+     * The transmit power, in mW (docs/BENCH.md).  This is what a bench run
+     * needs and what a channel used to provide by accident: on a VFO there is
+     * no channel, state.channel.power is 0, and the keying that followed put
+     * the PA up with nothing behind it.  TUNE now carries it, so the number
+     * the run measures is the number the run asked for.  Absent (or 0) keeps
+     * whatever is in force.
+     */
+    if (pc_tlv_get_u16(r->in, r->inLen, PC_TAG_BENCH_POWER, &power)) {
+        if (power > SETTINGS_TX_POWER_MAX) {
+            r->err = PC_ERR_INVALID_VALUE;
+            return -1;
+        }
+        bench.power = power;
+    }
+    power = bench.power;
+
     if (bench.capArmed || bench.swState != SW_IDLE) {
         /* Retuning in the middle of a capture or a sweep would silently
          * invalidate what was collected. */
@@ -312,12 +352,17 @@ int pc_bench_tune(struct pcReq *r)
     a.txHz = tx;
     a.mode = mode;
     a.bw = bw;
-    if (pc_proto_platformBench(PC_BENCH_OP_TUNE, &a) != 0) {
-        r->err = PC_ERR_INVALID_VALUE;
+    a.power = power;
+    int rc = pc_proto_platformBench(PC_BENCH_OP_TUNE, &a);
+    if (rc != 0) {
+        /* A busy state lock is not an invalid frequency: say which it was so a
+         * client knows whether retrying is worth anything. */
+        r->err = (rc == -(int)PC_ERR_BUSY) ? PC_ERR_BUSY : PC_ERR_INVALID_VALUE;
         return -1;
     }
 
     bench.tuned = true;
+    bench.power = a.power;
     bench.rxHz = a.rxHz != 0 ? a.rxHz : rx;
     bench.txHz = a.txHz != 0 ? a.txHz : tx;
     bench.mode = a.mode != 0 ? a.mode : mode;
@@ -334,6 +379,7 @@ int pc_bench_tune(struct pcReq *r)
                      (uint32_t)bench.deltaHz);
     off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_BENCH_TICK, tick);
     off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_BENCH_EPOCH, bench.epoch);
+    off = pc_tlv_u16(r->out, r->outCap, off, PC_TAG_BENCH_POWER, bench.power);
     if (off == 0) {
         r->err = PC_ERR_TOO_LARGE;
         return -1;
@@ -363,15 +409,41 @@ int pc_bench_ptt(struct pcReq *r)
     pc_tlv_get_u16(r->in, r->inLen, PC_TAG_BENCH_TONE, &tone);
     pc_tlv_get_u8(r->in, r->inLen, PC_TAG_BENCH_LEVEL, &level);
 
+    /*
+     * Only a keying with something to transmit with.  The power the run asked
+     * TUNE for is the power of the answer; if it is 0 (a VFO with no setting,
+     * a run that never tuned), keying would put the PA up at zero and the SDR
+     * would measure silence with nothing on the radio to blame.  Refused, with
+     * the error in the answer (docs/TX_SAFETY.md, docs/BENCH.md).
+     */
+    if (on && bench.power == 0) {
+        r->err = PC_ERR_INVALID_VALUE;
+        return -1;
+    }
+
     pcProtoBenchArgs_t a;
     memset(&a, 0, sizeof(a));
     a.ptt = on;
     a.toneHz = on ? tone : 0;
     a.level = level;
-    if (pc_proto_platformBench(PC_BENCH_OP_PTT, &a) != 0) {
-        r->err = PC_ERR_NOT_SUPPORTED;
+    a.power = bench.power;
+    int rc = pc_proto_platformBench(PC_BENCH_OP_PTT, &a);
+    if (rc != 0) {
+        if (rc == -(int)PC_ERR_BUSY)
+            r->err = PC_ERR_BUSY;
+        else if (on && a.power == 0)
+            r->err = PC_ERR_INVALID_VALUE; /* nothing to transmit with */
+        else
+            r->err = PC_ERR_NOT_SUPPORTED;
         return -1;
     }
+    /* The platform reports the power it really keyed with, which is what the
+     * run has to be compared against. */
+    if (a.power == 0 && on) {
+        r->err = PC_ERR_INVALID_VALUE;
+        return -1;
+    }
+    bench.power = a.power;
 
     uint32_t tick = benchNow();
     if (on) {
@@ -392,6 +464,7 @@ int pc_bench_ptt(struct pcReq *r)
     off = pc_tlv_u8(r->out, r->outCap, off, PC_TAG_TX_STATE, on ? 2 : 1);
     off = pc_tlv_u16(r->out, r->outCap, off, PC_TAG_BENCH_TONE, bench.toneHz);
     off = pc_tlv_u8(r->out, r->outCap, off, PC_TAG_BENCH_LEVEL, bench.level);
+    off = pc_tlv_u16(r->out, r->outCap, off, PC_TAG_BENCH_POWER, bench.power);
     off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_BENCH_TICK, tick);
     if (off == 0) {
         r->err = PC_ERR_TOO_LARGE;
@@ -771,6 +844,7 @@ static uint16_t benchReportBuild(void)
                           (unsigned long)bench.pttOnTick,
                           (unsigned long)bench.pttOffTick, bench.toneHz,
                           bench.level);
+    n += (size_t)snprintf(b + n, cap - n, "power  %u mW\n", bench.power);
 
     if (bench.capRate != 0) {
         n += (size_t)snprintf(b + n, cap - n,

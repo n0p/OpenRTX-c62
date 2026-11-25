@@ -193,6 +193,17 @@ struct txGuard *rtx_getTxGuard();
 bool rtx_keyingAllowed(const rtxStatus_t *status);
 
 /**
+ * Why the last call to rtx_keyingAllowed() said no.
+ *
+ * "none" when the gate would let a press through, otherwise a short word the
+ * status reports: "no tx power" (a channel or a VFO with 0 mW, which must
+ * never key, docs/TX_SAFETY.md), "tx disabled" (menus, receive-only channel)
+ * or whatever the gate itself is waiting for.  A PTT that does nothing has to
+ * be explainable from the outside.
+ */
+const char *rtx_keyingVetoReason(void);
+
+/**
  * May an unattended transmission start now? (a queued short message, the
  * packet modem: no operator and no PTT.)
  *

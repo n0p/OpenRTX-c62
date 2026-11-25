@@ -192,6 +192,8 @@ T_BATTERY_MV = 0x0086
 T_SQUELCH = 0x0087
 T_PERIOD_MS = 0x0088
 T_CHANNEL_NAME = 0x0089
+T_TX_POWER = 0x008A
+T_TX_REASON = 0x00EF
 
 T_MSG_TRANSPORT = 0x00A0
 T_MSG_PEER = 0x00A1
@@ -756,6 +758,10 @@ class Link:
             "battery_mv": f.u16(T_BATTERY_MV),
             "squelch": f.u8(T_SQUELCH), "name": f.s(T_CHANNEL_NAME),
             "uptime_ms": f.u32(T_UPTIME_MS),
+            # What the radio would key with, and why it would not: the answer
+            # to "the PTT does nothing" without opening the radio.
+            "power_mw": f.u16(T_TX_POWER),
+            "tx_reason": f.s(T_TX_REASON),
         }
 
     def subscribe_status(self, period_ms):

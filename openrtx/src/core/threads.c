@@ -80,8 +80,14 @@ void *ui_threadFunc(void *arg)
             rtx_cfg.opMode      = state.channel.mode;
             rtx_cfg.bandwidth   = state.channel.bandwidth;
             rtx_cfg.rxFrequency = state.channel.rx_frequency;
-            rtx_cfg.txFrequency = state.channel.tx_frequency;
-            rtx_cfg.txPower     = state.channel.power;
+            /*
+             * Transmit frequency and power come from state.c, not from the
+             * channel directly: on a VFO the channel carries neither, and a
+             * driver handed 0 Hz refuses to key without saying so and one
+             * handed 0 mW keys the PA into nothing (docs/TX_SAFETY.md).
+             */
+            rtx_cfg.txFrequency = state_txFrequency();
+            rtx_cfg.txPower     = state_txPowerMw();
             rtx_cfg.sqlLevel    = state.settings.sqlLevel;
             rtx_cfg.rxToneEn    = state.channel.fm.rxToneEn;
             rtx_cfg.rxTone      = ctcss_tone[state.channel.fm.rxTone];

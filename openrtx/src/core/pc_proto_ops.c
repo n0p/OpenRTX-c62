@@ -28,6 +28,7 @@
 
 #include "core/pc_proto.h"
 #include "pc_proto_internal.h"
+#include "core/state.h"
 #include "core/channel_store.h"
 #include "core/contact_store.h"
 #include "core/crc.h"
@@ -852,13 +853,32 @@ static int settingsApply(const struct settingsField *f, settings_t *s,
     }
 }
 
+/*
+ * How long a handler waits for state_mutex.  These run in the transport thread,
+ * which has to keep answering: the UI holds the same lock across ui_updateFSM()
+ * and a plain lock would park the protocol for as long as that takes -- or for
+ * ever, if the holder blocks.  A busy radio answers PC_ERR_BUSY, and a client
+ * that retries gets served (docs/PC_PROTO.md).
+ */
+#define OPS_LOCK_MS 20
+
+/** Take the state lock or answer BUSY; returns 0 to go on, -1 when answered. */
+static int opsLock(struct pcReq *r)
+{
+    if (state_tryLock(OPS_LOCK_MS))
+        return 0;
+    r->err = PC_ERR_BUSY;
+    return -1;
+}
+
 int pc_ops_settingsGet(struct pcReq *r)
 {
     settings_t s;
 
-    pthread_mutex_lock(&state_mutex);
+    if (opsLock(r) != 0)
+        return -1;
     memcpy(&s, &state.settings, sizeof(s));
-    pthread_mutex_unlock(&state_mutex);
+    state_unlock();
 
     size_t off = 0;
     bool anyField = false;
@@ -911,9 +931,10 @@ int pc_ops_settingsSet(struct pcReq *r)
         return -1;
     }
 
-    pthread_mutex_lock(&state_mutex);
+    if (opsLock(r) != 0)
+        return -1;
     memcpy(&work, &state.settings, sizeof(work));
-    pthread_mutex_unlock(&state_mutex);
+    state_unlock();
 
     /* Apply to a copy first: one bad field must not leave the radio with half
      * of the new settings. */
@@ -938,10 +959,11 @@ int pc_ops_settingsSet(struct pcReq *r)
         scan += 4 + l;
     }
 
-    pthread_mutex_lock(&state_mutex);
+    if (opsLock(r) != 0)
+        return -1;
     memcpy(&state.settings, &work, sizeof(work));
     memcpy(&back, &state.settings, sizeof(back));
-    pthread_mutex_unlock(&state_mutex);
+    state_unlock();
 
     /* The debouncer in state_task() sees the new CRC and writes the record to
      * flash a couple of seconds later, so a CPS edit lands the same way an
@@ -969,9 +991,10 @@ int pc_ops_settingsInfo(struct pcReq *r)
 {
     settings_t s;
 
-    pthread_mutex_lock(&state_mutex);
+    if (opsLock(r) != 0)
+        return -1;
     memcpy(&s, &state.settings, sizeof(s));
-    pthread_mutex_unlock(&state_mutex);
+    state_unlock();
 
     size_t off = pc_tlv_u16(r->out, r->outCap, 0, PC_TAG_SETTINGS_VER,
                             SETTINGS_VERSION);

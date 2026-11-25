@@ -331,6 +331,7 @@ enum pcProtoTag
     PC_TAG_SQUELCH      = 0x0087, /**< u8  1 open                          */
     PC_TAG_PERIOD_MS    = 0x0088, /**< u16 subscription period, 0 off      */
     PC_TAG_CHANNEL_NAME = 0x0089, /**< str name of the selected channel    */
+    PC_TAG_TX_POWER     = 0x008A, /**< u16 mW the radio would key with     */
 
     PC_TAG_MSG_TRANSPORT= 0x00A0, /**< u8  enum msgTransport               */
     PC_TAG_MSG_PEER     = 0x00A1, /**< str peer address                    */
@@ -420,7 +421,8 @@ enum pcProtoTag
     PC_TAG_BENCH_WINDOW  = 0x010F, /**< u16 ms of capture asked for          */
     PC_TAG_BENCH_RSSI_TS = 0x0110, /**< bytes, n * (u32 tick, i16 dBm)       */
     PC_TAG_BENCH_POINTS_TS = 0x0111, /**< bytes, n * (u32 Hz, i16 dBm)       */
-    PC_TAG_BENCH_OVERFLOW = 0x0112  /**< u8, 1 the capture filled up early   */
+    PC_TAG_BENCH_OVERFLOW = 0x0112, /**< u8, 1 the capture filled up early   */
+    PC_TAG_BENCH_POWER    = 0x0113  /**< u16 mW: TUNE in, TUNE/PTT out        */
 };
 
 /** Counters, PC_TAG_STATS; all are cumulative since boot. */
@@ -468,6 +470,14 @@ typedef struct
     uint8_t  taskCount;    /**< entries used in tasks[]                      */
     uint8_t  agc;          /**< AGC state, 0xFF unknown                      */
     pcProtoTaskStack_t tasks[8];
+    /**
+     * Power the radio would transmit with, mW, and why it would not ("none"
+     * when it would).  Appended after the block the first version defined, so
+     * a client that knows only the older fields still reads them where they
+     * were (docs/TX_SAFETY.md).
+     */
+    uint16_t txPower;
+    char     txReason[24];
 }
 __attribute__((packed)) pcProtoDiag_t;
 
@@ -534,6 +544,14 @@ typedef struct
     uint8_t  txState;     /**< 0 off, 1 receiving, 2 transmitting        */
     uint8_t  squelchOpen; /**< 1 when the squelch is open               */
     char     channelName[16]; /**< empty in VFO                         */
+    /**
+     * Power the radio would transmit with, mW: the channel's, or
+     * settings_t.tx_power when the channel carries none (a VFO).  Zero means
+     * it will not key at all, and txReason says why -- the one thing that must
+     * not be a mystery when the PTT does nothing (docs/TX_SAFETY.md).
+     */
+    uint16_t txPower;
+    char     txReason[24];    /**< "none" or why the keying is refused   */
 }
 pcProtoStatus_t;
 
@@ -798,6 +816,13 @@ typedef struct
     uint8_t  ptt;      /**< in/out: 1 keyed, 0 not                          */
     uint8_t  level;    /**< in/out: AF level asked for / applied           */
     uint8_t  txState;  /**< out: 0 off, 1 receiving, 2 transmitting        */
+    /**
+     * in: transmit power asked for with TUNE, mW; 0 keeps the one in force.
+     * out: the power the radio will key with.  A keying at 0 mW is refused:
+     * PC_BENCH_OP_PTT answers PC_ERR_INVALID_VALUE instead of putting the PA
+     * up with nothing behind it (docs/BENCH.md).
+     */
+    uint16_t power;
 }
 pcProtoBenchArgs_t;
 
