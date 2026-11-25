@@ -8,6 +8,7 @@
 #include "interfaces/platform.h"
 #include "core/spectrum_service.h"
 #include "core/utils.h"
+#include "interfaces/delays.h"
 #include "hwconfig.h"
 #include <errno.h>
 #include <new>
@@ -107,6 +108,20 @@ static bool            switching;
 
 static OpMode  *currMode;               // Pointer to currently active opMode handler
 static OpMode     noMode;               // Empty opMode handler for opmode::NONE
+
+/*
+ * A mode change has a deadline.
+ *
+ * enable() only sets the mode's own state: the receiver is started by the mode's
+ * first update(), which is where the driver is told to receive. A mode that
+ * cannot get there -- a driver that refuses to receive, an audio route that the
+ * codec did not apply -- used to be discovered by the operator: the radio stayed
+ * on a mode with no receiver and no way back. switchMode() now waits for the
+ * driver to report RX, for RTX_MODE_START_MS at most, and if that does not happen it
+ * says so and goes back to the mode it came from.
+ */
+static constexpr uint32_t MODE_START_STEP_MS = 5;
+static bool modeReverting;              // A revert is in progress, do not nest
 
 /*
  * The modes' objects, in one block (docs/MEMORY.md).
@@ -282,6 +297,44 @@ static void leaveRadioIdle(void)
 }
 
 /**
+ * Wait, with a deadline, for the mode just enabled to put the radio in receive.
+ *
+ * The mode's own update() is what starts the receiver (radio_enableRx() from
+ * its OFF+enterRx branch), and it is the same call the RTX loop makes 30 ms
+ * later, so running it here is idempotent. It returns as soon as the driver
+ * reports RX: on a healthy radio that is the first pass and this costs no time.
+ *
+ * @return true when the driver is receiving.
+ */
+static bool modeStarted(void)
+{
+    const uint32_t start = (uint32_t)getTick();
+
+    for (;;)
+    {
+        /*
+         * The mode's own start pass. newCfg is false: the configuration is not
+         * new, this is the same call the RTX loop makes 30 ms later.
+         */
+        currMode->update(&rtxStatus, false);
+
+        /*
+         * The driver's status, not the mode's: a mode sets opStatus to RX as
+         * soon as it has asked for the receiver, and a driver that refused it
+         * leaves the radio deaf while the mode believes it is receiving. That
+         * difference is the whole point of the check.
+         */
+        if (radio_getStatus() == RX)
+            return true;
+
+        if (((uint32_t)getTick() - start) >= RTX_MODE_START_MS)
+            return false;
+
+        sleepFor(0, MODE_START_STEP_MS);
+    }
+}
+
+/**
  * Leave the active mode and enter another one, or none.
  *
  * The order is the safety property, not a detail:
@@ -308,6 +361,14 @@ static void leaveRadioIdle(void)
  */
 static void switchMode(uint8_t mode)
 {
+    /*
+     * Where the radio came from: the mode a failed change goes back to. It is
+     * read before anything is torn down, so it is the mode that was really in
+     * use and not what the configuration asked for.
+     */
+    const uint8_t prevMode = (currMode != nullptr) ? (uint8_t)currMode->getID()
+                                                   : (uint8_t)OPMODE_NONE;
+
     pthread_mutex_lock(&txMutex);
     switching = true;
     keyGate_beginTransition(&keyGate, (uint32_t)getTick());
@@ -394,6 +455,51 @@ static void switchMode(uint8_t mode)
 
     currMode = fresh;
     currMode->enable();
+
+    /*
+     * The new mode has to end up receiving, and the change has to end either
+     * way. A mode that cannot start (a driver that refuses the receiver, a
+     * route the codec never applied) is not left half-entered: the radio goes
+     * back to the mode it came from, with the reason in the log, and if there
+     * was no previous mode it stays idle. Either way the operator keeps a
+     * working radio instead of a mode that never receives.
+     */
+    if ((mode != OPMODE_NONE) && (radio_getStatus() != RX) && (!modeStarted()))
+    {
+        #if defined(PLATFORM_C62)
+        printf("MODE %u: not receiving after %u ms, %s\r\n", (unsigned)mode,
+               (unsigned)RTX_MODE_START_MS,
+               ((prevMode != OPMODE_NONE) && (prevMode != mode)
+                    && (!modeReverting)) ? "reverting" : "staying idle");
+        #endif
+
+        if ((prevMode != OPMODE_NONE) && (prevMode != mode) && (!modeReverting))
+        {
+            /*
+             * The status goes back with the radio: leaving it asking for the
+             * mode that could not start would make every new configuration try
+             * it again, one failed change every 300 ms.
+             */
+            rtxStatus.opMode = prevMode;
+            modeReverting = true;
+            switchMode(prevMode);
+            modeReverting = false;
+            return;
+        }
+
+        /* Nothing to go back to: idle, PA off, receiver available */
+        currMode->disable();
+        OpMode *dead = currMode;
+        currMode = &noMode;
+        if (dead != &noMode)
+            dead->~OpMode();
+        modeArena_release();
+        radio_setOpmode(OPMODE_NONE);
+        leaveRadioIdle();
+        rtxStatus.opMode = OPMODE_NONE;
+        /* Idle with the receiver available, as the change that found no block */
+        rtxStatus.opStatus = OFF;
+    }
 
     pthread_mutex_lock(&txMutex);
     keyGate_endTransition(&keyGate, (uint32_t)getTick());

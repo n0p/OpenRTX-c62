@@ -20,6 +20,10 @@
  * off however many times it is asked for.
  */
 static enum opstatus radioStatus = OFF;
+/* Mode the driver was last configured for, and the host tests' refuse hook */
+static enum opmode radioMode = OPMODE_NONE;
+static enum opmode rxRefuseMode = OPMODE_NONE;
+static bool rxRefuse;
 static unsigned keyed = 0;
 static unsigned keysRefused = 0;
 static unsigned barrierCuts = 0;
@@ -89,6 +93,8 @@ void radio_terminate()
 
 void radio_setOpmode(const enum opmode mode)
 {
+    radioMode = mode;
+
     std::string mStr(" ");
     if(mode == OPMODE_NONE) mStr = "NONE";
     if(mode == OPMODE_FM)   mStr = "FM";
@@ -104,8 +110,23 @@ bool radio_checkRxDigitalSquelch()
     return false;
 }
 
+/*
+ * Host tests: make the receiver refuse to start in one mode, the way a driver
+ * whose chip does not come up with the profile of that mode does. The mode then
+ * never reports RX, which is the case the mode switch has to survive (revert to
+ * the mode it came from and say so).
+ */
+void radio_linux_refuseRx(uint8_t mode, bool refuse)
+{
+    rxRefuseMode = static_cast<opmode>(mode);
+    rxRefuse = refuse;
+}
+
 void radio_enableRx()
 {
+    if (rxRefuse && (radioMode == rxRefuseMode))
+        return;
+
     radioStatus = RX;
 }
 
