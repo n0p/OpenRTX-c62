@@ -86,6 +86,11 @@ scripts/get_demod_log
 /build-qemu/
 /build-lt-*/
 
+# Host bench of the packet modem: the test binary and the WAVs it generates for
+# direwolf are rebuilt by tests/host/kiss_loop/run.sh
+/tests/host/kiss_loop/build/
+/build-qemu-kiss/
+
 # dPMR working material: the ETSI PDFs, the DSDcc and dsd-neo checkouts used as
 # references and the captures the receiver was developed against.  Sources and
 # copyrights are their own; nothing of it is distributed with the firmware.

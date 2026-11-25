@@ -40,6 +40,9 @@ extern "C" {
  *       The blocks are appends at different offsets, so merging branches is a
  *       renumber and never a re-interpretation: nothing here reorders or reuses
  *       a field.
+ *  - 6: the packet modem block appended (enable, modem, KISS parameters), see
+ *       docs/KISS.md and core/packet_service.h.  c62/mega stopped at 5, so 6
+ *       is the next free number and no branch has to be renumbered.
  */
 #define SETTINGS_VERSION 6
 
@@ -180,6 +183,25 @@ typedef struct
      * not take it without moving the scan fields of an older record.
      */
     uint8_t  am_depth;            // Airband TX modulation depth, percent
+#ifdef CONFIG_KISS
+    /*
+     * Packet modem (KISS TNC), docs/KISS.md.
+     *
+     * The four KISS parameters the host can also set at run time
+     * (TXDELAY, PERSIST, SLOTTIME, TXTAIL) live here so that the radio keeps
+     * them across a power cycle; a value the host writes overrides the stored
+     * one for the session and is not saved, which is what a TNC2 does.
+     */
+    bool     packet_enable;       // KISS service running
+    uint8_t  packet_modem;        // pkt_modem_t: AFSK1200, AFSK9600, NXDN, DMRIP
+    uint8_t  packet_port;         // KISS port of the radio (0)
+    uint8_t  packet_persist;      // 0..255, channel access probability
+    uint8_t  packet_fulldup;      // 1: transmit without carrier sense
+    uint16_t packet_txdelay_ms;   // TXDELAY: key-up flags before the frame
+    uint16_t packet_txtail_ms;    // TXTAIL: silence after the last flag
+    uint16_t packet_slottime_ms;  // SLOTTIME: channel access slot
+    uint16_t packet_maxframe;     // Longest frame accepted from the host
+#endif
 }
 __attribute__((packed)) settings_t;
 
@@ -283,6 +305,17 @@ static const settings_t default_settings =
     146000000U,
     0,                            // Air delay 0: the measured default
     60,                           // AM: 60 % modulation depth on transmit
+#ifdef CONFIG_KISS
+    false,                        // Packet modem off until the operator asks
+    0,                            // PKT_MODEM_AFSK1200: what an FM channel carries
+    0,                            // KISS port 0
+    128,                          // PERSIST 128: listen before transmit
+    false,                        // Half duplex: carrier sense on
+    300,                          // 300 ms TXDELAY, as APRS recommends
+    20,                           // 20 ms TXTAIL
+    100,                          // 100 ms SLOTTIME
+    330,                          // The AX.25 ceiling, FCS included
+#endif
 };
 
 /**

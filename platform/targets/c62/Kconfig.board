@@ -27,6 +27,29 @@ endif # LSF_DSP
 
 endmenu
 
+menu "Packet"
+
+config C62_KISS
+	bool "Packet modem (KISS TNC)"
+	default y
+	help
+	  The radio as a KISS TNC: AX.25 frames in and out of the serial port,
+	  AFSK 1200 (Bell 202) and AFSK 9600 (G3RUH) modems, and the receive
+	  payload of the NXDN and DMR data channels exposed as frames.  Off at
+	  run time until the operator enables it on its page or the host sends
+	  0xFF; see docs/KISS.md.
+
+config C62_KISS_UART
+	bool "KISS over the programming cable (log muted, no PTT)"
+	depends on C62_KISS
+	default n
+	help
+	  Carries the KISS stream over the cable's UART, on the PTT pad, and
+	  mutes the firmware log because the stream is binary.  Not compatible
+	  with the remote control (C62_REMOTE), which uses the same pad.
+
+endmenu
+
 #
 # Tuning range.
 #

@@ -28,6 +28,11 @@
 #include "drivers/audio/c62_remote.h"
 #endif
 #endif
+#ifdef C62_KISS_UART
+/* Out of the dump block on purpose: the KISS build has no dump, and inside it
+ * the declaration disappeared and the call became an implicit one. */
+extern void kiss_uart_init(void);
+#endif
 #include "controller.h"
 #include "dsp.h"
 #include <string.h>
@@ -267,7 +272,17 @@ void platform_init_csk6()
     if ((ret == 0) && dumpRequested)
         c62_remote_init();
 #endif
-#else
+#endif /* C62_BASEBAND_DUMP */
+#ifdef C62_KISS_UART
+    /*
+     * The KISS stream owns the console UART and mutes the log: this has to
+     * happen after everything that prints, and it takes the PTT pad, which is
+     * why the option is off by default. See drivers/audio/c62_kiss.c.
+     */
+    if (ret == 0)
+        kiss_uart_init();
+#endif
+#ifndef C62_BASEBAND_DUMP
     /* Built without the dump: say so, it is the first thing to check when a
      * capture does not produce anything. */
     if (ret == 0)

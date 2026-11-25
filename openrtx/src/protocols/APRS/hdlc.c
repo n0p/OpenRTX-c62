@@ -74,12 +74,6 @@ static void pushBit(hdlc_deframer_t *d, bool bit)
 void hdlc_rx_level(hdlc_deframer_t *d, bool level,
                    hdlc_frame_cb cb, void *user)
 {
-    bool bit;
-
-    d->bits++;
-    if (d->bitsSinceFlag < 0xFFFFu)
-        d->bitsSinceFlag++;
-
     /*
      * NRZI: no transition means a one. The very first level carries no
      * information, because there is nothing to compare it with: priming the
@@ -93,8 +87,21 @@ void hdlc_rx_level(hdlc_deframer_t *d, bool level,
         return;
     }
 
-    bit = (level == d->lastLevel);
+    bool bit = (level == d->lastLevel);
     d->lastLevel = level;
+    hdlc_rx_bit(d, bit, cb, user);
+}
+
+/*
+ * The bit engine, shared by the NRZI path (1200 AFSK) and the direct path
+ * (9600 G3RUH, whose scrambler replaces the NRZI line code).
+ */
+void hdlc_rx_bit(hdlc_deframer_t *d, bool bit,
+                 hdlc_frame_cb cb, void *user)
+{
+    d->bits++;
+    if (d->bitsSinceFlag < 0xFFFFu)
+        d->bitsSinceFlag++;
 
     /*
      * Runs of ones are held back until the next zero tells what they were:

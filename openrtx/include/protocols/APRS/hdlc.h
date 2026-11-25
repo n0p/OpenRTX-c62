@@ -65,6 +65,13 @@ void hdlc_deframer_init(hdlc_deframer_t *d);
 void hdlc_rx_level(hdlc_deframer_t *d, bool level,
                    hdlc_frame_cb cb, void *user);
 
+/**
+ * Feed one already-decoded data bit, bypassing the NRZI decoder: the path for
+ * modems whose line code is a scrambler instead of NRZI (9600 G3RUH).
+ */
+void hdlc_rx_bit(hdlc_deframer_t *d, bool bit,
+                 hdlc_frame_cb cb, void *user);
+
 /** True when a frame has been received recently: the bit clock is locked. */
 static inline bool hdlc_locked(const hdlc_deframer_t *d)
 {
