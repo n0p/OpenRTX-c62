@@ -53,7 +53,7 @@ Las cuatro clases que separa el diseño:
 | YSF | 40 | `YsfPhy.phy` 508, `YsfTx.mod` 400 | trama | arena (29476 B de tablas ya en PSRAM) |
 | ninguno | 4 | — | — | se queda (nunca se destruye) |
 
-Suma de los objetos antes: **32308 B**. Con los estáticos de TETRA (17691 B entre
+Suma de los objetos antes (con `noMode`, que no se destruye nunca): **32308 B**. Con los estáticos de TETRA (17691 B entre
 `baseband`, `demod` y `tmo`) y el `baseband` de NXDN (3840 B), el estado de los
 modos ocupaba **53839 B** de SRAM de forma permanente.
 
@@ -252,6 +252,12 @@ normal.
 
 **Emulador** (`openrtx_linux`, SDL en modo *dummy*): arranca, `rtx_init()`
 enlaza la arena, teclas y cambios de configuración sin caídas.
+
+**Otras configuraciones**: el build por defecto del C62 (sin ningún
+`-DCONFIG_C62_*`, TETRA por defecto) compila y enlaza con el registro reducido
+(RAM 57,42 %, bloque de 17680 B por TETRA); el build de Linux, que solo tiene FM,
+AM de banda aérea, WFM y M17, pasa los dos tests nuevos. El bloque se adapta al
+registro sin tocar nada.
 
 **No verificado**: no hay hardware en este banco y el CSK6011B no tiene objetivo
 de QEMU en este árbol. El lazo TX-RX de DMR y el RX de NXDN/TETRA siguen sin
