@@ -241,7 +241,7 @@ un TNC2 con sus parámetros y lo que un operador espera de un menú.
 | audio de recepción | `audioPath_request(SOURCE_RTX, SINK_MCU, PRIO_RX)` | 48 kHz, bloques de 480 muestras (10 ms), `BUF_CIRC_DOUBLE` |
 | audio de transmisión | `audioPath_request(SOURCE_MCU, SINK_RTX, PRIO_TX)` | el mismo códec que usan los demás modos de datos |
 | hilo | `packetMain`, prioridad 6, pila 3 072 B | un bloque cada 10 ms; `packet_service_status()` lee contadores de 32 bits sin mutex |
-| ajustes | bloque `packet_*` al final de `settings_t` | `SETTINGS_VERSION` 6 (`c62/mega` se quedó en 5) |
+| ajustes | bloque `packet_*` al final de `settings_t`, detrás de `am_depth` | `SETTINGS_VERSION` 6, la misma subida que el TX AM (`c62/mega`) |
 
 El PTT es del operador: `transmit()` sale sin transmitir si
 `platform_getPttStatus()` es cierto, y al terminar devuelve el radio a recepción

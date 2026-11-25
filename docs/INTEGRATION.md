@@ -27,6 +27,11 @@ encima fusiona, en este orden:
 | `c62/dstar-voice` | D-STAR DV: cabecera con FEC convolucional, tramas de 96 bits, datos lentos y voz AMBE 3600x2400 (`lib/dstar_vocoder`) | `OPMODE_DSTAR`, `protocols/DSTAR/**`, `docs/RX_DSTAR.md` |
 | `c62/dmr-pkg` | el paquete de protocolo de DMR completo, en lugar de la cadena DMR propia: demodulador con valores soft, FEC (BPTC, Golay, QR, Reed-Solomon, trellis), protocolo y máquina de slots, voz, TX, datos, SMS, LRRP, cifrado y Tier III | `protocols/DMR/**`, `OpMode_DMR`, `docs/DMR_PKG.md` |
 | `c62/spectrum` | analizador de espectro: barrido del receptor con la FI ancha desde el hilo RTX, pantalla propia y gancho de traza para el protocolo de PC | `core/spectrum.*`, `core/spectrum_service.*`, `ui/ui_spectrum.*`, `docs/SPECTRUM.md` |
+| `c62/tx-am` | TX AM de banda aérea modulando la línea APC (sesión de armado obligatoria) | `core/am_tx.*`, `platform/targets/c62/air_tx.*`, `docs/TX_AIRBAND.md` |
+| `c62/tx-4fsk` | TX NXDN y dPMR sobre el mismo modulador 4FSK de DMR, más los arreglos de recepción de los dos (filtro de NXDN, timing de dPMR) | `protocols/NXDN/NxdnTx.*`, `protocols/DPMR/DpmrTx.*`, `protocols/Fsk4Tx.*`, `docs/TX_NXDN.md`, `docs/TX_DPMR.md` |
+| `c62/tx-c4fm` | TX P25 (HDU, LDU1/2, TSBK, TDU) y YSF (FICH, V/D modo 1) con el conformador C4FM, y el arreglo de `sync_verify()` de YSF | `protocols/P25/P25Tx.*`, `protocols/YSF/YsfTx.*`, `protocols/C4FM/C4fmMod.c` |
+| `c62/kiss` | módem de paquetes KISS: códec TNC2, AFSK 1200/9600, servicio con su hilo, puerto del cable y página de configuración | `core/packet_service.*`, `protocols/KISS/**`, `ui/ui_packet.*`, `docs/KISS.md` |
+| `c62/pc-proto` | protocolo binario radio-PC (CPS y banco) con espacio de nombres de depuración opcional | `core/pc_proto*`, `platform/targets/c62/pc_proto_c62.c`, `docs/PC_PROTO.md` |
 
 Una compilación con todo encendido tiene, por tanto, **once modos**: FM, M17,
 DMR, TETRA, NXDN, dPMR, P25, YSF, D-STAR, AM aéreo y WFM. Los once están en el
@@ -60,7 +65,7 @@ Los once valores están vivos en este árbol: cada uno tiene su `OpMode_*`, su
 
 ### 2.2 Ajustes (`openrtx/include/core/settings.h`)
 
-- `SETTINGS_VERSION` vale **5**. Un registro de otra versión se descarta limpio
+- `SETTINGS_VERSION` vale **6**. Un registro de otra versión se descarta limpio
   (`settings_record.c` compara la versión y vuelve a los valores por defecto), no
   se migra: no hay conversión de campos entre versiones.
 - Los bloques de campos de cada rama están **apendidos** al final de
@@ -68,14 +73,17 @@ Los once valores están vivos en este árbol: cada uno tiene su `OpMode_*`, su
   el mismo orden. Un bloque nuevo se añade detrás del último y el contador sube.
 - El registro tiene un techo de 256 B; el bloque de scan está dimensionado para
   no gastar más de lo que necesita (ver el comentario de `settings.h`).
+- **Cuarta pasada**: `SETTINGS_VERSION` sube **una sola vez** a 6 y en el mismo
+  sitio se apendan, en este orden, `uint8_t am_depth` (profundidad de AM del TX
+  de banda aérea, detrás de `dmr_tx_air_delay_us`) y el bloque `packet_*` del
+  módem KISS (`CONFIG_KISS`), detrás de `am_depth`. La rama de AM lo traía
+  metido en medio del bloque de AM —su árbol no tenía scan—; se movió al final
+  y el test de tamaño lo vigila. Un registro de la versión 5 (o de la 6 anterior
+  al bloque KISS) falla el CRC y se descarta entero.
 - **Tercera pasada**: el paquete de DMR apenda `int16_t dmr_tx_air_delay_us`
   (retardo de aire del camino de audio, 0 = el valor medido por defecto, ver
-  `docs/DMR_PKG.md`) **detrás del bloque de scan**, o sea al final del todo. La
-  versión **no sube**: el árbol es una sola línea de desarrollo y ningún campo
-  se reinterpreta, pero el registro creció dos bytes, así que un registro de la
-  pasada anterior (misma versión 5, dos bytes más corto) falla el CRC y se
-  descarta entero en vez de leerse con el retardo a medias. El operador pierde
-  los ajustes una vez, que es el precio documentado del apendido; lo prueba
+  `docs/DMR_PKG.md`) **detrás del bloque de scan**. El operador pierde los
+  ajustes una vez, que es el precio documentado del apendido; lo prueba
   `tests/unit/settings_record.cpp` («A record from before the air delay is
   refused, not half-read»).
 
@@ -389,12 +397,21 @@ meson test -C build_host --suite OpenRTX --print-errorlogs --no-rebuild
 sigue excluido porque ya estaba roto antes de esta integración: no está
 registrado en `meson.build` y no se construye.
 
-**El cuarto pase sube la cuenta a 47** con `ui_regressions_test` (y su variante
-sin APRS), que son las pruebas *por síntoma* de lo que el operador reportó en la
-radio: menú rápido con P2, una página de Ajustes por modo, entrada de frecuencia
-y ENTER, búsqueda tras tres segundos, menú de mensajes y PTT de DMR. Las seis
-funciones estaban probadas por debajo del despacho y no a través de él, que es
-donde estaban los fallos; §6.1 recoge los dos que aparecieron.
+El pase de síntomas que documenta §6.1 subió la cuenta a **47** con
+`ui_regressions_test` (y su variante sin APRS): menú rápido con P2, una página
+de Ajustes por modo, entrada de frecuencia y ENTER, búsqueda tras tres segundos,
+menú de mensajes y PTT de DMR. Las seis funciones estaban probadas por debajo
+del despacho y no a través de él, que es donde estaban los fallos.
+
+**La cuarta pasada deja la suite en 55 entradas, 55 en verde**: `ui_layout_test`
+crece con la alineación a la derecha, entran `spectrum_test` y
+`ui_spectrum_test` (rejilla, traza contra un receptor sintético, pico, retención
+y teclas de la pantalla), `am_tx_test` (banda de audio, profundidad, portadora y
+rampas), `nxdn_tx_test` y `dpmr_tx_test` (cada emisor leído por el receptor del
+mismo árbol), `pc_proto_test` y `pc_proto_dbg_test` (el mismo protocolo con y
+sin el espacio de depuración), y `KISS Packet Modem Loop`, que compila y corre
+el banco de `tests/host/kiss_loop` —códec KISS, AFSK 1200 y G3RUH 9600 en
+loopback y su BER contra ruido— desde meson.
 
 Lo que añade la tercera pasada: el `dmr_tx_fsm_test` se va con su máquina de
 estados y entra `dmr_glue_test` (los *records* que lee el paquete, el retardo de
@@ -472,3 +489,152 @@ Nota de uso para el operador: en el VFO, el verde **aplica** la frecuencia
 tecleada aunque no llegues a los ocho dígitos; si quieres un split, el octavo
 dígito (o UP/DOWN) pasa al campo TX y el campo de TX vacío copia el de RX. Los
 modos de solo recepción piden una sola frecuencia.
+
+
+## 7. Cuarta pasada de integración: analizador, tres TX, KISS y protocolo PC
+
+Seis ramas, fusionadas en este orden de menos a más invasiva: `c62/spectrum`
+(`b7cf208a`), `c62/tx-am` (`9efe256a`), `c62/tx-4fsk` (`00d091ce`),
+`c62/tx-c4fm` (`d61602d4`, dos commits), `c62/kiss` (seis commits) y
+`c62/pc-proto` (ocho commits). El resultado tiene los **once modos** de §2.1,
+tres transmisores nuevos (AM aéreo, NXDN y dPMR, P25 y YSF), el módem de
+paquetes y el protocolo de PC.
+
+### 7.1 Los conflictos, uno a uno
+
+| fusión | fichero | conflicto | resolución |
+|---|---|---|---|
+| `spectrum` | — | ninguno (fusión automática) | — |
+| `tx-am` | `meson.build` | el bloque de tests del analizador contra el de `am_tx_test` | se quedan las tres entradas, cada una con su comentario |
+| `tx-4fsk` | — | ninguno | — |
+| `tx-c4fm` | `rtx.cpp` (`opmode_canTransmit`) | sus `case OPMODE_P25`/`OPMODE_YSF` caían sobre el `case OPMODE_AIRBAND` de tx-am y sobre la lista de solo recepción que aún tenía P25/YSF | una sola cadena: AIRBAND (`CONFIG_C62_AIR_TX`), P25 (`CONFIG_P25_TX`), YSF (`CONFIG_YSF_TX`), NXDN (`CONFIG_NXDN_TX`), dPMR (`CONFIG_DPMR_TX`) y WFM de solo recepción |
+| `kiss` | `settings.h` | `am_depth` y el bloque `packet_*` en el mismo punto de anclaje | `am_depth` primero y el bloque KISS detrás, los dos al final de `settings_t`, con una sola `SETTINGS_VERSION` 6 |
+| `kiss` | `ui.c` | el `#endif` de APRS y el despacho de la pantalla de paquetes | APRS se cierra en su sitio y el bloque `CONFIG_KISS` va después, con su propio `#ifdef` |
+| `kiss` | `ui_quickmenu.c` | `QM_ITEM_APRS()` y la tabla del analizador | se conserva la tabla del analizador y entra `QM_ITEM_PKT()`; `QM_ITEM_APRS()` con la coma final que describe su comentario |
+| `pc-proto` | `README.md` | la lista de documentos | se quedan `TX_P25.md`, `TX_YSF.md`, `TX_DSTAR.md` y `PC_PROTO.md` |
+
+Además de los conflictos de git, la fusión obligó a tres correcciones que
+ninguna rama podía ver sola:
+
+- **`settings_t`**: `tx-am` insertaba `am_depth` dentro del bloque de AM (su
+  árbol no tenía scan). Se movió detrás de `dmr_tx_air_delay_us` y el test de
+  tamaño de §5 lo comprueba (`PRE_DELAY_PAYLOAD_LEN` descuenta ahora los tres
+  bytes apendidos desde la versión 5).
+- **`NXDN_TX` no existía en Kconfig**: el CMake de `tx-4fsk` lee
+  `CONFIG_NXDN_TX`, pero `Kconfig.board` no declaraba el símbolo, así que
+  `west build ... -DCONFIG_NXDN_TX=y` abortaba como asignación a un símbolo
+  indefinido (§3.1). Se añadió al menú NXDN con `depends on C62_NXDN_RX &&
+  DMR_TX`, como ya estaba `DPMR_TX`.
+- **`opmode_canTransmit()` y el registro de modos**: NXDN y dPMR seguían en la
+  lista de solo recepción aunque `tx-4fsk` ya traía su PTT, y las entradas del
+  registro (`ui_quickmenu.c`) no llevaban `UI_MODE_TX` para DMR, D-STAR, NXDN,
+  dPMR, P25 ni YSF. Ahora cada una lo lleva condicionado a su `CONFIG_*_TX`.
+
+### 7.2 La alineación a la derecha de `gfx_print`
+
+`c62/spectrum` cambia la semántica de `TEXT_ALIGN_RIGHT`: `x` pasa a ser el
+borde derecho en el que acaba el texto (antes era un margen izquierdo que se
+restaba de `max_width`). El resultado es que las pantallas que pasaban
+`CONFIG_SCREEN_WIDTH - margen` —contactos, mensajes, zonas, cabeceras de lista,
+filas del menú, menú rápido, las listas nuevas del pase anterior— se dibujaban
+en `x = 0` y ahora caen en su margen derecho. Se revisaron **todos** los puntos
+de llamada del árbol:
+
+- los que pasaban `W - margen` no se tocan (es la semántica nueva);
+- los que pasaban un punto de `layout` (barra superior, GPS, macro menú,
+  `module17`) usan ahora `gfx_right_edge(pos)`, que refleja el margen;
+- `ui_printBufferClipped` y `gfx_printLine` solo se usan con alineación
+  izquierda o centrada, así que no cambian.
+
+`ui_layout_test` recorre las filas alineadas a la derecha y comprueba que el
+último píxel cae exactamente en el margen; `ui_spectrum_test` hace lo mismo con
+la pantalla nueva. No queda ninguna pantalla desplazada.
+
+### 7.3 El cableado de la UI
+
+- **Analizador**: `SPECTRUM` se añade al final de `enum uiScreen` (no renumera
+  nada) y se abre con la fila `ESPECTRO` del menú rápido de FM (y de M17); tiene
+  su propia tabla de menú rápido (`qm_spectrumMenu`) y `ui_spectrum_enter()`
+  puede negarse si el modo actual necesita el discriminador o el receptor no
+  recibe.
+- **Módem de paquetes**: la rama ya dejaba `PKT_CFG`/`PKT_STATUS` en el
+  registro de pantallas, el despacho de teclas, la línea de estado de FM y la
+  fila `PKT` del menú rápido. No hubo que añadir nada, pero se comprobó que la
+  fila está en la tabla de FM y que el bloque de teclas queda fuera del `#ifdef`
+  de APRS.
+- **TX de los modos nuevos**: `opmode_canTransmit()` (lo que mira el PTT) y el
+  flag `UI_MODE_TX` del registro, ambos condicionados a su `CONFIG_*_TX`.
+- **Ajustes**: la página de AM gana la fila de profundidad de modulación
+  (`am_depth`, `am_tx_getDepth()`), y la de paquetes vive en su pantalla, no en
+  Ajustes.
+
+### 7.4 Compilación
+
+Los nombres reales de las opciones son los de `Kconfig.board` (`CONFIG_*`) y,
+para lo que es opción de CMake, los de `platform/targets/c62/CMakeLists.txt`:
+el protocolo PC es **`C62_PC_PROTO`** (no `CONFIG_C62_PC_PROTO`; ese símbolo no
+existe y west lo rechazaría, §3.1), su espacio de depuración
+**`C62_DEBUG_PROTO`**, y el TX de banda aérea **`C62_AIR_TX`**.
+
+```
+cd /home/n0p/src/c62/build/c62-ws-mega
+sudo docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/work openrtx-c62 \
+    c62-build -DCONFIG_C62_DMR_RX=y -DCONFIG_C62_APRS=y \
+               -DCONFIG_C62_NXDN_RX=y -DCONFIG_C62_YSF=y -DCONFIG_C62_P25=y \
+               -DCONFIG_C62_DPMR_RX=y -DCONFIG_C62_DSTAR=y \
+               -DCONFIG_DMR_TX=y -DCONFIG_NXDN_TX=y -DCONFIG_DPMR_TX=y \
+               -DCONFIG_P25_TX=y -DCONFIG_YSF_TX=y \
+               -DCONFIG_C62_KISS=y -DC62_PC_PROTO=ON -DC62_AIR_TX=ON \
+               -DC62_DEBUG_PROTO=ON        # variante con depuración
+```
+
+La variante de producción es la misma línea **sin `-DC62_DEBUG_PROTO=ON`**: el
+espacio de nombres de depuración se compila fuera, el resto es idéntico.
+
+### 7.5 Memoria
+
+| build | FLASH | RAM | ITCM | DTCM | PSRAMAP |
+|---|---|---|---|---|---|
+| todo + `C62_DEBUG_PROTO` | 758 948 B (72,38 %) | **209 416 B (79,89 %)** | 8 468 B (51,68 %) | 12 640 B (77,15 %) | 642 278 B (35,00 %) |
+| producción (sin depuración) | 755 632 B (72,06 %) | **209 400 B (79,88 %)** | 8 468 B | 12 640 B | 610 278 B (33,26 %) |
+
+Las dos caben y quedan **por debajo del techo del 80 %** (209 715 B), pero el
+margen es de **299 B**: cualquier campo nuevo lo rompe. De partida, las seis
+ramas dejaban la RAM en **236 952 B (90,39 %)**, o sea +28 816 B sobre la
+tercera pasada. Se bajó moviendo a `.psram_section` (ver `core/psram_state.h`)
+solo estado que se toca una vez por trama, bloque, mensaje o canal:
+
+| qué (fichero) | B |
+|---|---|
+| servicio del módem KISS, con sus colas de tramas (`packet_service.c`) | 5 840 |
+| banco de canales en RAM (`channel_store.c`) | 4 736 |
+| cola de marcos y estado de habla de TETRA (`TetraSpeech.c`) | 3 846 |
+| avisos de voz: índice y serie de tonos (`voicePrompts.c`) | 2 424 |
+| bandejas de mensajes (`messaging.c`) | 2 352 |
+| SDS de TETRA: registro, cola de historial y TX preparado (`TetraSds.c`, `SdsHist.c`) | 1 776 |
+| sesión y anillo de log del protocolo PC (`pc_proto_c62.c`) | 2 188 |
+| banco de contactos (`contact_store.c`) | 1 060 |
+| `soft` del demodulador de TETRA (`OpMode_TETRA.cpp`) | 1 088 |
+| tabla de signos del sincronismo de DMR (`dmr_demod.c`) | 864 |
+| barrido del analizador (`spectrum_service.c`) | 680 |
+| cabecera de TX de D-STAR (`DStarTx.c`) | 660 |
+| decodificador OpenACELP (`TetraSpeech.c`) | 532 |
+
+Con **APRS y KISS encendidos**, `settings_t` mide 202 B y el registro (cabecera
+de 8 B incluida) 210 B: cabe en el techo de 256 B (`NVM_RECORD_MAX`) con 46 B
+de margen. El test de host comprueba el tamaño de su propia estructura, que no
+lleva los bloques de APRS ni de KISS (el host no define esos `CONFIG_*`).
+
+**Lo que no se movió, y por qué**: los búferes que el worker del códec recorre
+muestra a muestra (`audioStream_start()`) siguen en SRAM —DMR `rxSamples`/
+`txSamples`, los `baseband` de NXDN, dPMR, P25, TETRA y YSF, los `pcm` de las
+colas de voz, `aprsTxBuf`, `modAcc` de D-STAR—, igual que las pilas de los
+hilos y el `tmo`/`demod` de TETRA, que están medidos en el aire y no se vuelven
+a medir en esta pasada.
+
+**Si hay que recuperar margen** (por orden, sin tocar nada medido ni DMA):
+`ui last_state` (552 B), `DStarTx slowBlocks` (144 B), el `tmo` (6 944 B) y el
+`demod` (4 944 B) de TETRA —exigen repetir la medida en el aire—, y por último
+apagar `-DC62_AIR_TX` (−1,1 KB de flash) o `-DCONFIG_C62_P25_VOCODER`. Lo que
+**no** debe moverse a PSRAM es nada que el códec recorra por muestra: ahí está
+el límite real, no en el total.
