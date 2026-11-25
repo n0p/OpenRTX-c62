@@ -720,6 +720,9 @@ settingsFields[] =
     { PC_TAG_SET_M17_CAN,    SK_M17CAN, 0, 0 },
     { PC_TAG_SET_M17_DEST,   SK_STR, offsetof(settings_t, m17_dest),
       sizeof(((settings_t *)0)->m17_dest) },
+    /* The accessory pad's owner, docs/ACCESSORY.md: the CPS can set it, and the
+     * transport picks it up on its next pass (1 ms) without a reboot. */
+    { PC_TAG_SET_PC_PORT,    SK_U8,  offsetof(settings_t, pc_port), 0 },
 };
 
 #define SETTINGS_FIELDS (sizeof(settingsFields) / sizeof(settingsFields[0]))
@@ -803,6 +806,10 @@ static int settingsApply(const struct settingsField *f, settings_t *s,
                     break;
                 case PC_TAG_SET_M17_CAN:
                     if (u8 > 15)
+                        return PC_ERR_INVALID_VALUE;
+                    break;
+                case PC_TAG_SET_PC_PORT:
+                    if (!settings_portModeValid(u8))
                         return PC_ERR_INVALID_VALUE;
                     break;
                 default:

@@ -14,6 +14,11 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/pwm.h>
 
+/* The accessory port's PTT rule.  Outside the extern "C" block below on
+ * purpose: the header brings its own, and a C++ translation unit that pulls
+ * <stdint.h> in from inside another extern "C" is asking for trouble. */
+#include "core/port_ptt.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -162,6 +167,39 @@ void platform_wdtFeed(void);
  * @param state: -1 to use the pad, 0 for released, 1 for pressed.
  */
 void platform_pttOverride(int state);
+
+/**
+ * @name Accessory port
+ *
+ * GPIOA_15, the PTT contact of the accessory jack, is UART2 RXD as well: the
+ * speaker-microphone's switch and the programming cable share one pad.  The
+ * operator decides who owns it (Settings ▸ Radio ▸ PC Port, enum portMode in
+ * core/settings.h) and these are the platform's half of that decision.
+ * docs/ACCESSORY.md.
+ * @{
+ */
+
+/** The port mode in force: settings.pc_port, or Auto when it is not valid. */
+uint8_t c62_portMode(void);
+
+/** The one detector instance: the transport and the key scan share it. */
+portPttState_t *c62_portPttState(void);
+
+/**
+ * Sample the pad into the detector.
+ *
+ * @return true when the declared pressed state changed on this sample, so the
+ *         transport can abort a half-received frame exactly once.
+ */
+bool c62_portPttPoll(void);
+
+/**
+ * Route the pad: UART2 RXD when @p uart, plain GPIO with its pull-up otherwise.
+ * Resets the detector, because a press cannot survive a change of owner.
+ */
+void c62_portPadToUart(bool uart);
+
+/** @} */
 
 extern const struct BK1080 c62_bk1080;
 

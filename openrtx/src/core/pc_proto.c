@@ -444,6 +444,13 @@ size_t pc_proto_statusTlv(const pcProtoStatus_t *s, uint8_t *buf, size_t cap,
     off = pc_tlv_u16(buf, cap, off, PC_TAG_TX_POWER, s->txPower);
     off = pc_tlv_str(buf, cap, off, PC_TAG_TX_REASON,
                      (s->txReason[0] != '\0') ? s->txReason : "none");
+    /*
+     * The accessory port travels with the status too: with the speaker-mic PTT
+     * sharing the pad with the serial line, "my requests stop being answered
+     * while I key" is explained here and nowhere else (docs/ACCESSORY.md).
+     */
+    off = pc_tlv_u8(buf, cap, off, PC_TAG_PORT_MODE, s->portMode);
+    off = pc_tlv_u32(buf, cap, off, PC_TAG_PORT_LOST, s->portLost);
     return off;
 }
 
@@ -863,6 +870,17 @@ void pc_proto_init(pcProto_t *p, const struct pcProtoPort *port)
     /* The bench state lives in its own module and survives an instance being
      * re-initialised: a port that comes up must come up with nothing keyed. */
     pc_proto_benchReset();
+}
+
+void pc_proto_rxResync(pcProto_t *p)
+{
+    if (p == NULL)
+        return;
+
+    p->rxLen = 0;
+    p->rxEsc = false;
+    p->rxInFrame = false;
+    p->rxOverflow = false;
 }
 
 void pc_proto_reset(pcProto_t *p)
