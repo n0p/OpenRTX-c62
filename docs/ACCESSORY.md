@@ -265,13 +265,16 @@ Port Test'`):
 
 Medido en la imagen completa (todas las banderas de modo y `C62_PC_PROTO`,
 `C62_DEBUG_PROTO`, `C62_BENCH_PROTO`, `C62_AIR_TX`), contra el commit base de la
-rama, mismo juego de banderas:
+rama (`c62/all-fixes e99172ce`), mismo juego de banderas:
 
-| región | base | con el puerto configurable | diferencia |
+| región | base | con el detector corregido | diferencia |
 |---|---|---|---|
-| FLASH | 789 684 B (75,31 %) | **791 176 B (75,45 %)** | +1 492 B |
-| RAM | 180 408 B (68,82 %) | **180 448 B (68,84 %)** | +40 B |
+| FLASH | 793 044 B (75,63 %) | **793 340 B (75,66 %)** | +296 B |
+| RAM | 180 472 B (68,84 %) | **180 472 B (68,84 %)** | 0 |
 | PSRAM | 653 910 B (35,64 %) | **653 910 B (35,64 %)** | 0 |
 
-Los 40 B de RAM son el detector (`portPttState_t`, 24 B), el modo aplicado y un
-par de contadores; el resto del coste es código.
+Los 296 B son la clasificación por carácter (`uartDrain`) y las dos líneas de
+log nuevas; la RAM no crece porque los dos bits de estado que añade el detector
+(`armed`, `unknown`) caben en el relleno de `portPttState_t`. El detector no
+añade ni un byte de PSRAM.
+

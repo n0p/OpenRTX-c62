@@ -275,9 +275,15 @@ place -- and it lives in `core/port_ptt.h`:
 
 | port mode (`Settings ▸ Radio ▸ PC Port`) | what `platform_getPttStatus()` answers |
 |---|---|
-| `Auto` | the sustained-low detector: low for **more than 30 ms** is a press (a `0x00` byte is 87 µs, a short break a few ms) |
+| `Auto` | the sustained-break detector: the receiver's own line status, `FE`/`BI` on the characters it frames, for **more than 30 ms** is a press (a clean `0x00` byte is not evidence, a 1-3 ms break is not a press) |
 | `Always` | `false` unless the remote/bench override is set: the pad belongs to the cable |
 | `Never` | `gpio_pin_get_dt(&button_ptt)`, the plain level, because the pad is a plain GPIO with its pull-up |
+
+The GPIO level is *not* the source in `Auto`: with the pad muxed to UART2 RXD its
+`DATAIN` does not follow the line (it reads low from boot, which is how the first
+version of this detector keyed the radio with nobody touching anything). The
+detector also requires a release first, so a pad that is already low when the
+radio starts is unknown, not pressed.
 
 `Auto` is the default and the only mode where both work at once; the frames that
 arrive while the switch is held are discarded and counted (`PC_TAG_PORT_LOST`),

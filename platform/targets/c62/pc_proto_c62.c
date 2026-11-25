@@ -716,7 +716,10 @@ static bool lineUnknownReported;
  * LSR is read *before* RBR on purpose: on this UART the status it carries
  * describes the character at the head of the FIFO, which is the one the next
  * RBR read pops.  Reading it the other way round would attribute every error
- * to the character after it.
+ * to the character after it.  With the FIFO enabled the error bits are sticky
+ * until it empties, so a character may be counted as held a second time; the
+ * rule only asks whether *any* character in the pass was held, and the error
+ * counter is a statistic, so the over-count costs nothing.
  */
 static size_t uartDrain(uint8_t *buf, size_t max, uint32_t *held,
                         uint32_t *overruns)
