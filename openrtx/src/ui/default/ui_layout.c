@@ -18,6 +18,10 @@
 #include "ui/ui_hints.h"
 #include "ui/ui_layout.h"
 
+#ifdef UI_CAPTURE
+#include "core/gfx_capture.h"
+#endif
+
 uint8_t ui_row_height(void)
 {
 #if CONFIG_SCREEN_HEIGHT > 63
@@ -88,6 +92,10 @@ int16_t ui_row_baseline_at(int16_t top, uint8_t row_h)
 
 void ui_list_header_only(const char *title, const char *right)
 {
+#ifdef UI_CAPTURE
+    gfx_capture_header(title, right);
+#endif
+
     if (title != NULL)
         gfx_print((point_t){ UI_TEXT_X, UI_HEADER_BASELINE }, FONT_SIZE_8PT,
                   TEXT_ALIGN_LEFT, yellow_fab413, "%s", title);
@@ -108,6 +116,10 @@ void ui_list_header(const char *title, const char *right)
 
 void ui_row_selection(int16_t top, uint8_t row_h, bool filled)
 {
+#ifdef UI_CAPTURE
+    gfx_capture_selection(top, row_h, filled);
+#endif
+
     gfx_drawRect((point_t){ 0, top }, CONFIG_SCREEN_WIDTH, row_h, color_white,
                  filled);
 }
