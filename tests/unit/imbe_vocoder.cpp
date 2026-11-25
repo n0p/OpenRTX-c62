@@ -120,7 +120,8 @@ TEST_CASE("the decoder renders the committed frames bit for bit", "[imbe][p25]")
         }
     }
 
-    INFO("samples that differ: " << mismatched << ", worst " << worst << " LSB");
+    INFO("samples that differ: " << mismatched << ", worst " << worst
+                                 << " LSB");
     REQUIRE(mismatched == 0);
 }
 
@@ -148,7 +149,7 @@ TEST_CASE("the corpora decode as voice, in order, from a clean state",
     struct Corpus {
         const char *file;
         size_t frames;
-        int peakMin;  ///< The loudest sample has to reach at least this
+        int peakMin; ///< The loudest sample has to reach at least this
     };
 
     const Corpus corpora[] = {

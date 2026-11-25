@@ -68,7 +68,10 @@ struct Lcg {
         return state >> 8;
     }
 
-    uint8_t byte() { return (uint8_t)(next() & 0xFFU); }
+    uint8_t byte()
+    {
+        return (uint8_t)(next() & 0xFFU);
+    }
 };
 
 /// Decode one frame into a buffer pre-filled with a pattern no frame produces.
@@ -165,7 +168,7 @@ TEST_CASE("random parameters are rendered, not trusted", "[imbe][p25][robust]")
         if (loudest > peak)
             peak = loudest;
 
-        REQUIRE(loudest <= 31128);  /* (int16_t)(32767 * 0.95) */
+        REQUIRE(loudest <= 31128); /* (int16_t)(32767 * 0.95) */
     }
 
     /* A pathological frame still produces sound, it does not go silent */

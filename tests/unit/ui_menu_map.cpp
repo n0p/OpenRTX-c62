@@ -59,8 +59,8 @@ void checkTable(const qm_menu_t *qm)
            ("MAX RET", "MS/PTO"): the popup's font and the voice prompts both
            assume it, and a label in lower case reads as a different key */
         for (const char *c = row.label; *c != '\0'; c++)
-            REQUIRE(((*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') ||
-                     (*c == ' ') || (*c == '/')));
+            REQUIRE(((*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9')
+                     || (*c == ' ') || (*c == '/')));
 
         /* One label per table: the tests and the operator find a row by it */
         for (uint8_t j = 0; j < i; j++)
@@ -162,7 +162,8 @@ TEST_CASE("the registry and the quick menu are the same list", "[ui][menu]")
     REQUIRE(qm_findMenu(0x7F) == qm_findMenu(OPMODE_FM));
 }
 
-TEST_CASE("a mode that says it transmits is a mode the PTT keys", "[ui][menu][tx]")
+TEST_CASE("a mode that says it transmits is a mode the PTT keys",
+          "[ui][menu][tx]")
 {
     for (uint8_t i = 0; i < ui_mode_count(); i++) {
         const ui_mode_t *entry = ui_mode_at(i);

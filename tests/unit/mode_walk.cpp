@@ -49,7 +49,7 @@ namespace
 {
 
 constexpr uint8_t firstMode = OPMODE_NONE;
-constexpr uint8_t lastMode  = OPMODE_WFM_BC;
+constexpr uint8_t lastMode = OPMODE_WFM_BC;
 
 pthread_mutex_t cfgMutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -71,7 +71,8 @@ void ptt(bool down)
 
 } /* namespace */
 
-TEST_CASE("every opmode of the enum, four rounds, through one block", "[arena][rtx]")
+TEST_CASE("every opmode of the enum, four rounds, through one block",
+          "[arena][rtx]")
 {
     rtx_init(&cfgMutex);
 
@@ -85,9 +86,8 @@ TEST_CASE("every opmode of the enum, four rounds, through one block", "[arena][r
         /* Up the enum and back down, twice: a mode is left and re-entered */
         for (int dir = 0; dir < 2; dir++) {
             for (int step = 0; step <= (lastMode - firstMode); step++) {
-                const uint8_t mode = (dir == 0)
-                                         ? (uint8_t)(firstMode + step)
-                                         : (uint8_t)(lastMode - step);
+                const uint8_t mode = (dir == 0) ? (uint8_t)(firstMode + step) :
+                                                  (uint8_t)(lastMode - step);
 
                 selectMode(mode);
 
@@ -98,8 +98,7 @@ TEST_CASE("every opmode of the enum, four rounds, through one block", "[arena][r
                     REQUIRE(rtx_getCurrentStatus().opMode == OPMODE_NONE);
                     REQUIRE(!arena->held());
                     REQUIRE(arena->poisonIntact());
-                }
-                else if (compiled) {
+                } else if (compiled) {
                     REQUIRE(rtx_getCurrentStatus().opMode == mode);
                     REQUIRE(arena->held());
                     REQUIRE(arena->owner() == mode);
@@ -108,8 +107,7 @@ TEST_CASE("every opmode of the enum, four rounds, through one block", "[arena][r
                     if (block == nullptr)
                         block = arena->block();
                     REQUIRE(arena->block() == block);
-                }
-                else {
+                } else {
                     /* No entry, no block: the radio stays idle and the block
                        stays released, not held by a mode that was never
                        constructed */
@@ -139,7 +137,8 @@ TEST_CASE("every opmode of the enum, four rounds, through one block", "[arena][r
     rtx_terminate();
 }
 
-TEST_CASE("a transmitter still keys and unkeys after the walk", "[arena][rtx][tx]")
+TEST_CASE("a transmitter still keys and unkeys after the walk",
+          "[arena][rtx][tx]")
 {
     rtx_init(&cfgMutex);
 
