@@ -44,6 +44,10 @@
 /** Samples per DBG_CAP_READ response. */
 #define DBG_CAP_CHUNK 128
 
+/** Longest record the post-mortem message will serve, and per-answer chunk. */
+#define DBG_BLACKBOX_MAX   1024
+#define DBG_BLACKBOX_CHUNK 200
+
 /*
  * ----------------------------------------------------------------------------
  * Platform hooks, weak so every host test and every other target links
@@ -118,6 +122,24 @@ __attribute__((weak)) int pc_proto_platformTxWatch(uint16_t *seconds,
 {
     (void)seconds;
     (void)reason;
+    return -1;
+}
+
+/**
+ * The post-mortem the last crash left, as it sits on flash.
+ *
+ * @return bytes copied, or a negative value when there is no record, which the
+ *         handler turns into PC_ERR_NOT_SUPPORTED (a radio that has not crashed
+ *         is not a radio that cannot answer).
+ */
+__attribute__((weak)) int pc_proto_platformBlackbox(uint32_t off, uint8_t *buf,
+                                                    uint16_t cap,
+                                                    uint16_t *total)
+{
+    (void)off;
+    (void)buf;
+    (void)cap;
+    (void)total;
     return -1;
 }
 
@@ -674,6 +696,55 @@ int pc_dbg_txTrace(struct pcReq *r)
     return 0;
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ * Post-mortem (docs/BLACKBOX.md)
+ * ----------------------------------------------------------------------------
+ */
+
+/**
+ * One chunk of the record the last crash left.
+ *
+ * The record is 516 bytes and a frame payload is 390 at most, so it travels in
+ * chunks: the client asks for an offset, gets PC_TAG_BLACKBOX_LEN (the total)
+ * and up to DBG_BLACKBOX_CHUNK bytes from there, and repeats until the offset
+ * reaches the length.  The bytes are the flash image, not a re-rendered copy,
+ * so a reader that knows the layout can parse it and one that does not can
+ * still keep it.
+ */
+int pc_dbg_blackbox(struct pcReq *r)
+{
+    uint32_t offset = 0;
+    uint16_t total = 0;
+    uint8_t buf[DBG_BLACKBOX_CHUNK];
+
+    pc_tlv_get_u32(r->in, r->inLen, PC_TAG_OFFSET, &offset);
+    if (offset >= DBG_BLACKBOX_MAX) {
+        r->err = PC_ERR_INVALID_VALUE;
+        return -1;
+    }
+
+    int n = pc_proto_platformBlackbox(offset, buf, sizeof(buf), &total);
+    if (n < 0) {
+        /* No crash since the last time the record was read: nothing to serve,
+         * and saying NOT_SUPPORTED is honest -- this radio has no post-mortem
+         * to show, not a broken one. */
+        r->err = PC_ERR_NOT_SUPPORTED;
+        return -1;
+    }
+
+    size_t off = pc_tlv_u32(r->out, r->outCap, 0, PC_TAG_OFFSET, offset);
+    off = pc_tlv_u16(r->out, r->outCap, off, PC_TAG_BLACKBOX_LEN, total);
+    off = pc_tlv_bytes(r->out, r->outCap, off, PC_TAG_BLACKBOX, buf,
+                       (size_t)n);
+    if (off == 0) {
+        r->err = PC_ERR_TOO_LARGE;
+        return -1;
+    }
+    r->outLen = off;
+    return 0;
+}
+
 #else /* !CONFIG_C62_DEBUG_PROTO */
 
 /*
@@ -701,5 +772,6 @@ int pc_dbg_capRead(struct pcReq *r)     { return dbgDenied(r); }
 int pc_dbg_bb(struct pcReq *r)          { return dbgDenied(r); }
 int pc_dbg_txTrace(struct pcReq *r)     { return dbgDenied(r); }
 int pc_dbg_rxCounters(struct pcReq *r)  { return dbgDenied(r); }
+int pc_dbg_blackbox(struct pcReq *r)    { return dbgDenied(r); }
 
 #endif /* CONFIG_C62_DEBUG_PROTO */

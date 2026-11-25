@@ -206,6 +206,13 @@ enum pcProtoMsg
     PC_MSG_DBG_BB          = 0x0540, /**< baseband dump: state and trigger   */
     PC_MSG_DBG_TX_TRACE    = 0x0550, /**< live transmit cycle trace          */
     PC_MSG_DBG_RX_COUNTERS = 0x0551, /**< per-mode receive error counters    */
+    PC_MSG_DBG_BLACKBOX    = 0x0552, /**< the post-mortem the last crash
+                                      *   left: req PC_TAG_OFFSET, resp
+                                      *   PC_TAG_BLACKBOX_LEN + that chunk
+                                      *   in PC_TAG_BLACKBOX.  Read it in
+                                      *   a loop from offset 0 until the
+                                      *   length says it is complete.
+                                      *   docs/BLACKBOX.md               */
 
     /* Bench namespace, 0x0600-0x060F: scripted measurements of the radio
      * against an external receiver (RTL-SDR, Anritsu...).  Every one of these
@@ -403,6 +410,14 @@ enum pcProtoTag
     PC_TAG_BB_STATE    = 0x00ED, /**< u8 baseband dump state              */
     PC_TAG_TX_SECONDS  = 0x00EE, /**< u16 air time since the last release */
     PC_TAG_TX_REASON   = 0x00EF, /**< str what the transmitter is doing   */
+
+    /*
+     * The post-mortem record (docs/BLACKBOX.md): the bytes are the record as
+     * it sits on flash, little endian, 516 of them, and the length is what the
+     * client compares its offset against to stop asking.
+     */
+    PC_TAG_BLACKBOX     = 0x00F0, /**< bytes: one chunk of the record     */
+    PC_TAG_BLACKBOX_LEN = 0x00F1, /**< u16 total length of the record     */
 
     /*
      * Bench namespace, 0x0100-0x011F.  A separate block because these are not
