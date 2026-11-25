@@ -282,6 +282,42 @@ the tour does not fail on.
 A new screen goes in two places: a step that walks it, and its name in
 `SCREENS`. Nothing else -- if you forget, `Simulator Coverage` says which one.
 
+## The coverage contract
+
+```sh
+meson test -C build_linux "Simulator Coverage"
+```
+
+`tests/unit/sim_coverage.cpp` is built with the simulator's own `-D` and the
+same UI sources, so it walks the interface the tour walks and not a variant of
+it (including DMR transmitting: `CONFIG_DMR_TX` is set for the simulator
+target and for this test, and for nothing else). It reads the declaration from
+the file meson generates with `tour.py --coverage-manifest` and compares it
+with
+
+1. **the registry of modes** -- `ui_mode_count()`, `ui_mode_at()`: order,
+   title, `ui_mode_canTx()`, the Settings page (opened the way the operator
+   opens it) and the labels of the quick menu rows, in order;
+2. **the menu tables** -- `menu_items[]` and `settings_items[]`;
+3. **the screen enum** -- every name `ui_dump_screenName()` knows is either in
+   `SCREENS` or in `UNREACHABLE`, and every declared name exists in the enum;
+4. **a key walk** -- a breadth-first search over the real `ui_updateFSM()`:
+   from a clean radio with the stores the tour seeds, press every key from
+   every state reached (the identity of a state is the screen, the overlay that
+   owns the keypad, the table and cursor of the popup, the mode and the run of
+   arrows that got there). Every screen the keys can reach has to be in
+   `SCREENS`.
+
+So adding a mode to `uiModes[]`, a row to a mode's table, a row to the top menu
+or to Settings, a new `uiScreen` or a new key binding that opens one, breaks
+CI until the tour covers it. That is the point: a tour that silently stops
+being a tour is worse than no tour.
+
+The key walk reaches 37 of the 40 screens. The three it does not are covered by
+the tour and declared: `MSG_STATUS` (needs a typed message), `APRS_MSG_EDIT`
+(needs a second green on a message whose internal state does not travel in the
+state identity) and `LOW_BAT` (needs a battery event, not a key).
+
 ## Known pending issues
 
 Found by the tour and left alone because they are cosmetic or need a decision:

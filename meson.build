@@ -2144,6 +2144,42 @@ if python3.found() and zlib_dep.found()
        env : ['OPENRTX_SIM_BIN=' + openrtx_c62_sim.full_path()],
        timeout : 600)
 
+  # The coverage contract (tests/unit/sim_coverage.cpp): the modes, the menu
+  # tables and the screens the firmware registers, and every screen its own key
+  # walk can reach, against the list the tour declares. The list is not written
+  # twice: it is generated from tour.py, which is the file that has to be
+  # extended when a mode or a screen is added.
+  #
+  # The test is built with the simulator's own -D and, since it links the
+  # control channel that the simulator's emulator.c needs, with its two host
+  # sources: what it walks is the interface the tour walks, not a variant.
+  sim_coverage_manifest = custom_target('sim-coverage-manifest',
+                                        input   : sim_tour_py,
+                                        output  : 'sim-coverage.txt',
+                                        command : [python3, '@INPUT@',
+                                                   '--coverage-manifest',
+                                                   '@OUTPUT@'])
+
+  sim_coverage_test = executable('sim_coverage_test',
+                                 sources : unit_test_src + ui_menu_audit_aprs_src + [
+                                   'openrtx/src/ui/default/ui_packet.c',
+                                   'openrtx/src/core/gfx_capture.c',
+                                   'openrtx/src/ui/default/ui_dump.c',
+                                   'platform/targets/linux/emulator/sim_control.c',
+                                   'platform/targets/linux/emulator/sim_png.c',
+                                   'tests/unit/sim_coverage.cpp'],
+                                 include_directories : linux_inc,
+                                 dependencies : [sdl_dep, threads_dep,
+                                                 codec2_dep, catch2_dep,
+                                                 zlib_dep],
+                                 c_args   : linux_c_args + sim_def,
+                                 cpp_args : linux_cpp_args + sim_def,
+                                 link_args : linux_l_args)
+
+  test('Simulator Coverage', sim_coverage_test,
+       depends : sim_coverage_manifest,
+       env : ['SIM_TOUR_COVERAGE=' + sim_coverage_manifest.full_path()],
+       timeout : 600)
 endif
 
 # The PC protocol's own harness (tests/host/pc_proto_host): three device builds
