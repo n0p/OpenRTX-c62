@@ -61,6 +61,13 @@ void selectMode(uint8_t mode)
 {
     rtxStatus_t cfg = rtx_getCurrentStatus();
     cfg.opMode = static_cast<opmode>(mode);
+    /*
+     * A power to key with: the gate refuses a transmission of 0 mW, because a
+     * PA with nothing behind it is the failure docs/TX_SAFETY.md ends.  The
+     * radio takes this from the channel or from settings_t.tx_power; this test
+     * has neither, so it says so here.
+     */
+    cfg.txPower = 500;
     rtx_configure(&cfg);
     rtx_task();
 }

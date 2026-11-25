@@ -27,13 +27,14 @@ extern "C" {
 }
 
 /*
- * The DMR package appended the transmit air delay and the fourth pass the
- * airband transmit depth.  Both are the end of the payload, so a record of the
- * previous pass is the same payload shorter and the CRC catches it: the record
- * is dropped as a whole instead of read with the fields missing.
+ * The DMR package appended the transmit air delay, the fourth pass the airband
+ * transmit depth and the seventh (settings version 7) the default transmit
+ * power.  All three are the end of the payload, so a record of an earlier pass
+ * is the same payload shorter and the CRC catches it: the record is dropped as
+ * a whole instead of read with the fields missing.
  */
 #define PRE_DELAY_PAYLOAD_LEN \
-    (sizeof(settings_t) - sizeof(int16_t) - sizeof(uint8_t))
+    (sizeof(settings_t) - sizeof(int16_t) - sizeof(uint8_t) - sizeof(uint16_t))
 
 static const settings_t &dflt()
 {
@@ -117,9 +118,9 @@ TEST_CASE("The receive-only modes default to the behaviour they had before",
 TEST_CASE("The DMR air delay and the AM depth end the record", "[settings]")
 {
     /* Version 6 adds the airband transmit depth, appended after the air delay */
-    REQUIRE(SETTINGS_VERSION == 6);
+    REQUIRE(SETTINGS_VERSION == 7);
     REQUIRE(sizeof(settings_t) == PRE_DELAY_PAYLOAD_LEN + sizeof(int16_t)
-                                  + sizeof(uint8_t));
+                                  + sizeof(uint8_t) + sizeof(uint16_t));
     REQUIRE(dflt().am_depth == 60);
 
     /*
@@ -127,6 +128,14 @@ TEST_CASE("The DMR air delay and the AM depth end the record", "[settings]")
      * which the mode reads as "use the measured default" (dmr_glue.c).
      */
     REQUIRE(dflt().dmr_tx_air_delay_us == 0);
+
+    /*
+     * Version 7 appends the default transmit power after the depth: 500 mW is
+     * what the radio keys with when the channel it is on has no power of its
+     * own -- the VFO (docs/TX_SAFETY.md).
+     */
+    REQUIRE(dflt().tx_power == 500);
+    REQUIRE(settings_txPowerValid(dflt().tx_power));
 }
 
 TEST_CASE("A record of an older version is discarded with a reason", "[settings]")

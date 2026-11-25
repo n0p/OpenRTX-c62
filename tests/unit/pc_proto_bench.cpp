@@ -49,6 +49,7 @@ struct SimRadio
     uint8_t ptt = 0;
     uint16_t tone = 0;
     uint8_t level = 0;
+    uint16_t power = 500; /* mW the PA is driven with; 0 = cannot key  */
     int16_t rssi = -73;
     int16_t rssiRaw = -70;
     int tuned = 0;      /* how many TUNE calls landed                */
@@ -95,6 +96,7 @@ int pc_proto_platformBench(uint8_t op, pcProtoBenchArgs_t *a)
             a->ptt = sim.ptt;
             a->toneHz = sim.tone;
             a->level = sim.level;
+            a->power = sim.power;
             a->txState = sim.ptt ? 2 : 1;
             return 0;
 
@@ -103,11 +105,18 @@ int pc_proto_platformBench(uint8_t op, pcProtoBenchArgs_t *a)
             sim.txHz = a->txHz;
             sim.mode = a->mode;
             sim.bw = a->bw;
+            /* The power of the run, in the channel field the driver keys from;
+             * 0 keeps what is in force. */
+            if (a->power != 0)
+                sim.power = a->power;
+            a->power = sim.power;
             sim.tuned++;
             a->txState = sim.ptt ? 2 : 1;
             return sim.rxHz < 18000000u ? -1 : 0; /* below 18 MHz: no */
 
         case PC_BENCH_OP_PTT:
+            if (a->ptt && (a->power == 0 || sim.power == 0))
+                return -1; /* nothing to transmit with: never keyed */
             sim.ptt = a->ptt;
             if (a->ptt) {
                 sim.keys++;
@@ -122,6 +131,7 @@ int pc_proto_platformBench(uint8_t op, pcProtoBenchArgs_t *a)
                 a->toneHz = 0;
             }
             a->level = sim.level;
+            a->power = sim.power;
             a->txState = sim.ptt ? 2 : 1;
             return 0;
 
@@ -185,6 +195,10 @@ int pc_proto_platformStatus(pcProtoStatus_t *out)
     out->mode = sim.mode;
     out->rssi = sim.rssi;
     out->txState = sim.ptt ? 2 : 1;
+    /* What this radio would key with: BENCH_ARM seeds the run from it, so a
+     * run that never sends BENCH_POWER still keys with the radio's own value
+     * (and a radio with 0 is refused at PTT). */
+    out->txPower = sim.power;
     return 0;
 }
 
@@ -523,6 +537,31 @@ TEST_CASE("Bench: a frequency the platform refuses is an error", "[bench]")
     Frame t = d.request(PC_MSG_BENCH_TUNE, 3, p);
     REQUIRE(t.id == PC_MSG_ERROR);
     REQUIRE(u8(t.payload, PC_TAG_ERROR) == PC_ERR_INVALID_VALUE);
+}
+
+TEST_CASE("Bench: a PTT with no transmit power is refused", "[bench]")
+{
+    /*
+     * The failure reported from the bench: with no channel selected the radio
+     * has no power, the PTT keyed anyway (tx_state=2) and nothing came out of
+     * the antenna.  The answer is an error, and the PA is never asked.
+     */
+    Device d;
+    d.hello();
+    sim.power = 0;
+    d.request(PC_MSG_BENCH_ARM, 2, d.tok());
+    REQUIRE(sim.keys == 0);
+
+    std::vector<uint8_t> p;
+    putU8(p, PC_TAG_TX_STATE, 1);
+    auto tok = d.tok();
+    p.insert(p.end(), tok.begin(), tok.end());
+    Frame on = d.request(PC_MSG_BENCH_PTT, 3, p);
+    REQUIRE(on.id == PC_MSG_ERROR);
+    REQUIRE(u8(on.payload, PC_TAG_ERROR) == PC_ERR_INVALID_VALUE);
+    REQUIRE(sim.keys == 0);
+    REQUIRE(sim.ptt == 0);
+    sim.power = 500;
 }
 
 TEST_CASE("Bench: PTT keys, stamps the edge and emits the event", "[bench]")
