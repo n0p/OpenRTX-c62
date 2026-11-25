@@ -24,7 +24,7 @@ Licencia: GPLv3 (ver LICENSE)
 | DMR Tier II/III | si | en pruebas | vocoder AMBE+2 propio, CC/slot/tipo de ráfaga en pantalla |
 | NXDN | si | no | RAN, 6,25/12,5 kHz, llamada y tipo de mensaje en pantalla |
 | dPMR (TS 102 490) | si | no | 4FSK en 6,25 kHz, datos cortos y voz AMBE+2 |
-| P25 Fase 1 | si (sin voz) | no | NAC, DUID y llamada en pantalla; falta el decodificador IMBE |
+| P25 Fase 1 | si | no | NAC, DUID y llamada en pantalla; voz con el decodificador IMBE propio |
 | System Fusion (YSF) | si (sin voz FR) | no | C4FM; la voz de tasa completa es IMBE y no se decodifica |
 | D-STAR DV | si | en pruebas | indicativos, datos lentos y voz AMBE 3600x2400; TX con trama nula |
 | AM aéreo (118-137 MHz) | si | no | AGC, ráster de 25 / 8,33 kHz, designador de canal |
@@ -114,7 +114,8 @@ lo contrario; con las siete de arriba, RAM al 86,5 % — ver
 - `CONFIG_C62_NXDN_RX` — NXDN de recepción.
 - `CONFIG_C62_DPMR_RX` — dPMR de recepción (TS 102 490).
 - `CONFIG_C62_YSF` — System Fusion de recepción.
-- `CONFIG_C62_P25` — P25 Fase 1 de recepción (sin decodificador IMBE).
+- `CONFIG_C62_P25` — P25 Fase 1 de recepción con el decodificador IMBE propio
+  (`CONFIG_C62_P25_MBELIB` deja el de mbelib, 48 veces más caro).
 - `CONFIG_C62_DSTAR` — D-STAR DV; arrastra la voz AMBE 3600x2400
   (`CONFIG_C62_DSTAR_VOCODER`) y el transmisor (`CONFIG_DSTAR_TX`).
 - `CONFIG_DMR_TX` — cadena de transmisión DMR. **Apagada por defecto**: sin encoder
@@ -151,8 +152,11 @@ lo contrario; con las siete de arriba, RAM al 86,5 % — ver
 - Encoder AMBE+2 para DMR TX (en curso) y calibración de desviación en banco
   (`REG_40`), que es lo que falta para los tres TX nuevos: `docs/TX_P25.md`,
   `docs/TX_YSF.md`, `docs/TX_DSTAR.md`.
-- Encoder IMBE (P25) y AMBE-2020 (D-STAR): no hay ninguno libre, por eso esos
-  dos transmiten sin voz.
+- Encoder IMBE para P25: **sí hay** implementaciones libres (mbelib-neo 2.6 y el
+  encoder fijo de Yazev, ya en el árbol); integrarlo es un paquete de trabajo del
+  tamaño del encoder AMBE+2, no un límite del formato.
+- Encoder AMBE-2020 para la voz de tasa completa de YSF y para D-STAR: ahí sí
+  falta, y por eso esos dos transmiten sin esa voz.
 - TX de TETRA: no es viable con este transmisor, la señal se sale de la máscara.
 - Imagen de DSP libre: la de fábrica funciona, pero no es sustituible todavía.
 - APRS: digipeater, igate y SmartBeaconing.

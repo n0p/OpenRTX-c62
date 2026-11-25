@@ -32,6 +32,10 @@ encima fusiona, en este orden:
 | `c62/tx-c4fm` | TX P25 (HDU, LDU1/2, TSBK, TDU) y YSF (FICH, V/D modo 1) con el conformador C4FM, y el arreglo de `sync_verify()` de YSF | `protocols/P25/P25Tx.*`, `protocols/YSF/YsfTx.*`, `protocols/C4FM/C4fmMod.c` |
 | `c62/kiss` | módem de paquetes KISS: códec TNC2, AFSK 1200/9600, servicio con su hilo, puerto del cable y página de configuración | `core/packet_service.*`, `protocols/KISS/**`, `ui/ui_packet.*`, `docs/KISS.md` |
 | `c62/pc-proto` | protocolo binario radio-PC (CPS y banco) con espacio de nombres de depuración opcional | `core/pc_proto*`, `platform/targets/c62/pc_proto_c62.c`, `docs/PC_PROTO.md` |
+| `c62/mem-arena` | el estado de los once modos en un solo bloque del tamaño del mayor, cogido al entrar al modo y devuelto al salir | `rtx/ModeArena.*`, `rtx/rtx.cpp`, `rtx/OpMode_TETRA.*`, `docs/MEMORY.md` |
+| `c62/sweep-fast` | barrido del analizador sin espera fija: puerta del *glitch* `REG_63`, bus SPI rápido, PLL cacheado, fila `ESPERA` y span de 96 MHz | `spectrum_service.c`, `radio_C62.cpp`, `BK4819.*`, `ui_quickmenu.c`, `docs/SPECTRUM.md` |
+| `c62/imbe` | decodificador IMBE propio en C (`lib/imbe_vocoder`), 195 k instrucciones por trama, y `C62_P25_MBELIB` como alternativa | `lib/imbe_vocoder/**`, `P25Vocoder.c`, `docs/IMBE.md` |
+| `c62/bench` | bloque `0x0600` del protocolo de PC (arm/tune/ptt/capture/rssi/sweep/report) y la herramienta `tools/bench` con receptores rtl/soapy/anritsu/sim | `core/pc_proto_bench.c`, `platform/targets/c62/pc_proto_bench_c62.c`, `tools/bench/**`, `docs/BENCH.md` |
 
 Una compilación con todo encendido tiene, por tanto, **once modos**: FM, M17,
 DMR, TETRA, NXDN, dPMR, P25, YSF, D-STAR, AM aéreo y WFM. Los once están en el
@@ -638,3 +642,176 @@ a medir en esta pasada.
 apagar `-DC62_AIR_TX` (−1,1 KB de flash) o `-DCONFIG_C62_P25_VOCODER`. Lo que
 **no** debe moverse a PSRAM es nada que el códec recorra por muestra: ahí está
 el límite real, no en el total.
+
+## 8. Quinta pasada: arena de memoria, barrido rápido, IMBE y banco
+
+Cuatro ramas, todas cortadas de `86c3b7dc` (el cierre de la cuarta pasada), y en
+este orden por lo que cada una toca: **`c62/mem-arena`** (`cfb46ee5`, `3338c090`)
+primero porque reescribe `rtx.cpp` y el objeto de `OPMODE_TETRA`; después
+**`c62/sweep-fast`** (5 commits), **`c62/imbe`** (`082fe519`, `f378c6d4`) y
+**`c62/bench`** (3 commits). El resultado sigue teniendo los **once modos** de
+§2.1 y la misma `SETTINGS_VERSION`.
+
+| qué | antes (`86c3b7dc`) | después |
+|---|---|---|
+| RAM (todo, con depuración y banco) | 209 416 B (79,89 %) | **179 152 B (68,34 %)** |
+| RAM (producción) | 209 400 B (79,88 %) | **177 192 B (67,59 %)** |
+| FLASH (todo) | 758 948 B (72,38 %) | 794 188 B (75,74 %) |
+| tests de host | 55 | **66** |
+
+### 8.1 Los conflictos, uno a uno
+
+Las cuatro fusiones entraron **sin un solo conflicto de git**: ramas cortadas del
+mismo commit que tocan hunks distintos. Lo que hubo fue convivencia, y se ve
+compilando y probando, no fusionando:
+
+| fusión | fichero | lo que pasó | resolución |
+|---|---|---|---|
+| `mem-arena` | `rtx.cpp` | `switchMode()` y `rtx_task()` reescritos alrededor del bloque, con el gancho `spectrumService_poll()` de la cuarta pasada al principio de `rtx_task()` | el gancho sigue siendo lo primero que corre el hilo (§8.2), y la `const uint32_t now` que quedó sin uso detrás de él se quita |
+| `mem-arena` | `OpMode_TETRA.*` | el `tmo` y el `demod` pasan de `.bss` al objeto del modo, que vive en el bloque | verificado en el ELF: `modeArenaStorage` mide **0x4510 = 17 680 B** (el tamaño del objeto de TETRA, el mayor) y no queda ningún `tmo`/`demod` en `.bss` |
+| `sweep-fast` | `platform/targets/c62/Kconfig.board` | menú «Spectrum analyser» nuevo (`C62_SPECTRUM_SPI_HZ`, `SETTLE_US`, `GATE_POLLS`, `AGC_FIX`) | se queda entero; la build con las cuatro ramas lo aplica (ver §8.3) |
+| `imbe` | `platform/targets/c62/Kconfig.board` | segundo menú al final del mismo fichero (`C62_P25_VOCODER`, `C62_P25_MBELIB`) | los dos menús conviven; `C62_P25_MBELIB` sigue apagado y `select C62_P25_VOCODER` |
+| `imbe` | `platform/targets/c62/CMakeLists.txt` | `add_subdirectory(lib/imbe_vocoder)` y la elección de backend | compila con `bench` (`pc_proto_bench_c62.c`, su `if(C62_BENCH_PROTO)` y la comprobación `BENCH ⇒ DEBUG`) en el mismo fichero |
+| `bench` | `meson.build` | quinto bloque de tests apendido al final (ya había cuatro) | seis entradas nuevas en total, ninguna definida después de usarse |
+| `bench` | `tools/cps/tests/test_pcproto.py` | el cliente esperaba `SETTINGS_VER 5` y el árbol está en **6** desde el KISS: un desajuste **anterior a esta pasada**, invisible porque el arnés no corría en `meson test` | se corrige a 6 (y la muestra de `docs/PC_PROTO.md`, a `v6, 210 B`) al registrar el arnés como test |
+
+**Ajustes y versiones.** Ni la arena, ni el barrido, ni el IMBE, ni el banco
+añaden un campo a `settings_t`: la `SETTINGS_VERSION` sigue siendo **6** (la del
+KISS) y no hay migración. La fila `ESPERA` **no** se persiste, igual que `SPAN` y
+`PASO`: es estado del barrido, no del equipo, y vive en `spectrum_service.c`
+(índice 0 por defecto, que es la puerta del `REG_63`). Tampoco cambian las zonas,
+ni los flags, ni el perfil de RF: `radio_spectrumEnter()` guarda `REG_43`/`REG_73`
+(y `REG_7E` con el AGC fijo) y los devuelve en `radio_spectrumLeave()`, y el
+cambio de modo sigue pasando por `radio_setOpmode()` *antes* de destruir el modo
+anterior, como pide el contrato del driver (§2 de `AGENTS.md`).
+
+### 8.2 El cableado de la UI
+
+- **`ESPERA`** ya venía cableada por `c62/sweep-fast` (menú rápido del
+  analizador, `AUTO`/50/100/200/400 µs): se comprueba en `ui_menu_map_test` que
+  está en la posición 2 de la tabla, que sus cinco nombres son los de
+  `docs/SPECTRUM.md` §5 y que moverla mueve `spectrumService_settleUs()`.
+- **Lo que faltaba era la pantalla**: el documento prometía que «la pantalla lo
+  dice» cuando la puerta se abandona, y no lo decía. La cabecera del analizador
+  muestra ahora `AUTO` (puerta en uso), la espera fija elegida
+  (`50us`…`400us`), `400us` cuando la puerta se ha abandonado y `PAUSA` con
+  portadora en el centro. El span no se pierde: sigue en el pie con la
+  frecuencia central.
+- **El banco no trae pantalla** y no hay nada que cablear: se maneja desde el PC
+  por el bloque `0x0600` (`docs/BENCH.md`), y en la radio sólo existe cuando
+  `C62_BENCH_PROTO=ON`, que exige `C62_DEBUG_PROTO`. La variante de producción
+  no tiene ni el espacio de nombres ni la herramienta.
+- **Menú coherente después de cuatro ramas**: `ui_menu_map_test` comprueba que
+  el registro de modos y las tablas del menú rápido son la misma lista (un
+  puntero por modo, sin repetidos), que toda fila es pintable (etiqueta de 1 a
+  10 caracteres en mayúsculas, sin duplicados, con valor/acción/formateador y
+  `names[]` cubriendo `min..max`), que cada `QM_GOTO` apunta a una pantalla que
+  existe, que `UI_MODE_TX` coincide con `opmode_canTransmit()` en los once
+  modos, y que el analizador es alcanzable desde FM y AM aéreo.
+
+### 8.3 Compilación y memoria
+
+Los nombres de opción son los de §7.4 más los de esta pasada: `C62_BENCH_PROTO`
+(CMake, exige `C62_DEBUG_PROTO`) y las cuatro de la placa para el analizador
+(`C62_SPECTRUM_*`, con `SETTLE_US=0` por defecto, que es la puerta).
+
+```
+cd /home/n0p/src/c62/build/c62-ws-mega
+sudo docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/work openrtx-c62 \
+    c62-build -DCONFIG_C62_DMR_RX=y -DCONFIG_C62_APRS=y \
+               -DCONFIG_C62_NXDN_RX=y -DCONFIG_C62_YSF=y -DCONFIG_C62_P25=y \
+               -DCONFIG_C62_DPMR_RX=y -DCONFIG_C62_DSTAR=y \
+               -DCONFIG_DMR_TX=y -DCONFIG_NXDN_TX=y -DCONFIG_DPMR_TX=y \
+               -DCONFIG_P25_TX=y -DCONFIG_YSF_TX=y \
+               -DCONFIG_C62_KISS=y -DC62_PC_PROTO=ON -DC62_AIR_TX=ON \
+               -DC62_DEBUG_PROTO=ON -DC62_BENCH_PROTO=ON
+```
+
+La variante de producción es la misma línea sin `-DC62_DEBUG_PROTO` ni
+`-DC62_BENCH_PROTO`. **Nota de entorno**: el `file(DOWNLOAD)` del firmware del
+DSP (`raw.githubusercontent.com`) no es alcanzable desde esta máquina, y el
+configure se queda en `SYN_SENT`; con una copia local del binario fijado basta
+`-DC62_DSP_FIRMWARE=/work/dsp/dsp_firmware.bin` (el CMake comprueba el sha256).
+
+| build | FLASH | RAM | ITCM | DTCM | PSRAMAP |
+|---|---|---|---|---|---|
+| todo + `C62_DEBUG_PROTO` + `C62_BENCH_PROTO` | 794 188 B (75,74 %) | **179 152 B (68,34 %)** | 8 468 B (51,68 %) | 12 640 B (77,15 %) | 653 910 B (35,64 %) |
+| producción | 785 508 B (74,91 %) | **177 192 B (67,59 %)** | 8 468 B | 12 640 B | 621 910 B (33,89 %) |
+
+Las dos caben con **margen de sobra** sobre el techo del 80 % (209 715 B): quedan
+**30 KB** de RAM libres, que era el problema de la cuarta pasada (299 B). El
+crédito es de la arena: los objetos de los once modos sumaban **32 308 B** de
+`.bss` (más los estáticos de TETRA y el `baseband` de NXDN, que también entraron
+en el objeto, hasta 53 839 B) y ahora hay un bloque de **17 680 B** —el de
+TETRA— que se coge al entrar al modo y se devuelve al salir. El
+flash sube **+35 240 B** (todo) por dos cosas que son código y tablas, no estado:
+el decodificador IMBE (`lib/imbe_vocoder`, tablas `const` en flash) y el bloque
+del banco con su herramienta.
+
+**Lo que no se movió**: nada de lo que el códec recorre por muestra. El bloque de
+la arena está en SRAM a propósito (`baseband` de TETRA es destino de DMA de
+`audioStream_start()`), y el estado del decodificador IMBE (11 632 B) sigue en
+PSRAM, que es donde lo puso `P25Vocoder.c` en la rama. Los búferes DMA y las
+pilas siguen en SRAM, como en §7.5.
+
+### 8.4 Tests de host
+
+`meson test -C build_host5`: **66 de 66 en verde**. Los cinco que traían las
+ramas son `Mode Arena Test`, `Mode Switch Test`, `PC Bench Test`, `PC Bench
+Production Test` (el mismo banco con y sin el espacio de nombres, para que
+«producción no mueve la radio» sea un test) y el `UI Spectrum Test` ampliado; los
+seis de esta pasada:
+
+| test | qué fija |
+|---|---|
+| `Mode Walk Test` | los doce valores de `enum opmode`, ida y vuelta dos veces, sobre el bloque: el modo compilado lo posee, el que no está deja la radio inactiva y el bloque envenenado, y el lazo TX→RX de FM después del recorrido |
+| `P25 IMBE Vocoder Test` | 64 tramas de la captura real, bit a bit contra su renderización comprometida; las dos corpora decodificadas en orden (261 + 1000 tramas, todas de voz) y el estado de 11 632 B |
+| `P25 IMBE Robustness Test` | los 88 errores de un bit de ocho tramas y 20 000 vectores aleatorios: siempre devuelve, siempre llena el búfer, nunca se sale de `PCM_LIMIT` (0,95 de fondo de escala) |
+| `Spectrum Settle Test` | la tabla de `ESPERA`, el índice por defecto, `gateOn`/`gatePolls` en el estado, la rejilla de 41 bins de 1 MHz y el span de 96 MHz con el paso subido por la escalera |
+| `UI Menu Map Test` | el mapa del menú de §8.2: registro ⇔ menú rápido, filas pintables, `QM_GOTO` válidos, `UI_MODE_TX` ⇔ `opmode_canTransmit()`, `ESPERA` donde toca |
+| `PC Protocol Host Harness` | `tests/host/pc_proto_host/run.sh` como test de meson: tres binarios del protocolo por un pty (sin depuración, con depuración, con banco) y el banco de punta a punta contra una radio simulada |
+
+La fidelidad del decodificador IMBE se re-verificó sobre el árbol fusionado con
+`lib/imbe_vocoder/tests/run_host.sh`: **61,78 dB** de SNR contra mbelib-neo en las
+261 tramas de aire (138 bit-exactas) y **50,73 dB** en las 1000 del corpus del
+codificador (348), los mismos números de `docs/IMBE.md` §4, más el barrido con
+ASan/UBSan. El test de meson no necesita mbelib porque compara contra una
+renderización comprometida (regresión, no fidelidad).
+
+### 8.5 El cambio de modo con la arena
+
+Lo que la pasada tenía que demostrar, y cómo se demuestra:
+
+- **Recorrido completo**: `Mode Walk Test` pide los doce valores del enumerado
+  (0 a 11) en orden y al revés, dos veces cada uno, y después de cada paso
+  comprueba que el modo activo es el pedido, que es el dueño del bloque, que el
+  bloque es **la misma dirección** que la del primer modo y que
+  `staleDetections()` sigue en 0. Son 273 comprobaciones, y el bloque se devuelve
+  envenenado (`poisonIntact()`) al volver a `OPMODE_NONE`.
+- **Volver a transmitir**: después del recorrido, `ptt(true)`/`ptt(false)` sobre
+  FM (el transmisor que todo build tiene) entra y sale de TX dos veces seguidas,
+  que es el lazo TX→RX que la arena podía romper: el objeto del modo, con sus
+  caminos de audio y sus colas de TX, es lo que se construye en el bloque.
+- **TETRA, el dueño de la arena**: no se enlaza en host (arrastra `libtetra` y
+  OpenACELP), así que en el host se comprueba lo que sí se puede — pedir
+  `OPMODE_TETRA` deja la radio inactiva y el bloque envenenado, sin romper el
+  cambio — y en el firmware se comprueba en el ELF: el bloque mide exactamente
+  `sizeof(struct tetraModeState)` (17 680 B) y el `tmo` (6 944 B) y el `demod`
+  (4 944 B) ya no están en `.bss`. TETRA es el mayor de los once objetos, de modo
+  que si entra y sale, caben los otros diez; lo que falta por medir en el aire es
+  lo de siempre, no la memoria.
+- **DMR**: tampoco se enlaza en host (demodulador + vocoder AMBE+2). Su parte está
+  en el recorrido como modo ausente y en la build de firmware, donde el bloque es
+  el mismo que usa al cambiar de modo.
+
+### 8.6 Lo que esta pasada corrige de la cuarta
+
+**El P25 sin voz no era un límite del formato, era una conclusión equivocada.**
+Existen dos encoders IMBE libres: el de **mbelib-neo 2.6**
+(`imbe7200x4400_enc.c`, con paridad publicada contra los vectores de DVSI) y el
+de **Pavel Yazev**, que ya estaba en el árbol en `lib/opendmr/encoder/` y nunca se
+cableó. Lo que falta es el trabajo de portarlos al M33 (del orden de 1,5-3 M de
+instrucciones por trama, como el encoder AMBE+2 de DMR que ya vuela a 1,43 M), no
+la licencia ni el algoritmo. Queda anotado en `docs/TX_P25.md` («Voice, and why
+there is none»), en `docs/IMBE.md` §8 y en el `help` de `C62_P25`; el transmisor
+sigue mandando HDU + TSBK + TDU hasta que ese encargo se haga.
