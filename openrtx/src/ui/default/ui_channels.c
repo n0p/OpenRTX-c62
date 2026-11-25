@@ -174,12 +174,29 @@ static bool tuneChannel(uint16_t idx)
     if (chstore_toChannel(idx, &ch) != 0)
         return false;
 
+    /*
+     * A channel is a memory channel, and the operator has to be able to see
+     * that: the screen goes to MAIN_MEM, which draws the name and the index,
+     * and tuner_mode says CH so that the PC protocol reports the channel
+     * instead of a VFO (it prints 0xFFFF for VFO). Before this the bank tuned
+     * the frequency and left the screen on MAIN_VFO: the radio was on a channel
+     * that nothing -- not the screen, not the protocol -- admitted to.
+     *
+     * The VFO the operator was on is kept, the way the CPS channel list does
+     * it, so tuning back to VFO returns to it and not to the channel.
+     */
+    if (state.tuner_mode == VFO)
+        state.vfo_channel = state.channel;
+
     state.channel = ch;
     state.channel_index = idx;
+    state.tuner_mode = CH;
     chstore_setLastUsed(idx);
 
     /* An airband channel brings its raster back with it (see qm_am_applyRaster) */
     qm_am_applyRaster();
+
+    state.ui_screen = MAIN_MEM;
 
     return true;
 }
