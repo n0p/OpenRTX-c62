@@ -97,8 +97,26 @@ int cstore_add(const cstore_contact_t *c)
     bank.list[bank.count] = *c;
     sanitize(&bank.list[bank.count]);
     bank.count++;
+
+    const bool wasPending = pending;
     pending = true;
-    return cstore_commit() == 0 ? (int)(bank.count - 1) : -EIO;
+
+    if (cstore_commit() != 0) {
+        /*
+         * The write failed, so the record does not exist: undo it. The old
+         * code kept it in RAM and returned -EIO, which left the list showing
+         * a contact that was never written -- it disappeared on the next power
+         * cycle, and until then the operator could not tell the two apart.
+         * The caller (ui_contacts.c) shows WRITE FAILED and stays in the
+         * editor, which only tells the truth if the book is unchanged.
+         */
+        memset(&bank.list[bank.count - 1], 0, sizeof(bank.list[0]));
+        bank.count--;
+        pending = wasPending;
+        return -EIO;
+    }
+
+    return (int)(bank.count - 1);
 }
 
 int cstore_set(uint16_t idx, const cstore_contact_t *c)
