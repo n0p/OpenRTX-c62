@@ -34,6 +34,7 @@
 
 static long frames, ldu, ldu1, ldu2, tsbk, tsbkOk, imbe, imbeBad, imbeErrs;
 static long lcValid, syncErrors;
+static bool imbeHex;
 
 static void onFrame(const struct p25Frame *f, void *user)
 {
@@ -63,6 +64,25 @@ static void onFrame(const struct p25Frame *f, void *user)
     if (f->lcValid)
         lcValid++;
 
+    /*
+     * Machine-readable IMBE dump: the 88 parameters of each frame as 11 bytes
+     * of hex, one line per voice frame, the same line the host prototype
+     * writes with --imbe-out, so the two receivers can be diffed byte for
+     * byte on the same capture.
+     */
+    if (imbeHex)
+    {
+        if (f->duid != P25_DUID_LDU1 && f->duid != P25_DUID_LDU2)
+            return;
+        for (int v = 0; v < f->voiceCount; v++)
+        {
+            for (int b = 0; b < P25_IMBE_BYTES; b++)
+                printf("%02x", f->voice[v][b]);
+            printf(" errs=%d\n", f->imbeErrors);
+        }
+        return;
+    }
+
     printf("%6ld %-6s NAC=%03X bch=%d sync=%d span=%u", f->symbol,
            p25_duid_name(f->duid), f->nac, f->bchErrors, f->syncErrors,
            f->spanSymbols);
@@ -87,11 +107,21 @@ int main(int argc, char **argv)
 {
     if (argc < 2)
     {
-        fprintf(stderr, "usage: %s capture.wav|raw [block_samples]\n", argv[0]);
+        fprintf(stderr, "usage: %s capture.wav|raw [block_samples] "
+                        "[--imbe-hex]\n", argv[0]);
         return 2;
     }
 
-    const size_t block = (argc > 2) ? (size_t)atoi(argv[2]) : 960;
+    size_t block = 960;
+    for (int i = 2; i < argc; i++)
+    {
+        if (strcmp(argv[i], "--imbe-hex") == 0)
+            imbeHex = true;
+        else
+            block = (size_t)atoi(argv[i]);
+    }
+    if (block == 0 || block > 8192)
+        block = 960;
     FILE *f = fopen(argv[1], "rb");
     if (f == NULL)
     {
@@ -161,11 +191,15 @@ int main(int argc, char **argv)
 done:
     fclose(f);
 
-    printf("\n%ld frames: %ld LDU1 %ld LDU2 %ld TSBK | LC %ld | TSBK CRC %ld | "
+    /* In hex mode stdout is the dump itself, so the summary goes to stderr and
+     * the dump can be diffed against the prototype's with a plain diff. */
+    FILE *sum = imbeHex ? stderr : stdout;
+
+    fprintf(sum, "\n%ld frames: %ld LDU1 %ld LDU2 %ld TSBK | LC %ld | TSBK CRC %ld | "
            "IMBE %ld bad %ld errs %ld | sync errors %ld | synced %d\n",
            frames, ldu1, ldu2, tsbk, lcValid, tsbkOk, imbe, imbeBad, imbeErrs,
            syncErrors, p25Phy_synced() ? 1 : 0);
-    printf("framing: sync tries %u (%.2f per frame), grid misses %u | "
+    fprintf(sum, "framing: sync tries %u (%.2f per frame), grid misses %u | "
            "cpu %.1f ms for %.2f s of audio, %.1f us per frame\n",
            p25Phy_syncTries(),
            frames ? (double)p25Phy_syncTries() / (double)frames : 0.0,
