@@ -10,41 +10,54 @@
  * work/dsp-probe/common/insnframe.c between frame markers.
  *
  * What it measures is one point of a sweep, built from the real code the radio
- * runs: bk4819_setFrequency() (two register writes, REG_39 then REG_38),
- * bk4819_getRssi() (one read of REG_67) and spectrum_store() (the engine), on
- * top of a model of the Zephyr bit-banged SPI the C62 uses. The model is not a
- * guess: its inner loop is the one in zephyr/drivers/spi/spi_bitbang.c
- * (mosi set, k_busy_wait(wait_us), clock edge, k_busy_wait(wait_us), clock
- * edge, read), with wait_us = 2, which is what
- * (1000000 * 2000 / 200000) / 2000 / 2 truncates to for the 200 kHz the C62
- * asks for: 4 us per bit, not 5. A 3-byte transfer is therefore 24 bits and
- * 96 us of bus time, and that is reported as wall clock next to the
- * instructions, because k_busy_wait() is time the core spends waiting, not
- * work it does.
+ * runs: bk4819_setFrequency() / bk4819_tuneCached() for the PLL word,
+ * bk4819_getRssi() / bk4819_getRssiFast() for the level, bk4819_getGlitch() for
+ * the gate, and spectrum_store() for the engine, on top of a model of the
+ * bit-banged SPI the C62 uses.
  *
- * The BK4819 is modelled too: the register file keeps REG_39/38 (so the mock
- * chip knows what it is tuned to) and answers REG_67 from a synthetic band with
- * two carriers, so the trace the harness prints is a real sweep of the engine
- * against a front end that exists only here.
+ * The bus model is not a guess: its inner loop is the one in
+ * zephyr/drivers/spi/spi_bitbang.c (mosi set, k_busy_wait(wait_us), clock edge,
+ * k_busy_wait(wait_us), clock edge, read), with
  *
- *   RTX=/home/n0p/src/c62/work/spectrum
+ *   wait_us = (1000000 * 2000 / frequency) / 2000 / 2
+ *
+ * which is the driver's own truncating division. At the radio's 200 kHz it
+ * gives 2 us per half period and 4 us per bit, so a 3-byte access is 24 bits and
+ * 96 us of bus. Above 1 MHz it truncates to zero and the cost of a bit is the
+ * GPIO toggling alone: three gpio_pin_set_dt() calls per bit, which on this core
+ * with the Zephyr STM32 driver is about 30 cycles each. That figure is an
+ * estimate -- the driver is not part of this image -- so it is charged as
+ * FAST_BIT_CYCLES and reported apart from the instructions, and everything else
+ * here is counted or modelled from the chip's own documentation.
+ *
+ * The BK4819 is modelled too, and the model is the point of the exercise: it
+ * keeps REG_39/38 (so the mock chip knows what it is tuned to), REG_67 with a
+ * settling time (the RSSI holds the previous bin until the IF has recovered)
+ * and REG_63 (the glitch indicator, which saturates over the same window). That
+ * is what makes it possible to say, for a given settling time of the real chip,
+ * which variant is fast and which is merely wrong: a variant that reads the RSSI
+ * before the chip is ready gets the previous bin's level, and the trace error is
+ * what counts it.
+ *
+ *   RTX=/home/n0p/src/c62/work/sweep-fast
  *   D=/home/n0p/src/c62/work/dsp-probe
+ *   O=/tmp/speccost
  *   arm-none-eabi-gcc -mcpu=cortex-m33 -mthumb -mfpu=fpv5-sp-d16 \
  *     -mfloat-abi=hard -O2 -ffunction-sections -fdata-sections \
- *     -I$RTX/openrtx/include -I$RTX/platform \
+ *     -I$RTX/openrtx/include -I$RTX/platform -I$RTX/tests/platform/qemu_stub \
  *     tests/platform/c62_spectrum_cost.c \
  *     $RTX/openrtx/src/core/spectrum.c \
  *     $RTX/platform/drivers/baseband/BK4819.c \
  *     -T $D/common/mps2.ld -specs=rdimon.specs -Wl,--gc-sections \
- *     $D/common/startup.o -lrdimon -o /tmp/speccost.elf
- *   INSNHIST_MARKER=$(arm-none-eabi-nm /tmp/speccost.elf |
+ *     $D/common/startup.o -lrdimon -o $O/speccost.elf
+ *   INSNHIST_MARKER=$(arm-none-eabi-nm $O/speccost.elf |
  *                     awk '$3=="frame_marker"{print $1}')
- *   INSNHIST_OUT=/tmp/h qemu-system-arm -M mps2-an505 -nographic \
- *     -semihosting-config enable=on,target=native -kernel /tmp/speccost.elf \
+ *   INSNHIST_OUT=$O/h qemu-system-arm -M mps2-an505 -nographic \
+ *     -semihosting-config enable=on,target=native -kernel $O/speccost.elf \
  *     -plugin file=$D/common/libinsnframe.so -d plugin
  *
- * The histogram holds one "TOTAL" line per marker; the difference between two
- * consecutive lines is the instructions of that block.
+ * The dump holds one line per marker with the cumulative total: the difference
+ * between two consecutive lines is the instruction count of that block.
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -56,50 +69,54 @@
 
 extern void initialise_monitor_handles(void);
 
-/* newlib + -specs=rdimon: the delay between two points, microseconds */
-#define SETTLE_US   400U
-
-/* Bins swept in the measured block: the default span and step of the screen */
+/* The raster of the screen's default span: 1 MHz in 41 bins of 25 kHz */
 #define SPAN_HZ  1000000U
 #define STEP_HZ    25000U
 
-/* Sweeps measured: enough for the marker histogram to be readable */
-#define SWEEPS 10
+/*
+ * CPU cost of one bit of the fast bus: three gpio_pin_set_dt() calls at about
+ * 30 cycles each, charged as cycles of the core and converted with the core
+ * clock. See the header comment for why it is an estimate.
+ */
+#define FAST_BIT_CYCLES 90U
+
+/*
+ * Same, for the fixed part of a bus transfer: spi_acquire(), the spi_config the
+ * driver rebuilds on every call, spi_context setup, and the 64-bit divisions
+ * spi_bitbang_configure() does to turn the frequency into a per-bit delay. About
+ * 450 cycles, also an estimate.
+ */
+#define FAST_XFER_CYCLES 450U
+
+/* Long settle used as the reference of what each bin really contains */
+#define REFERENCE_SETTLE_US 2000U
 
 __attribute__((noinline, used)) void frame_marker(void);
 void frame_marker(void) { __asm__ volatile("" ::: "memory"); }
 #define MARK() frame_marker()
 
-/* ---- what the CPU spends waiting instead of working -------------------- */
-
-static volatile uint32_t busyUs;
+/* ---- the virtual clock, in microseconds -------------------------------- */
 
 /*
- * k_busy_wait() of the Zephyr bit-bang driver. On the radio it is a calibrated
- * loop that burns the core for the whole period; in the emulator it returns at
- * once, so its microseconds are accumulated and reported separately, next to
- * the instruction count. delayUs() is the same kind of wait (a busy wait below
- * one millisecond on this SoC).
+ * Time as the chip sees it. Advanced by the bit-bang delays, by the settle and
+ * by the gate's own waits; the CPU work of the bit loop is charged separately as
+ * instructions. Everything the mock chip does is a function of this.
  */
+static uint32_t vnow;
+
+/* CPU cycles burned in the modelled GPIO/transfer overhead of the fast bus */
+static volatile uint32_t busCycles;
+
 static void busyWait(unsigned int useconds)
 {
-    busyUs += useconds;
+    vnow += useconds;
 }
 
-void delayUs(unsigned int useconds) { busyWait(useconds); }
-void delayMs(unsigned int mseconds) { (void)mseconds; }
+void delayUs(unsigned int useconds) { vnow += useconds; }
+void delayMs(unsigned int mseconds) { vnow += (uint32_t)mseconds * 1000U; }
 
-/* ---- the BK4819, as far as a sweep can tell ---------------------------- */
+/* ---- the band the mock chip is looking at ------------------------------ */
 
-static uint16_t regs[256];
-static uint16_t mockRead(uint8_t reg);
-static uint32_t transferCount;
-
-/*
- * The band the mock chip is looking at: a noise floor and two carriers, with
- * the 15 dB per bin skirt of one IF filter (~9 kHz in the wide profile) across
- * a 25 kHz raster. Frequencies are the ones the harness sweeps.
- */
 static int16_t mockLevel(uint32_t freq)
 {
     static const struct { uint32_t hz; int16_t dbm; } carriers[] = {
@@ -112,7 +129,7 @@ static int16_t mockLevel(uint32_t freq)
     for (size_t i = 0; i < sizeof(carriers) / sizeof(carriers[0]); i++)
     {
         uint32_t d = (freq > carriers[i].hz) ? (freq - carriers[i].hz)
-                                            : (carriers[i].hz - freq);
+                                             : (carriers[i].hz - freq);
         uint32_t bins = d / STEP_HZ;
 
         if (bins > 3)
@@ -127,19 +144,47 @@ static int16_t mockLevel(uint32_t freq)
     return level;
 }
 
-/* ---- the bus and the chip --------------------------------------------- */
+/* ---- the chip ---------------------------------------------------------- */
 
+static uint16_t regs[256];
 
-/*
- * One transfer of the bit-banged bus, with the structure of
- * zephyr/drivers/spi/spi_bitbang.c: half duplex, the data pin reconfigured for
- * the direction, then two clock edges and two k_busy_wait(wait_us) per bit,
- * with wait_us = 2 for the 200 kHz the C62 asks for (the driver's own division
- * truncates 5/2, so the real bit period is 4 us).
- */
+/* Settling model: what the real chip is assumed to need after a retune. */
+static uint32_t mockSettleUs;
+
+/* The retune in flight: when it was written, the level before it, and after. */
+static uint32_t tuneAt;
+static int16_t  levelBefore;
+static int16_t  levelAfter;
+
+/* Fast bus: 0 when the configuration is the radio's 200 kHz one */
+static int busFast;
+
+/* Byte at the output of an SPI transfer */
 static uint8_t lastCmd;
 static uint8_t pending[2];
 static uint8_t pendingBytes;
+static uint32_t transferCount;
+
+static uint16_t mockRead(uint8_t reg)
+{
+    if (reg == 0x67)
+    {
+        /* The IF has not recovered yet: the register still holds the old bin */
+        const int16_t dbm = (vnow < (tuneAt + mockSettleUs)) ? levelBefore
+                                                            : levelAfter;
+        return (uint16_t)((dbm + 160) * 2);
+    }
+
+    if (reg == 0x63)
+    {
+        /* Glitch counter: saturated over the same window as the IF recovery */
+        return (vnow < (tuneAt + mockSettleUs)) ? 0x00FFU : 0x0010U;
+    }
+
+    return regs[reg];
+}
+
+/* ---- the bus ----------------------------------------------------------- */
 
 static int bitBangTransfer(const struct spiDevice *dev, const void *txBuf,
                            void *rxBuf, const size_t size)
@@ -148,17 +193,17 @@ static int bitBangTransfer(const struct spiDevice *dev, const void *txBuf,
 
     const uint8_t *tx = (const uint8_t *)txBuf;
     uint8_t *rx = (uint8_t *)rxBuf;
+    const unsigned waitUs = busFast ? 0U : 2U;
 
     transferCount++;
+
+    if (busFast)
+        busCycles += FAST_XFER_CYCLES;
 
     /* gpio_pin_configure_dt(): one direction change per transfer */
     volatile int reconfigured = 1;
     (void)reconfigured;
 
-    /*
-     * The protocol of the chip: one command byte (address | 0x80 to read), then
-     * either two bytes of data going out or two bytes coming back.
-     */
     if ((tx != NULL) && (size == 1))
     {
         lastCmd = tx[0];
@@ -166,7 +211,40 @@ static int bitBangTransfer(const struct spiDevice *dev, const void *txBuf,
     }
     else if ((tx != NULL) && (size == 2) && ((lastCmd & 0x80) == 0))
     {
-        regs[lastCmd & 0x7F] = (uint16_t)((tx[0] << 8) | tx[1]);
+        const uint8_t reg = lastCmd & 0x7F;
+        const uint16_t value = (uint16_t)((tx[0] << 8) | tx[1]);
+
+        regs[reg] = value;
+
+        /*
+         * A write of the low half is what the chip acts on: it is the last one
+         * of the pair, in this driver and in the UV-K5 firmware alike.
+         */
+        if (reg == 0x38)
+        {
+            const uint32_t freq = ((((uint32_t)regs[0x39] & 0x7FFFU) << 16)
+                                   | regs[0x38]) * 10U;
+
+            levelBefore = levelAfter;
+            if (levelBefore == 0)
+                levelBefore = mockLevel(freq);
+
+            levelAfter = mockLevel(freq);
+            tuneAt     = vnow;
+        }
+        else if (reg == 0x39)
+        {
+            const uint32_t freq = ((((uint32_t)regs[0x39] & 0x7FFFU) << 16)
+                                   | regs[0x38]) * 10U;
+
+            levelBefore = levelAfter;
+            if (levelBefore == 0)
+                levelBefore = mockLevel(freq);
+
+            levelAfter = mockLevel(freq);
+            tuneAt     = vnow;
+        }
+
         pendingBytes = 0;
     }
     else if ((rx != NULL) && (size == 2))
@@ -188,15 +266,16 @@ static int bitBangTransfer(const struct spiDevice *dev, const void *txBuf,
             volatile int d = (out >> bit) & 1;    /* mosi set */
             (void)d;
 
-            busyWait(2);                          /* k_busy_wait(wait_us) */
+            busyWait(waitUs);
 
-            /* first clock edge, sampled on the falling one */
             if (rx != NULL)
                 in = (uint8_t)((in << 1) | ((out >> bit) & 1));
 
-            busyWait(2);                          /* k_busy_wait(wait_us) */
+            busyWait(waitUs);
 
-            /* second clock edge */
+            /* Two clock edges and, on the fast bus, three GPIO calls */
+            if (busFast)
+                busCycles += FAST_BIT_CYCLES;
         }
 
         if (rx != NULL)
@@ -206,7 +285,7 @@ static int bitBangTransfer(const struct spiDevice *dev, const void *txBuf,
     return 0;
 }
 
-/* ---- the BK4819, and the GPIO stubs it needs --------------------------- */
+/* ---- the GPIO stubs ---------------------------------------------------- */
 
 static int  fakeMode(const struct gpioDev *dev, const uint8_t pin,
                      const uint16_t mode)
@@ -237,46 +316,149 @@ static const struct gpioApi fakeApi = {
 
 static const struct gpioDev fakePort = { .api = &fakeApi, .priv = NULL };
 
-static const struct spiDevice mockSpi = {
-    .transfer = bitBangTransfer,
-    .priv     = NULL,
-    .mutex    = NULL,
+static const struct spiDevice mockSlowSpi = {
+    .transfer = bitBangTransfer, .priv = NULL, .mutex = NULL,
+};
+
+static const struct spiDevice mockFastSpi = {
+    .transfer = bitBangTransfer, .priv = NULL, .mutex = NULL,
 };
 
 static const struct BK4819 chip = {
-    .spi = &mockSpi,
+    .spi = &mockSlowSpi,
+    .spiFast = &mockFastSpi,
     .scn = { .port = &fakePort, .pin = 8 },
 };
 
-/* ---- the sweep --------------------------------------------------------- */
+/* ---- the variants ------------------------------------------------------ */
+
+typedef struct
+{
+    const char *name;
+    bool     fastBus;     ///< spiFast (the analyser's 1 MHz configuration)
+    bool     cached;      ///< skip the high half of the PLL word
+    uint32_t settleUs;    ///< fixed wait, 0 = poll REG_63
+    uint8_t  gatePolls;   ///< polls of REG_63 when settleUs is 0
+    uint8_t  gateStepUs;  ///< time between two of those polls
+} variant_t;
+
+static const variant_t variants[] = {
+    { "V0 base (200 kHz, 400 us sleep)", false, false, 400U,  0,  0 },
+    { "V1 fast bus (400 us sleep)",      true,  false, 400U,  0,  0 },
+    { "V2 fast bus + half cache",        true,  true,  400U,  0,  0 },
+    { "V3 + 200 us",                     true,  true,  200U,  0,  0 },
+    { "V4 + 100 us",                     true,  true,  100U,  0,  0 },
+    { "V5 + 50 us",                      true,  true,   50U,  0,  0 },
+    { "V6 + no settle",                  true,  true,    0U,  0,  0 },
+    { "V7 gate, 10 us steps",            true,  true,    0U, 40, 10 },
+    { "V8 gate, 20 us steps",            true,  true,    0U, 20, 20 },
+};
+
+#define VARIANT_COUNT (sizeof(variants) / sizeof(variants[0]))
+
+/*
+ * One point, as the driver does it: the PLL word, the wait and the level.
+ *
+ * This mirrors radio_spectrumPoint() of platform/drivers/baseband/radio_C62.cpp
+ * (without the LNA switch, which costs nothing inside a band). Keeping it here
+ * instead of calling the driver keeps the harness buildable without Zephyr; the
+ * calls it makes are the driver's own.
+ */
+static void sweepPoint(const variant_t *v, uint32_t freq, uint32_t *word,
+                       int16_t *dbm, uint32_t *spentUs)
+{
+    const uint32_t t0 = vnow;
+
+    if (v->cached)
+        bk4819_tuneCached(&chip, freq, word);
+    else
+        bk4819_setFrequency(&chip, freq);
+
+    if (v->settleUs > 0)
+    {
+        busyWait(v->settleUs);
+    }
+    else if (v->gatePolls > 0)
+    {
+        for (uint8_t i = 0; i < v->gatePolls; i++)
+        {
+            if (bk4819_getGlitch(&chip) < 255U)
+                break;
+
+            busyWait(v->gateStepUs);
+        }
+    }
+
+    *dbm = v->fastBus ? bk4819_getRssiFast(&chip) : bk4819_getRssi(&chip);
+    *spentUs = vnow - t0;
+}
+
+/* ---- the measurements -------------------------------------------------- */
 
 static spectrum_t scan;
 
-/*
- * REG_67 read back: the real chip answers with ((dBm + 160) * 2). The mock
- * derives the frequency from the PLL registers so that the level the engine
- * stores depends on what the sweep really wrote, not on what it meant to.
+/* LEVELS[route][bin] of the reference sweep, per mock settling time */
+static int16_t reference[SPECTRUM_MAX_BINS];
+
+static uint32_t bins;
+
+/**
+ * Sweep the raster once with one variant, against a chip that settles in
+ * mockSettle us.
+ *
+ * @param sweepUs: filled with the wall clock of the whole sweep, us.
+ * @param worstErr: filled with the worst bin error against the reference,
+ *                  in dB (the trace is in dBm).
+ * @param badBins: filled with the number of bins more than 1 dB out.
  */
-static uint16_t mockRead(uint8_t reg)
+static void runVariant(const variant_t *v, uint32_t mockSettle,
+                       uint32_t *sweepUs, int16_t *worstErr, uint16_t *badBins)
 {
-    if (reg == 0x67)
+    busFast = v->fastBus;
+    mockSettleUs = mockSettle;
+
+    uint32_t word = 0;
+    uint32_t total = 0;
+    int16_t worst = 0;
+    uint16_t bad = 0;
+
+    spectrum_startSweep(&scan);
+
+    for (uint16_t i = 0; i < bins; i++)
     {
-        uint32_t freq = ((((uint32_t)regs[0x39] & 0x7FFFU) << 16)
-                         | regs[0x38]) * 10U;
-        int16_t dbm = mockLevel(freq);
-        return (uint16_t)((dbm + 160) * 2);
+        int16_t dbm;
+        uint32_t spent;
+
+        sweepPoint(v, spectrum_binFreq(&scan, i), &word, &dbm, &spent);
+        spectrum_store(&scan, dbm);
+        total += spent;
     }
 
-    return regs[reg];
+    for (uint16_t i = 0; i < bins; i++)
+    {
+        int16_t err = (int16_t)(spectrum_level(&scan, i) - reference[i]);
+
+        if (err < 0)
+            err = (int16_t)-err;
+
+        if (err > worst)
+            worst = err;
+
+        if (err > 2) /* more than 1 dB */
+            bad++;
+    }
+
+    *sweepUs = total;
+    *worstErr = worst;
+    *badBins = bad;
 }
 
 int main(void)
 {
     initialise_monitor_handles();
 
-    const uint32_t bins = spectrum_configure(&scan, 145500000U, SPAN_HZ, STEP_HZ)
-                              ? spectrum_bins(&scan)
-                              : 0;
+    bins = spectrum_configure(&scan, 145500000U, SPAN_HZ, STEP_HZ)
+               ? spectrum_bins(&scan) : 0;
 
     if (bins == 0)
     {
@@ -284,90 +466,84 @@ int main(void)
         return 1;
     }
 
-    printf("spectrum cost: %u bins, %u Hz step, %u us settle\n",
-           (unsigned)bins, (unsigned)scan.scan.step, (unsigned)SETTLE_US);
-
-    /* Warm up: the first sweep pays nothing extra, but keep it out of the count */
-    spectrum_startSweep(&scan);
-    for (uint16_t i = 0; i < bins; i++)
-    {
-        bk4819_setFrequency(&chip, spectrum_binFreq(&scan, i));
-        busyWait(SETTLE_US);
-        spectrum_store(&scan, bk4819_getRssi(&chip));
-    }
+    printf("spectrum cost: %u bins, %u Hz step\n", (unsigned)bins,
+           (unsigned)scan.scan.step);
+    printf("bus: 200 kHz = 4 us/bit (2 us per half period, the driver's own "
+           "division), fast = 0 + %u cycles/bit\n", (unsigned)FAST_BIT_CYCLES);
 
     /*
-     * Three measured blocks, each one between two markers: a single point, a
-     * single bus transfer, and a whole sweep (the unit the screen asks for).
-     * The histogram of the TCG plugin gives the instructions of each block; the
-     * bus time and the settle are counted here, because on the radio they are
-     * time the core spends waiting rather than working.
+     * Reference: what every bin really contains, with a settling time long
+     * enough that no variant can be right by accident (2 ms).
      */
-    uint32_t pointTransfers;
-    uint32_t pointBusUs;
-
-    busyUs = 0;
-    transferCount = 0;
-    MARK();
-    bk4819_setFrequency(&chip, 145500000U);
-    busyWait(SETTLE_US);
-    (void)bk4819_getRssi(&chip);
-    MARK();
-    pointTransfers = transferCount;
-    pointBusUs = busyUs;
-
-    uint32_t xferTransfers;
-    uint32_t xferBusUs;
-
-    busyUs = 0;
-    transferCount = 0;
-    uint8_t cmd = 0x67 | 0x80;
-    uint8_t reply[2];
-    MARK();
-    spi_send(&mockSpi, &cmd, 1);
-    spi_receive(&mockSpi, reply, 2);
-    MARK();
-    xferTransfers = transferCount;
-    xferBusUs = busyUs;
-
-    uint32_t sweepTransfers;
-    uint32_t sweepBusUs;
-
-    busyUs = 0;
-    transferCount = 0;
-    MARK();
-    for (int sweep = 0; sweep < SWEEPS; sweep++)
+    mockSettleUs = 0;
     {
+        /* Warm start: the chip is tuned to the centre before anything runs */
+        const uint32_t centreWord = scan.scan.centre / 10U;
+
+        regs[0x39] = (uint16_t)((centreWord >> 16) & 0xFFFF);
+        regs[0x38] = (uint16_t)(centreWord & 0xFFFF);
+        levelAfter = mockLevel(scan.scan.centre);
+        levelBefore = levelAfter;
+        tuneAt = 0;
+    }
+    {
+        const variant_t ref = { "ref", false, false, REFERENCE_SETTLE_US, 0 };
+        uint32_t word = 0;
+
         spectrum_startSweep(&scan);
 
         for (uint16_t i = 0; i < bins; i++)
         {
-            bk4819_setFrequency(&chip, spectrum_binFreq(&scan, i));
-            busyWait(SETTLE_US);
-            spectrum_store(&scan, bk4819_getRssi(&chip));
+            int16_t dbm;
+            uint32_t spent;
+
+            sweepPoint(&ref, spectrum_binFreq(&scan, i), &word, &dbm, &spent);
+            reference[i] = dbm;
         }
     }
-    MARK();
-    sweepTransfers = transferCount;
-    sweepBusUs = busyUs;
 
-    printf("point: %u transfers, %u us of bus and settle\n",
-           (unsigned)pointTransfers, (unsigned)pointBusUs);
-    printf("transfer: %u calls, %u us for 3 bytes\n",
-           (unsigned)xferTransfers, (unsigned)xferBusUs);
-    printf("sweep: %u transfers, %u us each (%u us total)\n",
-           (unsigned)(sweepTransfers / (bins * SWEEPS)),
-           (unsigned)(sweepBusUs / (bins * SWEEPS)),
-           (unsigned)(sweepBusUs / SWEEPS));
-    printf("sweep: %u points/s at this settle\n",
-           (unsigned)((bins * 1000000U) / (sweepBusUs / SWEEPS)));
+    /*
+     * Two chip behaviours: one that settles in 150 us (a small step with the
+     * synthesizer already locked, the case this work assumes) and the
+     * datasheet's 300 us worst case. A variant is only a win if it is right in
+     * both.
+     */
+    static const uint32_t chipSettling[] = { 150U, 300U };
+    static const char *const chipNames[] = { "150 us", "300 us" };
 
-    /* The trace the mock front end produced, so the scaling is visible */
-    printf("trace:");
+    for (size_t c = 0; c < sizeof(chipSettling) / sizeof(chipSettling[0]); c++)
+    {
+        printf("\nmock chip settles in %s:\n", chipNames[c]);
+        printf("  %-30s %8s %8s %8s %9s %7s %6s %5s\n", "variant", "wait/pto",
+               "cpu/pto", "us/pto", "us/sweep", "pts/s", "err", "bad");
+
+        for (size_t i = 0; i < VARIANT_COUNT; i++)
+        {
+            uint32_t sweep;
+            int16_t worst;
+            uint16_t bad;
+
+            busCycles = 0;
+            runVariant(&variants[i], chipSettling[c], &sweep, &worst, &bad);
+
+            /* The GPIO overhead of the fast bus, as time at 300 MHz */
+            const uint32_t cpuUs = busCycles / 3000U;
+
+            printf("  %-30s %8u %8u %8u %9u %7u %6d %5u\n",
+                   variants[i].name,
+                   (unsigned)(sweep / bins),
+                   (unsigned)(cpuUs / bins),
+                   (unsigned)((sweep + cpuUs) / bins),
+                   (unsigned)(sweep + cpuUs),
+                   (unsigned)((bins * 1000000U) / (sweep + cpuUs)),
+                   (int)worst, (unsigned)bad);
+        }
+    }
+
+    printf("\ntrace (reference, every 4th bin):");
     for (uint16_t i = 0; i < bins; i += 4)
-        printf(" %d", (int)spectrum_level(&scan, i));
-    printf("\npeak: %d dBm at %lu Hz\n", (int)spectrum_peak(&scan),
-           (unsigned long)spectrum_peakFreq(&scan));
+        printf(" %d", (int)reference[i]);
+    printf("\n");
 
     return 0;
 }

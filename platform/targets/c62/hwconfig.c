@@ -15,6 +15,19 @@
 #include "drivers/I2C/i2c_bitbang.h"
 
 /*
+ * Clock of the SPI bus while the spectrum analyser sweeps, Hz. The chip's
+ * interface reaches 8 MHz (BK4819 datasheet V1.0 §2.6 table 6) and the radio
+ * talks to it at 200 kHz the rest of the time; this is the one knob to turn if
+ * a board turns out not to like the faster clock, and it costs nothing but the
+ * analyser. See docs/SPECTRUM.md §3.
+ */
+#ifdef CONFIG_C62_SPECTRUM_SPI_HZ
+#define C62_BK4819_SWEEP_SPI_HZ CONFIG_C62_SPECTRUM_SPI_HZ
+#else
+#define C62_BK4819_SWEEP_SPI_HZ 1000000
+#endif
+
+/*
  * Pin mapping, must match platform/targets/c62/c62.dts:
  * BK4819: SCLK gpioa 13, SDATA gpioa 7, SCN gpioa 8 (active low)
  * BK1080: SCLK gpioa 5, SDATA gpioa 6, PWR gpiob 2 (active low)
@@ -27,7 +40,28 @@ static const struct spiZephyrCfg c62_bk4819_spiCfg = {
 
 SPI_ZEPHYR_DEVICE_DEFINE(c62_bk4819_spi, c62_bk4819_spiCfg, NULL)
 
+/*
+ * The same bus at the clock the sweep uses. The chip's interface takes up to
+ * 8 MHz (BK4819 datasheet V1.0 §2.6 table 6: fSCK max 8 MHz, tHIGH/tLOW min
+ * 25 ns), and the bus is a Zephyr bit-bang whose per-bit delay is
+ * (1000000*2000/frequency)/2000/2 us: at 200 kHz that truncates to 2 us per
+ * half period and gives 4 us per bit, 96 us for the three bytes of a register
+ * access. Above 1 MHz the per-bit delay becomes zero and the rate is set by the
+ * GPIO toggling alone (about 2 MHz on this core), which is still four times
+ * inside the chip's limit. Only the sweep uses this configuration -- see
+ * docs/SPECTRUM.md -- so a board that does not tolerate it costs the analyser
+ * and nothing else.
+ */
+static const struct spiZephyrCfg c62_bk4819_fastSpiCfg = {
+    .bus = DEVICE_DT_GET(DT_NODELABEL(bk4819_spi)),
+    .frequency = C62_BK4819_SWEEP_SPI_HZ,
+    .flags = SPI_HALF_DUPLEX
+};
+
+SPI_ZEPHYR_DEVICE_DEFINE(c62_bk4819_fastSpi, c62_bk4819_fastSpiCfg, NULL)
+
 const struct BK4819 c62_bk4819 = { .spi = &c62_bk4819_spi,
+                                   .spiFast = &c62_bk4819_fastSpi,
                                    .scn = { &GpioA, 8 } };
 
 GPIO_BK4819_DEVICE_DEFINE(c62_bk4819_gpio, c62_bk4819)

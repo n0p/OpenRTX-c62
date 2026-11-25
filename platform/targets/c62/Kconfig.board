@@ -398,6 +398,76 @@ config C62_P25_VOCODER
 
 endmenu
 
+menu "Spectrum analyser"
+
+config C62_SPECTRUM_SPI_HZ
+	int "SPI clock while sweeping, Hz"
+	default 1000000
+	range 200000 4000000
+	help
+	  The BK4819 talks over a bit-banged SPI at 200 kHz for everything the
+	  radio does, which is 96 us for the three bytes of one register access.
+	  A sweep of the spectrum analyser is three accesses per bin, so the bus
+	  alone costs more than the synthesizer's settling time, and the analyser
+	  uses a second configuration of the same bus at this clock. The chip's
+	  interface takes up to 8 MHz (datasheet V1.0 §2.6); above 1 MHz the
+	  driver's per-bit delay truncates to zero and the rate is set by the GPIO
+	  toggling, around 2 MHz on this core. Lower this to 200000 to sweep over
+	  the same clock as the rest of the radio; nothing but the analyser
+	  changes either way. See docs/SPECTRUM.md §3.
+
+config C62_SPECTRUM_SETTLE_US
+	int "Settling time after a retune, us (0 = trust the chip)"
+	default 0
+	range 0 600
+	help
+	  Time the receiver is given after each PLL write before the RSSI is
+	  believed. The datasheet gives 0.3 ms for "power up or channel
+	  reselection" (V1.0 §1.2.3) and that is the worst case, not the case of
+	  a sweep, where the synthesizer stays locked and only the fractional
+	  divider moves by one bin.
+
+	  At 0 the analyser waits for the chip itself: it polls the glitch
+	  indicator, REG_63, which saturates while the IF recovers from a retune,
+	  and reads the RSSI as soon as the counter comes down -- the method of
+	  the UV-K5 spectrum firmware, with a bounded number of polls so a register
+	  that never comes down cannot stall the sweep (the analyser turns the
+	  gate off by itself if that happens, and the screen says so). A fixed
+	  value disables the gate and sleeps instead, which is what to use to
+	  compare the two on the bench.
+
+config C62_SPECTRUM_AGC_FIX
+	bool "Fix the AGC while sweeping"
+	default n
+	help
+	  Hold the receiver's AGC at one gain for the whole sweep (REG_7E<15>,
+	  with the index of <14:12>, which the chip resets to 011 = maximum).
+	  The automatic loop cannot follow one bin every 50 us, so without this
+	  each reading carries whatever gain the previous bins and the parked
+	  receiver left behind: the trace is a fixed-gain measurement anyway,
+	  but not the same one from sweep to sweep.
+
+	  Off by default because the fixed index is not the live gain: turning
+	  it on moves the absolute level of the trace, and a local carrier
+	  strong enough to overload a 0 dbm front end would flatten the span.
+	  Turn it on if the trace flickers between sweeps; check the levels
+	  against a known signal on the radio first. docs/SPECTRUM.md §3.2.
+
+config C62_SPECTRUM_GATE_POLLS
+	int "Glitch-gate polls before giving up"
+	default 20
+	range 1 40
+	depends on C62_SPECTRUM_SETTLE_US = 0
+	help
+	  How many times the analyser reads REG_63, 20 us apart, before it
+	  stops waiting for the IF to recover and reads the RSSI anyway. Twenty
+	  polls cover 400 us, the datasheet's worst case; a chip that settles
+	  faster costs a few. Each poll is a register read, so the step is a
+	  compromise between the resolution of the wait and the traffic it
+	  costs.
+
+endmenu
+
 DT_COMPAT_LSF_SERVICE_CONTROLLER := lsf,service-controller
 
 config LSF_SERVICE_CONTROLLER

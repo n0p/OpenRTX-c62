@@ -147,12 +147,27 @@ void radio_spectrumSweep(bool on);
  * One point of the sweep: tune, wait for the synthesizer, read the level.
  *
  * @param frequency: frequency to tune, Hz.
- * @param settleUs: time given to the PLL before the level is read, us.
+ * @param settleUs: time given to the PLL before the level is read, us. Zero
+ *                  means "ask the chip": the driver polls the glitch indicator
+ *                  and reads as soon as the IF has recovered (see
+ *                  docs/SPECTRUM.md §3), with a bounded number of polls.
  * @param pointUs: filled with the measured duration of the whole point, us.
  * @return RSSI level of that frequency, dBm.
  */
 int16_t radio_spectrumPoint(uint32_t frequency, uint32_t settleUs,
                             uint32_t *pointUs);
+
+/**
+ * What the last sweep session found out about the receiver's settling.
+ *
+ * Optional: only the platforms that implement the sweep define it, and the
+ * service calls it behind PLATFORM_C62. It exists so the operator can see
+ * whether the waiting was done by the chip's own indicator or by a clock.
+ *
+ * @param polls: average number of glitch polls per point, 0 if unused.
+ * @return false when the gate has been given up on for this session.
+ */
+bool radio_spectrumGate(uint32_t *polls);
 
 /**
  * Put the receiver back on the configured frequency, with its own filter and

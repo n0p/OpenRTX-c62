@@ -251,8 +251,17 @@ volatile uint16_t c62_rx_reg43 = 0x7808;
 static bool     specOn;          // A sweep session owns the receiver
 static bool     specWide;        // The sweep profile is the one in the chip
 static bool     specDirty;       // Something else rewrote the profile
+static bool     specGateOff;     // The glitch gate did not work: don't poll
+static uint8_t  specGateFails;   // Consecutive points whose gate ran out
+static uint32_t specGatePolls;   // Glitch polls spent since the screen opened
+static uint32_t specPoints;      // Points swept since the screen opened
 static uint16_t specReg43;       // REG_43 the mode was using
+static uint16_t specReg73;       // REG_73 (AFC), saved at entry
+#ifdef CONFIG_C62_SPECTRUM_AGC_FIX
+static uint16_t specReg7E;       // REG_7E (AGC fix), saved at entry
+#endif
 static uint32_t specFreq;        // Frequency the PLL was last set to
+static uint32_t specWord;        // Its 10 Hz word, as last written
 
 #ifdef C62_REG43_SWEEP
 /*
@@ -1024,7 +1033,12 @@ void radio_updateConfiguration()
      * longer in the chip, and the next sweep has to put it back.
      */
     if (specOn)
+    {
         specDirty = true;
+
+        /* The cached PLL word is only valid while nothing else tunes the chip */
+        specWord = 0xFFFFFFFFU;
+    }
 
     // TX calibration at the TX frequency, from the band its PA is in
     const struct C62BandCalib *band = &calData.uhf;
@@ -1216,11 +1230,31 @@ void radio_setRxOffset(int32_t hz)
 
 /*
  * The BK4819 has no I/Q output, so a spectrum is a sweep: write the PLL word of
- * a frequency (REG_39 then REG_38, 10 Hz units), give the synthesizer its
- * settling time, read the RSSI (REG_67, 0.5 dB per step, dBm = value/2 - 160)
- * and move on. core/spectrum_service.c owns the raster, the storage and the
- * timing; this is only the hardware half, and it runs in the RTX thread, which
- * is the owner of the chip.
+ * a frequency (REG_39 then REG_38, 10 Hz units), let the receiver catch up with
+ * it, read the RSSI (REG_67, 0.5 dB per step, dBm = value/2 - 160) and move on.
+ * core/spectrum_service.c owns the raster, the storage and the timing; this is
+ * only the hardware half, and it runs in the RTX thread, which is the owner of
+ * the chip.
+ *
+ * The chip has no sweep engine of its own: its only "scan" is a frequency
+ * counter (REG_32, results in REG_0D/0E) that measures the frequency of one
+ * carrier above -40 dBm and takes 0.2 to 1.6 s to do it, which is a
+ * measurement tool, not a spectrum. Its other scan features -- the squelch
+ * interrupts of REG_02/REG_3F and the CTCSS/CDCSS scanners of REG_68/REG_69 --
+ * only look at the frequency the PLL is on. So the sweep is a loop, and what
+ * makes it fast is (docs/SPECTRUM.md §3):
+ *
+ *  - the bus: 96 us for a register access at the radio's 200 kHz, three
+ *    accesses per bin, over a chip that takes 8 MHz. The analyser uses a second
+ *    configuration of the same bus (spiFast) and writes the high half of the
+ *    PLL word only when it changed, so a bin costs one or two accesses;
+ *  - the settling: instead of a fixed sleep, poll the glitch indicator (REG_63)
+ *    that saturates while the IF recovers from a retune, which is what the
+ *    UV-K5 spectrum firmware does, with a bounded number of polls;
+ *  - the profile: AFC off (it would pull the LO back onto a carrier and undo
+ *    the bin), and optionally the AGC fixed (CONFIG_C62_SPECTRUM_AGC_FIX: the
+ *    automatic loop cannot follow the bins, so the trace carries the gain of
+ *    whatever the receiver was doing).
  *
  * Two profile switches, because a spectrum of 9 kHz bins is the right filter
  * for measuring and the wrong one for listening:
@@ -1228,11 +1262,40 @@ void radio_setRxOffset(int32_t hz)
  *  - sweep: the widest receive path the chip has (25 kHz channel mode, REG_43
  *    0x7e28: the 4.5 kHz IF filter, doubled to 9 kHz by the mode), AF muted so
  *    the bins are not heard;
- *  - park: the filter and the AF output the mode had, restored from the words
- *    saved here, on the configured frequency. The receiver is then exactly what
- *    it was before the analyser opened, which is what lets the mode's own
- *    squelch pause the sweep with the audio working.
+ *  - park: the filter, the AFC and the AF output the mode had (and the AGC,
+ *    when the fix is compiled in),
+ *    restored from the words saved here, on the configured frequency. The
+ *    receiver is then exactly what it was before the analyser opened, which is
+ *    what lets the mode's own squelch pause the sweep with the audio working.
  */
+
+/* Polls of the glitch gate, and how long between them, when the Kconfig has
+   nothing to say (host builds). */
+#ifndef CONFIG_C62_SPECTRUM_GATE_POLLS
+#define CONFIG_C62_SPECTRUM_GATE_POLLS 20
+#endif
+
+/** Microseconds between two polls of the glitch indicator. */
+#define SPEC_GATE_STEP_US 20U
+
+/**
+ * Consecutive points whose gate ran out of polls before the gate is turned off.
+ *
+ * A glitch indicator that never comes down would turn every point into the full
+ * budget of polls for ever. Three points in a row is enough to tell a chip that
+ * does not behave as the UV-K5's from one that is merely slow on a noisy bin,
+ * and after that the sweep trusts the settling time it was given.
+ */
+#define SPEC_GATE_FAILS_MAX 3
+
+/**
+ * What the sweep waits when the gate has been given up on, us.
+ *
+ * The datasheet's worst case, which is what this driver did before there was a
+ * gate: a glitch indicator that does not come down must cost speed, never
+ * accuracy, so the fallback is the number the analyser used to trust.
+ */
+#define SPEC_GATE_FALLBACK_US 400U
 
 /** Cycles of the core clock to microseconds, for the per-point measurement. */
 static uint32_t specCyclesToUs(const uint32_t cycles)
@@ -1255,10 +1318,20 @@ bool radio_spectrumEnter(void)
 
     /* Remember what the mode is using before any register is touched */
     specReg43 = bk4819_readReg(&c62_bk4819, 0x43);
+    specReg73 = bk4819_readReg(&c62_bk4819, 0x73);
+#ifdef CONFIG_C62_SPECTRUM_AGC_FIX
+    specReg7E = bk4819_readReg(&c62_bk4819, 0x7E);
+#endif
     specFreq  = config->rxFrequency + rxTotalOffset();
+    /* Nothing is known about what the chip holds: write both halves first */
+    specWord  = 0xFFFFFFFFU;
     specOn    = true;
     specWide  = false;
     specDirty = true;
+    specGateOff = false;
+    specGateFails = 0;
+    specGatePolls = 0;
+    specPoints = 0;
 
     radio_spectrumSweep(true);
     return true;
@@ -1285,6 +1358,36 @@ void radio_spectrumSweep(const bool on)
         bk4819_setRfFilter(&c62_bk4819, 7, 7);
         c62_rx_reg43 = 0x7e28;
         bk4819_setAfOutput(&c62_bk4819, BK4819_AF_MUTE);
+
+        /*
+         * AFC off (REG_73<4>, application note V3 "AFC, ALC, MIC AGC"). It is
+         * on by default and its range is the widest (REG_73<13:11> = 000): a
+         * carrier anywhere near the bin under measurement would pull the
+         * synthesizer onto itself, which moves the bin and lengthens the
+         * settling it is trying to measure. Every implementation of a spectrum
+         * on this chip that this fork could read disables it for the sweep.
+         */
+        bk4819_maskSetRegister(&c62_bk4819, 0x73, 0x0010, 0x0010);
+
+#ifdef CONFIG_C62_SPECTRUM_AGC_FIX
+        /*
+         * AGC fixed (REG_7E<15>): the automatic loop cannot follow one bin per
+         * 50 us, so each reading carries the gain the previous bins left behind,
+         * and the gain the receiver happened to have when a sweep started
+         * changes while it is parked between sweeps -- which is a trace that
+         * flickers. Fixing it makes the trace a measurement at one gain, the
+         * same one every sweep, which is what egzumer's spectrum does
+         * (BK4819_SetAGC(false), REG_7E<15> with <14:12> = 011, the maximum).
+         *
+         * Off by default: <14:12> is a fixed index, not the live gain, so
+         * fixing it also moves the absolute level of the trace (and a local
+         * carrier strong enough to overload a 0 dB front end would flatten it),
+         * and that is something only the radio can say. See docs/SPECTRUM.md
+         * §3.2.
+         */
+        bk4819_maskSetRegister(&c62_bk4819, 0x7E, 0x8000, 0x8000);
+#endif
+
         specWide  = true;
         specDirty = false;
     }
@@ -1295,6 +1398,10 @@ void radio_spectrumSweep(const bool on)
             return;
 
         bk4819_writeReg(&c62_bk4819, 0x43, specReg43);
+        bk4819_writeReg(&c62_bk4819, 0x73, specReg73);
+#ifdef CONFIG_C62_SPECTRUM_AGC_FIX
+        bk4819_writeReg(&c62_bk4819, 0x7E, specReg7E);
+#endif
         c62_rx_reg43 = specReg43;
         radio_enableAfOutput();
         specWide  = false;
@@ -1326,24 +1433,88 @@ int16_t radio_spectrumPoint(const uint32_t frequency, const uint32_t settleUs,
             gpioDev_set(LNA_UHF_EN);
     }
 
-    bk4819_setFrequency(&c62_bk4819, frequency);
+    bk4819_tuneCached(&c62_bk4819, frequency, &specWord);
     specFreq = frequency;
 
     /*
-     * The settle sleeps the RTX thread instead of spinning on it: at 10 kHz of
-     * system tick k_usleep() rounds up by at most 100 us, and the audio worker
-     * and the UI keep running, which a k_busy_wait() of half a millisecond per
-     * point would not allow.
+     * Two ways to cover the time between writing the PLL word and believing the
+     * RSSI, and they are exclusive:
+     *
+     *  - a fixed settling time, given by the caller. Under 100 us it is a busy
+     *    wait, which is exact; above that it sleeps, because the RTX thread has
+     *    an audio worker to leave alone and k_usleep() rounds up by at most
+     *    100 us at the 10 kHz tick;
+     *  - no time at all, and the chip says when: REG_63 counts the glitches of
+     *    the discriminator and saturates while the IF recovers from a retune,
+     *    exactly as egzumer's spectrum GetRssi() uses it. Each poll is a
+     *    register read, so the gate costs a few microseconds when the receiver
+     *    is quick and the whole budget when it is not -- and the sweep records
+     *    how often it ran out, so a chip on which the indicator does not behave
+     *    that way stops polling and waits SPEC_GATE_FALLBACK_US instead: a gate
+     *    that does not work must cost speed, never accuracy.
      */
     if (settleUs > 0)
-        k_usleep(settleUs);
+    {
+        if (settleUs <= 100U)
+            k_busy_wait(settleUs);
+        else
+            k_usleep(settleUs);
+    }
+    else if (specGateOff)
+    {
+        k_usleep(SPEC_GATE_FALLBACK_US);
+    }
+    else
+    {
+        uint16_t polls = 0;
+        bool gaveUp = false;
 
-    const int16_t rssi = bk4819_getRssi(&c62_bk4819);
+        while (bk4819_getGlitch(&c62_bk4819) >= 255U)
+        {
+            if (++polls >= (uint16_t)CONFIG_C62_SPECTRUM_GATE_POLLS)
+            {
+                gaveUp = true;
+                break;
+            }
+
+            k_busy_wait(SPEC_GATE_STEP_US);
+        }
+
+        specGatePolls += polls;
+
+        if (gaveUp)
+        {
+            if (++specGateFails >= SPEC_GATE_FAILS_MAX)
+                specGateOff = true;
+        }
+        else
+        {
+            specGateFails = 0;
+        }
+    }
+
+    const int16_t rssi = bk4819_getRssiFast(&c62_bk4819);
 
     if (pointUs != nullptr)
         *pointUs = specCyclesToUs(k_cycle_get_32() - t0);
 
+    specPoints++;
+
     return rssi;
+}
+
+/**
+ * What the sweep found out about the chip, for the status line.
+ *
+ * @param polls: average number of glitch polls per point, 0 if the gate is off.
+ * @return false when the gate has been turned off for this session.
+ */
+bool radio_spectrumGate(uint32_t *polls)
+{
+    if (polls != nullptr)
+        *polls = (specPoints > 0) ? (specGatePolls / specPoints) : 0;
+
+    return (!specGateOff);
 }
 
 void radio_spectrumPark(void)
@@ -1354,6 +1525,7 @@ void radio_spectrumPark(void)
     radio_spectrumSweep(false);
 
     specFreq = config->rxFrequency + rxTotalOffset();
+    specWord = specFreq / 10U;
     bk4819_setFrequency(&c62_bk4819, specFreq);
 }
 

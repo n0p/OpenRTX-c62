@@ -258,8 +258,31 @@ TEST_CASE("The quick menu of the screen carries the span and the step")
     qm_adjust(+1);
     REQUIRE(spectrumService_spanIndex() == (uint8_t)((span + 1) % SPECTRUM_SPAN_COUNT));
 
-    /* The clear row is an action: ENTER runs it and does not close the popup */
-    qm_select(3);
+    /* The settle row cycles the wait the sweep uses (AUTO, 50, 100, 200, 400) */
+    spectrumService_setSettleIndex(0);
+    REQUIRE(spectrumService_settleUs() == 0);
+
+    qm_select(2);
+    qm_adjust(+1);
+    REQUIRE(spectrumService_settleIndex() == 1);
+    REQUIRE(spectrumService_settleUs() == 50);
+
+    qm_adjust(-1);
+    REQUIRE(spectrumService_settleIndex() == 0);
+    REQUIRE(spectrumService_settleUs() == 0);
+
+    /* The clear row is an action, wherever it sits: ENTER runs it and does not
+       close the popup */
+    uint8_t clearRow = 0xFF;
+
+    for (uint8_t row = 0; row < qm->count; row++)
+    {
+        if (strcmp(qm->items[row].label, "BORRAR MAX") == 0)
+            clearRow = row;
+    }
+
+    REQUIRE(clearRow != 0xFF);
+    qm_select(clearRow);
     qm_enter();
     REQUIRE(qm_state.open);
 
