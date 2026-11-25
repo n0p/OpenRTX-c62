@@ -27,6 +27,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <string.h>
 #include <termios.h>
 #include <time.h>
@@ -61,6 +62,13 @@ static uint8_t memWindow[256];
 /* Capture buffer: 2 s of 48 kHz would be 192 kB, which is fine here. */
 static int16_t capBuf[16000];
 static pcProtoCapture_t cap;
+
+/* A live capture is filled a sample at a time by benchFeed(). */
+static uint32_t liveSample;
+
+/* The radio's clock, defined with the transport below: milliseconds of
+ * monotonic time, the same base the firmware gets from k_uptime_get(). */
+static uint32_t nowMs(void);
 
 /* A channel event and a status event, so the client has something to receive
  * without a transmitter. */
@@ -163,11 +171,30 @@ int pc_proto_platformCapture(int op, pcProtoCapture_t *st, uint8_t *buf,
             cap.rate = 48000;
             cap.overflow = 0;
             cap.running = 1;
+            cap.t0Ms = nowMs();
+            cap.blocks = 0;
+            cap.blockLen = 0;
             /* A capture of a carrier: a ramp, so a truncated read is obvious
              * on the client side. */
             for (uint32_t i = 0; i < cap.capacity; i++)
                 capBuf[i] = (int16_t)(i * 3);
             cap.written = cap.capacity;
+            cap.blocks = cap.capacity / 480;
+            cap.blockLen = 480;
+            break;
+        case PC_CAP_OP_START_LIVE:
+            /* The bench flavour: empty, and filled 10 ms at a time by the
+             * audio the simulated radio is "receiving" (benchFeed below). */
+            cap.capacity = st->capacity > 16000 ? 16000 : st->capacity;
+            cap.written = 0;
+            cap.read = 0;
+            cap.rate = 48000;
+            cap.overflow = 0;
+            cap.running = 1;
+            cap.t0Ms = nowMs();
+            cap.blocks = 0;
+            cap.blockLen = 0;
+            liveSample = 0;
             break;
         case PC_CAP_OP_STOP:
             cap.running = 0;
@@ -207,6 +234,135 @@ int pc_proto_platformTxTrace(char *buf, size_t cap_)
 {
     snprintf(buf, cap_, "tx stage=idle slots=0 | last over ok, 0 retries");
     return 0;
+}
+
+/* --- the simulated radio of the bench namespace --------------------------- */
+
+/*
+ * A radio with a carrier where it says it is, a microphone, an RSSI that has a
+ * peak at 145.500 MHz and a discriminator that carries a 1 kHz tone when it is
+ * receiving one.  Enough for the PC tool to run its whole flow -- arm, tune,
+ * key, capture, sweep, report -- against the real protocol code, and for the
+ * correlation to have something to correlate.
+ */
+static struct
+{
+    uint32_t rxHz;
+    uint32_t txHz;
+    uint8_t mode;
+    uint8_t bw;
+    uint8_t ptt;
+    uint16_t tone;      /* Hz the radio really generates               */
+    uint8_t level;      /* deviation percentage in force               */
+} radio = { 145500000, 145500000, 1, 2, 0, 0, 0 };
+
+/** The tone the simulated receiver puts in the discriminator, in Hz. */
+#define RADIO_TONE_HZ 1000
+
+/** The level the simulated receiver sees: a peak at 145.500 MHz. */
+static int16_t simRssi(void)
+{
+    int32_t d = (int32_t)radio.rxHz - 145500000;
+    if (d < 0)
+        d = -d;
+    return (int16_t)(-95 + (d < 50000 ? 40 - d / 5000 : 0));
+}
+
+int pc_proto_platformBench(uint8_t op, pcProtoBenchArgs_t *a)
+{
+    switch (op) {
+        case PC_BENCH_OP_POLL:
+            a->nowMs = nowMs();
+            a->rxHz = radio.rxHz;
+            a->txHz = radio.txHz;
+            a->mode = radio.mode;
+            a->bw = radio.bw;
+            a->ptt = radio.ptt;
+            a->txState = radio.ptt ? 2 : 1;
+            a->toneHz = radio.tone;
+            a->level = radio.level;
+            a->rssi = simRssi();
+            a->rssiRaw = (int16_t)(a->rssi - 3);
+            a->deltaHz = 0;
+            return 0;
+
+        case PC_BENCH_OP_TUNE:
+            if (a->rxHz < 18000000u)
+                return -1;
+            radio.rxHz = a->rxHz;
+            radio.txHz = a->txHz != 0 ? a->txHz : a->rxHz;
+            if (a->mode != 0)
+                radio.mode = a->mode;
+            if (a->bw >= 1 && a->bw <= 3)
+                radio.bw = a->bw;
+            a->mode = radio.mode;
+            a->bw = radio.bw;
+            a->rxHz = radio.rxHz;
+            a->txHz = radio.txHz;
+            return 0;
+
+        case PC_BENCH_OP_PTT:
+            radio.ptt = a->ptt;
+            if (a->ptt) {
+                /* The generator only does the standard CTCSS range. */
+                radio.tone = (a->toneHz >= 60 && a->toneHz <= 260)
+                                 ? a->toneHz : 0;
+                radio.level = a->level;
+            } else {
+                radio.tone = 0;
+                radio.level = 0;
+            }
+            a->toneHz = radio.tone;
+            a->level = radio.level;
+            a->txState = radio.ptt ? 2 : 1;
+            return 0;
+
+        case PC_BENCH_OP_RSSI:
+            a->nowMs = nowMs();
+            a->rssi = simRssi();
+            a->rssiRaw = a->rssi;
+            return 0;
+
+        case PC_BENCH_OP_RELEASE:
+            radio.ptt = 0;
+            radio.tone = 0;
+            radio.level = 0;
+            return 0;
+
+        default:
+            return -1;
+    }
+}
+
+/*
+ * Fill a live capture with what the receiver would deliver: a 1 kHz tone at
+ * 40 % of full scale, 10 ms per call, with a phase that carries across blocks
+ * so the result is a continuous sine and not a click every 480 samples.
+ */
+static void benchFeed(void)
+{
+    if (!cap.running)
+        return;
+    /* The debug capture is pre-filled and not running by now; only a live one
+     * gets here with room left. */
+    if (cap.written >= cap.capacity)
+        return;
+
+    const uint32_t n = 480;
+    for (uint32_t i = 0; i < n && cap.written < cap.capacity; i++) {
+        /* A real sine, so the PC side can measure its frequency and its level
+         * and cross-correlate it with the demodulated capture of the SDR. */
+        double t = (double)liveSample++ / 48000.0;
+        capBuf[cap.written++] = (int16_t)(12000.0 * sin(2.0 * M_PI *
+                                                        RADIO_TONE_HZ * t));
+    }
+    if (cap.blockLen == 0)
+        cap.blockLen = (uint16_t)n;
+    cap.blocks++;
+    if (cap.written >= cap.capacity) {
+        cap.overflow = 1;
+        cap.running = 0;
+    }
 }
 
 /* --- transport ----------------------------------------------------------- */
@@ -304,6 +460,11 @@ int main(int argc, char **argv)
     ct.flags = 1;
     cstore_add(&ct);
 
+    /* What the capture platform answers before anything is armed: the rate it
+     * delivers and the buffer it has, so ARM can advertise a ceiling. */
+    cap.rate = 48000;
+    cap.capacity = 16000;
+
     regs4819[0x30] = 0x1234;
     regs4819[0x67] = 0x00A5;
     for (size_t i = 0; i < sizeof(memWindow); i++)
@@ -327,6 +488,7 @@ int main(int argc, char **argv)
             pc_proto_rx(&proto, chunk, n);
 
         pc_proto_tick(&proto, nowMs());
+        benchFeed();
 
         if (!greeted && pc_proto_linked(&proto)) {
             greeted = true;

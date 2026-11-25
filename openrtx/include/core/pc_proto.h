@@ -132,6 +132,8 @@ enum pcProtoMsg
     PC_EVT_MESSAGE         = 0x0083, /**< a message arrived                 */
     PC_EVT_SETTINGS        = 0x0084, /**< settings changed on the radio     */
     PC_EVT_LOG             = 0x0085, /**< one line of the firmware log      */
+    PC_EVT_BENCH_EDGE      = 0x0086, /**< bench: TX/RX edge with its radio
+                                      *   tick, see PC_MSG_BENCH_PTT       */
 
     /** Response used for every failed request; payload: PC_TAG_ERROR and
      *  PC_TAG_MSG_ID of the request that failed. */
@@ -203,7 +205,20 @@ enum pcProtoMsg
     PC_MSG_DBG_CAP_READ    = 0x0532, /**< read samples out of the capture    */
     PC_MSG_DBG_BB          = 0x0540, /**< baseband dump: state and trigger   */
     PC_MSG_DBG_TX_TRACE    = 0x0550, /**< live transmit cycle trace          */
-    PC_MSG_DBG_RX_COUNTERS = 0x0551  /**< per-mode receive error counters    */
+    PC_MSG_DBG_RX_COUNTERS = 0x0551, /**< per-mode receive error counters    */
+
+    /* Bench namespace, 0x0600-0x060F: scripted measurements of the radio
+     * against an external receiver (RTL-SDR, Anritsu...).  Every one of these
+     * is behind PC_CAP_BENCH, which only a build with CONFIG_C62_BENCH_PROTO
+     * advertises, and the ones that move the radio (TUNE, PTT, SWEEP) also
+     * need the session token.  See docs/BENCH.md. */
+    PC_MSG_BENCH_ARM       = 0x0601, /**< start a run: epoch + radio tick    */
+    PC_MSG_BENCH_TUNE      = 0x0602, /**< req: freq, mode, bw; token         */
+    PC_MSG_BENCH_PTT       = 0x0603, /**< req: tx on/off, tone, level; token */
+    PC_MSG_BENCH_CAPTURE   = 0x0604, /**< arm a capture of N ms, then read it*/
+    PC_MSG_BENCH_RSSI      = 0x0605, /**< n samples of (tick, RSSI)          */
+    PC_MSG_BENCH_SWEEP     = 0x0606, /**< rx sweep over (f0, f1, step)       */
+    PC_MSG_BENCH_REPORT    = 0x0607  /**< what the run collected, as text    */
 };
 
 /** Capability bits: what this build can serve, HELLO asks and answers. */
@@ -225,11 +240,21 @@ enum pcProtoCap
     /**
      * The debug namespace: log streaming, diagnostics, register and memory
      * access, capture, TX trace.  Compiled in only when the build option
-     * C62_DEBUG_PROTO is on (CONFIG_C62_DEBUG_PROTO); a production build does
-     * not advertise it and answers every one of those messages with
+     * C62_DEBUG_PROTO is on (CONFIG_C62_DEBUG_PROTO); a production build
+     * does not advertise it and answers every one of those messages with
      * PC_ERR_NOT_ALLOWED.  The writes need the session token on top.
      */
-    PC_CAP_DEBUG     = 0x00002000
+    PC_CAP_DEBUG     = 0x00002000,
+
+    /**
+     * The bench namespace: scripted measurements (tune, key, capture, sweep,
+     * RSSI) with a radio tick on every response so the PC can line the radio
+     * up against an external receiver.  Compiled in only with the build option
+     * C62_BENCH_PROTO (CONFIG_C62_BENCH_PROTO); without it the messages answer
+     * PC_ERR_NOT_ALLOWED and nothing is advertised.  TUNE, PTT and SWEEP also
+     * need the session token: they move the radio and key the PA.
+     */
+    PC_CAP_BENCH     = 0x00004000
 };
 
 /** Error codes, PC_TAG_ERROR in a response. */
@@ -362,7 +387,38 @@ enum pcProtoTag
     PC_TAG_RATE        = 0x00EA, /**< u16 lines per second allowed        */
     PC_TAG_OFFSET      = 0x00EB, /**< u32 offset in samples or bytes      */
     PC_TAG_RUNNING     = 0x00EC, /**< u8 1 capture or dump in progress    */
-    PC_TAG_BB_STATE    = 0x00ED  /**< u8 baseband dump state              */
+    PC_TAG_BB_STATE    = 0x00ED, /**< u8 baseband dump state              */
+
+    /*
+     * Bench namespace, 0x0100-0x011F.  A separate block because these are not
+     * debug telemetry but measurement scaffolding: every one of them is
+     * stamped with a radio tick (milliseconds since boot, the same base as
+     * PC_TAG_UPTIME_MS) so the PC can put its own clock and the radio's on one
+     * line.  docs/BENCH.md has the precision that can be expected from it.
+     */
+    PC_TAG_BENCH_EPOCH   = 0x0100, /**< u32 run counter, +1 on every ARM     */
+    PC_TAG_BENCH_TICK    = 0x0101, /**< u32 radio ms when the action ran     */
+    PC_TAG_BENCH_T0      = 0x0102, /**< u32 radio ms of sample/point zero    */
+    PC_TAG_BENCH_WRITTEN = 0x0103, /**< u32 samples or points collected      */
+    PC_TAG_BENCH_TONE    = 0x0104, /**< u16 Hz of the tone actually on air   */
+    PC_TAG_BENCH_LEVEL   = 0x0105, /**< u8  AF level actually applied        */
+    PC_TAG_BENCH_BW      = 0x0106, /**< u8  bandwidth index programmed      */
+    PC_TAG_BENCH_BLOCK   = 0x0107, /**< u16 samples per audio push, 0 varies */
+    PC_TAG_BENCH_BLOCKS  = 0x0108, /**< u32 audio pushes in the capture      */
+    PC_TAG_BENCH_STEP    = 0x0109, /**< u32 sweep step, Hz                   */
+    PC_TAG_BENCH_F0      = 0x010A, /**< u32 sweep start, Hz                  */
+    PC_TAG_BENCH_F1      = 0x010B, /**< u32 sweep end, Hz (exclusive)        */
+    PC_TAG_BENCH_DWELL   = 0x010C, /**< u16 ms the sweep waits per point     */
+    PC_TAG_BENCH_POINTS  = 0x010D, /**< u16 points the sweep will visit      */
+    PC_TAG_BENCH_DELTA   = 0x010E, /**< i32 Hz, what the radio measures
+                                    *   against the programmed carrier (0
+                                    *   when it cannot: a radio without a
+                                    *   reference cannot measure its own
+                                    *   carrier, the SDR does)              */
+    PC_TAG_BENCH_WINDOW  = 0x010F, /**< u16 ms of capture asked for          */
+    PC_TAG_BENCH_RSSI_TS = 0x0110, /**< bytes, n * (u32 tick, i16 dBm)       */
+    PC_TAG_BENCH_POINTS_TS = 0x0111, /**< bytes, n * (u32 Hz, i16 dBm)       */
+    PC_TAG_BENCH_OVERFLOW = 0x0112  /**< u8, 1 the capture filled up early   */
 };
 
 /** Counters, PC_TAG_STATS; all are cumulative since boot. */
@@ -422,6 +478,10 @@ typedef struct
     uint16_t rate;      /**< sample rate, Hz                               */
     uint8_t  running;   /**< 1 while recording                             */
     uint8_t  overflow;  /**< 1 when the buffer filled up before the stop   */
+    /* Bench additions: what a capture needs to be put on a time line. */
+    uint32_t t0Ms;      /**< radio tick of sample zero, 0 when unknown     */
+    uint32_t blocks;    /**< audio pushes recorded                         */
+    uint16_t blockLen;  /**< samples per push, 0 when it varies            */
 }
 __attribute__((packed)) pcProtoCapture_t;
 
@@ -632,7 +692,15 @@ enum pcProtoCaptureOp
     PC_CAP_OP_START = 0, /**< st->capacity samples asked for               */
     PC_CAP_OP_STOP  = 1,
     PC_CAP_OP_STATUS= 2,
-    PC_CAP_OP_READ  = 3  /**< buf, off and count valid                     */
+    PC_CAP_OP_READ  = 3, /**< buf, off and count valid                     */
+    /**
+     * Start a capture the audio path will fill, empty.  On a radio it is the
+     * same as PC_CAP_OP_START (the codec worker is what fills it either way);
+     * it exists so a simulator can tell "record what arrives" from "hand me a
+     * full buffer at once", which is what the bench needs to watch a capture
+     * fill over time and what the debug capture does not care about.
+     */
+    PC_CAP_OP_START_LIVE = 4
 };
 
 /** RX audio capture, implemented by the platform when it has an audio path. */
@@ -669,6 +737,63 @@ int pc_proto_platformBbDump(int op, uint8_t *state);
 
 /** Format the live transmit trace into buf (two short lines at most). */
 int pc_proto_platformTxTrace(char *buf, size_t cap);
+
+/*
+ * Bench namespace: one hook with an operation code and a structure in and out,
+ * so a platform (and a host simulator) implements one function rather than
+ * eight.  Weak default: every operation reports "not implemented" and the
+ * messages answer PC_ERR_NOT_SUPPORTED.  The core module owns the sequencing,
+ * the timestamps and the report; the platform owns the radio.
+ */
+
+/** Operations of pc_proto_platformBench(). */
+enum pcProtoBenchOp
+{
+    /** Fill *a with the radio's own view: nowMs, txState, rssi, tuned state,
+     *  plus whatever the platform applied since the last poll (tone, level).
+     *  Called once per tick by the core, so this is where a platform lands
+     *  anything that had to wait for the transmitter to be up. */
+    PC_BENCH_OP_POLL   = 0,
+    /** Program the receiver/transmitter: rxHz, txHz, mode, bw in; what was
+     *  applied back.  @return 0 on success, negative when the frequency or the
+     *  mode is out of reach. */
+    PC_BENCH_OP_TUNE   = 1,
+    /** Key or unkey: ptt in, toneHz (0 for none) and level in; the values
+     *  really programmed come back in toneHz/level.  @return 0 on success. */
+    PC_BENCH_OP_PTT    = 2,
+    /** One RSSI reading right now, in rssi (dBm) and rssiRaw (register). */
+    PC_BENCH_OP_RSSI   = 3,
+    /** Take down anything a run left behind: unkey, restore the tone and the
+     *  microphone gain, release a capture.  Called on ARM and on reset. */
+    PC_BENCH_OP_RELEASE= 4
+};
+
+/** In and out of pc_proto_platformBench(). */
+typedef struct
+{
+    uint32_t nowMs;    /**< out: radio tick, milliseconds since boot       */
+    uint32_t rxHz;     /**< in/out: receive frequency                      */
+    uint32_t txHz;     /**< in/out: transmit frequency                     */
+    int32_t  deltaHz;  /**< out: measured carrier error, 0 when unknown    */
+    uint16_t toneHz;   /**< in/out: tone asked for / tone programmed       */
+    int16_t  rssi;     /**< out: filtered RSSI, dBm                        */
+    int16_t  rssiRaw;  /**< out: raw RSSI as the transceiver reports it    */
+    uint8_t  mode;     /**< in/out: enum opmode                            */
+    uint8_t  bw;       /**< in/out: bandwidth index, 0 keeps the mode's    */
+    uint8_t  ptt;      /**< in/out: 1 keyed, 0 not                          */
+    uint8_t  level;    /**< in/out: AF level asked for / applied           */
+    uint8_t  txState;  /**< out: 0 off, 1 receiving, 2 transmitting        */
+}
+pcProtoBenchArgs_t;
+
+int pc_proto_platformBench(uint8_t op, pcProtoBenchArgs_t *a);
+
+/** Reset the bench state: new epoch on the next ARM, nothing left keyed. */
+void pc_proto_benchReset(void);
+
+/** Advance the bench state machine: captures, the RSSI collector and the
+ *  sweep.  Called from pc_proto_tick(), i.e. from the transport thread. */
+void pc_proto_benchTick(uint32_t nowMs);
 
 /* TLV writing: each returns the new offset, or 0 when it does not fit. */
 

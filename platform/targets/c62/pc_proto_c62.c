@@ -422,11 +422,19 @@ int pc_proto_platformCapture(int op, pcProtoCapture_t *st, uint8_t *buf,
 {
     switch (op) {
         case PC_CAP_OP_START:
+        case PC_CAP_OP_START_LIVE: /* the worker fills it either way */
             cap.capacity = st->capacity > CAP_MAX ? CAP_MAX : st->capacity;
             cap.written = 0;
             cap.read = 0;
             cap.rate = 48000; /* the rate the codec worker delivers */
             cap.overflow = 0;
+            /* The bench needs the capture on a time line: the tick of sample
+             * zero and the shape of the blocks that filled it.  A capture
+             * whose blocks are not all the same length cannot claim to be
+             * contiguous, and blockLen says so with 0. */
+            cap.t0Ms = (uint32_t)k_uptime_get();
+            cap.blocks = 0;
+            cap.blockLen = 0;
             cap.running = 1;
             break;
         case PC_CAP_OP_STOP:
@@ -454,6 +462,11 @@ void pc_proto_capturePush(const int16_t *samples, size_t stride, size_t count)
 {
     if (!cap.running)
         return;
+    if (cap.blocks == 0)
+        cap.blockLen = (uint16_t)count;
+    else if (cap.blockLen != (uint16_t)count)
+        cap.blockLen = 0; /* a gap of unknown size: not contiguous */
+    cap.blocks++;
     for (size_t i = 0; i < count && cap.written < cap.capacity; i++)
         capBuffer[cap.written++] = samples[i * stride];
     if (cap.written >= cap.capacity) {

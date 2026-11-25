@@ -457,10 +457,16 @@ uint32_t pc_proto_caps(void)
      * access, not even the advertisement that they exist. */
     caps |= PC_CAP_DEBUG;
 #endif
+#ifdef CONFIG_C62_BENCH_PROTO
+    /* The bench namespace moves the radio and keys the PA, so it is never in
+     * a production build either.  It shares the session token with the debug
+     * namespace: a build with either of them hands one out. */
+    caps |= PC_CAP_BENCH;
+#endif
     return caps;
 }
 
-#ifdef CONFIG_C62_DEBUG_PROTO
+#if defined(CONFIG_C62_DEBUG_PROTO) || defined(CONFIG_C62_BENCH_PROTO)
 /** Rotate the session token.  Not a secret: see the note in pc_proto.h. */
 static void tokenRotate(pcProto_t *p)
 {
@@ -586,7 +592,7 @@ static int pc_core_hello(struct pcReq *r)
     off = pc_tlv_u16(r->out, r->outCap, off, PC_TAG_LASTUSED,
                      (uint16_t)(lastUsed < 0 ? 0xFFFF : lastUsed));
     off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_UPTIME_MS, r->p->nowMs);
-#ifdef CONFIG_C62_DEBUG_PROTO
+#if defined(CONFIG_C62_DEBUG_PROTO) || defined(CONFIG_C62_BENCH_PROTO)
     /* Every HELLO rotates the token, so a second client on the cable
      * invalidates the first one's write permission instead of sharing it. */
     tokenRotate(r->p);
@@ -674,6 +680,16 @@ static const struct pcProtoEntry pc_table[] =
     { PC_MSG_DBG_BB,          PC_CAP_DEBUG,            pc_dbg_bb },
     { PC_MSG_DBG_TX_TRACE,    PC_CAP_DEBUG,            pc_dbg_txTrace },
     { PC_MSG_DBG_RX_COUNTERS, PC_CAP_DEBUG,            pc_dbg_rxCounters },
+
+    /* Bench namespace: same rule, refused on PC_CAP_BENCH when the build has
+     * no CONFIG_C62_BENCH_PROTO. */
+    { PC_MSG_BENCH_ARM,       PC_CAP_BENCH,            pc_bench_arm },
+    { PC_MSG_BENCH_TUNE,      PC_CAP_BENCH,            pc_bench_tune },
+    { PC_MSG_BENCH_PTT,       PC_CAP_BENCH,            pc_bench_ptt },
+    { PC_MSG_BENCH_CAPTURE,   PC_CAP_BENCH,            pc_bench_capture },
+    { PC_MSG_BENCH_RSSI,      PC_CAP_BENCH,            pc_bench_rssi },
+    { PC_MSG_BENCH_SWEEP,     PC_CAP_BENCH,            pc_bench_sweep },
+    { PC_MSG_BENCH_REPORT,    PC_CAP_BENCH,            pc_bench_report },
 };
 
 static const struct pcProtoEntry *pc_lookup(uint16_t id)
@@ -705,7 +721,7 @@ static void pc_dispatch(pcProto_t *p, const uint8_t *body, size_t len,
          * a production build has to look like a radio that refuses, never
          * like one that does not know the question. */
         pc_proto_sendError(p, seq, id,
-                           (e->caps & PC_CAP_DEBUG) != 0
+                           (e->caps & (PC_CAP_DEBUG | PC_CAP_BENCH)) != 0
                                ? PC_ERR_NOT_ALLOWED : PC_ERR_NOT_SUPPORTED);
         return;
     }
@@ -827,6 +843,9 @@ void pc_proto_init(pcProto_t *p, const struct pcProtoPort *port)
     p->logLevel = PC_LOG_INFO;
     p->logRate = 0;
     p->logLastMs = 0;
+    /* The bench state lives in its own module and survives an instance being
+     * re-initialised: a port that comes up must come up with nothing keyed. */
+    pc_proto_benchReset();
 }
 
 void pc_proto_reset(pcProto_t *p)
@@ -846,6 +865,9 @@ void pc_proto_reset(pcProto_t *p)
     p->logCount = 0;
     p->logHead = 0;
     p->dbgToken = 0;
+    /* A session that goes away must not leave the transmitter keyed or a
+     * capture armed: the bench state belongs to the session. */
+    pc_proto_benchReset();
 }
 
 bool pc_proto_linked(const pcProto_t *p)
@@ -968,6 +990,11 @@ void pc_proto_tick(pcProto_t *p, uint32_t nowMs)
     if (p == NULL)
         return;
     p->nowMs = nowMs;
+
+    /* The bench state machine runs whether or not a client is subscribed to
+     * events: a capture or a sweep is a measurement in progress, not an
+     * event stream. */
+    pc_proto_benchTick(nowMs);
 
     if (!p->linked || !p->events)
         return;

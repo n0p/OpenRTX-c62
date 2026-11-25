@@ -101,6 +101,13 @@ option(C62_PC_PROTO "Binary CPS protocol over the programming cable" OFF)
 #   production build wants: those messages are then not even advertised, and
 #   the code is compiled out.
 option(C62_DEBUG_PROTO "Debug namespace of the CPS protocol" OFF)
+# C62_BENCH_PROTO: the bench namespace -- scripted measurements (tune, key,
+#   capture, sweep, RSSI) with a radio tick on every answer, for measuring the
+#   radio against an external receiver (docs/BENCH.md).  It needs the debug
+#   namespace: they share the session token and the RX capture buffer, and a
+#   bench image is a debug image with a stopwatch.  It moves the radio and keys
+#   the PA, so it is never in a production build either.
+option(C62_BENCH_PROTO "Bench namespace of the CPS protocol" OFF)
 # C62_TETRA: TETRA TMO downlink receive mode ("T" under key 5), decoded with
 #   libtetra, which west fetches to modules/lib/libtetra.
 # C62_AIR_TX: amplitude modulation of the transmitter in the airband mode, by
@@ -158,6 +165,17 @@ if(C62_PC_PROTO)
     message(STATUS "C62: PC protocol with the debug namespace")
   else()
     message(STATUS "C62: PC protocol, debug namespace compiled out")
+  endif()
+  if(C62_BENCH_PROTO)
+    if(NOT C62_DEBUG_PROTO)
+      message(FATAL_ERROR "C62_BENCH_PROTO needs C62_DEBUG_PROTO: the bench "
+                          "namespace shares its session token and its RX "
+                          "capture buffer")
+    endif()
+    target_sources(app PRIVATE
+      ${OPENRTX_ROOT}/platform/targets/c62/pc_proto_bench_c62.c)
+    target_compile_definitions(app PRIVATE CONFIG_C62_BENCH_PROTO)
+    message(STATUS "C62: PC protocol with the bench namespace")
   endif()
 elseif(C62_DEBUG_PROTO)
   message(FATAL_ERROR "C62_DEBUG_PROTO needs C62_PC_PROTO")
