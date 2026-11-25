@@ -32,15 +32,26 @@
 
 /*
  * Time the receiver is given to settle after a PLL write, before the RSSI is
- * believed.
+ * believed. Zero means "ask the chip": the driver polls the glitch indicator
+ * (REG_63), which saturates while the IF recovers from a retune, and reads the
+ * RSSI as soon as it comes down. That is the method of the UV-K5 spectrum
+ * firmware (egzumer's GetRssi(), which replaced an 800 us fixed delay with this
+ * poll), and it is the only way to wait exactly as long as this particular chip
+ * needs instead of as long as the datasheet's worst case.
  *
- * The BK4819 datasheet is explicit: "on power up or channel reselection, the
- * synthesizer takes less than 0.3 msec to settle" (BK4819 datasheet V1.0 §1.2.3).
- * 400 us is that figure with a third of margin, and it is the only number in
- * this file that is not measured here (docs/SPECTRUM.md §3 measures everything
- * else, and the screen shows what a point really costs).
+ * The datasheet figure -- "on power up or channel reselection, the synthesizer
+ * takes less than 0.3 msec to settle", BK4819 V1.0 §1.2.3 -- is kept as the
+ * ceiling of the gate and as the fallback of the table below, because it is the
+ * only number the chip documents and it is the one a sweep that cannot use the
+ * gate has to believe. docs/SPECTRUM.md §3 has the measurements.
  */
-#define SPECTRUM_SETTLE_US 400U
+#ifndef CONFIG_C62_SPECTRUM_SETTLE_US
+#define CONFIG_C62_SPECTRUM_SETTLE_US 0
+#endif
+
+/** Settling times the quick menu offers, us: 0 is the chip's own indicator. */
+static const uint32_t settleTable[] = { 0U, 50U, 100U, 200U, 400U };
+#define SPECTRUM_SETTLE_COUNT (sizeof(settleTable) / sizeof(settleTable[0]))
 
 /* How long the receiver listens on the centre frequency between two sweeps. */
 #define SPECTRUM_LISTEN_MS 40U
@@ -48,13 +59,20 @@
 /* Time budget of one sweep pass, so a wide span cannot hold the RTX thread. */
 #define SPECTRUM_PASS_MS 30U
 
+/*
+ * The last entry is the widest span the engine accepts (SPECTRUM_MAX_SPAN): on
+ * the panel it is a band-survey view, 600 kHz per pixel, where a carrier is a
+ * bump to zoom into rather than something to measure. It only became usable
+ * when the sweep stopped costing 694 us per point: a 96 MHz span needs the whole
+ * 160-bin raster, which is what now fits in one pass (docs/SPECTRUM.md §3.3).
+ */
 static const uint32_t spanTable[SPECTRUM_SPAN_COUNT] = {
     200000U, 500000U, 1000000U, 2000000U,
-    5000000U, 10000000U, 20000000U, 50000000U
+    5000000U, 10000000U, 20000000U, 50000000U, 96000000U
 };
 
 static const char *const spanNames[SPECTRUM_SPAN_COUNT] = {
-    "200k", "500k", "1M", "2M", "5M", "10M", "20M", "50M"
+    "200k", "500k", "1M", "2M", "5M", "10M", "20M", "50M", "96M"
 };
 
 static const uint32_t stepTable[] = {
@@ -77,6 +95,7 @@ static volatile uint32_t centreHz;    ///< Centre requested, Hz
    per bar, and a sweep the receiver can do 35 times a second */
 static volatile uint8_t  spanIndex = 2;   ///< Entry of spanTable
 static volatile uint8_t  stepIndex = 1;   ///< Entry of stepTable
+static volatile uint8_t  settleIndex = 0xFF; ///< Entry of settleTable
 static volatile uint8_t  smooth;      ///< Sweeps averaged per bin
 
 static bool     parked;               ///< Receiver on the centre, audio on
@@ -95,6 +114,39 @@ static uint32_t requestedSpan(void)
 static uint32_t requestedStep(void)
 {
     return stepTable[stepIndex % SPECTRUM_STEP_COUNT];
+}
+
+/** Settling time in use, us: 0 means the driver waits on the chip itself. */
+static uint32_t settleUs(void)
+{
+    return settleTable[settleIndex % SPECTRUM_SETTLE_COUNT];
+}
+
+/**
+ * Table entry closest to the settling time the build was configured with.
+ *
+ * The quick menu walks the same table, so the configured value only has to pick
+ * a starting point; the operator can move from there without a rebuild.
+ */
+static uint8_t settleDefaultIndex(void)
+{
+    const uint32_t want = CONFIG_C62_SPECTRUM_SETTLE_US;
+    uint8_t best = 0;
+    uint32_t bestDiff = 0xFFFFFFFFU;
+
+    for (uint8_t i = 0; i < SPECTRUM_SETTLE_COUNT; i++)
+    {
+        const uint32_t diff = (settleTable[i] > want) ? (settleTable[i] - want)
+                                                     : (want - settleTable[i]);
+
+        if (diff < bestDiff)
+        {
+            bestDiff = diff;
+            best = i;
+        }
+    }
+
+    return best;
 }
 
 /**
@@ -203,6 +255,9 @@ bool spectrumService_open(uint32_t centre)
     stepIndex = (stepIndex < SPECTRUM_STEP_COUNT) ? stepIndex : 1U;
     smooth    = (smooth > 3) ? 3 : smooth;
 
+    if (settleIndex >= SPECTRUM_SETTLE_COUNT)
+        settleIndex = settleDefaultIndex();
+
     rebuildRaster();
 
     pointCount  = 0;
@@ -255,6 +310,15 @@ void spectrumService_status(spectrumStatus_t *out)
     out->paused    = parked && active;
     out->sweepUs   = lastSweepUs;
     out->pointUs   = (pointCount > 0) ? (pointSumUs / pointCount) : 0;
+    out->settleUs  = settleUs();
+    out->gateOn    = true;
+    out->gatePolls = 0;
+
+#if SPECTRUM_HW
+    /* What the driver had to wait for: its own indicator, or the clock */
+    out->gateOn = radio_spectrumGate(&out->gatePolls);
+#endif
+
     out->tuned     = spectrum_binFreq(&scan, (scan.index < scan.scan.bins)
                                                   ? scan.index
                                                   : (uint16_t)(scan.scan.bins - 1));
@@ -355,7 +419,7 @@ static bool sweepPass(void)
         int16_t dbm;
 
 #if SPECTRUM_HW
-        dbm = radio_spectrumPoint(freq, SPECTRUM_SETTLE_US, &pointUs);
+        dbm = radio_spectrumPoint(freq, settleUs(), &pointUs);
 #else
         dbm = hostLevel(freq);
         pointUs = 0;
@@ -488,6 +552,24 @@ uint32_t spectrumService_effectiveStep(void)
 bool spectrumService_hold(void)
 {
     return scan.holdOn;
+}
+
+uint8_t spectrumService_settleIndex(void)
+{
+    return settleIndex % SPECTRUM_SETTLE_COUNT;
+}
+
+void spectrumService_setSettleIndex(uint8_t index)
+{
+    if (index >= SPECTRUM_SETTLE_COUNT)
+        index = SPECTRUM_SETTLE_COUNT - 1;
+
+    settleIndex = index;
+}
+
+uint32_t spectrumService_settleUs(void)
+{
+    return settleUs();
 }
 
 void spectrumService_setHold(bool on)

@@ -47,7 +47,7 @@ extern "C" {
  */
 
 /** Spans the quick menu offers, Hz. */
-#define SPECTRUM_SPAN_COUNT 8
+#define SPECTRUM_SPAN_COUNT 9
 
 /** One completed sweep of this span fits in the frame budget of the panel. */
 typedef struct
@@ -65,6 +65,9 @@ typedef struct
     uint16_t bins;        ///< Bins of the raster
     uint16_t index;       ///< Bin being swept
     int16_t  peakDbm;     ///< Level of that bin, dBm
+    uint32_t settleUs;    ///< Settling time asked for, us (0 = chip's gate)
+    uint32_t gatePolls;   ///< Average glitch polls per point, 0 if unused
+    bool     gateOn;      ///< The glitch gate is doing the waiting
     bool     paused;      ///< Parked on a carrier, audio on
     bool     valid;       ///< At least one sweep is on screen
     bool     hold;        ///< Maximum hold enabled
@@ -126,6 +129,18 @@ bool spectrumService_hold(void);
 void spectrumService_setHold(bool on);
 void spectrumService_clearHold(void);
 void spectrumService_resetPeak(void);
+
+/**
+ * Settling time the sweep waits after each retune, us: 0 is the chip's own
+ * glitch indicator (docs/SPECTRUM.md §3), anything else a fixed wait.
+ *
+ * The table is { 0, 50, 100, 200, 400 } us, so the operator can compare what the
+ * chip asks for against the datasheet's worst case on the radio itself, which
+ * is the only place where the real settling time of a unit can be seen.
+ */
+uint8_t  spectrumService_settleIndex(void);
+void     spectrumService_setSettleIndex(uint8_t index);
+uint32_t spectrumService_settleUs(void);
 
 /** Park the span on a frequency again (the "CENTRA" shortcut). */
 void spectrumService_centreOn(uint32_t freq);

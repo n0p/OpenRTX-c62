@@ -920,17 +920,30 @@ void qm_am_applyRaster(void)
  * RTX thread's business (docs/SPECTRUM.md).
  */
 static const char *const qm_names_span[] = {
-    "200k", "500k", "1M", "2M", "5M", "10M", "20M", "50M"
+    "200k", "500k", "1M", "2M", "5M", "10M", "20M", "50M", "96M"
 };
 
 static const char *const qm_names_scanStep[] = {
     "12.5k", "25k", "50k", "100k", "250k"
 };
 
+/*
+ * Settling time per point. "AUTO" is the chip's own glitch indicator: the sweep
+ * reads the RSSI as soon as REG_63 says the IF has recovered. The four fixed
+ * values are there to compare against it on the radio (docs/SPECTRUM.md §3):
+ * the one that is neither slower than AUTO nor visibly wrong in the trace is
+ * the real settling time of that unit.
+ */
+static const char *const qm_names_settle[] = {
+    "AUTO", "50us", "100us", "200us", "400us"
+};
+
 static int  qm_spec_getSpan(void)  { return (int)spectrumService_spanIndex(); }
 static void qm_spec_setSpan(int v) { spectrumService_setSpanIndex((uint8_t)v); }
 static int  qm_spec_getStep(void)  { return (int)spectrumService_stepIndex(); }
 static void qm_spec_setStep(int v) { spectrumService_setStepIndex((uint8_t)v); }
+static int  qm_spec_getSettle(void) { return (int)spectrumService_settleIndex(); }
+static void qm_spec_setSettle(int v) { spectrumService_setSettleIndex((uint8_t)v); }
 static int  qm_spec_getHold(void)  { return spectrumService_hold() ? 1 : 0; }
 static void qm_spec_setHold(int v) { spectrumService_setHold(v != 0); }
 static void qm_spec_clear(void)    { spectrumService_clearHold(); }
@@ -963,6 +976,8 @@ static const qm_item_t qm_items_spectrum[] =
                  qm_spec_setSpan, qm_names_span, NULL),
     QM_ITEM_ENUM("PASO", 0, 4, qm_spec_getStep, qm_spec_setStep,
                  qm_names_scanStep, NULL),
+    QM_ITEM_ENUM("ESPERA", 0, 4, qm_spec_getSettle, qm_spec_setSettle,
+                 qm_names_settle, NULL),
     QM_ITEM_TOGGLE("MAX RET", qm_spec_getHold, qm_spec_setHold),
     QM_ITEM_ACTION("BORRAR MAX", qm_spec_clear),
     QM_ITEM_INFO("PICO", qm_spec_fmtPeak),
