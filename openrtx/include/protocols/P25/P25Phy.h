@@ -45,6 +45,7 @@ struct p25Frame
     long symbol;              ///< Symbol index of the sync, for traces
     enum p25Duid duid;        ///< Data unit ID of the frame
     uint16_t nac;             ///< Network access code, 0x000 to 0xFFF
+    uint16_t spanSymbols;     ///< Symbols cut from the ring, sync included
     int syncErrors;           ///< Sign errors in the 24 sync symbols
     int bchErrors;            ///< Bits corrected in the NID, -1 if undecodable
     bool inverted;            ///< Received with an inverted discriminator
@@ -106,6 +107,22 @@ bool p25Phy_synced(void);
  * @return the number of frames decoded since the last reset.
  */
 uint32_t p25Phy_frames(void);
+
+/**
+ * @return how many positions the sync search has examined since the reset.
+ *
+ * One per candidate symbol position: the demodulator tries a position when it
+ * has a whole frame in the ring, so on the grid this is one per frame and off
+ * it, one per symbol of ring that has to be walked.  The ratio against
+ * p25Phy_frames() is what the frame-length prediction is worth.
+ */
+uint32_t p25Phy_syncTries(void);
+
+/**
+ * @return how many times a frame failed to appear where the previous one
+ *         predicted it and the demodulator fell back to scanning the ring.
+ */
+uint32_t p25Phy_gridMisses(void);
 
 #ifdef __cplusplus
 }

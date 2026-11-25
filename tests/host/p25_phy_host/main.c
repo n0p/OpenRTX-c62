@@ -18,11 +18,16 @@
  *   ./tests/host/p25_phy_host/build/p25_phy_host capture.wav [block]
  *
  * A WAV (16-bit PCM mono) or raw s16le file is accepted.
+ *
+ * The summary carries what the framing costs: the symbols cut per frame
+ * (span), how many positions the sync search examined per decoded frame, how
+ * often the frame-length prediction missed, and the CPU time per frame.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "protocols/P25/P25Defs.h"
 #include "protocols/P25/P25Phy.h"
@@ -58,8 +63,9 @@ static void onFrame(const struct p25Frame *f, void *user)
     if (f->lcValid)
         lcValid++;
 
-    printf("%6ld %-6s NAC=%03X bch=%d sync=%d", f->symbol, p25_duid_name(f->duid),
-           f->nac, f->bchErrors, f->syncErrors);
+    printf("%6ld %-6s NAC=%03X bch=%d sync=%d span=%u", f->symbol,
+           p25_duid_name(f->duid), f->nac, f->bchErrors, f->syncErrors,
+           f->spanSymbols);
     if (f->lcValid)
         printf(" LC(tg=%u src=%u rs=%d)", f->talkgroup, f->source, f->lcRsErrors);
     if (f->duid == P25_DUID_LDU1 || f->duid == P25_DUID_LDU2)
@@ -68,6 +74,13 @@ static void onFrame(const struct p25Frame *f, void *user)
     if (f->tsbkValid)
         printf(" TSBK op=%02X mfid=%02X", f->tsbk[0] & 0x3F, f->tsbk[1]);
     printf("\n");
+}
+
+static double cpuSeconds(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts);
+    return (double)ts.tv_sec + 1e-9 * (double)ts.tv_nsec;
 }
 
 int main(int argc, char **argv)
@@ -85,6 +98,12 @@ int main(int argc, char **argv)
         perror("fopen");
         return 1;
     }
+
+    static int16_t samples[8192];
+    static int16_t silence[17280];     /* two frames of zeros at 48 kHz */
+    size_t have = 0;
+    long long total = 0;
+    double cpu = 0.0;
 
     /* Skip a RIFF header if there is one: find the "data" chunk */
     unsigned char hdr[12];
@@ -107,16 +126,14 @@ int main(int argc, char **argv)
         rewind(f);
     }
 
-    static int16_t samples[8192];
-    static int16_t silence[17280];     /* two frames of zeros at 48 kHz */
-    size_t have = 0;
-
     p25Phy_init();
+    const double t0 = cpuSeconds();
 
     for (;;)
     {
         size_t got = fread(samples + have, sizeof(int16_t), block - have, f);
         have += got;
+        total += (long long)got;
         if (have == block)
         {
             p25Phy_push(samples, have, onFrame, NULL);
@@ -139,6 +156,8 @@ int main(int argc, char **argv)
     memset(silence, 0, sizeof(silence));
     p25Phy_push(silence, sizeof(silence) / sizeof(silence[0]), onFrame, NULL);
 
+    cpu = cpuSeconds() - t0;
+
 done:
     fclose(f);
 
@@ -146,5 +165,11 @@ done:
            "IMBE %ld bad %ld errs %ld | sync errors %ld | synced %d\n",
            frames, ldu1, ldu2, tsbk, lcValid, tsbkOk, imbe, imbeBad, imbeErrs,
            syncErrors, p25Phy_synced() ? 1 : 0);
+    printf("framing: sync tries %u (%.2f per frame), grid misses %u | "
+           "cpu %.1f ms for %.2f s of audio, %.1f us per frame\n",
+           p25Phy_syncTries(),
+           frames ? (double)p25Phy_syncTries() / (double)frames : 0.0,
+           p25Phy_gridMisses(), 1e3 * cpu, (double)total / 48000.0,
+           frames ? 1e6 * cpu / (double)frames : 0.0);
     return 0;
 }

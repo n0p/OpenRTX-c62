@@ -150,6 +150,8 @@ struct p25PhyState
     float lastFine;               ///< Phase of the sync of the last frame
     long lastFrameAt;             ///< Sample count of the last frame
     uint32_t frames;              ///< Frames decoded since the reset
+    uint32_t syncTries;           ///< Candidate positions examined
+    uint32_t gridMisses;          ///< Grid predictions that found nothing
     bool haveGrid;                ///< A frame decoded, the next sync is known
     int8_t syncPat[P25_SYNC_SYMBOLS]; ///< The sync as +-1
 
@@ -637,6 +639,8 @@ static bool tryFrame(long start, struct p25Frame *f)
     float bestPh = (float)start;
     bool found = false;
 
+    phy.syncTries++;
+
     /* Coarse: every sub-phase in one symbol period. */
     for (int p = 0; p < P25_SYNC_PHASES; p++)
     {
@@ -696,9 +700,9 @@ static bool tryFrame(long start, struct p25Frame *f)
 
     struct p25Levels L = frameLevels(symBuf, P25_FRAME_SYMBOLS);
 #ifdef P25_PHY_TRACE
-    fprintf(stderr, "[sy] start %ld ph %.2f sc %.2f ap %.2f e %d pol %d\n",
+    fprintf(stderr, "[sy] start %ld ph %.2f sc %.2f ap %.2f e %d pol %d span %d\n",
             start, (double)(fine - (float)start), bestScore, bestAp, bestErrs,
-            bestPol);
+            bestPol, P25_FRAME_SYMBOLS);
 #else
     (void)bestAp;
 #endif
@@ -711,6 +715,7 @@ static bool tryFrame(long start, struct p25Frame *f)
 
     phy.lastFine = fine;
     f->symbol = start / 5;
+    f->spanSymbols = P25_FRAME_SYMBOLS;
     f->syncErrors = bestErrs;
     f->inverted = (bestPol < 0);
     f->bchErrors = -1;
@@ -811,6 +816,7 @@ static void pushDecimated(float mf)
          * that was decoded, never from before it (that would decode the same
          * frame for ever), but not from the grid either (a truncated header
          * before a call starts the next frame early). */
+        phy.gridMisses++;
         phy.haveGrid = false;
         phy.search = phy.rescan;
         if (phy.search < oldest)
@@ -873,4 +879,14 @@ bool p25Phy_synced(void)
 uint32_t p25Phy_frames(void)
 {
     return phy.frames;
+}
+
+uint32_t p25Phy_syncTries(void)
+{
+    return phy.syncTries;
+}
+
+uint32_t p25Phy_gridMisses(void)
+{
+    return phy.gridMisses;
 }
