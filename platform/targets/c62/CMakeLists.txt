@@ -297,6 +297,45 @@ if(CONFIG_C62_APRS)
 endif()
 
 #
+# C62_KISS: the packet modem (KISS TNC) and its configuration page.
+# docs/KISS.md is the reference. The service runs in its own thread and only
+# touches the audio path while the operator has it enabled; the protocol layer
+# (protocols/KISS/) is freestanding and is the same code the host bench runs.
+#
+# C62_KISS_UART: bind the KISS stream to the programming cable (UART2 RXD on
+# the PTT pad, log muted). It needs the pad, so it is off by default and
+# mutually exclusive with C62_REMOTE; when the PC protocol layer lands it binds
+# its own transport with packet_service_bind() and this option stays off.
+#
+# Both are Kconfig symbols (Kconfig.board), read here as CMake variables like
+# CONFIG_C62_APRS and CONFIG_C62_DMR_RX: calling them option(C62_KISS) would
+# leave the -DCONFIG_C62_KISS=y of the build scripts with nothing to enable.
+#
+if(CONFIG_C62_KISS)
+  target_sources(app PRIVATE
+    ${OPENRTX_ROOT}/openrtx/src/protocols/KISS/kiss.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/KISS/afsk9600.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/KISS/packet_modem.c
+    ${OPENRTX_ROOT}/openrtx/src/core/packet_service.c
+    ${OPENRTX_ROOT}/openrtx/src/ui/default/ui_packet.c)
+  target_compile_definitions(app PRIVATE CONFIG_KISS)
+  message(STATUS "C62: packet modem (KISS) enabled")
+
+  if(CONFIG_C62_KISS_UART)
+    target_sources(app PRIVATE
+      ${OPENRTX_ROOT}/platform/drivers/audio/c62_kiss.c)
+    target_compile_definitions(app PRIVATE C62_KISS_UART)
+    if(C62_REMOTE)
+      message(FATAL_ERROR "C62_KISS_UART and C62_REMOTE share the PTT pad")
+    endif()
+    if(NOT CONFIG_C62_APRS)
+      message(WARNING "C62_KISS_UART: the packet modem needs the AX.25 layer, "
+                      "enable CONFIG_C62_APRS for ax25.c and hdlc.c")
+    endif()
+  endif()
+endif()
+
+#
 # C62_NXDN_RX: NXDN receive mode (see docs/RX_NXDN.md).  The PHY, the FEC and
 # the frame handling are in protocols/NXDN; voice goes through lib/dmr_vocoder,
 # which is the same AMBE+2 decoder DMR uses because a NXDN voice channel is one
