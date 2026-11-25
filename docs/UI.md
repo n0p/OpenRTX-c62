@@ -598,3 +598,119 @@ table entry plus its rows**. The steps, in order, and nothing outside them:
 The mode's engine (OpMode class, PHY, protocol sources, Kconfig/CMake option) is
 a separate concern: `docs/RX_NXDN.md` and `docs/RX_AIRBAND.md` are the two worked
 examples, engine and UI both.
+
+## Screens, and who takes the key
+
+The dispatch in `ui_updateFSM()` is a chain, not a switch with fallthrough: the
+first block that recognises a key returns, and every block says which one it is
+before it does (`KEY_CLAIM()` and `enum uiKeyClaim` in `ui/ui_default.h`, read
+back with `ui_lastClaim()` / `ui_lastClaimCount()`). That trace is what
+`tests/unit/ui_menu_audit.cpp` uses to check, screen by screen and key by key,
+that **exactly one block claims each event**: a screen that claims nothing is a
+key that goes nowhere (the "deaf screen" defect) and two claims are two handlers
+eating the same event.
+
+The claim order, which is also the order of the blocks in the file:
+
+| # | Block | Claims |
+|---|-------|--------|
+| 1 | exit from standby | `UI_CLAIM_STANDBY` |
+| 2 | carrier search running | `UI_CLAIM_SEARCH` |
+| 3 | keypad locked, red held down | `UI_CLAIM_UNLOCK` |
+| 4 | quick menu open | `UI_CLAIM_QM` |
+| 5 | analyser screen | `UI_CLAIM_SPECTRUM` |
+| 6 | P2 short on a main screen | `UI_CLAIM_QM_OPEN` |
+| 7 | APRS screens | `UI_CLAIM_APRS` |
+| 8 | packet modem screens | `UI_CLAIM_PACKET` |
+| 9 | messaging screens | `UI_CLAIM_MSGS` |
+| 10 | contact book | `UI_CLAIM_CONTACTS` |
+| 11 | zone browser | `UI_CLAIM_ZONES` |
+| 12 | P2 long in FM | `UI_CLAIM_APRS_ENTER` |
+| 13 | MONI, P2 long, macro latch | `UI_CLAIM_MACRO` |
+| 14 | P1 long on a main screen | `UI_CLAIM_CHANNELS_OPEN` |
+| 15 | channel list and editor | `UI_CLAIM_CHANNELS` |
+| 16 | the screen's own case in the switch | `UI_CLAIM_SCREEN` |
+
+So the matrix, in the words the operator uses ("who answers this key"):
+
+| Screen | P2 short | P2 long | MONI | P1 long | everything else |
+|---|---|---|---|---|---|
+| MAIN_VFO / MAIN_MEM, FM | popup | APRS | macro grid | channel list | the screen |
+| MAIN_VFO / MAIN_MEM, other modes | popup | macro grid | macro grid | channel list | the screen |
+| MAIN_VFO_INPUT | macro grid | macro grid | macro grid | the screen | the screen |
+| MENU_TOP, MENU_INFO, MENU_ABOUT, MENU_SETTINGS and every page | macro grid | macro grid | macro grid | the screen | the screen |
+| Channel list, channel editor, delete confirmation | the list | the list | the list | the list | the list |
+| Contacts list, editor, confirmation | the book | the book | the book | the book | the book |
+| Zone browser (both lists) | the browser | the browser | the browser | the browser | the browser |
+| Messages: inbox, sent, view, compose, status | the module | the module | the module | the module | the module |
+| APRS: stations, detail, inbox, view, editor, setup | the module | the module | the module | the module | the module |
+| Packet modem: setup, counters | the module | the module | the module | the module | the module |
+| Analyser | its own popup | its own popup (latched) | the analyser | the analyser | the analyser |
+| Any screen, popup open | the popup | the popup | the popup | the popup | the popup |
+| Any screen, keypad locked | — red held unlocks — | | | | nothing else answers |
+
+Three things are worth reading off that table, because they are the ones that
+bit the operator:
+
+* **A screen that owns the keypad wins every key, MONI included.** The macro
+  grid is a shortcut of the main screens, not of a list; that is why MONI in the
+  contact book does not paint a grid over it.
+* **P2 long is the only binding that depends on the mode** (APRS in FM, the grid
+  everywhere else) and it is checked after the screens, so it can never steal a
+  key from one of them.
+* **Red is the only way out of every screen**, from any of its sub-screens, and
+  it leaves the transmitter the way it found it: armed only on the two main
+  screens, and only with no overlay on top. `_ui_syncTxDisable()` is the one
+  place that decides it (it used to be seven copies, one of which re-armed the
+  PTT when the inbox went back to the menu).
+
+## The screens the audit walks
+
+`tests/unit/ui_menu_audit.cpp` is built twice (with APRS and the packet modem,
+and without them) and covers, for every compiled mode:
+
+| Group | Screens |
+|---|---|
+| Main | VFO, frequency input, MEM |
+| Main menu | top, Banks, Channels, Zones, Contacts, Messages, Settings, Info, About |
+| Settings | Display, Time & Date (+ its digit entry), Radio, Audio, M17, TETRA, FM, Accessibility, Default Settings, and one generated page per mode that has `UI_MODE_PAGE` (DMR, NXDN, dPMR, P25, YSF, D-STAR, AM, WFM) |
+| Tools | channel list, channel editor, delete confirmation, contacts list/editor/confirmation, zone list, zone entries, inbox, sent, message view, composer, delivery status, analyser, packet setup, packet counters, APRS stations/detail/inbox/view/reply editor/setup |
+| Overlays | quick menu (one table per mode plus the analyser's), macro grid, low battery |
+
+The eleven modes (FM, M17, TETRA, DMR, NXDN, dPMR, P25, YSF, D-STAR, AM, WFM)
+are all in the host build: `UI_TEST_M17`, `UI_TEST_TETRA` and `UI_TEST_DMR` turn
+their screens on without their engines, the same way `UI_TEST_NXDN` already did,
+and `platform/targets/linux/emulator/ui_mode_status.c` answers the status getters
+of the three that have one (and the packet service) with "nothing decoded".
+
+Not reachable from any row, and therefore not walked: `MENU_BACKUP_RESTORE`,
+`MENU_BACKUP`, `MENU_RESTORE` and the two `MODE_VFO`/`MODE_MEM` entries. They are
+upstream leftovers: no entry of `menu_items[]` leads to them and `backup.c` needs
+the SPI flash of the MD-3x0 family. `MENU_BACKUP_RESTORE` used to walk itself
+with `settings_num` (13) instead of `backup_restore_num` (2), which would have
+run the cursor past the end of a two-row list; it uses the right count now.
+
+## What the walk found
+
+One line per symptom, with the fix and the test that holds it. "Correct" means
+the walk exercises it and found nothing to change.
+
+| Symptom | Cause | Fix | Test |
+|---|---|---|---|
+| Red on the main screen of the emulator crashes (`fseek(NULL)`) | `cps_io_libc` read the codeplug header without checking that `cps_init()` had opened it | `_readHeader()` returns -1 with no file | walk, VFO row, red |
+| After leaving a menu the PTT does not key until another key is pressed | only the `MAIN_VFO`/`MAIN_MEM` cases clear `txDisable`, and a key that *returns* to them never runs its case | one `_ui_syncTxDisable()` for the whole dispatch | interactions |
+| The radio can be keyed from the main menu after visiting the inbox | the module cleared `txDisable` when its screen was left, and "left" meant "back to the menu" | the same single rule: only the main screens key, and no overlay on top | interactions |
+| P1 long opens the channel list and the PA stays armed until the next key | that branch returned before the block that disables TX | it disables TX itself | walk, channel list |
+| 6.25 kHz in the FM menu crashes / speaks garbage | `vp_announceBandwidth()` indexed a two-entry table with `BW_6_25 = 2` | three entries and a bound | ASan run + FM BW row |
+| The analyser keeps sweeping after a mode change made with the side key | it only closed when the *screen* changed | it also closes when the mode it opened in changes | interactions |
+| The APRS reply editor cannot be typed into | it committed on `KEY_RIGHT` and backspaced on `KEY_LEFT`, which this keypad does not have | P1 adds, P2 deletes, long P1 backspaces; the hints say so | APRS reply test |
+| Two rows of the APRS setup do nothing (Comment, Path) | they are strings and the page has no editor for them | they are skipped by the cursor and marked `(fixed)` | APRS setup test |
+| The 1750 Hz row is a "setting" that changes nothing persistent | it toggled the momentary `tone_enabled` flag from a toggle row | it is an action now (green starts the burst), value column shows ON/OFF | rows test |
+| Locking the keypad was a one-way door | the lock blocks the key that opens the menu, so it could not be undone | red held down unlocks | rows test (LOCK) |
+| DMR had no page in Settings | its registry entry had no `UI_MODE_PAGE` and `UI_MODE_PAGES` did not list it | generated page, same rows as its popup | walk + registry test |
+| TETRA/DMR/M17 screens were only ever built for the radio | their tables were guarded by the engine's `CONFIG_*` | the guards follow the UI registry (`UI_MODE_*`), with `UI_TEST_*` for the host | the whole audit runs on the eleven modes |
+| FM settings page carried a duplicated green/red pair | merge residue | removed | settings walk |
+| Rows of a mode with no transmitter could move the power | nothing checked the rows against `UI_MODE_TX` | table check in the audit | `[tx]` test |
+| Every editable row writes `settings_t` and survives a save/read | — | correct | `[rows]` test (NVM round trip) |
+| Quick menu closes on PTT, search stops on any key, analyser gives the receiver back | — | correct | `[interaction]` test |
+| Two laps over the eleven modes leave the menus answering | — | correct (also under ASan/UBSan) | `[modes]` test |

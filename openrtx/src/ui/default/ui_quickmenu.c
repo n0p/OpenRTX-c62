@@ -44,10 +44,10 @@
 #include "ui/ui_messages.h"
 #include "ui/ui_modes.h"
 #include "ui/ui_quickmenu.h"
-#ifdef CONFIG_TETRA
+#ifdef UI_MODE_TETRA
 #include "protocols/TETRA/TetraStatus.h"
 #endif
-#ifdef CONFIG_DMR
+#ifdef UI_MODE_DMR
 #include "protocols/DMR/DmrStatus.h"
 #endif
 #ifdef UI_MODE_NXDN
@@ -215,7 +215,7 @@ void qm_set_keylight(int on)
 }
 #endif
 
-#if defined(CONFIG_DMR) && defined(DMR_ID_MAX)
+#ifdef UI_MODE_DMR
 /*
  * DMR call destination (docs/UI.md, "DMR"): the talkgroup or the subscriber ID
  * the next call is addressed to. The values live in settings (the model's
@@ -265,7 +265,7 @@ void qm_dmr_fmt_dest(char *buf, int len)
              (state.settings.dmr_dest_type == DMR_DEST_USER) ? "ID" : "TG",
              qm_dmr_getDest());
 }
-#endif /* CONFIG_DMR && DMR_ID_MAX */
+#endif /* UI_MODE_DMR */
 
 /* Unread messages badge, shown on the MSGS row of every table */
 static void qm_fmt_unread(char *buf, int len)
@@ -385,6 +385,25 @@ int qm_fm_get_burst(void)
     return state.tone_enabled ? 1 : 0;
 }
 
+void qm_fm_fmt_burst(char *buf, int len)
+{
+    snprintf(buf, len, "%s", state.tone_enabled ? "ON" : "OFF");
+}
+
+/*
+ * The 1750 Hz burst is not a setting: it is the transmitter sending a tone for
+ * as long as the operator keeps it on, the same thing the # key does, and the
+ * UI drops the flag on the next key. As a toggle row it claimed a value that
+ * does not exist anywhere - it wrote neither settings_t nor the channel, so it
+ * read as an editable setting that changed nothing persistent. It is an action
+ * now: green starts the burst and the value column shows whether it is on.
+ */
+static void qm_fm_burstStart(void)
+{
+    state.tone_enabled = true;
+    qm_requestSync();
+}
+
 void qm_fm_set_burst(int on)
 {
     state.tone_enabled = (on != 0);
@@ -450,7 +469,7 @@ void qm_m17_fmt_meta(char *buf, int len)
 /* TETRA                                                                      */
 /* ------------------------------------------------------------------------- */
 
-#ifdef CONFIG_TETRA
+#ifdef UI_MODE_TETRA
 int qm_tetra_get_afc(void)
 {
     return state.settings.tetraAfcOff ? 0 : 1;
@@ -551,13 +570,13 @@ void qm_tetra_fmt_ul(char *buf, int len)
     }
     snprintf(buf, len, "SSI %lu", (unsigned long)ts.uplinkSs);
 }
-#endif /* CONFIG_TETRA */
+#endif /* UI_MODE_TETRA */
 
 /* ------------------------------------------------------------------------- */
 /* DMR                                                                        */
 /* ------------------------------------------------------------------------- */
 
-#ifdef CONFIG_DMR
+#ifdef UI_MODE_DMR
 void qm_dmr_fmt_cc(char *buf, int len)
 {
     struct dmrStatus st;
@@ -587,7 +606,7 @@ void qm_dmr_fmt_sync(char *buf, int len)
     else
         snprintf(buf, len, "SRCH");
 }
-#endif /* CONFIG_DMR */
+#endif /* UI_MODE_DMR */
 
 /* ------------------------------------------------------------------------- */
 /* NXDN rows                                                                  */
@@ -882,6 +901,8 @@ void qm_am_applyRaster(void)
     { label, QM_INFO, 0, 0, 1, 0, NULL, NULL, NULL, fmt, 0, 0, NULL }
 #define QM_ITEM_ACTION(label, act) \
     { label, QM_ACTION, 0, 0, 1, 0, NULL, NULL, NULL, NULL, 0, 0, act }
+#define QM_ITEM_ACTION_F(label, act, fmt) \
+    { label, QM_ACTION, 0, 0, 1, 0, NULL, NULL, NULL, fmt, 0, 0, act }
 #define QM_ITEM_GOTO(label, screen, item) \
     { label, QM_GOTO, 0, 0, 1, 0, NULL, NULL, NULL, NULL, screen, item, NULL }
 #define QM_ITEM_GOTO_F(label, screen, fmt) \
@@ -1004,7 +1025,7 @@ const qm_menu_t *qm_spectrumMenu(void)
 #define QM_ITEM_PKT()
 #endif
 
-#if defined(CONFIG_DMR) && defined(DMR_ID_MAX)
+#ifdef UI_MODE_DMR
 #define QM_ITEM_DMR_DEST() \
     QM_ITEM_ENUM("CALL", DMR_DEST_GROUP, DMR_DEST_USER, qm_dmr_getDestType, \
                  qm_dmr_setDestType, qm_names_destType, NULL), \
@@ -1028,7 +1049,7 @@ static const qm_item_t qm_items_fm[] =
                  qm_names_bw, NULL),
     QM_ITEM_ENUM("SHIFT", 0, 4, qm_fm_get_shift, qm_fm_set_shift,
                  qm_names_shift, NULL),
-    QM_ITEM_TOGGLE("1750", qm_fm_get_burst, qm_fm_set_burst),
+    QM_ITEM_ACTION_F("1750", qm_fm_burstStart, qm_fm_fmt_burst),
     QM_ITEM_INT("BKL", 5, 100, 5, qm_get_brightness, qm_set_brightness),
 #ifdef CONFIG_KEY_BACKLIGHT
     QM_ITEM_TOGGLE("KEYLIT", qm_get_keylight, qm_set_keylight),
@@ -1060,7 +1081,7 @@ static const qm_item_t qm_items_m17[] =
     QM_ITEM_MSG()
 };
 
-#ifdef CONFIG_TETRA
+#ifdef UI_MODE_TETRA
 static const qm_item_t qm_items_tetra[] =
 {
     QM_ITEM_TOGGLE("AFC", qm_tetra_get_afc, qm_tetra_set_afc),
@@ -1082,9 +1103,9 @@ static const qm_item_t qm_items_tetra[] =
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
     QM_ITEM_MSG()
 };
-#endif /* CONFIG_TETRA */
+#endif /* UI_MODE_TETRA */
 
-#ifdef CONFIG_DMR
+#ifdef UI_MODE_DMR
 static const qm_item_t qm_items_dmr[] =
 {
     QM_ITEM_INFO("CC", qm_dmr_fmt_cc),
@@ -1103,7 +1124,7 @@ static const qm_item_t qm_items_dmr[] =
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
     QM_ITEM_MSG()
 };
-#endif /* CONFIG_DMR */
+#endif /* UI_MODE_DMR */
 
 #ifdef UI_MODE_NXDN
 /*
@@ -1457,7 +1478,7 @@ static const qm_menu_t uiModes[] =
 #endif
 #ifdef UI_MODE_DMR
     QM_MODE(OPMODE_DMR, "DMR", qm_items_dmr,
-            UI_MODE_CHANNEL | UI_MODE_SELECT
+            UI_MODE_CHANNEL | UI_MODE_SELECT | UI_MODE_PAGE
 #ifdef CONFIG_DMR_TX
                 | UI_MODE_TX
 #endif
@@ -2030,7 +2051,7 @@ static void qm_drawHeader(void)
               yellow_fab413, "%s", qm_state.qm->title);
 
     if (qm_state.qm->mode == OPMODE_TETRA) {
-#ifdef CONFIG_TETRA
+#ifdef UI_MODE_TETRA
         struct tetraStatus ts;
         tetra_getStatus(&ts);
         if (ts.cell)

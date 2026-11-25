@@ -40,15 +40,23 @@
 extern "C" {
 #endif
 
-#if defined(CONFIG_M17)
+/*
+ * UI_TEST_M17 / UI_TEST_DMR / UI_TEST_TETRA do for the three modes that come
+ * with their own engine what UI_TEST_NXDN does below: they turn the mode's
+ * *screens* (its quick menu table, its Settings page, its registry entry) on
+ * in a host build that cannot link a demodulator, so the menus of all eleven
+ * modes are walked by tests/unit/ui_menu_audit.cpp instead of only the eight
+ * that need no engine. The firmware never defines them: it defines CONFIG_*.
+ */
+#if defined(CONFIG_M17) || defined(UI_TEST_M17)
 #define UI_MODE_M17 1
 #endif
 
-#if defined(CONFIG_DMR)
+#if defined(CONFIG_DMR) || defined(UI_TEST_DMR)
 #define UI_MODE_DMR 1
 #endif
 
-#if defined(CONFIG_TETRA)
+#if defined(CONFIG_TETRA) || defined(UI_TEST_TETRA)
 #define UI_MODE_TETRA 1
 #endif
 
@@ -187,6 +195,12 @@ const qm_item_t *ui_mode_rows(uint8_t id, uint8_t *count);
  *
  * X(id, title) for each; a mode that is compiled out expands to nothing.
  */
+#ifdef UI_MODE_DMR
+#define UI_MODE_PAGE_DMR(X) X(OPMODE_DMR, "DMR")
+#else
+#define UI_MODE_PAGE_DMR(X)
+#endif
+
 #ifdef UI_MODE_NXDN
 #define UI_MODE_PAGE_NXDN(X) X(OPMODE_NXDN, "NXDN")
 #else
@@ -230,9 +244,9 @@ const qm_item_t *ui_mode_rows(uint8_t id, uint8_t *count);
 #endif
 
 #define UI_MODE_PAGES(X)                                                      \
-    UI_MODE_PAGE_NXDN(X) UI_MODE_PAGE_DPMR(X) UI_MODE_PAGE_P25(X)             \
-    UI_MODE_PAGE_YSF(X) UI_MODE_PAGE_DSTAR(X) UI_MODE_PAGE_AIRBAND(X)         \
-    UI_MODE_PAGE_WFM(X)
+    UI_MODE_PAGE_DMR(X) UI_MODE_PAGE_NXDN(X) UI_MODE_PAGE_DPMR(X)             \
+    UI_MODE_PAGE_P25(X) UI_MODE_PAGE_YSF(X) UI_MODE_PAGE_DSTAR(X)             \
+    UI_MODE_PAGE_AIRBAND(X) UI_MODE_PAGE_WFM(X)
 
 /*
  * Row accessors of the modes that have their own controls.

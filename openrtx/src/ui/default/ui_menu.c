@@ -470,7 +470,7 @@ int _ui_getRadioValueName(char *buf, uint8_t max_len, uint8_t index)
     return 0;
 }
 
-#ifdef CONFIG_M17
+#ifdef UI_MODE_M17
 int _ui_getM17EntryName(char *buf, uint8_t max_len, uint8_t index)
 {
     if(index >= settings_m17_num) return -1;
@@ -1065,7 +1065,7 @@ void _ui_drawSettingsTimeDateSet(ui_state_t* ui_state)
 }
 #endif
 
-#ifdef CONFIG_M17
+#ifdef UI_MODE_M17
 void _ui_drawSettingsM17(ui_state_t* ui_state)
 {
     if((ui_state->edit_mode) && (ui_state->menu_selected == M17_CALLSIGN))
@@ -1289,7 +1289,7 @@ bool _ui_drawMacroMenu(ui_state_t* ui_state)
         gfx_print(layout.line1_pos, layout.top_font, TEXT_ALIGN_CENTER,
                   color_white,   "       T-");
     }
-#ifdef CONFIG_M17
+#ifdef UI_MODE_M17
     else if (last_state.channel.mode == OPMODE_M17)
     {
         gfx_print(layout.line1_pos, layout.top_font, TEXT_ALIGN_LEFT,
@@ -1308,7 +1308,7 @@ bool _ui_drawMacroMenu(ui_state_t* ui_state)
         gfx_print(gfx_right_edge(layout.line1_pos), layout.top_font,
                   TEXT_ALIGN_RIGHT, color_white, " T+");
     }
-#ifdef CONFIG_M17
+#ifdef UI_MODE_M17
     else if (last_state.channel.mode == OPMODE_M17)
     {
         char encdec_str[9] = "        ";
@@ -1344,7 +1344,7 @@ bool _ui_drawMacroMenu(ui_state_t* ui_state)
         gfx_print(pos_2, layout.top_font, TEXT_ALIGN_LEFT,
                   color_white, bw_str);
     }
-#ifdef CONFIG_M17
+#ifdef UI_MODE_M17
     else if (last_state.channel.mode == OPMODE_M17)
     {
         gfx_print(pos_2, layout.top_font, TEXT_ALIGN_LEFT,

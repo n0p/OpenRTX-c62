@@ -156,7 +156,7 @@ const char *settings_items[] =
 #endif
     "Radio",
     "Audio",
-#ifdef CONFIG_M17
+#ifdef UI_MODE_M17
     "M17",
 #endif
 #ifdef CONFIG_TETRA_AFC
@@ -316,7 +316,7 @@ const uint8_t settings_gps_num = sizeof(settings_gps_items)/sizeof(settings_gps_
 #endif
 const uint8_t settings_radio_num = sizeof(settings_radio_items)/sizeof(settings_radio_items[0]);
 const uint8_t settings_audio_num = sizeof(settings_audio_items)/sizeof(settings_audio_items[0]);
-#ifdef CONFIG_M17
+#ifdef UI_MODE_M17
 const uint8_t settings_m17_num = sizeof(settings_m17_items)/sizeof(settings_m17_items[0]);
 #endif
 const uint8_t settings_fm_num = sizeof(settings_fm_items) / sizeof(settings_fm_items[0]);
@@ -340,6 +340,42 @@ static ui_state_t ui_state;
 static bool macro_menu = false;
 static bool layout_ready = false;
 static bool redraw_needed = true;
+
+/*
+ * Key claim trace.
+ *
+ * Every block of the dispatch that consumes a key event says so before it
+ * returns, into these two bytes: which block took it and how many took it.
+ * The tests walk every screen with every key and require exactly one claim per
+ * event, which is the mechanical form of the two defects the operator hit
+ * (a screen left deaf by a stale edit_mode, and a block that ate keys that
+ * belonged to another screen). It costs one byte of RAM and one store per key
+ * press; the interface is in ui/ui_default.h.
+ */
+static uint8_t keyClaim  = UI_CLAIM_NONE;
+static uint8_t keyClaims = 0;
+
+#define KEY_CLAIM(block)  do { keyClaim = (uint8_t)(block); keyClaims++; } while (0)
+
+uint8_t ui_lastClaim(void)
+{
+    return keyClaim;
+}
+
+uint8_t ui_lastClaimCount(void)
+{
+    return keyClaims;
+}
+
+uint8_t ui_menu_selected(void)
+{
+    return ui_state.menu_selected;
+}
+
+bool ui_edit_mode(void)
+{
+    return ui_state.edit_mode;
+}
 
 /*
  * Set by code that changes the radio configuration outside the UI FSM (the
@@ -952,7 +988,7 @@ static void _ui_changeMacroLatch(bool newVal)
                                    state.settings.macroMenuLatch);
 }
 
-#ifdef CONFIG_M17
+#ifdef UI_MODE_M17
 static inline void _ui_changeM17Can(int variation)
 {
     uint8_t can = state.settings.m17_can;
@@ -1739,6 +1775,48 @@ static void _ui_vfoSearchTick(long long now)
 }
 #endif /* CONFIG_VFO_SEARCH */
 
+
+/*
+ * One rule for "may the PTT key the radio now".
+ *
+ * It used to be written by hand in seven places -- the six screens that own
+ * the keypad and the tail of the dispatch -- and each one asked a different
+ * question. The six asked "is my screen still on?" and so they re-armed the
+ * transmitter whenever their red key went *back to the menu*: the operator
+ * opened the inbox, pressed red, and the radio was keyable from the main menu
+ * until the next key press. The rule is a property of the whole UI, not of a
+ * screen: the PTT is armed on the two main screens only, and no overlay and no
+ * menu is one of those.
+ */
+static void _ui_syncTxDisable(bool *sync_rtx)
+{
+    bool keyable = (state.ui_screen == MAIN_VFO) || (state.ui_screen == MAIN_MEM);
+
+    if (keyable && (macro_menu || qm_state.open || ui_channels_isOpen()
+                    || ui_contacts_isOpen() || ui_zones_isOpen()
+                    || ui_msgs_isScreen(state.ui_screen)
+                    || ui_spectrum_isOpen()))
+        keyable = false;
+
+#ifdef CONFIG_APRS
+    if (ui_aprs_isScreen(state.ui_screen))
+        keyable = false;
+#endif
+#ifdef CONFIG_KISS
+    if (ui_packet_isScreen(state.ui_screen))
+        keyable = false;
+#endif
+
+    /* txDisable is the opposite: true means "do not transmit" */
+    const bool wantDisabled = !keyable;
+
+    if (state.txDisable != wantDisabled)
+    {
+        state.txDisable = wantDisabled;
+        *sync_rtx = true;
+    }
+}
+
 void ui_updateFSM(bool *sync_rtx)
 {
     long long now = getTick();
@@ -1821,10 +1899,19 @@ void ui_updateFSM(bool *sync_rtx)
         msg.value = event.payload;
         bool f1Handled = false;
         enum vpQueueFlags queueFlags = vp_getVoiceLevelQueueFlags();
+
+        /* One event, one owner: reset the trace and let the block that takes
+           the key say so (see KEY_CLAIM) */
+        keyClaim  = UI_CLAIM_NONE;
+        keyClaims = 0;
+
         // If we get out of standby, we ignore the kdb event
         // unless is the MONI key for the MACRO functions
         if (_ui_exitStandby(now) && !(msg.keys & KEY_MONI))
+        {
+            KEY_CLAIM(UI_CLAIM_STANDBY);
             return;
+        }
 
 #ifdef CONFIG_VFO_SEARCH
         /*
@@ -1856,9 +1943,27 @@ void ui_updateFSM(bool *sync_rtx)
             redraw_needed = true;
             if (state.settings.vpLevel == vpBeep)
                 vp_beep(BEEP_KEY_GENERIC, SHORT_BEEP);
+            KEY_CLAIM(UI_CLAIM_SEARCH);
             return;
         }
 #endif
+
+        /*
+         * A locked keypad has to be unlockable from the keypad. The LOCK row of
+         * the quick menu sets the lock and the lock then blocks every key,
+         * including the one that opens the menu: the only way out was a power
+         * cycle, which is a one-way door and not a lock. A long press of red is
+         * the way out, and it does nothing else while the lock is on.
+         */
+        if (ui_state.input_locked && (msg.keys & KEY_ESC) && msg.long_press)
+        {
+            ui_state.input_locked = false;
+            if (state.settings.vpLevel > vpBeep)
+                vp_play();
+            redraw_needed = true;
+            KEY_CLAIM(UI_CLAIM_UNLOCK);
+            return;
+        }
 
         /*
          * Contextual quick menu (P2, KEY_F2). Short press opens the popup on
@@ -1893,6 +1998,7 @@ void ui_updateFSM(bool *sync_rtx)
             }
             if(event.payload != 0)
                 vp_play();
+            KEY_CLAIM(UI_CLAIM_QM);
             return;
         }
 
@@ -1907,6 +2013,7 @@ void ui_updateFSM(bool *sync_rtx)
             if (ui_spectrum_handleEvent(&msg, sync_rtx))
             {
                 redraw_needed = true;
+                KEY_CLAIM(UI_CLAIM_SPECTRUM);
                 return;
             }
         }
@@ -1917,6 +2024,7 @@ void ui_updateFSM(bool *sync_rtx)
            && (ui_channels_isOpen() == false))
         {
             qm_open();
+            KEY_CLAIM(UI_CLAIM_QM_OPEN);
             return;
         }
 
@@ -1934,13 +2042,9 @@ void ui_updateFSM(bool *sync_rtx)
             if (ui_aprs_fsm(msg, sync_rtx))
             {
                 /* ESC can leave APRS for the VFO: re-arm the PTT in that case */
-                bool wantDisabled = ui_aprs_isScreen(state.ui_screen);
-                if (state.txDisable != wantDisabled)
-                {
-                    state.txDisable = wantDisabled;
-                    *sync_rtx = true;
-                }
+                _ui_syncTxDisable(sync_rtx);
                 redraw_needed = true;
+                KEY_CLAIM(UI_CLAIM_APRS);
                 return;
             }
         }
@@ -1953,13 +2057,9 @@ void ui_updateFSM(bool *sync_rtx)
         {
             if (ui_packet_fsm(msg, sync_rtx))
             {
-                bool wantDisabled = ui_packet_isScreen(state.ui_screen);
-                if (state.txDisable != wantDisabled)
-                {
-                    state.txDisable = wantDisabled;
-                    *sync_rtx = true;
-                }
+                _ui_syncTxDisable(sync_rtx);
                 redraw_needed = true;
+                KEY_CLAIM(UI_CLAIM_PACKET);
                 return;
             }
         }
@@ -1974,29 +2074,18 @@ void ui_updateFSM(bool *sync_rtx)
         if (ui_msgs_isScreen(state.ui_screen))
         {
             ui_msgs_handleEvent(&msg, sync_rtx);
-
-            bool wantDisabled = ui_msgs_isScreen(state.ui_screen);
-            if (state.txDisable != wantDisabled)
-            {
-                state.txDisable = wantDisabled;
-                *sync_rtx = true;
-            }
+            _ui_syncTxDisable(sync_rtx);
             redraw_needed = true;
+            KEY_CLAIM(UI_CLAIM_MSGS);
             return;
         }
 
         if ((state.ui_screen == MENU_CONTACTS) && ui_contacts_isOpen())
         {
             ui_contacts_handleEvent(&msg, sync_rtx);
-
-            /* The editor disables TX; leaving it (red) re-arms the PTT */
-            bool wantDisabled = (state.ui_screen == MENU_CONTACTS);
-            if (state.txDisable != wantDisabled)
-            {
-                state.txDisable = wantDisabled;
-                *sync_rtx = true;
-            }
+            _ui_syncTxDisable(sync_rtx);
             redraw_needed = true;
+            KEY_CLAIM(UI_CLAIM_CONTACTS);
             return;
         }
 
@@ -2004,14 +2093,9 @@ void ui_updateFSM(bool *sync_rtx)
         if ((state.ui_screen == MENU_ZONES) && ui_zones_isOpen())
         {
             ui_zones_handleEvent(&msg, sync_rtx);
-
-            bool wantDisabled = (state.ui_screen == MENU_ZONES);
-            if (state.txDisable != wantDisabled)
-            {
-                state.txDisable = wantDisabled;
-                *sync_rtx = true;
-            }
+            _ui_syncTxDisable(sync_rtx);
             redraw_needed = true;
+            KEY_CLAIM(UI_CLAIM_ZONES);
             return;
         }
 
@@ -2035,6 +2119,7 @@ void ui_updateFSM(bool *sync_rtx)
             state.txDisable = true;
             *sync_rtx = true;
             redraw_needed = true;
+            KEY_CLAIM(UI_CLAIM_APRS_ENTER);
             return;
         }
 #endif /* CONFIG_APRS */
@@ -2063,6 +2148,7 @@ void ui_updateFSM(bool *sync_rtx)
             }
 
             _ui_fsm_menuMacro(msg, sync_rtx);
+            KEY_CLAIM(UI_CLAIM_MACRO);
             return;
         }
         else
@@ -2093,7 +2179,20 @@ void ui_updateFSM(bool *sync_rtx)
             (state.ui_screen == MAIN_VFO || state.ui_screen == MAIN_MEM))
         {
             ui_channels_open();
+            /*
+             * The list owns the keypad from this moment, so it also owns the
+             * transmitter: the PTT is not a key event and would otherwise key
+             * the radio from the channel editor until the next key press. The
+             * menu's Channels row and ui_open_screen() do the same; this path
+             * returned before the block below could.
+             */
+            if (state.txDisable != true)
+            {
+                state.txDisable = true;
+                *sync_rtx = true;
+            }
             redraw_needed = true;
+            KEY_CLAIM(UI_CLAIM_CHANNELS_OPEN);
             return;
         }
 
@@ -2101,19 +2200,17 @@ void ui_updateFSM(bool *sync_rtx)
         if (ui_channels_isOpen())
         {
             ui_channels_handleEvent(&msg, sync_rtx);
+            _ui_syncTxDisable(sync_rtx);
 
-            /* Never transmit with the channel UI on screen */
-            bool wantDisabled = ui_channels_isOpen();
-            if (state.txDisable != wantDisabled)
-            {
-                state.txDisable = wantDisabled;
-                *sync_rtx = true;
-            }
-
+            KEY_CLAIM(UI_CLAIM_CHANNELS);
             return;
         }
 
         int priorUIScreen = state.ui_screen;
+
+        /* From here on the screen's own case takes the key */
+        KEY_CLAIM(UI_CLAIM_SCREEN);
+
         switch(state.ui_screen)
         {
             // VFO screen
@@ -2684,7 +2781,7 @@ void ui_updateFSM(bool *sync_rtx)
                         case S_AUDIO:
                             state.ui_screen = SETTINGS_AUDIO;
                             break;
-#ifdef CONFIG_M17
+#ifdef UI_MODE_M17
                         case S_M17:
                             state.ui_screen = SETTINGS_M17;
                             break;
@@ -3095,7 +3192,7 @@ void ui_updateFSM(bool *sync_rtx)
                 else if(msg.keys & KEY_ESC)
                     _ui_menuBack(MENU_SETTINGS);
                 break;
-#ifdef CONFIG_M17
+#ifdef UI_MODE_M17
             // M17 Settings
             case SETTINGS_M17:
                 if(ui_state.edit_mode)
@@ -3511,13 +3608,13 @@ void ui_updateFSM(bool *sync_rtx)
                 break;
         }
 
-        // Enable Tx only if in MAIN_VFO or MAIN_MEM states
-        bool inMemOrVfo = (state.ui_screen == MAIN_VFO) || (state.ui_screen == MAIN_MEM);
-        if ((macro_menu == true) || ((inMemOrVfo == false) && (state.txDisable == false)))
-        {
-            state.txDisable = true;
-            *sync_rtx = true;
-        }
+        /*
+         * Enable Tx only if the UI is on a main screen with no overlay: the
+         * same rule the six screens above use, and the one that re-arms the
+         * PTT when this very key brought the UI back to a main screen (leaving
+         * a menu with red used to leave it disabled until the next key press).
+         */
+        _ui_syncTxDisable(sync_rtx);
         if (!f1Handled && (msg.keys & KEY_F1) && (state.settings.vpLevel > vpBeep))
         {
             vp_replayLastPrompt();
@@ -3709,7 +3806,7 @@ bool ui_updateGUI()
             _ui_drawSettingsGPS(&ui_state);
             break;
 #endif
-#ifdef CONFIG_M17
+#ifdef UI_MODE_M17
         // M17 settings screen
         case SETTINGS_M17:
             _ui_drawSettingsM17(&ui_state);

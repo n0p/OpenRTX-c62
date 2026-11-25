@@ -399,6 +399,11 @@ at32f423_def += miosix_cm4f_def
 ##
 linux_src = ['platform/targets/linux/emulator/emulator.c',
              'platform/targets/linux/emulator/sdl_engine.c',
+             # DMR and TETRA keep their decoded status in a translation unit
+             # that includes the demodulator; the host decodes nothing, so it
+             # answers the two getters with "no sync" and the screens of both
+             # modes still build and are walked by the UI tests.
+             'platform/targets/linux/emulator/ui_mode_status.c',
              'platform/drivers/display/display_libSDL.c',
              'platform/drivers/keyboard/keyboard_linux.c',
              'platform/drivers/NVM/nvmem_linux.c',
@@ -448,7 +453,14 @@ linux_default_src = linux_src + ui_src_default
 linux_default_def = linux_def + {'CONFIG_SCREEN_WIDTH': '160', 'CONFIG_SCREEN_HEIGHT': '128', 'CONFIG_PIX_FMT_RGB565': '',
                                  'CONFIG_GPS': '', 'CONFIG_RTC': '', 'UI_TEST_NXDN': '',
                                  'UI_TEST_DPMR': '', 'UI_TEST_P25': '',
-                                 'UI_TEST_YSF': '', 'UI_TEST_DSTAR': ''}
+                                 'UI_TEST_YSF': '', 'UI_TEST_DSTAR': '',
+                                 # M17, TETRA and DMR: their screens, their
+                                 # registry entries and their Settings pages,
+                                 # without the engines. See ui_modes.h.
+                                 'UI_TEST_M17': '', 'UI_TEST_TETRA': '',
+                                 'UI_TEST_DMR': '',
+                                 # The TETRA page of Settings (AFC) too.
+                                 'CONFIG_TETRA_AFC': ''}
 linux_small_def   = linux_def + {'CONFIG_SCREEN_WIDTH': '128', 'CONFIG_SCREEN_HEIGHT': '64', 'CONFIG_PIX_FMT_BW': '',
                                  'CONFIG_GPS': '', 'CONFIG_RTC': ''}
 
@@ -1384,6 +1396,32 @@ ui_regressions_test = executable('ui_regressions_test',
 ui_regressions_noaprs_test = executable('ui_regressions_noaprs_test',
                                         sources : unit_test_src + ui_regressions_src,
                                         kwargs  : unit_test_opts)
+
+# El recorrido de los menús (docs/UI.md): cada pantalla de cada modo compilado,
+# fila a fila y tecla a tecla, a través del FSM real. Se compila dos veces, como
+# las regresiones: con APRS y el módem de paquetes (la configuración de la
+# radio) y sin ellos, que es la build en la que las pantallas de mensajes,
+# contactos y zonas se quedaban fuera por un #ifdef mal cerrado.
+ui_menu_audit_src = ['tests/unit/ui_menu_audit.cpp']
+# El módem de paquetes entra con su pantalla: core/packet_service.c pertenece al
+# kernel (hilo propio, streams de audio, PSRAM), así que el host usa el doble de
+# platform/targets/linux/emulator/ui_mode_status.c, como con los estados de DMR
+# y TETRA.
+ui_menu_audit_aprs_src = ui_regressions_aprs_src + ['openrtx/src/ui/default/ui_packet.c']
+
+ui_menu_audit_opts = unit_test_opts + {
+    'c_args'   : linux_c_args + ['-DCONFIG_APRS', '-DCONFIG_KISS'],
+    'cpp_args' : linux_cpp_args + ['-DCONFIG_APRS', '-DCONFIG_KISS'],
+}
+
+ui_menu_audit_test = executable('ui_menu_audit_test',
+                                sources : unit_test_src + ui_menu_audit_aprs_src +
+                                          ui_menu_audit_src,
+                                kwargs  : ui_menu_audit_opts)
+
+ui_menu_audit_plain_test = executable('ui_menu_audit_plain_test',
+                                      sources : unit_test_src + ui_menu_audit_src,
+                                      kwargs  : unit_test_opts)
 
 ui_quickmenu_test = executable('ui_quickmenu_test',
                                sources : unit_test_src + ['tests/unit/ui_quickmenu.cpp'],

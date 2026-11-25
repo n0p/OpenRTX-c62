@@ -10,6 +10,8 @@
 #include "ui/ui_default.h"
 #include "core/aprs_service.h"
 #include "core/state.h"
+#include "core/beeps.h"
+#include "core/voicePrompts.h"
 #include "core/graphics.h"
 #include "interfaces/delays.h"
 #include "interfaces/nvmem.h"
@@ -296,6 +298,18 @@ static void drawMessageView(void)
 static const char EDIT_CHARS[] =
     " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,-/:?@+=!";
 
+/*
+ * Comment and Path are strings, and this page has no text editor for them: the
+ * two rows were listed next to the numeric ones and pressing P1/P2 on them did
+ * nothing at all, which is a dead row. They are read only until a field editor
+ * for strings lands, and the row says so ("(fixed)"): the values are the ones
+ * the beacon uses, but this screen cannot change them.
+ */
+static bool configReadOnly(uint8_t field)
+{
+    return (field == 5u) || (field == 6u);
+}
+
 static void drawMessageEdit(void)
 {
     char right[16];
@@ -320,9 +334,9 @@ static void drawMessageEdit(void)
               (unsigned)strlen(uia.editText));
 
     gfx_print((point_t){ UI_TEXT_X, 84}, FONT_SIZE_5PT, TEXT_ALIGN_LEFT, color_white,
-              "up/down char, left/right move");
+              "up/down char, P1 adds, P2 deletes");
 
-    hints("SEND", "<>", "DEL", "EXIT");
+    hints("SEND", "ADD", "DEL", "EXIT");
 }
 
 static void drawConfig(void)
@@ -358,7 +372,8 @@ static void drawConfig(void)
 
         gfx_print((point_t){ UI_TEXT_X, baseline }, FONT_SIZE_5PT,
                   TEXT_ALIGN_LEFT, sel ? yellow_fab413 : color_white,
-                  "%-9s %s", names[i], values[i]);
+                  "%-9s %s%s", names[i], values[i],
+                  configReadOnly(i) ? " (fixed)" : "");
     }
 
     hints("NEXT", "+/-", "SAVE", "EXIT");
@@ -411,6 +426,13 @@ static void editCommit(void)
 
 static bool configAdjust(int dir)
 {
+    if (configReadOnly(uia.field))
+    {
+        /* Never pretend: the two string rows are not adjustable here */
+        vp_beep(400, SHORT_BEEP);
+        return false;
+    }
+
     switch (uia.field)
     {
         case 0:
@@ -590,9 +612,31 @@ bool ui_aprs_fsm(kbd_msg_t msg, bool *sync_rtx)
 
         case APRS_MSG_EDIT:
         {
+            /*
+             * The C62 has no LEFT/RIGHT keys: the editor used to commit a
+             * character on RIGHT and backspace on LEFT, so on this radio a
+             * reply could be started, deleted from and sent, but never typed.
+             * P1 is now "add the chosen character" (what RIGHT did) and P2 is
+             * "delete the last one"; long P1 is the old backspace. UP/DOWN keep
+             * cycling the character, and the hints row says so.
+             */
             if (msg.keys & KEY_UP)    { editCycle(+1); return true; }
             if (msg.keys & KEY_DOWN)  { editCycle(-1); return true; }
-            if (msg.keys & KEY_RIGHT) { editCommit(); return true; }
+            if ((msg.keys & KEY_F1) && msg.long_press)
+            {
+                const size_t len = strlen(uia.editText);
+                if (len > 0)
+                {
+                    uia.editText[len - 1] = '\0';
+                    uia.editPos = (uint8_t)(len - 1);
+                }
+                return true;
+            }
+            if ((msg.keys & KEY_F1) || (msg.keys & KEY_RIGHT))
+            {
+                editCommit();
+                return true;
+            }
             if (msg.keys & KEY_LEFT)
             {
                 const size_t len = strlen(uia.editText);
@@ -631,12 +675,16 @@ bool ui_aprs_fsm(kbd_msg_t msg, bool *sync_rtx)
         {
             if (msg.keys & KEY_DOWN)
             {
-                uia.field = (uint8_t)((uia.field + 1u) % 9u);
+                do
+                    uia.field = (uint8_t)((uia.field + 1u) % 9u);
+                while (configReadOnly(uia.field));
                 return true;
             }
             if (msg.keys & KEY_UP)
             {
-                uia.field = (uint8_t)((uia.field + 8u) % 9u);
+                do
+                    uia.field = (uint8_t)((uia.field + 8u) % 9u);
+                while (configReadOnly(uia.field));
                 return true;
             }
             /* P1/P2 change the value: the C62 keypad has no LEFT/RIGHT */

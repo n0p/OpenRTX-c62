@@ -171,8 +171,18 @@ void vp_announceBandwidth(const uint8_t bandwidth,
         vp_queuePrompt(PROMPT_BANDWIDTH);
     }
 
-    char *bandwidths[] = { "12.5", "25" };
-    vp_queueString(bandwidths[bandwidth], vpAnnounceCommonSymbols);
+    /*
+     * One entry per enum bandwidth, in the enum's order: BW_12_5 = 0,
+     * BW_25 = 1, BW_6_25 = 2. The table used to have two entries, so choosing
+     * 6.25 kHz read one past it and handed a wild pointer to the voice prompt
+     * (AddressSanitizer: stack-buffer-overflow, from the FM bandwidth row and
+     * from the FM settings page).
+     */
+    static const char *const bandwidths[] = { "12.5", "25", "6.25" };
+    const size_t count = sizeof(bandwidths) / sizeof(bandwidths[0]);
+
+    vp_queueString(bandwidths[(bandwidth < count) ? bandwidth : BW_12_5],
+                   vpAnnounceCommonSymbols);
     vp_queuePrompt(PROMPT_KILOHERTZ);
     playIfNeeded(flags);
 }

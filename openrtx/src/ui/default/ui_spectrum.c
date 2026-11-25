@@ -51,6 +51,7 @@ static int64_t  lastDraw;        ///< Tick of the last redraw
 static bool     lastPaused;      ///< Pause state already on screen
 static bool     open;            ///< The screen is ours
 static uint8_t  backScreen;      ///< Screen the analyser was opened from
+static uint8_t  openMode;        ///< Operating mode the sweep was started in
 
 /* ---------------------------------------------------------------- the maths */
 
@@ -83,6 +84,7 @@ bool ui_spectrum_enter(void)
 
     open       = true;
     backScreen = (state.ui_screen == SPECTRUM) ? MAIN_VFO : state.ui_screen;
+    openMode   = state.channel.mode;
     lastSweeps = 0;
     lastPaused = false;
     lastDraw   = 0;
@@ -129,6 +131,20 @@ bool ui_spectrum_tick(long long now)
      * receiver back with it: the sweep is not allowed to outlive the plot.
      */
     if (state.ui_screen != SPECTRUM)
+    {
+        ui_spectrum_leave();
+        return true;
+    }
+
+    /*
+     * A mode change made with the side key while the plot is up has to take the
+     * receiver with it: the sweep forces the front end into a wideband profile
+     * and the digital modes need every discriminator sample for their own
+     * demodulator, which is why spectrumService_open() refuses to start in one
+     * of them. Leaving the plot running after the mode changed put the radio in
+     * a mode nobody could decode until the screen was closed by hand.
+     */
+    if (state.channel.mode != openMode)
     {
         ui_spectrum_leave();
         return true;

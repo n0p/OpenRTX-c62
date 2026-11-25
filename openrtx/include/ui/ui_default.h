@@ -103,6 +103,53 @@ enum uiScreen
     SPECTRUM
 };
 
+/**
+ * Key claim trace.
+ *
+ * The dispatch in ui_updateFSM() is a chain of blocks that each consume the
+ * key event when it belongs to them; every one of them records itself here
+ * before returning. A screen that takes no claim is a key that goes nowhere
+ * (the "deaf screen" defect), and two claims on one event mean two blocks are
+ * eating the same key. tests/unit/ui_menu_audit.cpp walks every screen with
+ * every key and requires exactly one claim, in the block docs/UI.md documents.
+ */
+enum uiKeyClaim
+{
+    UI_CLAIM_NONE = 0,   /**< Nobody took the key: a defect                */
+    UI_CLAIM_STANDBY,    /**< Coming out of standby swallowed it           */
+    UI_CLAIM_SEARCH,     /**< The carrier search stopped on it             */
+    UI_CLAIM_QM,         /**< The quick menu owns the keypad               */
+    UI_CLAIM_SPECTRUM,   /**< The analyser's screen                        */
+    UI_CLAIM_QM_OPEN,    /**< P2 short on a main screen opened the popup    */
+    UI_CLAIM_APRS,       /**< One of the APRS screens                      */
+    UI_CLAIM_PACKET,     /**< The packet modem screens                     */
+    UI_CLAIM_MSGS,       /**< One of the messaging screens                 */
+    UI_CLAIM_CONTACTS,   /**< The contact book                             */
+    UI_CLAIM_ZONES,      /**< The zone browser                             */
+    UI_CLAIM_APRS_ENTER, /**< P2 long in FM opened the APRS screens        */
+    UI_CLAIM_MACRO,      /**< The macro grid (MONI or P2 long)             */
+    UI_CLAIM_CHANNELS_OPEN, /**< P1 long opened the channel list           */
+    UI_CLAIM_CHANNELS,   /**< The channel list or editor                   */
+    UI_CLAIM_SCREEN,     /**< The case of the screen in the big switch     */
+    UI_CLAIM_UNLOCK      /**< Red held down while the keypad was locked    */
+};
+
+/**
+ * What the UI thinks is selected, and whether it is editing a field.
+ *
+ * `ui_state` is a static of ui.c; these two accessors are what a test (or the
+ * remote control) needs to see the state that the screens act on, without
+ * opening the struct.
+ */
+uint8_t ui_menu_selected(void);
+bool ui_edit_mode(void);
+
+/** Block that consumed the last key event (enum uiKeyClaim). */
+uint8_t ui_lastClaim(void);
+
+/** How many blocks consumed the last key event: 1 when it is correct. */
+uint8_t ui_lastClaimCount(void);
+
 enum SetRxTx
 {
     SET_RX = 0,
@@ -137,7 +184,7 @@ enum settingsItems
 #endif
     S_RADIO,
     S_AUDIO,
-#ifdef CONFIG_M17
+#ifdef UI_MODE_M17
     S_M17,
 #endif
 #ifdef CONFIG_TETRA_AFC
@@ -347,7 +394,9 @@ extern const uint8_t display_num;
 extern const uint8_t settings_gps_num;
 extern const uint8_t settings_radio_num;
 extern const uint8_t settings_audio_num;
+#ifdef UI_MODE_M17
 extern const uint8_t settings_m17_num;
+#endif
 extern const uint8_t settings_fm_num;
 extern const uint8_t settings_accessibility_num;
 extern const uint8_t backup_restore_num;
