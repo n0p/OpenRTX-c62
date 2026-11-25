@@ -257,8 +257,8 @@ El módulo no añade teclas ni pantallas. Lo que la interfaz tiene que hacer:
 
 | gancho | llamada | cuándo |
 |---|---|---|
-| arrancar el scan de memorias | `scan_service_start(SCAN_MODE_MEMORY)` | tecla del operador (p. ej. P1 largo en la pantalla de canal) |
-| arrancar el scan de VFO | `scan_service_start(SCAN_MODE_VFO)` | tecla del operador en la pantalla de VFO |
+| arrancar el scan de memorias | `scan_service_start(SCAN_MODE_MEMORY)` | la fila `Scan` del menú de herramientas (P1 mantenido, `ui_tools.c`) |
+| arrancar el scan de VFO | `scan_service_start(SCAN_MODE_VFO)` | ninguna tecla todavía: el menú de herramientas arranca la búsqueda de VFO (`vfo_search_service`), que es otra máquina |
 | parar | `scan_service_stop()` | la misma tecla, `KEY_ENTER`, `KEY_ESC`, o antes de cualquier sintonía manual / cambio de canal / cambio de modo |
 | pintar el estado | `scan_service_status(&st)` y `scan_service_stateName()` | en `ui_updateGUI()`: `st.running`, `st.state`, `st.channel`, `st.frequency`, `st.visited`, `st.stops` |
 | avisos | `while (scan_service_popEvent(&ev)) ...` | en `ui_updateFSM()`: "parado", "reanudando", "fin de rango", "prioridad" |

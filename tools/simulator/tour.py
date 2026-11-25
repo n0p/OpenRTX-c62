@@ -264,6 +264,43 @@ class Tour:
             self.fail("%s: the screen does not answer the keys "
                       "(nothing changed on %s)" % (where, d0["screen"]["name"]))
 
+    # --------------------------------------------------------- tools menu ----
+
+    def tools_open(self):
+        """P1 held down on a main screen: the tools menu (docs/UI.md)."""
+        self.home()
+        self.key_long("P1")
+        d = self.dump()
+
+        if not d["tools"]["open"]:
+            self.fail("P1 long does not open the tools menu")
+            return None
+
+        return d
+
+    def tools_to(self, label):
+        """Move the cursor of the tools menu (or of its submenu) by label."""
+        for _ in range(12):
+            t = self.dump()["tools"]
+
+            if not t["open"]:
+                self.fail("the tools menu closed while moving the cursor")
+                return False
+
+            if t["rows"][t["selected"]]["label"] == label:
+                return True
+
+            self.key("DOWN")
+
+        self.fail("the tools menu cursor does not reach %r" % label)
+        return False
+
+    def open_channels(self):
+        """The channel list, through the row the tools menu added for it."""
+        self.tools_open()
+        self.tools_to("Channels")
+        self.key("GREEN")
+
     # --------------------------------------------------------------- phases --
 
     def phase_main(self):
@@ -600,15 +637,116 @@ class Tour:
                 self.key("RED")
         self.home()
 
+    def phase_tools(self):
+        """P1 held down: the tools menu, its five rows and the mode submenu."""
+        self.step_name = "tools"
+        self.goto_mode("FM")
+        self.home()
+
+        if self.tools_open() is None:
+            return
+
+        d = self.capture("tools-list", screen="TOOLS_MENU",
+                         need=["TOOLS", "Mode", "Scan", "VFO scan", "Spectrum",
+                               "Channels"])
+        self.check(d["radio"]["tx_disable"],
+                   "the tools menu does not disable the transmitter")
+        self.check(d["tools"]["selected"] == 0,
+                   "the tools menu does not open on the first row")
+
+        rows = [r["label"] for r in d["tools"]["rows"]]
+        self.check(rows == ["Mode", "Scan", "VFO scan", "Spectrum", "Channels"],
+                   "the rows of the tools menu are %s, not the five of the "
+                   "design" % rows)
+        self.check(d["tools"]["rows"][0]["value"] == "FM",
+                   "the Mode row does not show the mode in use: %r"
+                   % d["tools"]["rows"][0]["value"])
+
+        # Walk the five rows: each one selectable, in order
+        for index, label in enumerate(rows):
+            if not self.tools_to(label):
+                return
+            d = self.capture("tools-row-%d" % index)
+            self.check(d["tools"]["selected"] == index,
+                       "row %d (%s) cannot be selected" % (index, label))
+
+        # The cursor wraps at both ends, and P1/P2 move it as well (the C62 has
+        # no arrow pair of its own: the operator has UP/DOWN and P1/P2)
+        self.key("DOWN")
+        d = self.dump()
+        self.check(d["tools"]["selected"] == 0,
+                   "DOWN on the last row does not wrap to the first one")
+        self.key("UP")
+        d = self.dump()
+        self.check(d["tools"]["selected"] == len(rows) - 1,
+                   "UP on the first row does not wrap to the last one")
+        self.key("P2")
+        d = self.dump()
+        self.check(d["tools"]["selected"] == 0, "P2 does not move the cursor down")
+        self.key("P1")
+        d = self.dump()
+        self.check(d["tools"]["selected"] == len(rows) - 1,
+                   "P1 does not move the cursor up")
+        self.capture("tools-rows-walked")
+
+        # The mode submenu: opens on the mode in use, marks the receive-only
+        # modes, and red goes back to the list without leaving the menu
+        self.tools_to("Mode")
+        self.key("GREEN")
+        d = self.capture("tools-modes", screen="TOOLS_MENU", need=["MODE"])
+        self.check(d["tools"]["modes"], "green on Mode does not open the submenu")
+        self.check(len(d["tools"]["rows"]) == len(MODES),
+                   "the submenu lists %d modes, the image has %d"
+                   % (len(d["tools"]["rows"]), len(MODES)))
+        self.check(d["tools"]["rows"][d["tools"]["selected"]]["label"] == "FM",
+                   "the submenu does not open on the mode in use")
+
+        values = dict((r["label"], r["value"]) for r in d["tools"]["rows"])
+        self.check(values.get("FM") == "TX",
+                   "FM is not marked as able to transmit: %r" % values.get("FM"))
+        self.check(values.get("TETRA") == "RX",
+                   "a receive-only mode is not marked RX: %r"
+                   % values.get("TETRA"))
+        self.check(values.get("WFM") == "RX",
+                   "broadcast FM is not marked RX: %r" % values.get("WFM"))
+
+        # Into the submenu, down to another mode and back out with red
+        self.tools_to("TETRA")
+        d = self.capture("tools-modes-tetra")
+        self.check(d["tools"]["rows"][d["tools"]["selected"]]["label"] == "TETRA",
+                   "the submenu cursor does not reach TETRA")
+        self.key("RED")
+        d = self.capture("tools-modes-back")
+        self.check(d["tools"]["open"] and not d["tools"]["modes"],
+                   "red in the submenu leaves the menu instead of going back")
+        self.check(d["tools"]["selected"] == 0,
+                   "the list cursor is not back on the Mode row")
+
+        # Green twice: open the submenu and apply the mode the cursor is on,
+        # which is the one already in use, so the radio does not move and the
+        # tour exercises apply-and-return without changing what follows
+        self.key("GREEN")
+        self.key("GREEN")
+        d = self.capture("tools-applied", screen="MAIN_VFO")
+        self.check(not d["tools"]["open"],
+                   "choosing a mode does not close the menu")
+        self.check(d["radio"]["mode"] == "FM",
+                   "choosing FM left the radio in %s" % d["radio"]["mode"])
+        self.check(not d["radio"]["tx_disable"],
+                   "the transmitter is not re-armed after the menu closes")
+
+        self.assert_alive("after the tools menu")
+
     def phase_channels(self):
         """The in-radio channel bank: create, edit the frequency, save, tune."""
         self.step_name = "channels"
         self.goto_mode("FM")
         self.home()
 
-        self.key_long("P1")
+        self.open_channels()
         d = self.capture("channels-list-empty")
-        self.check(d["modules"]["channels"], "P1 long does not open the bank")
+        self.check(d["modules"]["channels"],
+                   "the Channels row of the tools menu does not open the bank")
         self.check("No channels" in " ".join(l["text"] for l in d["lines"]),
                    "the empty bank does not say so")
 
@@ -656,7 +794,7 @@ class Tour:
                    "the memory screen does not show the channel name")
 
         # And the editor opens the stored record: P2 on the entry
-        self.key_long("P1")
+        self.open_channels()
         self.capture("channels-list-after-tune")
         self.key("P2")
         d = self.capture("channels-editor-existing", need=["EDIT"])
@@ -883,6 +1021,7 @@ class Tour:
         self.phase_quick_menu()
         self.phase_top_menu()
         self.phase_settings()
+        self.phase_tools()
         self.phase_channels()
         self.phase_contacts()
         self.phase_messages()

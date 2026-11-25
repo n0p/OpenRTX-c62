@@ -165,7 +165,10 @@ object. Both come from the firmware's structures, never from the bitmap:
 - **`settings`**, **`aprs`**, **`packet`** are the settings blocks the screens
   write.
 - **`modules`** says which overlay owns the screen (channel list, contacts,
-  zones, messages).
+  zones, messages, tools).
+- **`tools`** is the tools menu (P1 held down): whether it is open, which of its
+  two screens is on (`modes` is true in the mode submenu), the cursor and every
+  row with its right-hand value as the screen draws it.
 
 ```json
 {"screen":{"id":5,"name":"MENU_TOP"},
@@ -176,7 +179,8 @@ object. Both come from the firmware's structures, never from the bitmap:
  "lines":[{"y":11,"x":2,"font":2,"align":0,"rgb":"fab413",
            "selected":false,"text":"Menu"}, ...],
  "radio":{"mode":"FM","rx":145500000,"name":"","bandwidth":1,"power":1000,...},
- "modules":{"channels":false,"contacts":false,"zones":false,"messages":false}}
+ "modules":{"channels":false,"contacts":false,"zones":false,"messages":false},
+ "tools":{"open":false}}
 ```
 
 ## The menu tour
@@ -187,12 +191,14 @@ python3 tools/simulator/tour.py --out /tmp/tour
 
 or, from a configured build, `meson test -C build_sim "Simulator Menu Tour"`.
 
-It walks 183 screens and writes a PNG plus a text dump per screen: the main
+It walks 194 screens and writes a PNG plus a text dump per screen: the main
 screen, the frequency entry, all eleven modes (with the AM page and its popup),
 the P2 popup of every mode (every row selected, every editable value changed),
 the top menu and every row of it, the eighteen Settings pages including the
-per-mode pages, the channel bank (create, edit the frequency, save, tune, open
-the stored record again), the contact book (create, save, reopen), the messages
+per-mode pages, the tools menu of P1 held down (its five rows walked, the row
+labels and values checked, the mode submenu opened, walked and left, and the
+mode applied with green), the channel bank (create, edit the frequency, save,
+tune, open the stored record again), the contact book (create, save, reopen), the messages
 (inbox, sent, composer, typing), the zone browser (list, entries, tune), APRS
 (station list with P2 held, setup page), the packet modem (configuration and
 counters) and the spectrum analyser.

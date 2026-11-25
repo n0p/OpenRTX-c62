@@ -16,7 +16,9 @@ en la API de `core/vfo_search_service.h`.
 En la pantalla principal y en **modo VFO**, mantener pulsado **ARRIBA o ABAJO
 durante tres segundos** arranca un barrido de portadoras desde la frecuencia
 actual, con el paso del modo: hacia arriba si es ARRIBA, hacia abajo si es
-ABAJO. El barrido se para en la primera portadora que cree, y **se queda ahí**:
+ABAJO. La fila `VFO scan` del menú de herramientas (P1 mantenido,
+`docs/UI.md`) arranca el mismo barrido hacia arriba sin esperar los tres
+segundos, y desde la pantalla de memoria devuelve primero la VFO. El barrido se para en la primera portadora que cree, y **se queda ahí**:
 no vuelve a barrer, no hay hold con temporizador, no hay reanudación.
 
 Es un barrido puntual del VFO, no un scan. La diferencia con
@@ -29,7 +31,7 @@ Es un barrido puntual del VFO, no un scan. La diferencia con
 | criterio digital | el `rxSquelchOpen()` del modo (un sync) | sync **con tramas detrás** (CRC/paridad), estable |
 | frecuencia | la del canal | puede corregirse a la que publica la red |
 | fin | vuelta al banco / fin de rango | vuelta al inicio del rango y fin, o sigue con la vuelta |
-| quién lo lanza | un menú / una tecla | pulsación larga de 3 s de una flecha |
+| quién lo lanza | un menú / una tecla | pulsación larga de 3 s de una flecha (o la fila `VFO scan` del menú de herramientas) |
 
 Se decidió una máquina aparte, y no un tercer modo de reanudación dentro del
 scanner, por tres razones: el scanner camina una **lista** (y aquí no hay

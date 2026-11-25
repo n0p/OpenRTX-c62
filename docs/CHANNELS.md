@@ -152,8 +152,9 @@ but sensitivity and spurious response there are not characterised.
 
 ## Using the editor
 
-P1 long press (or the hook in `ui.c`) opens the list from the VFO or the MEM
-screen.
+The list is the last row of the tools menu that P1 held down opens on the VFO
+or the MEM screen (`docs/UI.md`, "Herramientas"), which is where the old P1-long
+shortcut went: the same key, one row further in.
 
 | Key | List | Editor |
 |-----|------|--------|
@@ -180,7 +181,7 @@ again after a rebase.
 | File | Site | Lines | What it does |
 |------|------|-------|--------------|
 | `openrtx/src/ui/default/ui.c` | includes | 59 | `#include "ui/ui_channels.h"` |
-| `openrtx/src/ui/default/ui.c` | `ui_updateFSM()`, before `int priorUIScreen = state.ui_screen;` | 1516-1544 | opens the list on a P1 long press from `MAIN_VFO`/`MAIN_MEM`; while open, every key goes to `ui_channels_handleEvent()`, `state.txDisable` is held true and the FSM returns |
+| `openrtx/src/ui/default/ui.c` | `ui_updateFSM()` | — | P1 long on `MAIN_VFO`/`MAIN_MEM` opens the tools menu (`ui_tools.c`) and its `Channels` row calls `ui_channels_open()`; while the list is open, every key goes to `ui_channels_handleEvent()`, `state.txDisable` is held true and the FSM returns |
 | `openrtx/src/ui/default/ui.c` | `ui_updateGUI()`, after the layout is ready | 2759-2764 | `ui_channels_draw()` and `return true` while open |
 | `openrtx/src/core/state.c` | includes | 18 | `#include "core/channel_store.h"` |
 | `openrtx/src/core/state.c` | `state_init()`, after the VFO is loaded | 81-93 | `chstore_init()`, then the last used channel into `state.channel` |
@@ -207,7 +208,8 @@ and the merged `state.c` and `ui.c` compile.
   debounces are 2 s and 3 s so their erases do not land in the same pass.
 - If the UI branch takes P1 long press for something else, only the first hook
   block changes: call `ui_channels_open()` wherever the list should be reachable
-  from (a menu entry works as well, the module does not care how it is opened).
+  from (a menu entry works as well, the module does not care how it is opened —
+  today it is the `Channels` row of the tools menu).
 - `ui_channels_drawHints()` is the only drawing function the shared hint bar has
   to replace; it receives the four labels (green, P1, P2, red). **Done on the
   merged tree**: the body is now `ui_hints_draw()`, and `CH_HINTS_H` is

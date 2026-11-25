@@ -13,7 +13,8 @@ al receptor (`core/spectrum_service.*`), el medio hardware del driver
 
 Una pantalla propia (`state.ui_screen == SPECTRUM`) que barre el receptor en
 torno a la frecuencia del canal y dibuja el nivel de cada punto como una barra.
-Se abre desde el menú rápido de FM y de airband (fila `ESPECTRO`) y desde la
+Se abre desde el menú rápido de FM y de airband (fila `ESPECTRO`), desde la
+fila `Spectrum` del menú de herramientas (P1 mantenido, `docs/UI.md`) y desde la
 propia pantalla:
 
 | tecla | qué hace |

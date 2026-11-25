@@ -89,7 +89,9 @@ Per screen:
 | Screen | UP / DOWN | Green | P1 | P2 | Red |
 |---|---|---|---|---|---|
 | VFO frequency input | digit | Set | — | — | Cancel |
-| Main VFO / MEM | cursor (FM: step) | menu | replay prompt (long: channels) | quick menu (long: macro grid; FM: APRS) | — (S-meter) |
+| Main VFO / MEM | cursor (FM: step) | menu | replay prompt (long: tools menu) | quick menu (long: macro grid; FM: APRS) | — (S-meter) |
+| Tools menu | previous / next row (P1/P2 too) | run the row | previous row | next row | back to the main screen |
+| Tools menu, mode submenu | previous / next mode (P1/P2 too) | apply the mode and leave | previous mode | next mode | back to the tools list |
 | Menu (top, banks, settings, backup, info, about) | previous / next | open | — | — | back |
 | Settings pages | previous / next | edit | — | — | back (leaves edit first) |
 | Settings page of a mode (NXDN, dPMR, P25, YSF, D-STAR, AM, WFM) | previous / next row | cycle the value | value − (long: coarse) | value + (long: coarse) | back |
@@ -225,6 +227,62 @@ popup.
 falls back to the FM one, and comparing contents there rebuilt the popup on
 every UI pass — the cursor jumped back to the first row as soon as it was
 moved. That was the "the quick menu stops working with some options" report.
+
+## Herramientas (P1 mantenido)
+
+P1 mantenido en las dos pantallas principales abre el menú de herramientas
+(`openrtx/src/ui/default/ui_tools.c`, pantalla `TOOLS_MENU`). Antes ese atajo
+abría la lista de canales; la lista es ahora la última fila del menú, así que el
+atajo no se pierde y el escáner, la búsqueda en VFO, el analizador y el selector
+de modo ganan la puerta que no tenían.
+
+Cabecera `TOOLS` (8 pt) con la batería a la derecha, filas de 12 px con la
+fuente de 6 pt sobre `ui_row_baseline_at()`, etiqueta a la izquierda y valor
+alineado a la derecha, y la pista de teclas en la última fila del panel:
+`OK`, `P1:Up`, `P2:Down`, `Back`.
+
+| fila | valor a la derecha | qué hace el verde |
+|---|---|---|
+| `Mode` | el modo en uso | abre el submenú de modos (no cierra el menú) |
+| `Scan` | canales del banco, `12 CH` | arranca el escáner de memorias (`scan_service_start(SCAN_MODE_MEMORY)`) y cierra el menú |
+| `VFO scan` | `UP` | arranca la búsqueda de portadoras en VFO (`vfoSearchService_start(VFOS_UP)`), la misma que tres segundos de arriba o abajo |
+| `Spectrum` | — | abre el analizador en barrido, la pantalla `SPECTRUM`, centrada en la frecuencia del radio |
+| `Channels` | canales del banco | abre la lista de canales (`docs/CHANNELS.md`) |
+
+Reglas:
+
+- **Las filas son de compilación.** Sin `CONFIG_SCAN` no hay fila `Scan`; sin
+  `CONFIG_VFO_SEARCH` no hay `VFO scan`. Ninguna fila es una tecla que no hace
+  nada, y el valor de la derecha dice de antemano lo que hay (un banco vacío se
+  ve como `0 CH` antes de pulsar).
+- **Mientras está abierto, el menú reclama todas las teclas**, MONI y el P2
+  largo incluidos (`UI_CLAIM_TOOLS`), y desactiva el TX (`state.txDisable`): la
+  misma regla que la lista de canales, desde un menú no se clavea.
+- **Al cerrar, la pantalla vuelve a la que estaba** (`MAIN_VFO` o `MAIN_MEM`, que
+  se recuerda al abrir) y `_ui_syncTxDisable()` vuelve a armar el PTT. Si la
+  fila abrió un módulo que reclama el teclado —la lista de canales, el
+  analizador—, el TX sigue desactivado hasta que ese módulo se cierre.
+- **`VFO scan` desde `MAIN_MEM`** devuelve primero la VFO (lo mismo que hace el
+  rojo en la pantalla de memoria) y barre desde ahí: la búsqueda sólo arranca en
+  la pantalla de VFO (`core/vfo_search_service.c`).
+- **`Scan` no interrumpe una llamada**: el servicio para el escáner al ver el PTT
+  y devuelve el receptor donde estaba (`docs/SCAN.md`).
+- **`Spectrum` puede negarse**: un modo digital necesita el discriminador y un
+  receptor parado no tiene RSSI para barrer; entonces pita y deja la pantalla
+  donde estaba (`docs/SPECTRUM.md`).
+
+### Submenú de modos
+
+Cabecera `MODE` y, a la derecha, el modo en uso. Una fila por modo del registro
+(`ui/ui_modes.h`), en su orden, con la capacidad a la derecha: `TX` si el modo
+puede transmitir en esta imagen, `RX` si es de sólo recepción, para que elegir un
+modo de recepción no engañe. Se abre con el cursor sobre el modo en uso, así que
+el modo actual es la fila resaltada.
+
+Verde aplica el modo elegido por la puerta de siempre —`state.channel.mode` más
+petición de resincronización del RTX—, deja `tx_frequency` igual a
+`rx_frequency` en los modos de sólo recepción, lo anuncia por voz y vuelve a la
+pantalla principal. Rojo vuelve a la lista sin salir del menú.
 
 ## Channel list and editor
 
@@ -638,17 +696,19 @@ The claim order, which is also the order of the blocks in the file:
 | 10 | contact book | `UI_CLAIM_CONTACTS` |
 | 11 | zone browser | `UI_CLAIM_ZONES` |
 | 12 | P2 long in FM | `UI_CLAIM_APRS_ENTER` |
-| 13 | MONI, P2 long, macro latch | `UI_CLAIM_MACRO` |
-| 14 | P1 long on a main screen | `UI_CLAIM_CHANNELS_OPEN` |
-| 15 | channel list and editor | `UI_CLAIM_CHANNELS` |
-| 16 | the screen's own case in the switch | `UI_CLAIM_SCREEN` |
+| 13 | tools menu open (list or mode submenu) | `UI_CLAIM_TOOLS` |
+| 14 | MONI, P2 long, macro latch | `UI_CLAIM_MACRO` |
+| 15 | P1 long on a main screen | `UI_CLAIM_TOOLS_OPEN` |
+| 16 | channel list and editor | `UI_CLAIM_CHANNELS` |
+| 17 | the screen's own case in the switch | `UI_CLAIM_SCREEN` |
 
 So the matrix, in the words the operator uses ("who answers this key"):
 
 | Screen | P2 short | P2 long | MONI | P1 long | everything else |
 |---|---|---|---|---|---|
-| MAIN_VFO / MAIN_MEM, FM | popup | APRS | macro grid | channel list | the screen |
-| MAIN_VFO / MAIN_MEM, other modes | popup | macro grid | macro grid | channel list | the screen |
+| MAIN_VFO / MAIN_MEM, FM | popup | APRS | macro grid | tools menu | the screen |
+| MAIN_VFO / MAIN_MEM, other modes | popup | macro grid | macro grid | tools menu | the screen |
+| Tools menu, mode submenu | the menu | the menu | the menu | the menu | the menu |
 | MAIN_VFO_INPUT | macro grid | macro grid | macro grid | the screen | the screen |
 | MENU_TOP, MENU_INFO, MENU_ABOUT, MENU_SETTINGS and every page | macro grid | macro grid | macro grid | the screen | the screen |
 | Channel list, channel editor, delete confirmation | the list | the list | the list | the list | the list |
@@ -686,7 +746,7 @@ and without them) and covers, for every compiled mode:
 | Main | VFO, frequency input, MEM |
 | Main menu | top, Banks, Channels, Zones, Contacts, Messages, Settings, Info, About |
 | Settings | Display, Time & Date (+ its digit entry), Radio, Audio, M17, TETRA, FM, Accessibility, Default Settings, and one generated page per mode that has `UI_MODE_PAGE` (DMR, NXDN, dPMR, P25, YSF, D-STAR, AM, WFM) |
-| Tools | channel list, channel editor, delete confirmation, contacts list/editor/confirmation, zone list, zone entries, inbox, sent, message view, composer, delivery status, analyser, packet setup, packet counters, APRS stations/detail/inbox/view/reply editor/setup |
+| Tools | tools menu and its mode submenu, channel list, channel editor, delete confirmation, contacts list/editor/confirmation, zone list, zone entries, inbox, sent, message view, composer, delivery status, analyser, packet setup, packet counters, APRS stations/detail/inbox/view/reply editor/setup |
 | Overlays | quick menu (one table per mode plus the analyser's), macro grid, low battery |
 
 The eleven modes (FM, M17, TETRA, DMR, NXDN, dPMR, P25, YSF, D-STAR, AM, WFM)
