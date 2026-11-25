@@ -104,26 +104,47 @@ static uint16_t scaleFreq(const uint16_t freq)
     return (((uint32_t)freq * 1048576u) + 50000u) / 100000u; /* with rounding */
 }
 
-uint16_t bk4819_readReg(const struct BK4819 *dev, uint8_t reg)
+/**
+ * Which bus a transfer goes over.
+ *
+ * The chip takes up to 8 MHz on SCK (datasheet V1.0 §2.6, table 6), while the
+ * radio talks to it at 200 kHz because no register access is in anyone's inner
+ * loop. A sweep is the exception: 96 us for a 3-byte transfer, three times per
+ * bin, is longer than the settling time it is meant to cover. The device
+ * therefore carries a second SPI configuration, same pins and same protocol,
+ * only a faster clock, used by the sweep and by nothing else, so a board that
+ * turns out not to like the faster clock still has a working radio.
+ */
+static const struct spiDevice *busOf(const struct BK4819 *dev, bool fast)
+{
+    if (fast && (dev->spiFast != NULL))
+        return dev->spiFast;
+
+    return dev->spi;
+}
+
+static uint16_t readRegOn(const struct BK4819 *dev, const struct spiDevice *spi,
+                          uint8_t reg)
 {
     const uint8_t cmd = reg | BK4819_REG_READ;
     uint8_t rx[2];
 
-    spi_acquire(dev->spi);
+    spi_acquire(spi);
     gpioPin_clear(&dev->scn);
     delayUs(1);
 
-    spi_send(dev->spi, &cmd, 1);
-    spi_receive(dev->spi, rx, sizeof(rx));
+    spi_send(spi, &cmd, 1);
+    spi_receive(spi, rx, sizeof(rx));
 
     delayUs(1);
     gpioPin_set(&dev->scn);
-    spi_release(dev->spi);
+    spi_release(spi);
 
     return ((uint16_t)rx[0] << 8) | rx[1];
 }
 
-void bk4819_writeReg(const struct BK4819 *dev, uint8_t reg, uint16_t data)
+static void writeRegOn(const struct BK4819 *dev, const struct spiDevice *spi,
+                       uint8_t reg, uint16_t data)
 {
     const uint8_t cmd = reg | BK4819_REG_WRITE;
     const uint8_t tx[2] = {
@@ -131,16 +152,26 @@ void bk4819_writeReg(const struct BK4819 *dev, uint8_t reg, uint16_t data)
         data & 0xFF,
     };
 
-    spi_acquire(dev->spi);
+    spi_acquire(spi);
     gpioPin_clear(&dev->scn);
     delayUs(1);
 
-    spi_send(dev->spi, &cmd, 1);
-    spi_send(dev->spi, tx, sizeof(tx));
+    spi_send(spi, &cmd, 1);
+    spi_send(spi, tx, sizeof(tx));
 
     delayUs(1);
     gpioPin_set(&dev->scn);
-    spi_release(dev->spi);
+    spi_release(spi);
+}
+
+uint16_t bk4819_readReg(const struct BK4819 *dev, uint8_t reg)
+{
+    return readRegOn(dev, dev->spi, reg);
+}
+
+void bk4819_writeReg(const struct BK4819 *dev, uint8_t reg, uint16_t data)
+{
+    writeRegOn(dev, dev->spi, reg, data);
 }
 
 void bk4819_maskSetRegister(const struct BK4819 *dev, uint8_t reg,
@@ -233,6 +264,25 @@ void bk4819_setFrequency(const struct BK4819 *dev, uint32_t freq)
     freq = freq / 10; /* Convert to 10 Hz units */
     bk4819_writeReg(dev, 0x39, (freq >> 16) & 0xFFFF);
     bk4819_writeReg(dev, 0x38, freq & 0xFFFF);
+}
+
+void bk4819_tuneCached(const struct BK4819 *dev, uint32_t freq, uint32_t *word)
+{
+    const struct spiDevice *spi = busOf(dev, true);
+    const uint32_t w = freq / 10U; /* 10 Hz units */
+
+    /*
+     * High half first and low half last, as bk4819_setFrequency() does: the
+     * chip applies the word when the low half lands, so skipping the high write
+     * when the field has not moved cannot leave the PLL on a half-updated word.
+     */
+    if ((word == NULL) || ((w >> 16) != (*word >> 16)))
+        writeRegOn(dev, spi, 0x39, (uint16_t)((w >> 16) & 0xFFFF));
+
+    writeRegOn(dev, spi, 0x38, (uint16_t)(w & 0xFFFF));
+
+    if (word != NULL)
+        *word = w;
 }
 
 void bk4819_enableRx(const struct BK4819 *dev)
@@ -498,6 +548,19 @@ void bk4819_setMicGain(const struct BK4819 *dev, uint8_t gain)
 int16_t bk4819_getRssi(const struct BK4819 *dev)
 {
     return ((bk4819_readReg(dev, 0x67) & BK4819_REG67_RSSI_MASK) / 2) - 160;
+}
+
+int16_t bk4819_getRssiFast(const struct BK4819 *dev)
+{
+    const uint16_t raw = readRegOn(dev, busOf(dev, true), 0x67)
+                       & BK4819_REG67_RSSI_MASK;
+
+    return (int16_t)((raw / 2) - 160);
+}
+
+uint8_t bk4819_getGlitch(const struct BK4819 *dev)
+{
+    return (uint8_t)(readRegOn(dev, busOf(dev, true), 0x63) & 0xFF);
 }
 
 uint16_t bk4819_getMicLevel(const struct BK4819 *dev)

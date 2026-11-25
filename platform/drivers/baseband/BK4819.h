@@ -92,8 +92,10 @@ enum bk4819_gpio {
  * transfer function does not manage it.
  */
 struct BK4819 {
-    const struct spiDevice *spi; ///< SPI bus device
-    struct gpioPin scn;          ///< Chip select, active low
+    const struct spiDevice *spi;     ///< SPI bus device
+    const struct spiDevice *spiFast; ///< Same bus, faster clock, for the sweep;
+                                     ///< NULL to use spi for everything
+    struct gpioPin scn;              ///< Chip select, active low
 };
 
 /**
@@ -172,6 +174,49 @@ void bk4819_init(const struct BK4819 *dev);
  * @param freq: frequency, in Hz.
  */
 void bk4819_setFrequency(const struct BK4819 *dev, uint32_t freq);
+
+/**
+ * Tune with only the halves of the PLL word that changed.
+ *
+ * The word is 32 bits of 10 Hz, split over REG_39 (high) and REG_38 (low). In a
+ * sweep the step is far smaller than the 655.36 kHz that the high half covers,
+ * so at 25 kHz it changes once every 26 bins: writing it only when it changes
+ * takes a third of the accesses out of a sweep. It is safe because the low write
+ * comes last either way -- the order this driver has always used, and the one
+ * the UV-K5 firmware uses with the halves exchanged, both of which the chip
+ * applies. The transfer goes over the fast bus when the device has one (see
+ * spiFast).
+ *
+ * @param dev: pointer to device data.
+ * @param freq: frequency, in Hz.
+ * @param word: last 10 Hz word written through this function, in and out. May
+ *              be NULL, which writes both halves every time.
+ */
+void bk4819_tuneCached(const struct BK4819 *dev, uint32_t freq, uint32_t *word);
+
+/**
+ * Get the RSSI over the fast bus.
+ *
+ * Same value as bk4819_getRssi(), for the inner loop of a sweep.
+ *
+ * @param dev: pointer to device data.
+ * @return RSSI, in dBm.
+ */
+int16_t bk4819_getRssiFast(const struct BK4819 *dev);
+
+/**
+ * Get the glitch indicator, REG_63<7:0>.
+ *
+ * The chip counts the spikes of the discriminator in a window of its own, and
+ * the counter saturates while the IF is recovering from a retune: the UV-K5
+ * spectrum firmware polls this register instead of waiting a fixed delay
+ * (egzumer's GetRssi()), which is the only way to know that the receiver has
+ * caught up with the new frequency without guessing a number.
+ *
+ * @param dev: pointer to device data.
+ * @return glitch indicator, 0 to 255.
+ */
+uint8_t bk4819_getGlitch(const struct BK4819 *dev);
 
 /**
  * Turn on RX.
