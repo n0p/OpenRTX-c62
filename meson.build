@@ -47,6 +47,10 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/core/crc.c',
                'openrtx/src/core/datetime.c',
                'openrtx/src/core/openrtx.c',
+               # Post-mortem recorder: breadcrumbs, liveness beats, the crash
+               # record. Portable C, built into the host tests as well as the
+               # firmware. See docs/BLACKBOX.md.
+               'openrtx/src/core/blackbox.c',
                'openrtx/src/core/audio_codec.c',
                'openrtx/src/core/audio_stream.c',
                'openrtx/src/core/audio_path.cpp',
@@ -1596,6 +1600,14 @@ port_mode_test = executable('port_mode_test',
                             sources : unit_test_src + ['tests/unit/port_mode.cpp'],
                             kwargs  : unit_test_opts)
 
+# Caja negra (docs/BLACKBOX.md): el detector de atasco con un hilo que deja de
+# latir y un reloj de mentira, el contenido del registro (campos, orden de las
+# migajas, CRC, version) y la lectura al arrancar sobre una flash falsa con
+# semantica NOR.
+blackbox_test = executable('blackbox_test',
+                           sources : unit_test_src + ['tests/unit/blackbox.cpp'],
+                           kwargs  : unit_test_opts)
+
 # APRS: validacion de indicativo, SSID y path antes de emitir
 aprs_config_test = executable('aprs_config_test',
                               sources : unit_test_src + [
@@ -1905,6 +1917,7 @@ test('Spectrum Settle Test',  spectrum_settle_test)
 test('UI Spectrum Test',     ui_spectrum_test)
 test('Settings Record Test', settings_record_test)
 test('Accessory Port Test',  port_mode_test)
+test('Blackbox Test',        blackbox_test)
 test('P25 IMBE Vocoder Test', imbe_vocoder_test)
 test('P25 IMBE Robustness Test', imbe_robust_test)
 test('APRS Config Test',     aprs_config_test)
