@@ -313,6 +313,11 @@ con nombres vacíos y sin mínimo histórico.
   completa: el CRC lo delata y el reinicio lo da el perro guardián.
 * El registro es **uno**: el siguiente cuelgue pisa al anterior. Se lee al
   arrancar justo por eso.
+* Un hilo que se pasa 2 s dentro de una sola operación —una escritura grande de
+  canales desde el CPS, por ejemplo— se considera colgado. Es deliberado: un
+  hilo que no da una vuelta en 2 s no está sirviendo a nadie, y las escrituras
+  de este firmware (4 KiB de sector) tardan decenas de milisegundos, no
+  segundos.
 * El tick de las migajas es de 24 bits (4,6 h) y su resolución es la del último
   latido o de la pasada del supervisor (≤ 100 ms).
 * Un cuelgue determinista al arrancar produce un ciclo de reinicios; cada vuelta
