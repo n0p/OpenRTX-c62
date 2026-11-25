@@ -130,16 +130,20 @@ static int areaWrite(void *ctx, uint32_t off, const void *buf, size_t len)
     if ((off == BB_OFF_VALID) && (len == 4)) {
         /* 1 -> 0 over the write block: no erase, and the record is dead. */
         uint32_t zero = 0;
-        return (flash_area_write(bbArea, BB_AREA_OFFSET + off, &zero, 4) < 0) ?
-                 -1 :
-                 0;
+
+        if (flash_area_write(bbArea, BB_AREA_OFFSET + off, &zero, 4) < 0)
+            return -1;
+
+        return 0;
     }
 
     if (flash_area_erase(bbArea, BB_AREA_OFFSET, BB_SECTOR_SIZE) < 0)
         return -1;
 
-    return (flash_area_write(bbArea, BB_AREA_OFFSET + off, buf, len) < 0) ? -1 :
-                                                                            0;
+    if (flash_area_write(bbArea, BB_AREA_OFFSET + off, buf, len) < 0)
+        return -1;
+
+    return 0;
 }
 
 static const bbFlashIo_t bbIo = {
