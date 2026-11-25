@@ -2010,6 +2010,42 @@ void ui_updateFSM(bool *sync_rtx)
             return;
         }
 
+#ifdef CONFIG_APRS
+        /*
+         * Entry point to the APRS screens, and the one deliberate exception to
+         * the key map: on the FM main screen a long press of P2 opens them. In
+         * FM that long press used to open the macro grid; the side key (MONI)
+         * still does, short or long, so nothing is lost. Everywhere else P2
+         * keeps its meaning: short opens the quick menu, long opens the macro
+         * grid, and nothing about APRS is reachable by accident.
+         *
+         * This has to be decided *before* the popup, and it has to close the
+         * popup: the keypad reports the press and the long press as two
+         * events, so the popup is already open -- it opens on the press edge --
+         * by the time the long press arrives, and its handler takes every key
+         * while it is up. That is why P2 held on the FM main screen only
+         * latched the popup, and the station list was unreachable from the
+         * keypad (tests/unit/ui_aprs_entry.cpp presses the two events in the
+         * order the keypad delivers them).
+         */
+        if (((state.ui_screen == MAIN_VFO) || (state.ui_screen == MAIN_MEM))
+            && (state.channel.mode == OPMODE_FM)
+            && (msg.keys & KEY_F2) && msg.long_press
+            && !ui_state.input_locked && !ui_state.edit_mode
+            && !ui_channels_isOpen())
+        {
+            if (qm_state.open)
+                qm_close();
+
+            ui_aprs_enter();
+            state.txDisable = true;
+            *sync_rtx = true;
+            redraw_needed = true;
+            KEY_CLAIM(UI_CLAIM_APRS_ENTER);
+            return;
+        }
+#endif /* CONFIG_APRS */
+
         /*
          * Contextual quick menu (P2, KEY_F2). Short press opens the popup on
          * the main screens; while it is open it owns the keypad: UP/DOWN move
@@ -2143,31 +2179,6 @@ void ui_updateFSM(bool *sync_rtx)
             KEY_CLAIM(UI_CLAIM_ZONES);
             return;
         }
-
-#ifdef CONFIG_APRS
-        /*
-         * Entry point, and the one deliberate exception to the key map: on the
-         * FM main screen a long press of P2 opens the APRS screens. In FM that
-         * long press used to open the macro grid; the side key (MONI) still
-         * does, short or long, so nothing is lost. Everywhere else P2 keeps
-         * its meaning: short opens the quick menu, long opens the macro grid.
-         * Long press on purpose, so that nothing about APRS is reachable by
-         * accident, and so that the short press stays with the quick menu.
-         */
-        if (((state.ui_screen == MAIN_VFO) || (state.ui_screen == MAIN_MEM))
-            && (state.channel.mode == OPMODE_FM)
-            && (msg.keys & KEY_F2) && msg.long_press
-            && !ui_state.input_locked && !ui_state.edit_mode
-            && !ui_channels_isOpen())
-        {
-            ui_aprs_enter();
-            state.txDisable = true;
-            *sync_rtx = true;
-            redraw_needed = true;
-            KEY_CLAIM(UI_CLAIM_APRS_ENTER);
-            return;
-        }
-#endif /* CONFIG_APRS */
 
         // If MONI is pressed, activate MACRO functions; P2 long keeps the
         // legacy 3x3 grid as its shortcut everywhere APRS does not claim it
