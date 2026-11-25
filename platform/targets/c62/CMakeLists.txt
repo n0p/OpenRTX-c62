@@ -321,16 +321,23 @@ if(CONFIG_C62_KISS)
   target_compile_definitions(app PRIVATE CONFIG_KISS)
   message(STATUS "C62: packet modem (KISS) enabled")
 
+  if(NOT CONFIG_C62_APRS)
+    # The AX.25 layer, the HDLC framer and the Bell 202 modulator that the KISS
+    # modems reuse live in the APRS block. Without APRS they are linked here:
+    # they are plain protocol sources and drag no APRS interface in.
+    target_sources(app PRIVATE
+      ${OPENRTX_ROOT}/openrtx/src/protocols/APRS/ax25.c
+      ${OPENRTX_ROOT}/openrtx/src/protocols/APRS/hdlc.c
+      ${OPENRTX_ROOT}/openrtx/src/protocols/APRS/afsk.c)
+    message(STATUS "C62: KISS links AX.25/HDLC/AFSK itself (no CONFIG_C62_APRS)")
+  endif()
+
   if(CONFIG_C62_KISS_UART)
     target_sources(app PRIVATE
       ${OPENRTX_ROOT}/platform/drivers/audio/c62_kiss.c)
     target_compile_definitions(app PRIVATE C62_KISS_UART)
     if(C62_REMOTE)
       message(FATAL_ERROR "C62_KISS_UART and C62_REMOTE share the PTT pad")
-    endif()
-    if(NOT CONFIG_C62_APRS)
-      message(WARNING "C62_KISS_UART: the packet modem needs the AX.25 layer, "
-                      "enable CONFIG_C62_APRS for ax25.c and hdlc.c")
     endif()
   endif()
 endif()

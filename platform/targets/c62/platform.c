@@ -27,9 +27,11 @@
 #ifdef C62_REMOTE
 #include "drivers/audio/c62_remote.h"
 #endif
-#ifdef C62_KISS_UART
-extern void kiss_uart_init(void);
 #endif
+#ifdef C62_KISS_UART
+/* Out of the dump block on purpose: the KISS build has no dump, and inside it
+ * the declaration disappeared and the call became an implicit one. */
+extern void kiss_uart_init(void);
 #endif
 #include "controller.h"
 #include "dsp.h"

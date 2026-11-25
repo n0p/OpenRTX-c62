@@ -27,10 +27,11 @@ west build -b c62 -d build_c62 . -- -DCONFIG_C62_DMR_RX=y -DCONFIG_C62_APRS=y \
 ```
 
 `CONFIG_C62_KISS` (`platform/targets/c62/Kconfig.board`, `default y`) mete en la
-imagen el codec, los modems, el servicio y las dos pantallas. No hace falta
-`CONFIG_C62_APRS` para los modems AFSK (el HDLC y AX.25 vienen de ahí, y sin él
-solo se enlazan si el build lo pide: el CMake avisa), pero sí para que la trama
-que llega del aire se pueda interpretar como AX.25.
+imagen el codec, los modems, el servicio y las dos pantallas. La capa AX.25, el
+framer HDLC y el modulador de Bell 202 viven en el bloque de APRS; si el build
+lleva `-DCONFIG_C62_APRS=n`, el bloque de KISS los enlaza él mismo (son fuentes
+de protocolo sueltas, no arrastran la interfaz de APRS), así que el modem se
+compila sin el modo APRS. Lo que no se puede es no tener ninguno de los dos.
 
 | opción | qué añade | por defecto |
 |---|---|---|
@@ -55,11 +56,15 @@ tres variantes:
 | sin KISS (`-DCONFIG_C62_KISS=n`) | 567 016 B (54,07 %) | 179 504 B (68,48 %) | 435 980 B | 8 468 B | 12 640 B |
 | KISS (`ncuart`) | 573 944 B (54,74 %) | 188 656 B (71,97 %) | 435 980 B | 8 468 B | 12 640 B |
 | KISS + cable (`uart`) | 574 116 B (54,75 %) | 188 656 B (71,97 %) | 435 980 B | 8 468 B | 12 640 B |
+| KISS sin APRS (`-DCONFIG_C62_APRS=n`) | 548 980 B (52,35 %) | 181 720 B (69,32 %) | 430 388 B | 8 468 B | 12 640 B |
 
 El modem cuesta **+6 928 B de flash y +9 152 B de RAM** (el driver del cable
 añade 172 B más de flash y nada de RAM). De la RAM, 3 072 B son la pila del
 hilo del servicio; el resto es el motor (dos demoduladores, dos moduladores,
-deframer y buffers) más la cola de tres tramas. No toca PSRAM.
+deframer y buffers) más la cola de tres tramas. No toca PSRAM. La cuarta fila
+está ahí porque demuestra lo de arriba: sin APRS el enlace lo resuelve el propio
+bloque de KISS, y la imagen baja 25 KB de flash (todo el APRS) con el modem
+dentro.
 
 ---
 

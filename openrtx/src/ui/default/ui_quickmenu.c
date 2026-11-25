@@ -856,16 +856,23 @@ void qm_am_applyRaster(void)
 #define QM_ITEM_MSG() \
     { "MSG", QM_GOTO, 0, 0, 1, 0, NULL, NULL, NULL, NULL, MSG_COMPOSE, 0 }
 
+/*
+ * The two optional entries at the end of the FM list carry their own comma, and
+ * the list has no separators between them: with "QM_ITEM_APRS(), QM_ITEM_PKT()"
+ * a build of APRS or KISS whose macro expands to nothing leaves a bare comma and
+ * the initialiser does not compile. A trailing comma in an initialiser is legal
+ * C, so this way all four combinations build.
+ */
 #ifdef CONFIG_APRS
 #define QM_ITEM_APRS() \
-    { "APRS", QM_GOTO, 0, 0, 1, 0, NULL, NULL, NULL, NULL, APRS_CFG, 0 }
+    { "APRS", QM_GOTO, 0, 0, 1, 0, NULL, NULL, NULL, NULL, APRS_CFG, 0 },
 #else
 #define QM_ITEM_APRS()
 #endif
 
 #ifdef CONFIG_KISS
 #define QM_ITEM_PKT() \
-    { "PKT", QM_GOTO, 0, 0, 1, 0, NULL, NULL, NULL, NULL, PKT_CFG, 0 }
+    { "PKT", QM_GOTO, 0, 0, 1, 0, NULL, NULL, NULL, NULL, PKT_CFG, 0 },
 #else
 #define QM_ITEM_PKT()
 #endif
@@ -902,7 +909,7 @@ static const qm_item_t qm_items_fm[] =
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
     QM_ITEM_MSG(),
-    QM_ITEM_APRS(),
+    QM_ITEM_APRS()
     QM_ITEM_PKT()
 };
 

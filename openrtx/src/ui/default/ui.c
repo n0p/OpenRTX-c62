@@ -79,6 +79,7 @@
 #endif
 #ifdef CONFIG_KISS
 #include "ui/ui_packet.h"
+#include "core/packet_service.h"
 #endif
 #ifdef CONFIG_VFO_SEARCH
 #include "core/vfo_search.h"
