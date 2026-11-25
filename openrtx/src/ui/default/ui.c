@@ -203,6 +203,9 @@ const char *settings_radio_items[] =
     "Step",
     "Squelch",
     "TX Power",
+    /* Who owns the accessory jack's pad: UART2 RXD, the speaker-mic PTT, or
+     * both (docs/ACCESSORY.md). */
+    "PC Port",
 };
 
 const char *settings_audio_items[] =
@@ -3168,6 +3171,31 @@ void ui_updateFSM(bool *sync_rtx)
                                     state.channel.power -= 500;
                                 *sync_rtx = true;
                                 vp_announcePower(state.channel.power, queueFlags);
+                            }
+                            break;
+                        case R_PC_PORT:
+                            /*
+                             * Who owns the pad at the accessory jack
+                             * (docs/ACCESSORY.md).  Nothing to sync with the
+                             * RTX: the transport reads the setting on its next
+                             * pass, 1 ms later, and reroutes the pad and the
+                             * keying itself.  The debouncer in state_task()
+                             * writes the record three seconds later, like any
+                             * other setting.
+                             */
+                            if(msg.keys & (KEY_UP | KEY_RIGHT | KNOB_RIGHT))
+                            {
+                                state.settings.pc_port =
+                                    (state.settings.pc_port >= PORT_MODE_NEVER)
+                                        ? (uint8_t)PORT_MODE_AUTO
+                                        : (uint8_t)(state.settings.pc_port + 1);
+                            }
+                            else if(msg.keys & (KEY_DOWN | KEY_LEFT | KNOB_LEFT))
+                            {
+                                state.settings.pc_port =
+                                    (state.settings.pc_port == PORT_MODE_AUTO)
+                                        ? (uint8_t)PORT_MODE_NEVER
+                                        : (uint8_t)(state.settings.pc_port - 1);
                             }
                             break;
                         default:
