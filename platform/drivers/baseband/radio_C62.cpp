@@ -21,6 +21,10 @@
 #include "drivers/audio/csk6_codec.h"
 #include "radioUtils.h"
 #include <stdio.h>
+
+#ifdef CONFIG_C62_AIR_TX
+#include "../../targets/c62/air_tx.h"
+#endif
 #ifdef C62_BASEBAND_DUMP
 #include "../audio/baseband_dump_c62.h"
 #endif
@@ -128,6 +132,32 @@ static constexpr uint8_t AM_RX_AUDIO_GAIN2 = 0x3f;
 /* Codec ADC peak, sample units, that asks for a coarser or a finer AF step */
 static constexpr uint16_t AM_AF_PEAK_HIGH = 28000; // 0.85 of full scale
 static constexpr uint16_t AM_AF_PEAK_LOW = 7000;   // 0.21 of full scale
+
+/*
+ * Airband AM transmitter (CONFIG_C62_AIR_TX). The carrier is a BK4819
+ * transmission with no audio in it: the amplitude modulation happens in the PA,
+ * where the APC duty sets its bias, and core/am_tx.c turns the microphone into
+ * that duty. Three numbers describe the calibration:
+ *
+ *  - AM_CARRIER_MW: the carrier power the mode asks for. 1 W, the low point of
+ *    the factory band calibration and the only one this radio can produce
+ *    without leaving the linear part of the PA for the peaks of the envelope:
+ *    at 90 % depth the peaks are 3.6 times the carrier.
+ *  - AM_DUTY_MIN_PCT: the bottom of the linear window, in percent of the 1 W
+ *    duty. One tenth is what a 90 % depth needs; the PA of this radio has not
+ *    been measured there yet, and if it stops being linear earlier the
+ *    modulator caps the depth instead of clipping the envelope.
+ *  - AM_DUTY_MAX_PCT: the top, 190 % of the carrier duty, which is what a 90 %
+ *    depth asks for (1.9 times the carrier voltage). Well below the 5 W point,
+ *    which would be 4 times the carrier voltage.
+ *
+ * None of the three is measured: the factory calibration has no point below
+ * 136.125 MHz, so the duty for 118 MHz is extrapolated. docs/TX_AIRBAND.md has
+ * the bench procedure that replaces them.
+ */
+static constexpr uint32_t AM_CARRIER_MW = 1000;
+static constexpr uint8_t AM_DUTY_MIN_PCT = 10;
+static constexpr uint8_t AM_DUTY_MAX_PCT = 190;
 
 /* REG_48<11:10> has four steps, 0 dB to -18 dB in 6 dB steps */
 static constexpr uint8_t AM_RX_AUDIO_GAIN1_MAX = 3;
@@ -448,6 +478,15 @@ void radio_init(const rtxStatus_t *rtxState)
     gpioPin_set(&c62_bk1080.pwr);
     wfmReady = false;
 
+#ifdef CONFIG_C62_AIR_TX
+    /* The amplitude modulator of the airband transmitter, see air_tx.h */
+    int airTx = air_tx_init();
+    if (airTx == -ENOTSUP)
+        printk("AM TX: no pacing timer, airband transmit limited to 1 kHz\n");
+    else if (airTx != 0)
+        printk("AM TX: APC power control not available, airband is RX only\n");
+#endif
+
     gpioDev_setMode(LNA_VHF_EN, OUTPUT_ACTIVE_LOW);
     gpioDev_setMode(LNA_UHF_EN, OUTPUT_ACTIVE_LOW);
     gpioDev_setMode(PA_VHF_EN, OUTPUT);
@@ -459,6 +498,11 @@ void radio_terminate()
 {
     /* The tuner has its own supply switch: do not leave it drawing 20 mA */
     wfmLeave();
+
+#ifdef CONFIG_C62_AIR_TX
+    /* Nothing may be left keyed, and no ramp matters at shutdown */
+    air_tx_abort();
+#endif
 }
 
 void radio_tuneVcxo(const int16_t vhfOffset, const int16_t uhfOffset)
@@ -630,6 +674,9 @@ void radio_setOpmode(const enum opmode mode)
         bk4819_setRxAudioGain(&c62_bk4819, amAfGain1, AM_RX_AUDIO_GAIN2);
         agc_init(&amAgc, NULL);
         csk6codec_setRxProcessor(amAudioProcess);
+#ifdef CONFIG_C62_AIR_TX
+        air_tx_setDepth(state.settings.am_depth);
+#endif
     } else if (mode == OPMODE_WFM_BC) {
         /*
          * Broadcast FM. The BK4819 is not in this path at all: its audio is
@@ -839,10 +886,62 @@ void radio_enableTx()
     if (radioMode == OPMODE_WFM_BC)
         return;
 
-    // Aircraft band AM is receive only, and so is TETRA
-    if ((config->txDisable == 1) || (radioMode == OPMODE_TETRA) ||
-        (radioMode == OPMODE_AIRBAND))
+    // TETRA has no transmitter, and neither has the airband without the
+    // amplitude modulator built in
+    if ((config->txDisable == 1) || (radioMode == OPMODE_TETRA))
         return;
+
+#ifndef CONFIG_C62_AIR_TX
+    if (radioMode == OPMODE_AIRBAND)
+        return;
+#else
+    /*
+     * Airband AM: the BK4819 transmits a bare carrier -- the codec's
+     * microphone path is taken over by the modulator, which leaves silence for
+     * the chip -- and the PA bias is driven with the voice envelope. The order
+     * matters: the VCO and the PA come up first, and only then does the carrier
+     * ramp start, so that the ramp is the only thing between silence and full
+     * power.
+     */
+    if (radioMode == OPMODE_AIRBAND) {
+        gpioDev_clear(LNA_VHF_EN);
+        gpioDev_clear(LNA_UHF_EN);
+        gpioDev_clear(PA_VHF_EN);
+        gpioDev_clear(PA_UHF_EN);
+        gpioDev_clear(ALC_TX_LED_EN);
+        delayMs(5);
+
+        const uint32_t freq = airband_snap(config->txFrequency);
+        if ((freq < AIRBAND_FREQ_MIN) || (freq > AIRBAND_FREQ_MAX))
+            return;
+
+        /* The carrier level, from the band calibration at the TX frequency */
+        const uint32_t pwr = (config->txPower < AM_CARRIER_MW)
+                                 ? config->txPower
+                                 : AM_CARRIER_MW;
+
+        bk4819_setFrequency(&c62_bk4819, freq);
+        if (freq < 174000000)
+            gpioDev_set(PA_VHF_EN);
+        else
+            gpioDev_set(PA_UHF_EN);
+
+        gpioDev_set(ALC_TX_LED_EN);
+        set_tx_power(pwr);
+
+        /* The carrier, then the envelope */
+        bk4819_enableTx(&c62_bk4819);
+
+        const uint32_t carrierPct = (txCal.loPwr > 0) ? txCal.loPwr : 33;
+        air_tx_setCalibration((uint8_t)carrierPct, AM_DUTY_MIN_PCT,
+                              AM_DUTY_MAX_PCT, (uint8_t)carrierPct);
+        air_tx_setDepth(state.settings.am_depth);
+        air_tx_key(true);
+
+        radioStatus = TX;
+        return;
+    }
+#endif
 
     gpioDev_clear(LNA_VHF_EN);
     gpioDev_clear(LNA_UHF_EN);
@@ -878,6 +977,17 @@ void radio_enableTx()
 
 void radio_disableRtx()
 {
+#ifdef CONFIG_C62_AIR_TX
+    /*
+     * The airband transmitter is stopped before anything else: the modulator
+     * ramps the carrier down in 16 ms and then releases the APC line, so that
+     * the PA switch is not what cuts the carrier. It is a no-op when the
+     * modulator is not keyed.
+     */
+    if (radioMode == OPMODE_AIRBAND)
+        air_tx_key(false);
+#endif
+
     bk4819_disableCtdcss(&c62_bk4819);
 
     gpioDev_clear(LNA_VHF_EN);

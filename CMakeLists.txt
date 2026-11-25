@@ -133,6 +133,7 @@ target_sources(app
     openrtx/src/core/settings_record.c
     openrtx/src/core/zones.c
     openrtx/src/core/agc.c
+    openrtx/src/core/am_tx.c
     openrtx/src/core/airband.c
     openrtx/src/core/wfm.c
     openrtx/src/core/spectrum.c

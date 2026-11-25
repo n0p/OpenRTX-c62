@@ -27,13 +27,13 @@ extern "C" {
 }
 
 /*
- * The DMR package appended the transmit air delay: the new octets are the end
- * of the payload, so a record of the previous pass is the same payload two
- * bytes shorter.  The version did not move (the tree is one development line),
- * so it is the CRC that catches the shorter payload: the record is dropped as
- * a whole instead of read with the delay missing.
+ * The DMR package appended the transmit air delay and the fourth pass the
+ * airband transmit depth.  Both are the end of the payload, so a record of the
+ * previous pass is the same payload shorter and the CRC catches it: the record
+ * is dropped as a whole instead of read with the fields missing.
  */
-#define PRE_DELAY_PAYLOAD_LEN (sizeof(settings_t) - sizeof(int16_t))
+#define PRE_DELAY_PAYLOAD_LEN \
+    (sizeof(settings_t) - sizeof(int16_t) - sizeof(uint8_t))
 
 static const settings_t &dflt()
 {
@@ -109,13 +109,18 @@ TEST_CASE("The receive-only modes default to the behaviour they had before",
     REQUIRE(default_settings.am_agc == true);
     REQUIRE(default_settings.am_step == false);
     REQUIRE(default_settings.am_snap == false);
+
+    /* And the new transmit depth has a default the modulator can use as is */
+    REQUIRE(default_settings.am_depth == 60);
 }
 
-TEST_CASE("The DMR air delay is the last field of the record", "[settings]")
+TEST_CASE("The DMR air delay and the AM depth end the record", "[settings]")
 {
-    /* Version 5 carries it, appended after the scan block */
-    REQUIRE(SETTINGS_VERSION == 5);
-    REQUIRE(sizeof(settings_t) == PRE_DELAY_PAYLOAD_LEN + sizeof(int16_t));
+    /* Version 6 adds the airband transmit depth, appended after the air delay */
+    REQUIRE(SETTINGS_VERSION == 6);
+    REQUIRE(sizeof(settings_t) == PRE_DELAY_PAYLOAD_LEN + sizeof(int16_t)
+                                  + sizeof(uint8_t));
+    REQUIRE(dflt().am_depth == 60);
 
     /*
      * A default radio sends the measured delay: the field is 0 in the record,
@@ -176,9 +181,9 @@ TEST_CASE("A record from before the air delay is refused, not half-read",
     uint8_t old[SETTINGS_RECORD_SIZE];
 
     /*
-     * The record the previous pass wrote: version 5 already, a valid magic and
-     * a CRC over a payload without the DMR air delay.  The version matches, so
-     * it is the CRC length that refuses it; the radio keeps its defaults and
+     * The record the previous pass wrote: the current version, a valid magic
+     * and a CRC over a payload without the DMR air delay.  The version matches,
+     * so it is the CRC length that refuses it; the radio keeps its defaults and
      * the operator loses the settings once, which is the documented cost of
      * the append.
      */
@@ -186,7 +191,7 @@ TEST_CASE("A record from before the air delay is refused, not half-read",
     old[0] = 0x58; old[1] = 0x54; old[2] = 0x52; old[3] = 0x4F;  /* "ORTX" */
     old[4] = (uint8_t)(crc_ccitt(&s, PRE_DELAY_PAYLOAD_LEN) & 0xFF);
     old[5] = (uint8_t)(crc_ccitt(&s, PRE_DELAY_PAYLOAD_LEN) >> 8);
-    old[6] = 5; old[7] = 0;                          /* version 5 */
+    old[6] = (uint8_t)SETTINGS_VERSION; old[7] = 0;  /* current version */
     memcpy(&old[SETTINGS_RECORD_HDR], &s, PRE_DELAY_PAYLOAD_LEN);
 
     settings_t out;

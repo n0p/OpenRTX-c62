@@ -496,11 +496,21 @@ bool opmode_canTransmit(uint8_t mode)
             /* Receive only: nothing keys the carrier in this build */
             return false;
 #endif
+        case OPMODE_AIRBAND:
+#ifdef CONFIG_C62_AIR_TX
+            /*
+             * AM transmit by modulating the PA supply: the mode asks for the
+             * operator's confirmation before it keys anything, so a "yes" here
+             * only means the transmitter exists, not that it will transmit.
+             */
+            return true;
+#else
+            return false;
+#endif
         case OPMODE_NXDN:
         case OPMODE_DPMR:
         case OPMODE_P25:
         case OPMODE_YSF:
-        case OPMODE_AIRBAND:
         case OPMODE_WFM_BC:
             /* Receive only: there is no transmitter for these modes yet */
             return false;

@@ -41,7 +41,7 @@ extern "C" {
  *       renumber and never a re-interpretation: nothing here reorders or reuses
  *       a field.
  */
-#define SETTINGS_VERSION 5
+#define SETTINGS_VERSION 6
 
 typedef enum
 {
@@ -168,6 +168,18 @@ typedef struct
      * bench calibration against a repeater.  Positive moves the burst later.
      */
     int16_t  dmr_tx_air_delay_us;
+    /*
+     * Modulation depth of the airband transmitter, percent. 30 to 90: below
+     * that an amplitude modulated carrier is hard to hear over the noise of a
+     * receiver with its AGC on, and above it the troughs of the envelope come
+     * too close to zero for any PA to follow without distortion. The modulator
+     * caps it further if the calibrated window of the PA cannot take it, and
+     * am_tx_getDepth() is what the menu shows.
+     *
+     * Fourth pass, appended behind everything else: the AM block above could
+     * not take it without moving the scan fields of an older record.
+     */
+    uint8_t  am_depth;            // Airband TX modulation depth, percent
 }
 __attribute__((packed)) settings_t;
 
@@ -270,6 +282,7 @@ static const settings_t default_settings =
     144000000U,                   // VFO scan: 2 m band
     146000000U,
     0,                            // Air delay 0: the measured default
+    60,                           // AM: 60 % modulation depth on transmit
 };
 
 /**

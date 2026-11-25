@@ -26,6 +26,7 @@
 #include "core/cps.h"
 #include "core/spectrum_service.h"
 #include "core/airband.h"
+#include "core/am_tx.h"
 #include "core/channel_store.h"
 #include "core/messaging.h"
 #include "core/ui.h"
@@ -744,6 +745,44 @@ void qm_am_set_agc(int on)
     state.settings.am_agc = (on != 0);
 }
 
+#ifdef CONFIG_C62_AIR_TX
+/*
+ * Transmit confirmation and depth. The state row is the only way to disarm
+ * except switching the radio off, and it shows what the transmitter would do:
+ * "LOCK" (the first PTT will raise the warning), "PROMPT" (the warning is on
+ * screen) or "ARM" (PTT transmits). The depth row is what the modulator tries
+ * to produce; the value the PA can actually reach is what it shows once the
+ * window is narrower than the setting.
+ */
+int qm_am_get_tx(void)
+{
+    return (int)airband_txState();
+}
+
+void qm_am_set_tx(int v)
+{
+    airband_txSetState((v != 0) ? AIRBAND_TX_ARMED : AIRBAND_TX_LOCKED);
+    /* The transmitter reads the state at the next key, nothing to resync */
+}
+
+static const char *const qm_names_am_tx[] = { "LOCK", "WAIT", "ARM" };
+
+int qm_am_get_depth(void)
+{
+    return state.settings.am_depth;
+}
+
+void qm_am_set_depth(int v)
+{
+    if (v < AMTX_DEPTH_MIN)
+        v = AMTX_DEPTH_MIN;
+    if (v > AMTX_DEPTH_MAX)
+        v = AMTX_DEPTH_MAX;
+
+    state.settings.am_depth = (uint8_t)v;
+}
+#endif /* CONFIG_C62_AIR_TX */
+
 /*
  * Channel raster. 25 kHz is the classic plan, 8.33 kHz the one mandated above
  * FL195 in Europe: three channels per 25 kHz slot, named with a designator
@@ -1084,6 +1123,12 @@ static const qm_item_t qm_items_airband[] =
     QM_ITEM_INFO("CH", qm_am_fmt_ch),
     QM_ITEM_ENUM("IF", 0, 1, qm_am_get_if, qm_am_set_if,
                  qm_names_am_if, NULL),
+#ifdef CONFIG_C62_AIR_TX
+    QM_ITEM_ENUM("TX", 0, 1, qm_am_get_tx, qm_am_set_tx,
+                 qm_names_am_tx, NULL),
+    QM_ITEM_INT("DEPTH", AMTX_DEPTH_MIN, AMTX_DEPTH_MAX, 10,
+                qm_am_get_depth, qm_am_set_depth),
+#endif
 #ifdef CONFIG_RX_FINE_OFFSET
     QM_ITEM_INT_FF("FINE", -500, 500, 10, 100, qm_get_rx_fine,
                    qm_set_rx_fine, qm_fmt_fine),
@@ -1407,7 +1452,11 @@ static const qm_menu_t uiModes[] =
 #endif
 #ifdef UI_MODE_AIRBAND
     QM_MODE(OPMODE_AIRBAND, "AM", qm_items_airband,
-            UI_MODE_CHANNEL | UI_MODE_SELECT | UI_MODE_PAGE),
+            UI_MODE_CHANNEL | UI_MODE_SELECT | UI_MODE_PAGE
+#ifdef CONFIG_C62_AIR_TX
+                | UI_MODE_TX
+#endif
+            ),
 #endif
 #ifdef UI_MODE_WFM
     QM_MODE(OPMODE_WFM_BC, "WFM", qm_items_wfm,

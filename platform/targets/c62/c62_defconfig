@@ -18,6 +18,7 @@ CONFIG_ST7735R=y
 
 CONFIG_SPI_BITBANG=y
 
+
 # C62 LSF service controller, see Kconfig.board
 CONFIG_LSF_SERVICE_CONTROLLER=y
 

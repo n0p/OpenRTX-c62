@@ -5,10 +5,13 @@ para 118.000-136.975 MHz: AM con doble banda lateral y portadora (DSB-FC), los
 dos rasters de canales de la banda (25 kHz y 8,33 kHz), control automático de
 ganancia y squelch por portadora.
 
-Es **solo recepción**. La banda no es una en la que este equipo pueda emitir y,
-además, un transmisor que modula en frecuencia no puede producir AM: no hay
-camino de TX en el modo, `opmode_canTransmit()` devuelve `false` y
-`radio_enableTx()` sale sin tocar el PA.
+Es **solo recepción por defecto**: un transmisor que modula en frecuencia no
+puede producir AM, así que no hay camino de TX en el modo,
+`opmode_canTransmit()` devuelve `false` y `radio_enableTx()` sale sin tocar el
+PA. Con la opción de compilación `C62_AIR_TX` el modo también transmite, pero no
+por aquí: la amplitud se modula en el PA con la línea del APC y el BK4819 emite
+una portadora desnuda. Ese camino está en **docs/TX_AIRBAND.md**, y todo lo que
+sigue en este documento describe el receptor, que no cambia.
 
 - `platform/drivers/baseband/BK4819.c` — el camino de AM del chip.
 - `platform/drivers/baseband/radio_C62.cpp` — el modo en el driver de radio: el
@@ -361,7 +364,7 @@ Lo que la UI muestra y dónde está el dato:
 | línea 1: `AGC sql7` | `settings.am_agc`, `settings.sqlLevel` |
 | menú rápido y Ajustes → AM | tabla de filas `qm_items_airband[]` |
 | teclear un designador (`airband_nameToFreq("118.005")` da la portadora) | todavía no: la entrada de frecuencia son dígitos de frecuencia, y `SNAP` lleva cualquier frecuencia a la portadora del canal más cercano |
-| indicar que el canal no emite | `opmode_canTransmit(OPMODE_AIRBAND) == false` |
+| indicar que el canal no emite | `opmode_canTransmit(OPMODE_AIRBAND) == false` (con `C62_AIR_TX`, `TX-LOCK` / `TX-ARM` en la línea 1, ver docs/TX_AIRBAND.md) |
 
 Filas del menú rápido / página de ajustes (la misma tabla):
 

@@ -218,7 +218,12 @@ TEST_CASE("The channel editor offers the modes the registry marks for it",
 
 #if defined(UI_MODE_AIRBAND)
     REQUIRE(ui_mode_inChannelList(OPMODE_AIRBAND));
+#ifdef CONFIG_C62_AIR_TX
+    /* The airband has a transmitter by modulating the PA supply */
+    REQUIRE(ui_mode_canTx(OPMODE_AIRBAND));
+#else
     REQUIRE(!ui_mode_canTx(OPMODE_AIRBAND));
+#endif
 #endif
 
     /* TX capability matches what the RTX says, mode by mode */

@@ -154,3 +154,26 @@ int32_t airband_nameToFreq(const char *name)
 
     return (int32_t)airband_channelFreq((uint16_t)channel);
 }
+
+/*
+ * Confirmation state of the transmitter. A single variable, and deliberately
+ * not part of the settings record: the operator confirms once per power cycle,
+ * after reading the warning, and a radio handed to somebody else is locked
+ * again the next time it is switched on.
+ */
+static enum airbandTxState txState = AIRBAND_TX_LOCKED;
+
+enum airbandTxState airband_txState(void)
+{
+    return txState;
+}
+
+void airband_txSetState(enum airbandTxState state)
+{
+    txState = state;
+}
+
+bool airband_txAllowed(freq_t freq)
+{
+    return airband_inBand(freq) && (txState == AIRBAND_TX_ARMED);
+}
