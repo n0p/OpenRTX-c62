@@ -104,6 +104,7 @@ MSG_DBG_CAP_READ = 0x0532
 MSG_DBG_BB = 0x0540
 MSG_DBG_TX_TRACE = 0x0550
 MSG_DBG_RX_COUNTERS = 0x0551
+MSG_DBG_BLACKBOX = 0x0552
 
 MSG_NAMES = {v: k[4:].lower() for k, v in list(globals().items())
              if k.startswith("MSG_") or k.startswith("EVT_")}
@@ -248,6 +249,10 @@ T_RATE = 0x00EA
 T_OFFSET = 0x00EB
 T_RUNNING = 0x00EC
 T_BB_STATE = 0x00ED
+
+# The post-mortem record: raw bytes as they sit on flash (docs/BLACKBOX.md).
+T_BLACKBOX = 0x00F0
+T_BLACKBOX_LEN = 0x00F1
 
 # --- records ---------------------------------------------------------------
 
