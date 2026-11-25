@@ -14,6 +14,7 @@
 #include "calibration/calib_C62.h"
 #include "core/agc.h"
 #include "core/airband.h"
+#include "core/blackbox.h"
 #include "core/state.h"
 #include "core/wfm.h"
 #include "drivers/baseband/BK4819.h"
@@ -920,6 +921,8 @@ static void dumpSendStats()
 
 void radio_enableRx()
 {
+    bb_mark(BB_M_RX_ON);
+
     /*
      * Broadcast FM: the tuner is the receiver. Its audio does not go through
      * the codec -- it reaches the amplifier through the analog volume pot --
@@ -1011,6 +1014,8 @@ void radio_enableRx()
 
 void radio_enableTx()
 {
+    bb_mark(BB_M_TX_ON);
+
     /*
      * The PA is keyed only while the RTX layer says a permitted transmission is
      * in progress (rtx_txPermitted(), rtx.h): a mode change, a PTT that was not
@@ -1210,6 +1215,8 @@ const char *radio_txRefusedReason(void)
 
 void radio_disableRtx()
 {
+    bb_mark(BB_M_TX_OFF);
+
     /*
      * The air ends here as far as the driver's clock is concerned: it is the
      * one place that puts the PA down, so it is the one place that tells the
@@ -1364,6 +1371,11 @@ struct txWatch *radio_txWatch(void)
 
 void radio_updateConfiguration()
 {
+    /* A mode change converges here: the chip's filters, the DSP profile and the
+     * audio routing are all rewritten from it, so it is the last breadcrumb
+     * before an AM mode that never comes back. */
+    bb_mark(BB_M_RADIO_CONF);
+
     /*
      * A reconfiguration writes REG_43 and the AF routing from the mode's
      * profile: while the analyser is open that means the sweep profile is no

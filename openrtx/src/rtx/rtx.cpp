@@ -6,6 +6,7 @@
 
 #include "interfaces/radio.h"
 #include "interfaces/platform.h"
+#include "core/blackbox.h"
 #include "core/spectrum_service.h"
 #include "core/utils.h"
 #include "interfaces/delays.h"
@@ -377,6 +378,11 @@ static void switchMode(uint8_t mode)
     const uint8_t prevMode = (currMode != nullptr) ? (uint8_t)currMode->getID()
                                                    : (uint8_t)OPMODE_NONE;
 
+    /* Breadcrumb before the first thing that can wedge: if the switch never
+     * finishes, this is the last thing the radio thread did, and the record's
+     * rtx mode field is the mode it was trying to reach. */
+    bb_mark(BB_M_MODE_ENTER);
+
     pthread_mutex_lock(&txMutex);
     switching = true;
     keyGate_beginTransition(&keyGate, (uint32_t)getTick());
@@ -409,6 +415,7 @@ static void switchMode(uint8_t mode)
 
     if (mode == OPMODE_NONE)
     {
+        bb_mark(BB_M_MODE_OFF);
         pthread_mutex_lock(&txMutex);
         keyGate_endTransition(&keyGate, (uint32_t)getTick());
         switching = false;
@@ -458,6 +465,7 @@ static void switchMode(uint8_t mode)
         #else
         (void)err;
         #endif
+        bb_mark(BB_M_MODE_FAIL);
         return;
     }
 
@@ -474,6 +482,7 @@ static void switchMode(uint8_t mode)
      */
     if ((mode != OPMODE_NONE) && (radio_getStatus() != RX) && (!modeStarted()))
     {
+        bb_mark(BB_M_MODE_FAIL);
         #if defined(PLATFORM_C62)
         printf("MODE %u: not receiving after %u ms, %s\r\n", (unsigned)mode,
                (unsigned)RTX_MODE_START_MS,
@@ -513,6 +522,8 @@ static void switchMode(uint8_t mode)
     keyGate_endTransition(&keyGate, (uint32_t)getTick());
     switching = false;
     pthread_mutex_unlock(&txMutex);
+
+    bb_mark(BB_M_MODE_READY);
 }
 
 
@@ -631,6 +642,10 @@ struct txGuard *rtx_getTxGuard()
  */
 static void abortTransmission(uint32_t now, const char *why)
 {
+    /* The supervisor intervened: a mode that is stuck in transmit is one of the
+     * two ways this radio freezes (docs/BLACKBOX.md). */
+    bb_mark(BB_M_TX_ABORT);
+
     /*
      * PA off first, and confirmed: the mode's abortTx() cancels the streams,
      * which is what wakes the thread blocked in one of them, and the radio must
@@ -810,6 +825,13 @@ void rtx_supervise()
 void rtx_task()
 {
     /*
+     * Liveness, first and unconditionally: the spectrum analyser returns below
+     * without touching the mode, and a receiver parked on the analyser is not a
+     * stuck radio (docs/BLACKBOX.md).
+     */
+    bb_beat(BB_BEAT_RTX);
+
+    /*
      * Spectrum analyser. While the analyser's screen is open the sweep owns the
      * receiver, and it does so from this thread because this is the thread that
      * owns the chip: the RSSI read below and the sweep would otherwise fight
@@ -871,6 +893,8 @@ void rtx_task()
 
     if(reconfigure)
     {
+        bb_mark(BB_M_RTX_CONF);
+
         // Force TX and RX tone squelch to off for OpModes different from FM.
         if(rtxStatus.opMode != OPMODE_FM)
         {

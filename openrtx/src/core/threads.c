@@ -21,6 +21,7 @@
 #include "core/backup.h"
 #include "core/gps.h"
 #include "core/voicePrompts.h"
+#include "core/blackbox.h"
 
 #if defined(PLATFORM_TTWRPLUS)
 #include "pmu.h"
@@ -68,6 +69,14 @@ void *ui_threadFunc(void *arg)
     {
         time = getTick();
         uiThreadBeat++;
+
+        /*
+         * Liveness for the post-mortem recorder (docs/BLACKBOX.md): this is
+         * the thread whose freeze used to leave a radio that still received
+         * and still answered the cable, so it is the one the supervisor has to
+         * be able to see stop.
+         */
+        bb_beat(BB_BEAT_UI);
 
         if(input_scanKeyboard(&kbd_msg))
         {
@@ -189,6 +198,8 @@ void *main_thread(void *arg)
     {
         time = getTick();
 
+        bb_beat(BB_BEAT_MAIN);
+
         #if defined(PLATFORM_TTWRPLUS)
         pmu_handleIRQ();
         #endif
@@ -252,6 +263,13 @@ void *main_thread(void *arg)
         time += 5;
         sleepUntil(time);
     }
+
+    /*
+     * Shutdown, not a hang: the threads this supervisor watches are about to
+     * stop on purpose, so stop watching before they do.
+     */
+    bb_suspend();
+    bb_mark(BB_M_TERM);
 
     return NULL;
 }
