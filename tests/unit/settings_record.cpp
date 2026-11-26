@@ -167,17 +167,89 @@ TEST_CASE("A version 7 record is migrated, not dropped", "[settings]")
      * shorter (settings_t.pc_port did not exist), with a CRC over that length
      * and "7" in the header.  The operator keeps his callsign, his channels'
      * power and his scan settings, and the appended field comes back at its
-     * default -- Auto.
+     * default -- the PTT switch, not the byte that followed it on the flash.
+     *
+     * Every block the record grew through is given a value of its own here,
+     * including the ones added after the version number stopped keeping up
+     * (the DMR air delay, the airband depth, the transmit power, the packet
+     * modem): the migration is a byte-for-byte copy of the prefix, so the
+     * check that it lost nothing is a memcmp and not a list of fields somebody
+     * remembered to add.
      */
     settings_t s = dflt();
 
     s.brightness = 33;
+    s.contrast = 7;
     s.sqlLevel = 7;
+    s.voxLevel = 3;
+    s.utc_timezone = -4;
+    s.gps_enabled = true;
     snprintf(s.callsign, sizeof(s.callsign), "%s", "EA5MIG");
-    s.tx_power = 2500;
-    s.scan_dwell = 22;
+    s.display_timer = TIMER_5M;
+    s.m17_can = 9;
+    s.vpLevel = 2;
+    s.vpPhoneticSpell = 1;
+    s.macroMenuLatch = 0;
+    s.tetraAfcOff = 1;
+    s.keyBacklight = 0;
+    s.m17_can_rx = true;
+    snprintf(s.m17_dest, sizeof(s.m17_dest), "%s", "EA5XYZ");
+    s.showBatteryIcon = true;
+    s.gpsSetTime = true;
+    snprintf(s.M17_meta_text, sizeof(s.M17_meta_text), "%s", "MIGRATED");
+    s.tetraAfcOffset = -120;
+    s.rxFineHz = 40;
+    /* Version 2 and 3: the DMR identity and the slot */
     s.dmr_id = 2142001;
-    s.pc_port = PORT_MODE_NEVER; /* not part of a v7 record: must not survive */
+    s.dmr_dest_id = 2142123;
+    s.dmr_dest_type = DMR_DEST_USER;
+    s.sms_format = DMR_SMS_FMT_DD_UTF8;
+    s.dmr_timeslot = 2;
+    /* Version 4: the receive-only modes' controls */
+    s.nxdn_ran = 27;
+    s.am_agc = false;
+    s.am_step = true;
+    s.am_snap = true;
+    /* Version 5: the scan block */
+    s.scan_resume = 2;
+    s.scan_priority = 5;
+    s.scan_step = 3;
+    s.scan_dwell = 22;
+    s.scan_hold = 33;
+    s.scan_prioInterval = 44;
+    s.scan_flags = SETTINGS_SCAN_PRIORITY | SETTINGS_SCAN_DOWN;
+    s.scan_vfoLow = 430000000U;
+    s.scan_vfoHigh = 440000000U;
+    /* Appended without renumbering: air delay, airband depth, TX power */
+    s.dmr_tx_air_delay_us = 12500;
+    s.am_depth = 75;
+    s.tx_power = 2500;
+#ifdef CONFIG_APRS
+    s.aprs_decode = true;
+    s.aprs_beaconEn = true;
+    s.aprs_msgAck = false;
+    s.aprs_ssid = 3;
+    s.aprs_lat_e4 = 388700;
+    s.aprs_lon_e4 = -12300;
+    s.aprs_table = '\\';
+    s.aprs_symbol = '>';
+    snprintf(s.aprs_comment, sizeof(s.aprs_comment), "%s", "migrated");
+    snprintf(s.aprs_path, sizeof(s.aprs_path), "%s", "WIDE2-1");
+    s.aprs_interval_s = 900;
+    s.aprs_txdelay_ms = 400;
+#endif
+#ifdef CONFIG_KISS
+    s.packet_enable = true;
+    s.packet_modem = 1;
+    s.packet_port = 0;
+    s.packet_persist = 63;
+    s.packet_fulldup = 1;
+    s.packet_txdelay_ms = 250;
+    s.packet_txtail_ms = 30;
+    s.packet_slottime_ms = 80;
+    s.packet_maxframe = 256;
+#endif
+    s.pc_port = PORT_MODE_ALWAYS; /* not part of a v7 record: must not survive */
 
     uint8_t rec[SETTINGS_RECORD_SIZE];
     std::memset(rec, 0xFF, sizeof(rec));
@@ -203,10 +275,32 @@ TEST_CASE("A version 7 record is migrated, not dropped", "[settings]")
     REQUIRE(out.tx_power == 2500);
     REQUIRE(out.scan_dwell == 22);
     REQUIRE(out.dmr_id == 2142001);
+
+    /* Nothing the v7 record carried was lost, byte for byte, including the
+     * blocks appended after the version number last moved. */
+    REQUIRE(std::memcmp(&out, &s, V7_PAYLOAD_LEN) == 0);
+
     /* The appended field is the default, never the byte that followed it on
      * flash.  A version 7 record says nothing about the pad, so it takes the
      * factory value: the PTT switch (docs/ACCESSORY.md). */
     REQUIRE(out.pc_port == PORT_MODE_NEVER);
+    REQUIRE(out.pc_port == default_settings.pc_port);
+    REQUIRE(settings_portModeValid(out.pc_port));
+
+    /*
+     * And the record the next write produces is a version 8 one carrying the
+     * same data, so the upgrade is finished on the first save and not redone
+     * on every boot.
+     */
+    uint8_t fresh[SETTINGS_RECORD_SIZE];
+    REQUIRE(settings_recordPack(fresh, sizeof(fresh), &out)
+            == (int)SETTINGS_RECORD_SIZE);
+    REQUIRE(settings_recordVersion(fresh, sizeof(fresh)) == SETTINGS_VERSION);
+
+    settings_t again;
+    std::memset(&again, 0x00, sizeof(again));
+    REQUIRE(settings_recordRead(fresh, sizeof(fresh), &again) == 0);
+    REQUIRE(std::memcmp(&again, &out, sizeof(out)) == 0);
 
     /* A v7 record whose CRC does not cover its own length is still corrupt: the
      * migration must not read a truncated or damaged payload. */
