@@ -34,8 +34,11 @@
  * Not covered, and why: the mode's own update() (it needs the Zephyr kernel,
  * the audio streams and the radio), the vocoder's output samples (unit/imbe_*
  * and the dmr_rx host harness cover them), the 7 KiB voice stack (a compile
- * time assertion in DmrSpeech.c) and the BK4819's filters (a register the
- * host has no driver for: see tests/unit/bk4819_bypass.cpp for what is left).
+ * time assertion in DmrSpeech.c), the BK4819's filters (REG_7E high-pass,
+ * REG_43 in 12.5 kHz mode: a different subsystem, one register write away from
+ * the discriminator this starts at) and MS-sourced streams (simplex and
+ * hotspots: no CACH, no timeslots, 60 ms bursts).  reports/dmr_rx_standin.md
+ * has the list.
  */
 
 #include <catch2/catch_test_macros.hpp>
@@ -755,4 +758,47 @@ TEST_CASE("DMR link quality falls when the embedded link controls fail",
         }
     }
     REQUIRE(evmClean > evmBroken);
+}
+
+/*
+ * A call ends with a terminator: the slot goes idle (not voice) and the screen
+ * keeps who called whom until the next call, which is what dmr_proto.h
+ * promises ("the slot keeps ids_valid until the next call").  A terminator
+ * that leaves the slot reading "voice" is the shape of a call that never ends.
+ */
+TEST_CASE("A DMR call ends with a terminator and keeps its identifiers",
+          "[dmr][rx]")
+{
+    resetReceiver();
+
+    Gen g;
+    CallOpts o;
+
+    o.frames = 40;
+    o.terminator = true;
+    buildCall(g, o);
+
+    const std::vector<Obs> st = feed(g.s);
+    int midCallVoice = 0;
+    const Obs *last = nullptr;
+
+    for (const Obs &obs : st) {
+        if (obs.st.timeslot != 1)
+            continue;
+        last = &obs;
+        if (obs.st.voice)
+            midCallVoice++;
+    }
+    REQUIRE(last != nullptr);
+    REQUIRE(midCallVoice > 10); /* it was a call, not a header and a goodbye */
+
+    INFO("block " << last->block << ", "
+                  << g.s.whatOfSlot[last->block]);
+    REQUIRE(last->st.sync);
+    REQUIRE(last->st.colourCode == kCc);
+    REQUIRE_FALSE(last->st.voice);
+    REQUIRE(last->st.lastType == 9); /* DMR_DT_IDLE, DmrDefs.h */
+    REQUIRE(last->st.idsValid);
+    REQUIRE(last->st.src == kSrc);
+    REQUIRE(last->st.dst == kTg);
 }

@@ -63,8 +63,9 @@ are margins and they move at `-O0`.
 | 5 | one voice burst whose EMB word only decodes with a correction, onto another colour code | the published colour code stays 1; a *clean* burst announcing CC 5 **is** published (this receiver is a listener, not a colour-code filter) |
 | 6 | a text message as packet data, one payload octet of its last block changed | `crcChecks` > 0 with `crcOk` = 0 when broken, and `crcOk` = `crcChecks` when intact |
 | 7 | the embedded LC words of every fifth voice burst replaced by one their code cannot correct | quality falls below 1000 and stays above 0; the call, its colour code, its identifiers and its audio stay |
+| 8 | the same call, ended with a terminator | the call's slot goes idle — not voice, `lastType` 9 — and the identifiers stay published until the next call, which is what `dmr_proto.h` promises |
 
-1823 assertions, runtime ≈ 0.1 s.
+1831 assertions, runtime ≈ 0.1 s.
 
 ## 3. What it found
 
