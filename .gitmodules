@@ -1,0 +1,3 @@
+[submodule "lib/opendmr"]
+	path = lib/opendmr
+	url = https://github.com/n0p/OpenDMR.git

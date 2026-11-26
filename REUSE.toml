@@ -45,6 +45,17 @@ path = [
 SPDX-License-Identifier = "GPL-3.0-or-later"
 SPDX-FileCopyrightText = "OpenRTX Contributors"
 
+# Seven seconds of a real dPMR transmission: the second one of the DSDcc
+# sample samples/dpmr.dis (S16LE discriminator, 48 kS/s), from 22,4 s to the
+# end of the file.  It is the fixture the host and the cost harness decode in
+# `meson test` and in docs/RX_DPMR.md; the whole capture, with both
+# transmissions, is only in DSDcc.
+[[annotations]]
+path = "tests/unit/assets/dpmr_air_frame.dis"
+SPDX-License-Identifier = "GPL-2.0-or-later"
+SPDX-FileCopyrightText = "DSDcc contributors"
+precedence = "override"
+
 # This section is for font glyph sources that were taken from Pictogrammers
 [[annotations]]
 path = [

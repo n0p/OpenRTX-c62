@@ -7,6 +7,25 @@
 CHANGELOG
 =========
 
+Unreleased
+==========
+Fixed
+-----
+- core: a transmit that blocks on its audio stream can no longer keep the PA
+  keyed: the transmit lifecycle has deadlines and a supervisor that unkeys and
+  cancels the streams from outside the blocked thread
+- C62: the codec worker no longer holds the audio lock across DSP calls, which
+  used to freeze every audio caller -- the RTX thread included -- when the DSP
+  did not answer
+- C62: the AP watchdog is armed (2 s) and refreshed by the main thread, so a
+  firmware that cannot unkey itself resets into receive
+
+Added
+-----
+- core: transmit trace (phases, first block, blocks, reason) in the log and over
+  the C62 remote control, plus the transmit baseband level and the audio
+  worker's age
+
 v0.4.5 - 2026-09-25
 ===================
 Added

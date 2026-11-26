@@ -84,6 +84,43 @@ void radio_enableTx();
 void radio_disableRtx();
 
 /**
+ * Check that the transmit path is really off.
+ *
+ * Reading back the PA enable lines (not the driver's own bookkeeping) is what
+ * lets a mode change prove it is starting from a radio that is not
+ * transmitting. A platform that cannot read them back answers from its own
+ * status.
+ *
+ * @return true if the PA and its bias are off.
+ */
+bool radio_txPathOff(void);
+
+/**
+ * Force the PA and its bias off and prove it.
+ *
+ * The boot path calls this before anything else drives the transceiver -- a
+ * radio must never start up transmitting -- and the driver calls it when its
+ * own transmit clock says the keying has lasted longer than the barrier allows.
+ * It drives the enable lines low and reads the latch back, retrying a few
+ * times; a platform without read-back answers from its status.
+ *
+ * @return true when the transmit path is off, as read back from the chip.
+ */
+bool radio_paForceOff(void);
+
+/**
+ * Get the driver's own transmit clock (rtx/TxWatch.h).
+ *
+ * The second barrier: it is fed by radio_enableTx()/radio_disableRtx()
+ * themselves, with the limit plus a margin, so it stops a keying even when the
+ * RTX supervisor does not run. The diagnostics read it and the tests advance
+ * it (docs/TX_SAFETY.md).
+ *
+ * @return the clock, never NULL.
+ */
+struct txWatch *radio_txWatch(void);
+
+/**
  * Update configuration of the radio module to match the one currently described
  * by the rtxStatus_t configuration data structure.
  * This function has to be called whenever the configuration data structure has
@@ -91,6 +128,15 @@ void radio_disableRtx();
  * correctly configured.
  */
 void radio_updateConfiguration();
+
+/**
+ * Set a fine offset of the receive frequency, added to the configured one,
+ * for an automatic frequency correction. Applied at once when receiving.
+ * Implemented only by radios with CONFIG_TETRA_AFC.
+ *
+ * @param hz: offset in Hz.
+ */
+void radio_setRxOffset(int32_t hz);
 
 /**
  * Get the current RSSI level in dBm.
@@ -105,6 +151,80 @@ rssi_t radio_getRssi();
  * @return current operating status.
  */
 enum opstatus radio_getStatus();
+
+/**
+ * Why the driver refused the last keying, or "none" when it accepted it.
+ *
+ * The keying path has several barriers (no permitted transmission, the air
+ * clock, an out-of-band frequency, a power of 0, a receive-only mode) and each
+ * of them used to be a bare return: the PA lines dropped, the LED dark and no
+ * RF, with nothing said (docs/TX_SAFETY.md).  This is the short word the
+ * diagnostics and the PC protocol report instead.
+ */
+const char *radio_txRefusedReason(void);
+
+/*
+ * Spectrum analyser.
+ *
+ * The receiver the C62 uses (BK4819) has no I/Q output: what it can be asked
+ * for is the RSSI of the frequency it is tuned to, and the audio of the
+ * demodulator. A spectrum is therefore a sweep: tune, let the PLL settle, read
+ * REG_67. These four calls are that, and only the platforms whose receiver can
+ * be tuned a single word at a time implement them (the C62 does; nothing else
+ * calls them). See core/spectrum_service.h for who is allowed to call them and
+ * when, and docs/SPECTRUM.md for the numbers.
+ */
+
+/**
+ * Take the receiver over for sweeping: remember the IF filter and the audio
+ * routing, select the widest receive path and mute the AF output.
+ *
+ * @return false if the receiver is not receiving (off or transmitting).
+ */
+bool radio_spectrumEnter(void);
+
+/**
+ * Switch between the sweep profile and the normal one.
+ *
+ * @param on: true selects the widest IF and mutes the audio, false restores the
+ *            filter and the AF output the mode had.
+ */
+void radio_spectrumSweep(bool on);
+
+/**
+ * One point of the sweep: tune, wait for the synthesizer, read the level.
+ *
+ * @param frequency: frequency to tune, Hz.
+ * @param settleUs: time given to the PLL before the level is read, us. Zero
+ *                  means "ask the chip": the driver polls the glitch indicator
+ *                  and reads as soon as the IF has recovered (see
+ *                  docs/SPECTRUM.md §3), with a bounded number of polls.
+ * @param pointUs: filled with the measured duration of the whole point, us.
+ * @return RSSI level of that frequency, dBm.
+ */
+int16_t radio_spectrumPoint(uint32_t frequency, uint32_t settleUs,
+                            uint32_t *pointUs);
+
+/**
+ * What the last sweep session found out about the receiver's settling.
+ *
+ * Optional: only the platforms that implement the sweep define it, and the
+ * service calls it behind PLATFORM_C62. It exists so the operator can see
+ * whether the waiting was done by the chip's own indicator or by a clock.
+ *
+ * @param polls: average number of glitch polls per point, 0 if unused.
+ * @return false when the gate has been given up on for this session.
+ */
+bool radio_spectrumGate(uint32_t *polls);
+
+/**
+ * Put the receiver back on the configured frequency, with its own filter and
+ * audio, and stay there: the normal receive path runs again from here.
+ */
+void radio_spectrumPark(void);
+
+/** Give the receiver back after a sweep session. */
+void radio_spectrumLeave(void);
 
 #ifdef __cplusplus
 }
