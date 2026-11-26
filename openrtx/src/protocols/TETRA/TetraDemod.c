@@ -354,10 +354,12 @@ static size_t symbol(struct tetraDemod *dm, float d, int8_t *soft)
             if (isfinite(dm->st) && dm->st > 1e-9f) {
                 float g = (PI_F / 2) / dm->st;
                 if (isfinite(g) && g > 0) {
-                    if (g < 1e-3f)
-                        g = 1e-3f;
-                    else if (g > 1e6f)
-                        g = 1e6f;
+                    /* Bounded only to keep it finite: a loud capture needs a
+                     * gain of 1e-5 and a quiet one 1e3, both are fine */
+                    if (g < 1e-12f)
+                        g = 1e-12f;
+                    else if (g > 1e12f)
+                        g = 1e12f;
                     dm->gain = g;
                 }
             }
@@ -504,10 +506,10 @@ static float acquireByEnergy(struct tetraDemod *dm)
         float var = dm->sxx - dm->sx * dm->sx;
 
         if (isfinite(g) && g > 0) {
-            if (g < 1e-3f)
-                g = 1e-3f;
-            else if (g > 1e6f)
-                g = 1e6f;
+            if (g < 1e-12f)
+                g = 1e-12f;
+            else if (g > 1e12f)
+                g = 1e12f;
             dm->gain = g;
             dm->st = g * (dm->sx - dm->offset);
             dm->sxt = dm->sx * dm->st + g * var;
@@ -641,14 +643,23 @@ size_t tetraDemod_process(struct tetraDemod *dm, const int16_t *in, size_t n,
              * any input from turning into a spin that also runs off the
              * caller's soft buffer.
              */
-            if ((int32_t)(dm->written - dm->nextInt) >= SPS / 2 + 2) {
+            for (int catchUp = 0; catchUp < 2; catchUp++) {
+                if ((int32_t)(dm->written - dm->nextInt) < SPS / 2 + 2)
+                    break;
                 timing(dm);
                 float v = sampleAt(dm, 0);
                 out += symbol(dm, v, soft + out);
                 dm->nextInt += SPS;
             }
             if ((int32_t)(dm->written - dm->nextInt) >= SPS / 2 + 2) {
-                dm->nextInt = dm->written - (SPS / 2 + 2);
+                /*
+                 * Still due after two symbols: the position was left behind by
+                 * a broken update. Put it ahead of the samples, where a normal
+                 * symbol emission leaves it (written + 2), so the catch-up
+                 * cannot emit a symbol per sample for ever nor run off the
+                 * caller's soft buffer.
+                 */
+                dm->nextInt = dm->written + 2;
                 dm->nextFrac = 0;
             }
         }

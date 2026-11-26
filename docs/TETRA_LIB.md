@@ -385,6 +385,16 @@ silencio+burst, y comprueba en cada bloque que el estado sigue finito, que la
 posición no se queda atrás y que no se escribe más de `3/4·n + 8` bits. Antes
 del arreglo ese test no termina (meson lo mata por timeout).
 
+**Sin regresión en la bajada**, comprobado con la captura real de §5.1: el
+`TetraStatus.c` del firmware, alimentado por el demodulador arreglado, sigue
+dando exactamente las cifras de la tabla (`228-8889 CC 1`, 426,7 MHz, red 2010
+con 1 vecina, llamada `id 113` de `100701` a `100601`, 455 slots de tráfico,
+908/910 tramas). Lo que cambió en el lazo de símbolos fue una condición de
+carrera degenerada y las cotas de la ganancia: un valor acotado de más (1e-3
+como mínimo) rompía justo esta captura, que necesita ~1e-5 por lo fuerte que
+llega; las cotas quedan en 1e-12..1e12, que solo descartan lo que no es un
+número.
+
 ## 6. Coste
 
 ### Por bloque de 30 ms (QEMU, mps2-an505, Cortex-M33, `-O2`)
