@@ -48,8 +48,12 @@ MODES = ["FM", "M17", "TETRA", "DMR", "NXDN", "dPMR", "P25", "YSF",
 # Pages of Settings that are not a mode's own page. The mode pages (DMR,
 # NXDN, ...) are drawn from the same table as the mode's popup and are walked
 # right after its popup instead.
-FIXED_PAGES = ["Display", "Time & Date", "Radio", "Identity", "Audio", "M17",
-               "TETRA", "FM", "Accessibility"]
+#
+# "Default Settings" is not here on purpose: it is an action with a
+# confirmation, and walking it would reset the record half way through the
+# walk. The tour presses it (docs/SIMULATOR.md, SETTINGS_RESET2DEFAULTS).
+FIXED_PAGES = ["Display", "Time & Date", "GPS", "Radio", "Identity", "Audio",
+               "M17", "TETRA", "FM", "Accessibility"]
 
 MODE_PAGE_TITLE = {"FM": "FM", "M17": "M17", "TETRA": "TETRA"}
 
