@@ -26,6 +26,7 @@
 #include "core/gps.h"
 #include "core/voicePrompts.h"
 #include "core/blackbox.h"
+#include "core/ui_watchdog.h"
 
 #if defined(PLATFORM_TTWRPLUS)
 #include "pmu.h"
@@ -47,7 +48,8 @@ pthread_mutex_t rtx_mutex;
  * lines are off until a transmission keys them.
  */
 static volatile uint32_t uiThreadBeat;
-static const uint32_t    UI_THREAD_STALL_MS = 3000;
+/* The rule itself: core/ui_watchdog.h, tested on the host. */
+static struct uiWatchdog uiWatchdog;
 
 /**
  * \internal Thread managing user input and UI
@@ -241,23 +243,18 @@ void *main_thread(void *arg)
          * operator: no key does anything and there is no way back. Stopping the
          * feed turns that into a reset, and the reset comes up in receive.
          */
-        static uint32_t lastBeat;
-        static uint32_t beatTime;
-        static bool     stalled;
-
-        uint32_t beat = uiThreadBeat;
-        if (beat != lastBeat) {
-            lastBeat = beat;
-            beatTime = (uint32_t)getTick();
-            stalled = false;
-        } else if ((!stalled)
-                   && (((uint32_t)getTick() - beatTime) > UI_THREAD_STALL_MS)) {
-            stalled = true;
+        bool wasStalled = uiw_stalled(&uiWatchdog);
+        bool feed = uiw_service(&uiWatchdog, (uint32_t)getTick(),
+                                uiThreadBeat);
+        if (feed && wasStalled) {
+            /* It came back: the pass was slow, not lost. */
+            printf("UI: thread advanced again, watchdog fed\r\n");
+        } else if (!feed && !wasStalled) {
             printf("UI: thread stalled %u ms, watchdog left to reset\r\n",
-                   (unsigned)UI_THREAD_STALL_MS);
+                   (unsigned)UIW_STALL_MS);
         }
 
-        if (!stalled)
+        if (feed)
             platform_wdtFeed();
 
 #ifdef C62_PC_PROTO
@@ -268,7 +265,7 @@ void *main_thread(void *arg)
         c62_portNecklace();
 #endif
         #else
-        (void)UI_THREAD_STALL_MS;
+        (void)uiWatchdog;
         #endif
 
         // Run this loop once every 5ms

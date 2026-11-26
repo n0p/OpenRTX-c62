@@ -26,6 +26,7 @@
 #include "core/state.h"
 #include "core/settings.h"
 #include "core/psram_state.h"
+#include "core/stack_budget.h"
 #include "interfaces/audio.h"
 #include "rtx/rtx.h"
 #include "interfaces/delays.h"
@@ -40,7 +41,8 @@
 #define PKT_FS            48000u   /* the TX path and the RX tap rate     */
 #define PKT_BLOCK         480u     /* 10 ms of audio per stream buffer    */
 #define PKT_QUEUE         3u       /* frames waiting for the channel      */
-#define PKT_THREAD_STACK  3072
+/* The size and its floor live in core/stack_budget.h. */
+#define PKT_THREAD_STACK  STACK_BUDGET_PACKET
 #define PKT_THREAD_PRIO   6
 
 /* Name kept short: the linker map is read by hand often enough */

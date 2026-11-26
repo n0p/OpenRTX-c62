@@ -21,6 +21,7 @@
 #include <string.h>
 #include "core/audio_path.h"
 #include "core/audio_stream.h"
+#include "core/stack_budget.h"
 #include "interfaces/delays.h"
 #include "dmr_port.h"
 #include "dmr_voice.h"
@@ -39,20 +40,21 @@
  * between overs, which is the trade.
  */
 #define SILENCE_BURSTS 50 /* About three seconds */
-#ifdef DMR_VOICE_ENABLED
-/* mbelib's synthesis keeps a few KB of arrays on the stack */
-#define THREAD_STACK 8192
-#else
 /*
- * lib/dmr_vocoder keeps its scratch in the instance (DTCM, dmr_voice.c), but
- * the synthesis is not flat: dmr_rfft256 puts 128+128 floats of its own on the
- * stack and synth_unvoiced calls it with the frame's buffers live.  A DMR
- * session with 4 KB overflowed exactly there -- the black box caught
- * K_ERR_STACK_CHK_FAIL with PC in dmr_rfft256 and LR in synth_unvoiced -- so
- * the thread gets what DTCM can still hold: 16 KB total, 8.5 KB of decoder
- * state beside it, 672 B left over after this.
+ * The size and its floor live in core/stack_budget.h, so the host test sees the
+ * same numbers.  lib/dmr_vocoder keeps its scratch in the instance (DTCM,
+ * dmr_voice.c), but the synthesis is not flat: dmr_rfft256 puts 128+128 floats
+ * of its own on the stack and synth_unvoiced calls it with the frame's buffers
+ * live.  A DMR session with 4 KB overflowed exactly there -- the black box
+ * caught K_ERR_STACK_CHK_FAIL with PC in dmr_rfft256 and LR in synth_unvoiced --
+ * so the thread gets what DTCM can still hold: 16 KB total, 8.5 KB of decoder
+ * state beside it, 672 B left over after this.  mbelib's synthesis is deeper
+ * still and keeps a few KB of arrays on the stack.
  */
-#define THREAD_STACK 7168
+#ifdef DMR_VOICE_ENABLED
+#define THREAD_STACK STACK_BUDGET_DMR_SPEECH_MBELIB
+#else
+#define THREAD_STACK STACK_BUDGET_DMR_SPEECH_OWN
 #endif
 /*
  * The measurement behind the number, as a rule the build enforces: 4 096 B

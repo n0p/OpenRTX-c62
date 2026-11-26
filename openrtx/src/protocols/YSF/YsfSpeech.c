@@ -24,6 +24,7 @@
 
 #include "core/audio_path.h"
 #include "core/audio_stream.h"
+#include "core/stack_budget.h"
 #include "dmr_decoder.h"
 #include "dmr_vocoder.h"
 #include "interfaces/delays.h"
@@ -34,7 +35,8 @@
 #define PREBUFFER_SLOTS YSF_VOICE_SLOTS
 /** Silent slots before the speaker is released: about one second. */
 #define SILENCE_SLOTS 50
-#define THREAD_STACK 8192
+/* The size and its floor live in core/stack_budget.h. */
+#define THREAD_STACK STACK_BUDGET_IMBE_SPEECH
 
 static pthread_mutex_t queueMutex = PTHREAD_MUTEX_INITIALIZER;
 /* Queue and PCM scratch: 2.1 KB touched once per 20 ms slot, so PSRAM.  Both

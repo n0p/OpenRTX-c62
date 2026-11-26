@@ -17,12 +17,15 @@
 #include "core/audio_path.h"
 #include "core/audio_stream.h"
 #include "core/psram_state.h"
+#include "core/stack_budget.h"
 #include "interfaces/delays.h"
 
 #define QUEUE_FRAMES 16     /* 480 ms */
 #define PREBUFFER_FRAMES 5  /* 150 ms: frame 18 leaves a 113 ms gap */
 #define SILENCE_FRAMES 34   /* About one second of 30 ms frames */
-#define THREAD_STACK 4096
+/* The size and its floor live in core/stack_budget.h: this stack is malloc'd,
+ * so an overrun is a heap corruption with no guard fault behind it. */
+#define THREAD_STACK STACK_BUDGET_TETRA_SPEECH
 #define FOLLOW_HOLD_MS 1000 /* Keep following a timeslot this long */
 
 struct frame {

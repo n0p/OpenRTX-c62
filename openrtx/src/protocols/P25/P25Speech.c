@@ -25,6 +25,7 @@
 
 #include "core/audio_path.h"
 #include "core/audio_stream.h"
+#include "core/stack_budget.h"
 #include "interfaces/delays.h"
 #include "protocols/P25/P25Vocoder.h"
 
@@ -34,7 +35,8 @@
 #define PREBUFFER_FRAMES P25_FRAMES_PER_LDU
 /** Frames of silence before the speaker is released: about one second. */
 #define SILENCE_FRAMES 50
-#define THREAD_STACK 8192
+/* The size and its floor live in core/stack_budget.h. */
+#define THREAD_STACK STACK_BUDGET_IMBE_SPEECH
 
 struct frame {
     uint8_t params[11];

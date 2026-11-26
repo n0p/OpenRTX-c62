@@ -46,6 +46,7 @@
 #include "core/port_ptt.h"
 #include "core/psram_state.h"
 #include "core/settings.h"
+#include "core/stack_budget.h"
 #include "core/state.h"
 #include "rtx/rtx.h"
 #include "rtx/TxGuard.h"
@@ -73,7 +74,9 @@
 #define LSR_THRE BIT(5)
 
 #define THREAD_PRIORITY 6
-#define THREAD_STACK 4096
+/* The size and its floor live in core/stack_budget.h: a thread that overruns
+ * here takes the cable with it. */
+#define THREAD_STACK STACK_BUDGET_PC_PROTO
 #define POLL_US 1000
 
 /** No pass of the loop for this long is a stall, not a slow frame. */

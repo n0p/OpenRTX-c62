@@ -419,11 +419,11 @@ struct Device
         return resp;
     }
 
-    Frame hello()
+    Frame hello(uint32_t caps = PC_CAP_EVENTS)
     {
         std::vector<uint8_t> p;
         putU16(p, PC_TAG_VERSION, PC_PROTO_VERSION);
-        putU32(p, PC_TAG_CAPS, PC_CAP_EVENTS);
+        putU32(p, PC_TAG_CAPS, caps);
         Frame f = request(PC_MSG_HELLO, 1, p);
         token = u32(f.payload, PC_TAG_TOKEN);
         return f;
@@ -495,6 +495,209 @@ TEST_CASE("Bench: ARM needs the session token", "[bench]")
     Frame a = d.request(PC_MSG_BENCH_ARM, 2);
     REQUIRE(a.id == PC_MSG_ERROR);
     REQUIRE(u8(a.payload, PC_TAG_ERROR) == PC_ERR_NOT_ALLOWED);
+}
+
+TEST_CASE("Bench: every message that moves the radio needs the token",
+          "[bench]")
+{
+    /*
+     * The rules of the cable that bit us (docs/TEST_PLAN.md §4): the session
+     * token is not a formality on ARM, it is the thing that keeps a client from
+     * a session that was spent -- a second HELLO rotates it -- from keying the
+     * PA or moving the radio.  One handler that forgot the gate was enough to
+     * make that a whole session, so this walks all six.
+     */
+    Device d;
+    d.hello();
+
+    /* Each with a payload that is otherwise valid, so the only reason to be
+     * refused is the missing token. */
+    std::vector<uint8_t> tune;
+    putU32(tune, PC_TAG_RX_FREQ, 145500000);
+    putU8(tune, PC_TAG_MODE, 1);
+
+    std::vector<uint8_t> ptt;
+    putU8(ptt, PC_TAG_TX_STATE, 1);
+
+    std::vector<uint8_t> capture;
+    putU16(capture, PC_TAG_BENCH_WINDOW, 100);
+
+    std::vector<uint8_t> rssi;
+    putU8(rssi, PC_TAG_COUNT, 4);
+
+    std::vector<uint8_t> sweep;
+    putU32(sweep, PC_TAG_BENCH_F0, 145000000);
+    putU32(sweep, PC_TAG_BENCH_F1, 146000000);
+    putU32(sweep, PC_TAG_BENCH_STEP, 25000);
+    putU16(sweep, PC_TAG_BENCH_DWELL, 10);
+
+    struct
+    {
+        uint16_t id;
+        const std::vector<uint8_t> *payload;
+        const char *name;
+    } const msgs[] = {
+        { PC_MSG_BENCH_ARM,     nullptr, "arm"     },
+        { PC_MSG_BENCH_TUNE,    &tune,   "tune"    },
+        { PC_MSG_BENCH_PTT,     &ptt,    "ptt"     },
+        { PC_MSG_BENCH_CAPTURE, &capture, "capture" },
+        { PC_MSG_BENCH_RSSI,    &rssi,   "rssi"    },
+        { PC_MSG_BENCH_SWEEP,   &sweep,  "sweep"   },
+    };
+
+    uint8_t seq = 2;
+    for (const auto &m : msgs) {
+        INFO("message: " << m.name);
+        std::vector<uint8_t> payload =
+            (m.payload != nullptr) ? *m.payload : std::vector<uint8_t>();
+        Frame f = d.request(m.id, seq++, payload);
+        REQUIRE(f.id == PC_MSG_ERROR);
+        REQUIRE(u8(f.payload, PC_TAG_ERROR) == PC_ERR_NOT_ALLOWED);
+        REQUIRE(u16(f.payload, PC_TAG_MSG_ID) == m.id);
+    }
+
+    /* Nothing was tuned, nothing was keyed, no capture was armed: a refused
+     * request is a request that did not happen. */
+    REQUIRE(sim.tuned == 0);
+    REQUIRE(sim.keys == 0);
+    REQUIRE(sim.ptt == 0);
+    REQUIRE(!cap.st.running);
+}
+
+TEST_CASE("Bench: a spent token cannot key the PA, and a new HELLO restores it",
+          "[bench]")
+{
+    /*
+     * This is the failure the rule exists for: a bench script that armed the
+     * radio, then something on the cable did a second HELLO (another tool, a
+     * CPS window, the script itself reconnecting).  The token it holds is
+     * spent from that moment.  A keying with it has to be refused -- not
+     * silently dropped, not "keyed anyway" -- because a PA keyed on behalf of a
+     * client nobody is listening to is a carrier nobody measures.
+     */
+    Device d;
+    d.hello();
+
+    const uint32_t spent = d.token;
+
+    d.hello();                        /* the second client */
+    const uint32_t fresh = d.token;
+    REQUIRE(fresh != spent);
+    REQUIRE(fresh != 0);
+
+    std::vector<uint8_t> ptt;
+    putU8(ptt, PC_TAG_TX_STATE, 1);
+    putU32(ptt, PC_TAG_TOKEN, spent);
+
+    Frame on = d.request(PC_MSG_BENCH_PTT, 3, ptt);
+    REQUIRE(on.id == PC_MSG_ERROR);
+    REQUIRE(u8(on.payload, PC_TAG_ERROR) == PC_ERR_NOT_ALLOWED);
+    REQUIRE(sim.keys == 0);
+    REQUIRE(sim.ptt == 0);
+
+    /*
+     * The token the current session holds does key: the spending rotated the
+     * token, it did not close the bench.  A run still starts with ARM, as every
+     * one does (pc_bench_arm resets the bench and seeds the power).
+     */
+    d.request(PC_MSG_BENCH_ARM, 4, d.tok());
+    std::vector<uint8_t> ptt2;
+    putU8(ptt2, PC_TAG_TX_STATE, 1);
+    auto t = d.tok();
+    ptt2.insert(ptt2.end(), t.begin(), t.end());
+    Frame ok = d.request(PC_MSG_BENCH_PTT, 5, ptt2);
+    REQUIRE(ok.id == PC_MSG_BENCH_PTT);
+    REQUIRE(u8(ok.payload, PC_TAG_TX_STATE) == 2);
+    REQUIRE(sim.keys == 1);
+    REQUIRE(u32(ok.payload, PC_TAG_BENCH_TICK) == sim.tickMs);
+}
+
+TEST_CASE("Bench: a keying does not spend the token -- the next HELLO does",
+          "[bench]")
+{
+    /*
+     * The rule, stated the way the firmware implements it, because the other
+     * reading ("a PTT spends the token") is what the bench notes used to say
+     * and it is not what the code does: a measurement keys three times in one
+     * run (deviation at three levels), and a session that died on the first
+     * keying could not take it.  What spends the token is a HELLO; what a
+     * keying must always carry is the token.
+     *
+     * If this ever changes to "spent by a PTT", this test is the one that has
+     * to change with it -- and tools/bench/cases.py, which keys more than once
+     * per arm, has to change too.
+     */
+    Device d;
+    d.hello();
+    d.request(PC_MSG_BENCH_ARM, 2, d.tok());
+
+    std::vector<uint8_t> tune;
+    putU32(tune, PC_TAG_RX_FREQ, 145500000);
+    putU8(tune, PC_TAG_MODE, 1);
+    putU8(tune, PC_TAG_BENCH_BW, 2);
+    auto t = d.tok();
+    tune.insert(tune.end(), t.begin(), t.end());
+    REQUIRE(d.request(PC_MSG_BENCH_TUNE, 3, tune).id == PC_MSG_BENCH_TUNE);
+
+    for (uint8_t i = 0; i < 3; i++) {
+        std::vector<uint8_t> ptt;
+        putU8(ptt, PC_TAG_TX_STATE, 1);
+        auto tk = d.tok();
+        ptt.insert(ptt.end(), tk.begin(), tk.end());
+        Frame on = d.request(PC_MSG_BENCH_PTT, (uint8_t)(4 + 2 * i), ptt);
+        REQUIRE(on.id == PC_MSG_BENCH_PTT);
+
+        std::vector<uint8_t> off;
+        putU8(off, PC_TAG_TX_STATE, 0);
+        auto tk2 = d.tok();
+        off.insert(off.end(), tk2.begin(), tk2.end());
+        REQUIRE(d.request(PC_MSG_BENCH_PTT, (uint8_t)(5 + 2 * i), off).id ==
+                PC_MSG_BENCH_PTT);
+    }
+
+    REQUIRE(sim.keys == 3);   /* one per keying, same token, no re-arm */
+    /* And the session is still usable for the next measurement. */
+    REQUIRE(d.request(PC_MSG_BENCH_TUNE, 20, tune).id == PC_MSG_BENCH_TUNE);
+    REQUIRE(sim.tuned == 2);
+}
+
+TEST_CASE("Bench: a client that does not advertise its caps gets no events",
+          "[bench]")
+{
+    /*
+     * The other half of the rules of the cable: a request is answered to any
+     * client that speaks the protocol, but the events -- the TX/RX edge the
+     * bench measures its latency against, the log stream, the status stream --
+     * only go to a client that said it wanted them in HELLO (PC_CAP_EVENTS).
+     * A bench script that forgets the cap gets answers and no edges, which is
+     * why the client in tools/bench passes it (benchproto.BenchLink).
+     */
+    Device d;
+    d.hello(0);
+    d.request(PC_MSG_BENCH_ARM, 2, d.tok());
+
+    std::vector<uint8_t> ptt;
+    putU8(ptt, PC_TAG_TX_STATE, 1);
+    auto t = d.tok();
+    ptt.insert(ptt.end(), t.begin(), t.end());
+
+    Frame on = d.request(PC_MSG_BENCH_PTT, 3, ptt);
+    REQUIRE(on.id == PC_MSG_BENCH_PTT);        /* answered               */
+    REQUIRE(sim.keys == 1);                    /* and it did key         */
+    REQUIRE(d.lastEvents.empty());             /* but no edge came back  */
+
+    /* The same request from a client that asked for events does carry it. */
+    Device e;
+    e.hello(PC_CAP_EVENTS);
+    e.request(PC_MSG_BENCH_ARM, 2, e.tok());
+    std::vector<uint8_t> q;
+    putU8(q, PC_TAG_TX_STATE, 0);
+    auto t2 = e.tok();
+    q.insert(q.end(), t2.begin(), t2.end());
+    Frame off = e.request(PC_MSG_BENCH_PTT, 3, q);
+    REQUIRE(off.id == PC_MSG_BENCH_PTT);
+    REQUIRE(e.lastEvents.size() == 1);
+    REQUIRE(e.lastEvents[0].id == PC_EVT_BENCH_EDGE);
 }
 
 TEST_CASE("Bench: TUNE programs the radio and reports what it took", "[bench]")

@@ -119,8 +119,11 @@ class BenchLink(P.Link):
     `clock_pairs`, which is what correlate.fit_clock() turns into an offset.
     """
 
-    def __init__(self, port, verbose=False):
-        super().__init__(port, client_caps=P.CAP_EVENTS, verbose=verbose)
+    def __init__(self, port, verbose=False, client_caps=P.CAP_EVENTS):
+        # The caps are the client's, not the bench's: a client that does not
+        # ask for PC_CAP_EVENTS still gets answers and no edges (the test
+        # tools/bench/tests/test_bench_proto.py pins that).
+        super().__init__(port, client_caps=client_caps, verbose=verbose)
         self.clock_pairs = []   # (radio_ms, host_ns_mid, rtt_ns)
         self.last = {}          # last answer per message, for the report
         # Power every TUNE carries unless the case asks for another one.  The
