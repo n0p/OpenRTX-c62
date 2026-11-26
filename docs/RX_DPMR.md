@@ -341,25 +341,39 @@ when `DPMR_CAPTURE` points at it and the coding checks run either way.
 
 ## What the screen can show
 
-`OpMode_DPMR` exposes what a diagnostics line needs, and nothing else:
+`DpmrStatus.c` is what the operator reads: it publishes what each decoded frame
+gives and the main screen draws it (ui_mode_state.c), the same shape as NXDN's
+`NxdnStatus.c`.
 
-| accessor | content |
+| field | content |
 |---|---|
-| `communicationMode()` | mode of the call (clause 5.7), 0xFF unknown |
-| `headerType()` | header type (clause 5.11), 0xFF unknown |
-| `calledId()` / `ownId()` | 24 bit addresses of the header frame |
-| `channelCode()` | 12 bit channel code (clause 6.1.5), 0 unknown |
-| `lastStatusMessage()` | 5 bit status of an END frame with ET = 01, 0xFF none |
-| `txWait()` | Tx wait of the last END frame, clause 5.14 |
-| `slowDataText()` / `slowDataLength()` / `slowDataMessages()` | last reassembled slow data message |
-| `appendedFormat()` / `appendedLength()` | header of an appended data message |
-| `framesDecoded()` / `headersDecoded()` / `endsDecoded()` | counters |
-| `rxSquelchOpen()` | the frame grid is locked (also opens the standby timer) |
+| `sync` | a frame decoded since the mode was entered or retuned |
+| `receiving` | the frame grid is locked right now (`dpmrPhy_synced()`) |
+| `channelCode` | 12 bit channel code (clause 6.1.5), -1 until a frame that carries it closes its CCH CRC |
+| `callType` | `DPMR_CALLTYPE_VCALL` (start header), `TX_REL` (END frame), `DISC` (disconnect request) |
+| `source` / `dest` | 24 bit own and called addresses of the header frame, `idsValid` |
+| `mode` / `ht` | communication mode (clause 5.7) and header type (clause 5.11) of the last header |
+| `endSeen` / `endHasStatus` / `endStatus` / `endWait` | the END frame, its 5 bit status when `ET = 01` (clause 5.15) and the Tx wait (clause 5.14) |
+| `evm`, `frames`, `cchErrors`, `voiceFrames`, `ambeFrames`, `headers`, `ends` | what the demodulator measured and how much it decoded |
 
-A line 2 candidate, in the style of the DMR mode's `CC13 TS2`: `dPMR 0DD v`
-while a call runs, `dPMR 0DD F2` when the frame number matters, and the called
-address on line 1. The UI itself is not touched by this work: `openrtx/src/ui/**`
-is out of scope here, and the accessors above are the whole hook it needs.
+Line 2 carries the channel code (`CC0DD`, `dPMR SYNC` while it has not been
+decoded yet, `RX` while the grid is locked), line 1 the call
+(`000135>00393D` in the 24 bit hex dPMR CPSs use) with the EVM and the frame
+count -- these take the width only while no header has decoded, because the
+call does not give it up -- and the note on the right of line 2 the call event
+(`VCALL`, `TX_REL` with its status as `S21`, `DISC`, and the type alone when the
+status does not fit). The identifiers stay on screen after the
+transmission ends, which is when the END status is worth reading. Nothing
+decoded reads `dPMR SRCH`, never a zero.
+
+The `OpMode_DPMR` accessors (`communicationMode()`, `headerType()`, `calledId()`,
+`ownId()`, `channelCode()`, `lastStatusMessage()`, `txWait()`,
+`slowDataText()`/`slowDataLength()`/`slowDataMessages()`,
+`appendedFormat()`/`appendedLength()`, `framesDecoded()`/`headersDecoded()`/
+`endsDecoded()`) stay as the diagnostics of the class; the screen no longer
+reads them, `DpmrStatus.c` is written from the same frames in `onFrame()`.
+`tests/unit/dpmr_status.cpp` builds a call with this tree's transmitter and
+affirms both the struct and the texts `ui_mode_state_read()` returns.
 
 Audio is muted unless the last frame arrived less than 400 ms ago
 (`dpmrPhy_synced()`), and the playback thread releases the speaker after a

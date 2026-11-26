@@ -28,18 +28,8 @@ Leyenda: ✅ cubierto por tests automáticos · ⚠️ cubierto a medias · ❌ 
 | **FM** | squelch y su histéresis; tonos CTCSS TX/RX y su anuncio; paso de frecuencia y límites; TX/RX de voz; APRS sobre FM | ⚠️ | `unit/fm_squelch` (histéresis de 1 dB, nivel vivo, tono que decide, rutas RX/TX sin ruta colgada), `unit/fm_ctcss` (tabla EIA, selección canal→rtx, anuncio leído de la cola de voz), `unit/fm_step` (tabla de pasos, raster del airband, snap, límites de banda), `unit/spectrum`, `unit/slevel`, `unit/audio_path`, `host/pc_proto_host` (pty), APRS sólo por `unit/aprs_config`; **niveles de audio y desviación: banco** |
 | **AM / Airband** | canal, raster, profundidad de modulación, TX de AM, cambio de modo sin clavear | ✅ | `unit/airband` (plan de banda, designadores, snap, compuerta TX), `unit/airband_mode` (squelch con margen 1/2 dB y colgante de 400 ms, diálogo de claveado con `CONFIG_C62_AIR_TX`, cambio de modo que no clavea), `unit/fm_step` (raster 25k/8.33k), `unit/am_tx` (profundidad, ventana, rampas), `unit/agc`, `unit/mode_switch_am`; **profundidad y potencia reales: banco** |
 | **DMR** | sincronismo, CC/TS, CACH, BPTC, LC con origen>destino, calidad; vocoder AMBE+2 (decodifica y sintetiza); SMS (formato, cola, ACK); TX (ráfaga, terminador, gate) | ✅/⚠️ | `unit/dmr_rx_status` (**doble del receptor**: basebanda de repetidor del modulador propio → `dmr_getStatus()`: CC/TS/CACH/LC/calidad, y las negativas —silencio, LC con checksum roto, CC mal corregido, CRC-32 roto—), `host/dmr_tx_host` (modulador→demod, bit-exacto), `host/dmr_pkg_host`, `unit/dmr_glue`, `unit/dmr_lc_dest`, `unit/dmr_sms_format`, `unit/imbe_*`; quedan fuera el camino BK4819 (REG_7E/REG_43), la pila de 7 KiB y el flujo MS/simplex: `reports/dmr_rx_standin.md` |
-| **NXDN** | 4FSK 2400 Bd, FEC, RAN, SACCH (origen>destino), TX | ⚠️ | `unit/nxdn_rx`, `unit/nxdn_tx` |
-| **dPMR** | 4FSK 2400 Bd, CCH, permutación de voz, TX | ⚠️ | `unit/dpmr_rx`, `unit/dpmr_tx` |
-| **FM** | squelch y su histéresis; tonos CTCSS TX/RX y su anuncio; paso de frecuencia y límites; TX/RX de voz; APRS sobre FM | ⚠️ | `unit/spectrum`, `unit/slevel`, `unit/audio_path`, `host/pc_proto_host` (pty), APRS sólo por `unit/aprs_config` |
-| **AM / Airband** | canal, raster, profundidad de modulación, TX de AM, cambio de modo sin clavear | ✅/⚠️ | `unit/am_tx`, `unit/airband`, `unit/mode_switch_am`, `unit/agc` |
-| **DMR** | sincronismo, CC/TS, CACH, BPTC, LC con origen>destino, calidad; vocoder AMBE+2 (decodifica y sintetiza); SMS (formato, cola, ACK); TX (ráfaga, terminador, gate) | ⚠️ | `host/dmr_tx_host` (modulador→demod, bit-exacto), `host/dmr_pkg_host`, `unit/dmr_glue`, `unit/dmr_lc_dest`, `unit/dmr_sms_format`, `unit/imbe_*`; **la cadena RX en la radio no tiene doble** |
 | **NXDN** | 4FSK 2400 Bd, FEC, RAN, SACCH (origen>destino), TX | ✅/⚠️ | `unit/nxdn_rx` (captura, ruido, rechazo de la FEC), `unit/nxdn_tx` (TX bit a bit, sincronismo sobre stream sintético con fase y deriva, RAN aceptado/rechazado, SACCH VCALL/TX_REL/DISC, estado que lee la UI); la voz hasta el altavoz, no |
-| **dPMR** | 4FSK 2400 Bd, CCH, permutación de voz, TX | ✅/⚠️ | `unit/dpmr_rx` (vectores, permutación exhaustiva, rechazo de la FEC), `unit/dpmr_tx` (TX bit a bit, layout de la ráfaga, sincronismo con fase y deriva, squelch publicado); la voz hasta el altavoz, no |
-| **P25** | C4FM, sync por sub-fase, TSBK, HDU/TDU, IMBE 7200, NAC | ✅/⚠️ | `unit/p25_phy`, `host/p25_phy_host`, `host/p25_tx`, `unit/imbe_robust` |
-| **YSF** | 4FSK, FICH/DGID, modo V/D, IMBE, TX | ✅ | `host/ysf_host`, `host/ysf_tx` |
-| **D-STAR** | GMSK 4800, AMBE 3600x2400 propio, header, TX | ⚠️ | `host/dstar`, `unit/` (vocoder por `lib/dstar_vocoder`) |
-| **NXDN** | 4FSK 2400 Bd, FEC, RAN, SACCH (origen>destino), TX | ⚠️ | `unit/nxdn_rx`, `unit/nxdn_tx` |
-| **dPMR** | 4FSK 2400 Bd, CCH, permutación de voz, TX | ⚠️ | `unit/dpmr_rx`, `unit/dpmr_tx` |
+| **dPMR** | 4FSK 2400 Bd, CCH, permutación de voz, TX, estado publicado (sync, canal, llamada, END) | ✅/⚠️ | `unit/dpmr_rx` (vectores, permutación exhaustiva, rechazo de la FEC), `unit/dpmr_tx` (TX bit a bit, layout de la ráfaga, sincronismo con fase y deriva, squelch publicado), `unit/dpmr_status` (**doble del receptor**: cabecera, supertramas y trama END del transmisor propio → demodulador real → `DpmrStatus.c` → `ui_mode_state_read()`: "CC0DD", "000135>00393D", VCALL/TX_REL/DISC, estado del END, y el estado vacío como "dPMR SRCH"); la voz hasta el altavoz, no |
 | **P25** | C4FM, sync por sub-fase, TSBK, HDU/TDU, IMBE 7200, NAC | ✅ | `unit/p25_phy` (y el rechazo: NID fuera de política, paridad del DUID, DUID desconocido, TSBK anunciado sobre un LDU, NAC de cada trama, trama cortada), `unit/p25_fec` (radio de cada código y su rechazo), `unit/p25_status` (estado publicado, buena trama y mala), `unit/imbe_robust` (recuento de bits y repetición), `host/p25_phy_host`, `host/p25_tx` |
 | **YSF** | 4FSK, FICH/DGID, modo V/D, voz AMBE+2, TX | ✅ | `unit/ysf_frame` (FICH roto, bloque DCH roto, voz FR no soportada, bit fijo de V/D 2, DG-ID), `unit/ysf_phy` (sync: encuentra y no inventa), `host/ysf_host`, `host/ysf_tx` |
 | **D-STAR** | GMSK 4800, AMBE 3600x2400 propio, header, TX | ✅/⚠️ | `unit/dstar_header` (P_FCS, cabecera codificada y su rechazo, MY/UR/RPT, oídos, texto), `unit/dstar_phy` (transmisión completa, cortada en cabecera o en tramas, ruido, recuentos de error por palabra AMBE), `host/dstar`, `unit/` (vocoder por `lib/dstar_vocoder`); sin decodificador AMBE 2400: el modo calla |
@@ -57,13 +47,15 @@ oído— y la profundidad de AM realmente radiada.
 **El hueco común a los digitales:** ningún modo tiene un *doble del receptor*
 que alimente `OpMode_*::update()` con muestras sintéticas y compruebe el estado
 que se publica (sync, identificadores, calidad). Es exactamente la clase de
-hueco por la que un CC inestable se ve en la radio y no en los tests. TETRA es
-la excepción desde `unit/tetra_status`, y no por el `OpMode` sino por su estado:
-un `tetra_tmo_rx` de verdad recibe PDUs de verdad (la grabación de bajada que
-trae libtetra, sus PDUs de MM capturados, un D-NWRK-BROADCAST y una ráfaga de
-uplink del propio encoder) y lo que se comprueba es `TetraStatus.c` y el texto
-que `ui_mode_state.c` le da a la pantalla principal. Queda para los demás modos
-el mismo molde.
+hueco por la que un CC inestable se ve en la radio y no en los tests. TETRA lo
+tiene desde `unit/tetra_status`, y no por el `OpMode` sino por su estado: un
+`tetra_tmo_rx` de verdad recibe PDUs de verdad (la grabación de bajada que trae
+libtetra, sus PDUs de MM capturados, un D-NWRK-BROADCAST y una ráfaga de uplink
+del propio encoder) y lo que se comprueba es `TetraStatus.c` y el texto que
+`ui_mode_state.c` le da a la pantalla principal. NXDN y dPMR lo tienen por el
+lado del PHY (`unit/nxdn_tx`, `unit/dpmr_status`): una llamada del transmisor
+del árbol pasa por el demodulador real y llega al módulo de estado. Queda para
+P25, YSF y D-STAR el mismo molde.
 
 **DMR ya lo tiene** (`unit/dmr_rx_status`, `reports/dmr_rx_standin.md`): genera
 las franjas de un repetidor con el modulador propio, las mete por
@@ -72,9 +64,8 @@ lo que sale por `dmr_getStatus()`, incluidas las negativas. Ya encontró dos
 cosas: un CC que sólo salía de una corrección se publicaba (corregido en
 `dmr_proto.c`), y con el otro timeslot ocupado los identificadores de la
 llamada parpadean en pantalla porque `DmrStatus.c` los toma de la última
-ráfaga y no del último LC. El resto de los digitales sigue sin doble, y el
-mismo molde sirve: NXDN, dPMR, P25, YSF, D-STAR y TETRA tienen su demodulador y
-su estado como los de DMR.
+ráfaga y no del último LC. P25, YSF y D-STAR siguen sin doble, y el mismo molde
+sirve: los tres tienen su demodulador y su estado como los de DMR.
 
 ## 1bis. La configuración del chip, por modo
 
@@ -97,7 +88,8 @@ tabla con el porqué de cada valor.
 NXDN y dPMR ya tienen la mitad que importa de ese doble, sin radio: una llamada
 construida con el transmisor del árbol pasa por el demodulador de verdad y llega
 al módulo de estado que lee la UI (`nxdn_tx.cpp`, grupos `[status]`, `[ran]`,
-`[layout]`, `[timing]`). Lo que queda fuera del alcance del host es lo que
+`[layout]`, `[timing]`; `dpmr_status.cpp`, que además afirma los textos de
+`ui_mode_state_read()`). Lo que queda fuera del alcance del host es lo que
 `OpMode_*::update()` toca del resto del firmware — flujos de audio, PTT,
 `nxdnSpeech_push()`/`dpmrSpeech_push()` — porque el build de host no instancia
 los modos (`CONFIG_NXDN`, `CONFIG_DPMR`); su pegamento está compilado a mano

@@ -474,7 +474,7 @@ What each mode publishes, and where its quality figure comes from:
 |---|---|---|---|
 | DMR | `CC n TS n` | `src>dst`, `LC n%` (embedded LC decoded) | data type (`CSBK`, `Idle`…) |
 | NXDN | `RAN n VOX` | `src>dst`, `e n% f n` (EVM, frames) | `VCALL` / `TX_REL` / `DISC` |
-| dPMR | `dPMR RX` / `SRCH` | — (the PHY publishes no counters) | — |
+| dPMR | `CC nnn` (`CC0DD`, + `RX` while locked) / `dPMR SYNC` | `src>dst` (24 bit hex), `e n% f n` (EVM, frames) | `VCALL` / `TX_REL` / `DISC`, `S n` with the END status |
 | P25 | `NAC nnn VOX` | `src>tg`, `ok n% f n` (frames without uncorrectable errors) | `DUID n` |
 | YSF | `YSF RX` / `SRCH` | — | — |
 | D-STAR | `MY/SFX>UR` | `b n RPT` (Viterbi-corrected bits, access repeater) | slow-data text |
@@ -600,10 +600,19 @@ main screen (see "El estado del modo").
 ### dPMR, receive only (5–6 rows)
 
 dPMR is one 6.25 kHz carrier with no timeslots and no channel spacing to choose,
-and its PHY publishes no counters to the UI yet, so the table is `FINE`, `BKL`,
-`KEYLIT`, `LOCK`, `MSGS`, `MSG`. Whether a call is being followed is on the main
-screen: `dPMR RX` while the squelch is open (it opens with the frame grid and
-the CCH CRC), `SRCH` otherwise.
+so the table is `FINE`, `BKL`, `KEYLIT`, `LOCK`, `MSGS`, `MSG`. What the burst
+gives is on the main screen, from `DpmrStatus.c`: the channel code of clause
+6.1.5 (`CC0DD`) once a frame that carries it closes its CCH CRC — until then
+`dPMR SYNC`, and `dPMR RX` while the frame grid is locked and the code is still
+unknown — the two 24 bit addresses of the header (`000135>00393D` on line 1),
+the call event (`VCALL` from a start header, `DISC` from a disconnect request,
+`TX_REL` from the END frame, with the 5 bit status of clause 5.15 when the END
+says `ET = 01`, e.g. `TX_REL S21`, and the type alone as the short form when it
+does not fit beside the code) and the demodulator's EVM and frame count, which
+take line 1 only while no header has decoded: the call does not give it up.
+The identifiers stay readable after the transmission ends, which is when the
+END status is worth reading; `RX` follows the squelch. `SRCH` means nothing has
+been decoded since the mode was entered or retuned.
 
 ### P25 Phase 1, receive only (5–6 rows)
 
