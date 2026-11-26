@@ -92,6 +92,9 @@ openrtx_src = ['openrtx/src/core/state.c',
                # The P25 and D-STAR status blocks, for the same reason: the mode
                # screens read them and they are portable C. See docs/UI.md.
                'openrtx/src/protocols/P25/P25Status.c',
+               # The burst data type names: the main screen's state block
+               # prints what the last DMR burst was, in both builds.
+               'openrtx/src/protocols/DMR/DmrDefs.c',
                'openrtx/src/protocols/DSTAR/DStarStatus.c',
                'openrtx/src/protocols/DSTAR/DStarSlowData.c',
                # The TETRA "Cell uplink" session: the quick menu row, the mode
@@ -144,6 +147,8 @@ ui_src_default = ['openrtx/src/ui/default/ui.c',
                   'openrtx/src/ui/default/ui_menu.c',
                   'openrtx/src/ui/default/ui_hints.c',
                   'openrtx/src/ui/default/ui_layout.c',
+                  # The decoded state of each mode, drawn on the main screen
+                  'openrtx/src/ui/default/ui_mode_state.c',
                   'openrtx/src/ui/default/ui_zones.c',
                   'openrtx/src/ui/default/ui_quickmenu.c',
                   'openrtx/src/ui/default/ui_strings.c',

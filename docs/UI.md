@@ -420,6 +420,71 @@ the tree the list shows `NO ZONES`; the UI never invents a frequency. Green
 tunes the entry into the VFO (through `zones_toChannel()`, so the bandwidth and
 the shift are the plan's) and leaves; red goes back one level.
 
+## El estado del modo (the mode's state, on the main screen)
+
+The owner's rule, and the reason this section exists:
+
+> el estado del modo tiene que aparecer en la pantalla principal, no en un
+> subsubmenu. en los menús están las configuraciones y las opciones.
+
+A receive mode's decoded state — is it locked, to what, who is calling whom, how
+good the signal is — is what the operator watches while working the radio. It
+used to be read-only rows of each mode's quick menu, which is *also* that mode's
+page under Settings, so it could only be read by opening a menu, and the page was
+a list of rows that beeped and did nothing when a value key was pressed.
+
+`ui/ui_mode_state.h` is now the one block every digital mode fills, and
+`ui_main.c` draws it in the same place in all of them (`_ui_drawModeState()`):
+
+| Line | Content | Examples |
+|---|---|---|
+| 1 | the call and the received quality | `2317>9 LC98%`, `e4% f1234`, `2317>9 ok99%`, `b2 ED5YAM` |
+| 2, left | identifiers and sync state | `CC1 TS2`, `RAN12 VOX`, `NAC293 VOX`, `228-8889`, `EA5ABC>CQCQCQ`, `SRCH` |
+| 2, right | the secondary state | `ACC G3` (TETRA registration), `DUID3`, `VCALL`, `CSBK`, `LA1 ACC G3` |
+
+The frequency keeps the 16 pt row between them and the bottom row stays the
+S-meter (or the carrier-search message), so the state is the same two bands in
+every mode: line 1 at `layout.line1_pos` and line 2 at `layout.line2_pos`, from
+the one `layout_t` every screen shares. There is no fourth line: the 16 pt
+digits reach y=93 and `layout.line4_pos` is y=97, so a note there is drawn over
+the frequency — the simulator showed it (`mode_state_shots.py`, the first version
+of this block).
+
+Both halves of line 2 are measured with `gfx_getTextWidth()` before they are
+drawn: the note takes its short form (`ACC G3` instead of `LA1 ACC G3`) when the
+long one does not fit beside the identifiers, and is dropped when neither does.
+The identifiers are never shortened. `gfx_print()` does not clip, so measuring
+first is what keeps a long text from wrapping onto the frequency.
+
+Nothing decoded reads as `SRCH` (TETRA: `T searching`) and an identifier that is
+not known reads as `-`, never as a zero: a colour code of 0 is a fact and "not
+decoded yet" is not. `tests/unit/ui_menu_audit.cpp` checks both the vocabulary
+and the positive cases, and rejects any read-only (`QM_INFO`) row in a mode's
+table, so the state cannot creep back into a menu.
+
+What each mode publishes, and where its quality figure comes from:
+
+| Mode | Identifiers (line 2) | Call / quality (line 1) | Note (line 2, right) |
+|---|---|---|---|
+| DMR | `CC n TS n` | `src>dst`, `LC n%` (embedded LC decoded) | data type (`CSBK`, `Idle`…) |
+| NXDN | `RAN n VOX` | `src>dst`, `e n% f n` (EVM, frames) | `VCALL` / `TX_REL` / `DISC` |
+| dPMR | `dPMR RX` / `SRCH` | — (the PHY publishes no counters) | — |
+| P25 | `NAC nnn VOX` | `src>tg`, `ok n% f n` (frames without uncorrectable errors) | `DUID n` |
+| YSF | `YSF RX` / `SRCH` | — | — |
+| D-STAR | `MY/SFX>UR` | `b n RPT` (Viterbi-corrected bits, access repeater) | slow-data text |
+| TETRA | `MCC-MNC` | uplink SSI / SDS / demodulator figures (line 1, radio) | `LA n` + `ACC G n` / `REJ n` |
+
+FM, M17, airband and broadcast FM keep their own lines: FM shows its bandwidth
+and tone, M17 the link set-up frame with symbols, source, destination, reflector
+and meta text, and the two receivers the tuner's own read-out (the airband
+channel designator and TX arm state, the BK1080's stereo state, level and SNR).
+
+Where the state is *not*: the TETRA network broadcast (neighbour count, cell
+load, network clock) does not fit beside the cell on a 160 px line and is a
+diagnostic, not something the operator works with; the D-STAR slow-data text is
+also stored in the message inbox. Everything else that the tables used to show
+read-only is above.
+
 ## Contextual quick menu
 
 P2 short press, on the main screens only, with the keypad unlocked and not
@@ -466,25 +531,27 @@ broke.
 | `MSG` | goto | opens the composer, transport chosen by the current mode |
 | `APRS` | goto | opens the APRS setup page (`CONFIG_APRS`), red returns to the main screen |
 
-### M17 (11 rows)
+### M17 (10 rows)
 
 `CALL` (opens Settings → Identity → callsign, the station's one callsign), `CAN`
-0..15, `CANRX` toggle, `SRC` (read only), `META` (opens the meta text editor),
+0..15, `CANRX` toggle, `META` (opens the meta text editor),
 `PWR`, `BKL`, `KEYLIT`, `LOCK`, `MSGS`, `MSG`.
 
 `CALL` is a rename: the row used to be `DEST` and opened the *own* callsign
 editor, which is the source address and not a destination. The destination of an
 M17 call is not settable from this radio.
 
-### TETRA, receive only (14 rows)
+### TETRA, receive only (8 rows)
 
 `AFC` toggle, `FINE` −500..+500 Hz in 10 Hz steps (long press: ±100 Hz),
 `CELL UL` (`OFF` / `ON` / `NO UL`: listens to the uplink of the cell — the MS
 to BS direction — see docs/TETRA_LIB.md, "Escuchar el uplink de la celda"), then
-`CELL` (MCC-MNC, read only), `LA/CC`, `REG` (registration/attach), `NET`
-(neighbours + network clock), `UL` (SSI heard on the uplink, read only), `CALL`
-(talker > destination, group and encryption flags, read only), `BKL`, `KEYLIT`,
-`LOCK`, `MSGS`, `MSG`.
+`BKL`, `KEYLIT`, `LOCK`, `MSGS`, `MSG`.
+
+The cell, its location area, the registration and the call are state and are on
+the main screen (see "El estado del modo"): `MCC-MNC` and `LA`/`CC` on line 2,
+`ACC G<n>` or `REJ <cause>` at its right, and the talking party and the called
+group on the call screen, which takes lines 1 to 4 while a call is up.
 
 `CELL UL` is a **session of the mode**, not a setting: `ON` tunes the receiver to
 the cell's uplink frequency (published by its SYSINFO, or the duplex conversion
@@ -495,79 +562,90 @@ and nothing is retuned — it never invents one. Leaving the mode or tuning
 elsewhere ends the session (the periodic part of `ui_updateFSM()` does it, so a
 mode that can transmit never inherits an uplink frequency as its TX).
 
-### DMR (12–13 rows)
+### DMR (8–9 rows)
 
-`CC` (colour code), `TS` (timeslot), `SYNC` (sync state and EVM), all read only
-from the demodulator. Then the call destination — `CALL` (`GROUP` / `USER`) and
-`DEST` (the talkgroup or the subscriber ID, 24 bits, step 1, long press ±100) —
-then `FINE`, `BKL`, `KEYLIT`, `LOCK`, `MSGS`, `MSG`.
+The call destination — `CALL` (`GROUP` / `USER`) and `DEST` (the talkgroup or
+the subscriber ID, 24 bits, step 1, long press ±100) — then `FINE`, `BKL`,
+`KEYLIT`, `LOCK`, `MSGS`, `MSG`.
+
+The colour code, the timeslot, the sync state, the call and the link quality are
+state and are on the main screen (see "El estado del modo").
 
 `DEST` writes `settings.dmr_dest_id` / `settings.dmr_dest_type` and asks for an
 RTX resync; the UI never touches `rtxStatus_t`. The two rows only exist when
 the settings record has them (`DMR_ID_MAX` from `core/datatypes.h`, the model
 branch) and the build has DMR; until then the table builds without them.
 
-A read-only row shows `---`, `SEARCHING` or `SRCH` while there is no data,
-never a zero that would read as a real value. P1/P2 on such a row beeps and
-changes nothing.
+No mode's table carries a read-only row any more: a table is both the popup and
+the mode's Settings page, so a read-only row there is state inside a menu.
+`tests/unit/ui_menu_audit.cpp` fails when one comes back.
 
-### NXDN, receive only (10–11 rows)
+### NXDN, receive only (7–8 rows)
 
-`RAN` (0..63 plus `ANY`, the default: it is a receive filter, and the mode drops
-voice and layer 3 from any other RAN once a superframe has decoded), `BW`
-(12.5 / 6.25 kHz, the channel spacing the IF filter follows), then what the
-demodulator reports: `SYNC` (sync state and EVM, or `SRCH`), `CALL` (source >
-destination of the last layer 3 message the SACCH carried) and `TYPE` (`VCALL`,
-`TXREL`, `DISC`). Then `FINE`, `BKL`, `KEYLIT`, `LOCK`, `MSGS`, `MSG`.
+`RAN` (0..63 plus `ANY`, the default: it is a receive *filter*, and the mode
+drops voice and layer 3 from any other RAN once a superframe has decoded) and
+`BW` (12.5 / 6.25 kHz, the channel spacing the IF filter follows), then `FINE`,
+`BKL`, `KEYLIT`, `LOCK`, `MSGS`, `MSG`.
 
-### dPMR, receive only (7–8 rows)
+What the demodulator reports — sync, the RAN it locked to, the EVM, the frames
+and the source > destination of the last SACCH message with its type — is on the
+main screen (see "El estado del modo").
 
-`SYNC` is the whole table's own row: `RX` while the mode is following a call
-(its squelch opens with the frame grid and the CCH CRC), `SRCH` otherwise. dPMR
-is one 6.25 kHz carrier with no timeslots and no channel spacing to choose, and
-its PHY publishes no counters to the UI yet, so there is nothing else to put
-there. Then `FINE`, `BKL`, `KEYLIT`, `LOCK`, `MSGS`, `MSG`.
+### dPMR, receive only (5–6 rows)
 
-### P25 Phase 1, receive only (10–11 rows)
+dPMR is one 6.25 kHz carrier with no timeslots and no channel spacing to choose,
+and its PHY publishes no counters to the UI yet, so the table is `FINE`, `BKL`,
+`KEYLIT`, `LOCK`, `MSGS`, `MSG`. Whether a call is being followed is on the main
+screen: `dPMR RX` while the squelch is open (it opens with the frame grid and
+the CCH CRC), `SRCH` otherwise.
 
-What the receiver reports: `SYNC` (`VOX`, `SYNC` or `SRCH`), `NAC` (three hex
-digits, `---` until one decodes), `TYPE` (the data unit of the last frame) and
-`CALL` (source > talkgroup of the last link control). Then `FINE`, `BKL`,
-`KEYLIT`, `LOCK`, `MSGS`, `MSG`.
+### P25 Phase 1, receive only (5–6 rows)
 
-### YSF, receive only (7–8 rows)
+P25 has nothing to configure of its own, so the table is `FINE`, `BKL`,
+`KEYLIT`, `LOCK`, `MSGS`, `MSG`. The receiver's state is on the main screen: the
+NAC it locked to (three hex digits) on line 2, the data unit of the last frame
+at its right, the source > talkgroup of the last link control and the share of
+voice frames that needed no uncorrectable repair on line 1.
 
-`SYNC` only, for now: `RX` while the mode tracks a carrier, `SRCH` otherwise.
+### YSF, receive only (5–6 rows)
+
 The frame layer does not publish a status block yet (`docs/RX_FUSION.md`), so
-the table is that row plus `FINE`, `BKL`, `KEYLIT`, `LOCK`, `MSGS`, `MSG`.
+the table is `FINE`, `BKL`, `KEYLIT`, `LOCK`, `MSGS`, `MSG` and the main screen
+says `YSF RX` while the mode tracks a carrier, `SRCH` otherwise.
 
-### D-STAR, receive only (11–12 rows)
+### D-STAR, receive only (5–6 rows)
 
-The callsigns are the mode: `SYNC`, `MY` (own callsign and suffix), `UR`
-(destination), `RPT` (access repeater) and `TXT` (the last 20-character
-slow-data message). All of them read `---` until a header with a good P_FCS
-arrives, so nothing on the screen can be mistaken for a real call. Then `FINE`,
-`BKL`, `KEYLIT`, `LOCK`, `MSGS`, `MSG`.
+The callsigns are the mode, and they are state: the main screen shows
+`MY/SFX>UR` on line 2, the access repeater and the Viterbi-corrected channel bits
+of the last header on line 1, and the slow-data text at the right of line 2 (also
+stored in the message inbox). The table is `FINE`, `BKL`, `KEYLIT`, `LOCK`,
+`MSGS`, `MSG`. Nothing reads `---` any more: with no header the screen says
+`DSTAR SRCH`.
 
-### WFM, broadcast FM, receive only (9 rows)
+### WFM, broadcast FM, receive only (5 rows)
 
-Everything here is what the BK1080 reports: `ST` (`STEREO`, `PILOT`, `MONO` or
-`SRCH`), `LVL` (dBuV), `SNR` (the chip's 0..15 estimate) and `CH` (the CCIR
-channel index). There is no `SQL` and no `PWR` row: the tuner's AFC says whether
-there is a station, there is no transmitter, and the volume is the analog pot. Then
-`BKL`, `KEYLIT`, `LOCK`, `MSGS`, `MSG`.
+Everything the BK1080 reports is on the main screen, which is this mode's whole
+read-out: the stereo state (`STEREO`, `PILOT`, `MONO` or `SRCH`) and the CCIR
+channel designator on line 2, the level in dBuV and the chip's own 0..15 SNR on
+line 1. There is no `SQL` and no `PWR` row: the tuner's AFC says whether there
+is a station, there is no transmitter, and the volume is the analog pot. The
+table is `BKL`, `KEYLIT`, `LOCK`, `MSGS`, `MSG`.
 
-### AM, airband, receive only (11–12 rows)
+### AM, airband, receive only (10–11 rows)
 
 `SQL` is the **carrier** squelch: the same level as FM, but in AM the audio
 follows the carrier, so what it thresholds is the RSSI — a noise squelch would
 open on the noise the AGC has just brought up. `AGC` turns the audio AGC of the
 AM path on and off. `STEP` picks the raster (25 kHz or 8.33 kHz) and moves the
 global tuning step with it, `SNAP` puts every step and every typed frequency on
-the nearest 8.33 kHz carrier, `CH` shows the channel designator the receiver is
-on (`118.005`, whose carrier is 118.00833), and `IF` picks the AM IF filter
-(25 kHz wide / 12.5 kHz narrow). No `PWR` row: there is no transmitter in this
-mode. Then `FINE`, `BKL`, `KEYLIT`, `LOCK`, `MSGS`, `MSG`.
+the nearest 8.33 kHz carrier, and `IF` picks the AM IF filter (25 kHz wide /
+12.5 kHz narrow). No `PWR` row: there is no transmitter in this mode. Then
+`FINE`, `BKL`, `KEYLIT`, `LOCK`, `MSGS`, `MSG`.
+
+The channel designator the receiver is on (`118.005`, whose carrier is
+118.00833) is state and is on the main screen next to the raster, with the AGC
+state, the squelch level and — with `CONFIG_C62_AIR_TX` — whether the band is
+armed to transmit (`TX-ARM`) or locked (`TX-LOCK`).
 
 ## Frequency entry
 

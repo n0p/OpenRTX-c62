@@ -27,6 +27,7 @@ extern "C" {
 #include "interfaces/delays.h"
 #include "rtx/rtx.h"
 #include "ui/ui_default.h"
+#include "ui/ui_mode_state.h"
 #include "ui/ui_modes.h"
 #include "ui/ui_quickmenu.h"
 #include "ui/ui_layout.h"
@@ -242,13 +243,13 @@ TEST_CASE("NXDN has its rows in the quick menu", "[ui][modes][quickmenu]")
     REQUIRE(qm != NULL);
     REQUIRE(qm->mode == OPMODE_NXDN);
 
-    /* The knobs the engine has */
+    /* The knobs the engine has, and only those: what it reports (sync, RAN,
+       the call, the type, the EVM) is on the main screen, not in the menu */
     REQUIRE(rowOf(qm, "RAN") == 0);
     REQUIRE(rowOf(qm, "BW") > 0);
-    /* What the demodulator reports */
-    REQUIRE(rowOf(qm, "SYNC") > 0);
-    REQUIRE(rowOf(qm, "CALL") > 0);
-    REQUIRE(rowOf(qm, "TYPE") > 0);
+    REQUIRE(rowOf(qm, "SYNC") == -1);
+    REQUIRE(rowOf(qm, "CALL") == -1);
+    REQUIRE(rowOf(qm, "TYPE") == -1);
     /* The tail every table shares */
     REQUIRE(rowOf(qm, "MSGS") > 0);
     REQUIRE(rowOf(qm, "MSG") > 0);
@@ -305,8 +306,10 @@ TEST_CASE("Airband has its rows in the quick menu", "[ui][modes][quickmenu]")
     REQUIRE(rowOf(qm, "AGC") > 0);
     REQUIRE(rowOf(qm, "STEP") > 0);      /* 25 kHz / 8.33 kHz */
     REQUIRE(rowOf(qm, "SNAP") > 0);
-    REQUIRE(rowOf(qm, "CH") > 0);        /* channel designator */
     REQUIRE(rowOf(qm, "IF") > 0);
+    /* The channel designator of the frequency in use is state: the main
+       screen shows it next to the raster */
+    REQUIRE(rowOf(qm, "CH") == -1);
 
     /* Receive only: no power row */
     REQUIRE(rowOf(qm, "PWR") == -1);
@@ -510,7 +513,9 @@ TEST_CASE("dPMR has its rows in the quick menu", "[ui][modes][quickmenu]")
 
     REQUIRE(qm != NULL);
     REQUIRE(qm->mode == OPMODE_DPMR);
-    REQUIRE(rowOf(qm, "SYNC") == 0);
+    /* dPMR has nothing to configure of its own: the sync state is a line of
+       the main screen, so the table is the shared tail */
+    REQUIRE(rowOf(qm, "SYNC") == -1);
     REQUIRE(rowOf(qm, "MSGS") > 0);
     REQUIRE(rowOf(qm, "MSG") > 0);
     REQUIRE(rowOf(qm, "PWR") == -1);
@@ -524,16 +529,19 @@ TEST_CASE("P25 has its rows in the quick menu", "[ui][modes][quickmenu]")
 
     REQUIRE(qm != NULL);
     REQUIRE(qm->mode == OPMODE_P25);
-    REQUIRE(rowOf(qm, "SYNC") == 0);
-    REQUIRE(rowOf(qm, "NAC") > 0);
-    REQUIRE(rowOf(qm, "TYPE") > 0);
-    REQUIRE(rowOf(qm, "CALL") > 0);
+    /* The NAC, the DUID and the last link control are state: the main screen
+       draws them, the page does not offer them */
+    REQUIRE(rowOf(qm, "SYNC") == -1);
+    REQUIRE(rowOf(qm, "NAC") == -1);
+    REQUIRE(rowOf(qm, "TYPE") == -1);
+    REQUIRE(rowOf(qm, "CALL") == -1);
     REQUIRE(rowOf(qm, "PWR") == -1);
 }
 
 TEST_CASE("P25 reports nothing as a zero", "[ui][modes]")
 {
     struct p25Status st;
+    ui_mode_state_t out;
 
     p25Status_clear();
     p25Status_get(&st);
@@ -541,17 +549,14 @@ TEST_CASE("P25 reports nothing as a zero", "[ui][modes]")
     REQUIRE(st.nac < 0);
     REQUIRE(st.duid < 0);
 
-    /* The formatters of the popup rows say so instead of printing a value */
-    char buf[24];
-
-    qm_p25_fmt_sync(buf, sizeof(buf));
-    REQUIRE(strcmp(buf, "SRCH") == 0);
-    qm_p25_fmt_nac(buf, sizeof(buf));
-    REQUIRE(strcmp(buf, "---") == 0);
-    qm_p25_fmt_type(buf, sizeof(buf));
-    REQUIRE(strcmp(buf, "---") == 0);
-    qm_p25_fmt_call(buf, sizeof(buf));
-    REQUIRE(strcmp(buf, "---") == 0);
+    /* The main screen's state block says so instead of printing a value */
+    state.channel.mode = OPMODE_P25;
+    ui_mode_state_read(&out);
+    REQUIRE(!out.sync);
+    REQUIRE(strcmp(out.id, "P25 SRCH") == 0);
+    REQUIRE(out.callTxt[0] == '\0');
+    REQUIRE(out.note[0] == '\0');
+    REQUIRE(strstr(out.id, "0") == NULL);
 }
 #endif
 
@@ -562,7 +567,7 @@ TEST_CASE("YSF has its rows in the quick menu", "[ui][modes][quickmenu]")
 
     REQUIRE(qm != NULL);
     REQUIRE(qm->mode == OPMODE_YSF);
-    REQUIRE(rowOf(qm, "SYNC") == 0);
+    REQUIRE(rowOf(qm, "SYNC") == -1);
     REQUIRE(rowOf(qm, "MSG") > 0);
     REQUIRE(rowOf(qm, "PWR") == -1);
 }
@@ -575,28 +580,28 @@ TEST_CASE("D-STAR has its rows in the quick menu", "[ui][modes][quickmenu]")
 
     REQUIRE(qm != NULL);
     REQUIRE(qm->mode == OPMODE_DSTAR);
-    /* The callsigns are the mode: MY, UR, RPT and the slow-data text */
-    REQUIRE(rowOf(qm, "SYNC") == 0);
-    REQUIRE(rowOf(qm, "MY") > 0);
-    REQUIRE(rowOf(qm, "UR") > 0);
-    REQUIRE(rowOf(qm, "RPT") > 0);
-    REQUIRE(rowOf(qm, "TXT") > 0);
+    /* The callsigns of the last header are state, not settings: the main
+       screen shows MY>UR, the repeater and the slow-data text */
+    REQUIRE(rowOf(qm, "SYNC") == -1);
+    REQUIRE(rowOf(qm, "MY") == -1);
+    REQUIRE(rowOf(qm, "UR") == -1);
+    REQUIRE(rowOf(qm, "RPT") == -1);
+    REQUIRE(rowOf(qm, "TXT") == -1);
     REQUIRE(rowOf(qm, "PWR") == -1);
 }
 
 TEST_CASE("D-STAR shows no callsign before one arrives", "[ui][modes]")
 {
-    char buf[24];
+    ui_mode_state_t out;
 
     dstarStatus_clear();
-    qm_dstar_fmt_sync(buf, sizeof(buf));
-    REQUIRE(strcmp(buf, "SRCH") == 0);
-    qm_dstar_fmt_my(buf, sizeof(buf));
-    REQUIRE(strcmp(buf, "---") == 0);
-    qm_dstar_fmt_ur(buf, sizeof(buf));
-    REQUIRE(strcmp(buf, "---") == 0);
-    qm_dstar_fmt_rpt(buf, sizeof(buf));
-    REQUIRE(strcmp(buf, "---") == 0);
+    state.channel.mode = OPMODE_DSTAR;
+    ui_mode_state_read(&out);
+    REQUIRE(!out.sync);
+    REQUIRE(strcmp(out.id, "DSTAR SRCH") == 0);
+    REQUIRE(out.callTxt[0] == '\0');
+    REQUIRE(out.qual[0] == '\0');
+    REQUIRE(out.note[0] == '\0');
 }
 #endif
 
@@ -607,11 +612,13 @@ TEST_CASE("Broadcast FM has its rows in the quick menu", "[ui][modes][quickmenu]
 
     REQUIRE(qm != NULL);
     REQUIRE(qm->mode == OPMODE_WFM_BC);
-    /* What the BK1080 reports, and nothing to set: no squelch, no power */
-    REQUIRE(rowOf(qm, "ST") == 0);
-    REQUIRE(rowOf(qm, "LVL") > 0);
-    REQUIRE(rowOf(qm, "SNR") > 0);
-    REQUIRE(rowOf(qm, "CH") > 0);
+    /* What the BK1080 reports is on the tuner's own read-out (the main
+       screen), so the table is only what can be changed: no squelch, no
+       power, no read-only rows */
+    REQUIRE(rowOf(qm, "ST") == -1);
+    REQUIRE(rowOf(qm, "LVL") == -1);
+    REQUIRE(rowOf(qm, "SNR") == -1);
+    REQUIRE(rowOf(qm, "CH") == -1);
     REQUIRE(rowOf(qm, "PWR") == -1);
     REQUIRE(rowOf(qm, "SQL") == -1);
 }

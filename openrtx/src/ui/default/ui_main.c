@@ -18,6 +18,7 @@
 #include "ui/ui_packet.h"
 #endif
 #include <string.h>
+#include "ui/ui_mode_state.h"
 #include "ui/ui_strings.h"
 #include "core/utils.h"
 #include "ui/utils.h"
@@ -40,9 +41,12 @@
 #include "protocols/DMR/DmrDefs.h"
 #include "protocols/DMR/DmrStatus.h"
 #endif
-#ifdef CONFIG_TETRA
-#include "protocols/TETRA/TetraSds.h"
+#ifdef UI_MODE_TETRA
 #include "protocols/TETRA/TetraStatus.h"
+#endif
+#ifdef CONFIG_TETRA
+/* The SDS texts are kept in the storage partition: a radio-only service */
+#include "protocols/TETRA/TetraSds.h"
 #endif
 #ifdef CONFIG_VFO_SEARCH
 #include "core/vfo_search.h"
@@ -123,7 +127,7 @@ static void _ui_formatSsi(char *buf, size_t size, const char *prefix,
         snprintf(buf, size, "%s-", prefix);
 }
 
-#ifdef CONFIG_TETRA
+#ifdef UI_MODE_TETRA
 /**
  * Check whether a TETRA call takes over the main screen.
  */
@@ -133,79 +137,63 @@ static bool _ui_tetraCallShown(const struct tetraStatus *ts)
 }
 
 /**
- * TETRA cell or call information, from line 1 to line 4 during a call,
- * on line 2 otherwise.
+ * TETRA call information, from line 1 to line 4 during a call.
+ *
+ * A call takes the screen over (symbols, talker, called group, cell, call
+ * state); when there is none the shared state block draws the cell and the
+ * registration (line 2 and line 4) and _ui_drawTetraLine1() keeps line 1 for
+ * the demodulator figures, the uplink and the SDS texts.
  */
 static void _ui_drawTetraInfo(void)
 {
     struct tetraStatus ts;
     tetra_getStatus(&ts);
     const uint16_t pad = layout.horizontal_pad;
-    char a[32], b[32], c[32];
+    char a[32], b[32];
 
-    if (_ui_tetraCallShown(&ts)) {
-        /*
-         * Talking party. An uplink call is an MS transmitting, not the
-         * network: it is marked as such and its own SSI is the sending one.
-         */
-        uint32_t ssi = (ts.talker != 0) ? ts.talker : ts.uplinkSs;
-        _ui_formatSsi(a, sizeof(a), ts.uplink ? "UL " : "", ssi);
-        const char *talker[] = { a };
-        _ui_printWithSymbol(layout.line1_pos, layout.line1_symbol_size,
-                            SYMBOL_CALL_MADE, layout.line1_font, talker, 1);
-
-        // Called group or individual
-        _ui_formatSsi(a, sizeof(a), ts.callGroup ? "G " : "", ts.callDst);
-        const char *called[] = { a };
-        _ui_printWithSymbol(layout.line2_pos, layout.line2_symbol_size,
-                            SYMBOL_CALL_RECEIVED, layout.line2_font, called,
-                            1);
-
-        // Cell, without a symbol: the text is too wide to go beside one
-        snprintf(a, sizeof(a), "%u-%u LA %u", ts.mcc, ts.mnc, ts.la);
-        snprintf(b, sizeof(b), "%u-%u", ts.mcc, ts.mnc);
-        const char *cell[] = { a, b };
-        _ui_printFit(layout.line3_pos, layout.line3_font, pad, cell, 2);
-
-        // Call state
-        if (ts.callEncrypted) {
-            const char *enc[] = { "Encrypted" };
-            _ui_printWithSymbol(layout.line4_pos, layout.line4_symbol_size,
-                                SYMBOL_LOCK, layout.line4_font, enc, 1);
-        } else {
-            const char *voice = ts.voice ? "Voice" : "Idle";
-            snprintf(a, sizeof(a), "%s, call %u", voice, ts.callId);
-            const char *state[] = { a, voice };
-            _ui_printFit(layout.line4_pos, layout.line4_font, pad,
-                         ts.callId != 0 ? state : state + 1,
-                         ts.callId != 0 ? 2 : 1);
-        }
+    if (!_ui_tetraCallShown(&ts))
         return;
-    }
 
-    if (!ts.sync) {
-        const char *searching[] = { "T searching" };
-        _ui_printFit(layout.line2_pos, layout.line2_font, pad, searching, 1);
-        return;
-    }
+    /*
+     * Talking party. An uplink call is an MS transmitting, not the network: it
+     * is marked as such and its own SSI is the sending one.
+     */
+    uint32_t ssi = (ts.talker != 0) ? ts.talker : ts.uplinkSs;
+    _ui_formatSsi(a, sizeof(a), ts.uplink ? "UL " : "", ssi);
+    const char *talker[] = { a };
+    _ui_printWithSymbol(layout.line1_pos, layout.line1_symbol_size,
+                        SYMBOL_CALL_MADE, layout.line1_font, talker, 1);
 
-    /* No symbol: centred, the cell text reaches the left edge (as in M17) */
-    if (ts.sysinfo) {
-        const char *enc = ts.airEncryption ? " enc" : "";
-        snprintf(a, sizeof(a), "T %u-%u LA %u%s", ts.mcc, ts.mnc, ts.la, enc);
-        snprintf(b, sizeof(b), "T %u-%u%s", ts.mcc, ts.mnc, enc);
-        snprintf(c, sizeof(c), "T %u-%u", ts.mcc, ts.mnc);
-        const char *cell[] = { a, b, c };
-        _ui_printFit(layout.line2_pos, layout.line2_font, pad, cell, 3);
+    // Called group or individual
+    _ui_formatSsi(a, sizeof(a), ts.callGroup ? "G " : "", ts.callDst);
+    const char *called[] = { a };
+    _ui_printWithSymbol(layout.line2_pos, layout.line2_symbol_size,
+                        SYMBOL_CALL_RECEIVED, layout.line2_font, called, 1);
+
+    // Cell, without a symbol: the text is too wide to go beside one
+    snprintf(a, sizeof(a), "%u-%u LA %u", ts.mcc, ts.mnc, ts.la);
+    snprintf(b, sizeof(b), "%u-%u", ts.mcc, ts.mnc);
+    const char *cell[] = { a, b };
+    _ui_printFit(layout.line3_pos, layout.line3_font, pad, cell, 2);
+
+    // Call state
+    if (ts.callEncrypted) {
+        const char *enc[] = { "Encrypted" };
+        _ui_printWithSymbol(layout.line4_pos, layout.line4_symbol_size,
+                            SYMBOL_LOCK, layout.line4_font, enc, 1);
     } else {
-        snprintf(a, sizeof(a), "T %u-%u CC %u", ts.mcc, ts.mnc,
-                 ts.colourCode);
-        snprintf(b, sizeof(b), "T %u-%u", ts.mcc, ts.mnc);
-        const char *cell[] = { a, b };
-        _ui_printFit(layout.line2_pos, layout.line2_font, pad, cell, 2);
+        const char *voice = ts.voice ? "Voice" : "Idle";
+        snprintf(a, sizeof(a), "%s, call %u", voice, ts.callId);
+        const char *state[] = { a, voice };
+        _ui_printFit(layout.line4_pos, layout.line4_font, pad,
+                     (ts.callId != 0) ? state : state + 1,
+                     (ts.callId != 0) ? 2 : 1);
     }
 }
 
+#endif /* UI_MODE_TETRA */
+
+#ifdef CONFIG_TETRA
 /**
  * TETRA line 1 in VFO mode, when no call is shown: the received SDS messages
  * (paged, scrolling) or the demodulator quality.
@@ -289,7 +277,7 @@ static bool _ui_callShown(void)
     if ((status.opMode == OPMODE_M17) && status.lsfOk)
         return true;
 #endif
-#ifdef CONFIG_TETRA
+#ifdef UI_MODE_TETRA
     if (last_state.channel.mode == OPMODE_TETRA) {
         struct tetraStatus ts;
         tetra_getStatus(&ts);
@@ -404,124 +392,137 @@ const char* _ui_getToneEnabledString(bool tone_tx_enable, bool tone_rx_enable,
     return strings[use_abbreviation][index];
 }
 
+/*
+ * ---------------------------------------------------------------------------
+ * The mode's decoded state, in one place
+ * ---------------------------------------------------------------------------
+ *
+ * Every receive mode used to publish what it had decoded as read-only rows of
+ * its quick menu - which is also that mode's Settings page - so the operator
+ * had to open a menu to see whether the radio had locked, and the page was a
+ * list of rows that could not be actuated. The state is now drawn here, on the
+ * main screen, from one block (ui_mode_state.h) that every mode fills the same
+ * way, so it reads the same in all of them and there is a single place to fix
+ * when a protocol changes what it publishes.
+ *
+ * The layout is two lines of the existing bands, and only those:
+ *
+ *   line 1  the call and the quality      "2317>9 LC98%", "e4% f1234"
+ *   line 2  the identifiers, left          "CC1 TS2", "RAN12 VOX", "T 228-8889
+ *           and the secondary state, right LA 1" ... "ACC G3 NB4 L2"
+ *
+ * Line 2 is a status line in the usual sense - what the receiver is locked to
+ * on the left, what else it has learnt on the right - because the C62 has no
+ * free row below the frequency: the 16 pt digits of line 3 reach down to y=93
+ * and `layout.line4_pos` is y=97, so a fourth line of the state block would be
+ * drawn over the frequency (seen in the simulator, docs/UI.md). Both halves are
+ * measured before they are drawn: the note is dropped, never shortened over the
+ * identifiers, when the two would collide.
+ *
+ * The frequency keeps the big 16 pt row and the bottom row stays the S-meter
+ * (and the carrier-search message), so nothing moves between modes: the same
+ * baselines, from the same layout_t, in all of them.
+ */
+
+/**
+ * Draw one line from a primary and a secondary text.
+ *
+ * The full "primary secondary", then the primary alone, then the secondary
+ * alone: the first that fits the panel is printed, and if none does the
+ * primary is shortened by _ui_printFit (which picks the shortest candidate it
+ * was given). gfx_print() does not clip, so a text that is not measured first
+ * wraps onto the line below and draws over the frequency.
+ */
+static void _ui_drawStateLine(point_t pos, fontSize_t font, const char *first,
+                              const char *second)
+{
+    char both[(2 * UI_MODE_STATE_LEN) + 2];
+    const char *texts[3];
+    size_t n = 0;
+
+    if ((first != NULL) && (first[0] != '\0') && (second != NULL)
+        && (second[0] != '\0')) {
+        snprintf(both, sizeof(both), "%s %s", first, second);
+        texts[n++] = both;
+    }
+    if ((first != NULL) && (first[0] != '\0'))
+        texts[n++] = first;
+    if ((second != NULL) && (second[0] != '\0'))
+        texts[n++] = second;
+
+    if (n == 0)
+        return;
+
+    _ui_printFit(pos, font, layout.horizontal_pad, texts, n);
+}
+
+/**
+ * The state block of the current mode: line 1 (call and quality) and line 2
+ * (identifiers on the left, secondary state on the right).
+ */
+static void _ui_drawModeState(void)
+{
+    const int16_t left = (int16_t)layout.horizontal_pad;
+    const int16_t right = (int16_t)(CONFIG_SCREEN_WIDTH - layout.horizontal_pad);
+    /* Air between the identifiers and the note, so the two read as two */
+    const int16_t gap = 6;
+    ui_mode_state_t st;
+
+    ui_mode_state_read(&st);
+
+    _ui_drawStateLine(layout.line1_pos, layout.line1_font, st.callTxt, st.qual);
+
+    if (st.id[0] == '\0')
+        return;
+
+    gfx_print((point_t){ left, layout.line2_pos.y }, layout.line2_font,
+              TEXT_ALIGN_LEFT, color_white, "%s", st.id);
+
+    const int16_t id_end = (int16_t)(left
+                                     + gfx_getTextWidth(layout.line2_font,
+                                                        st.id));
+
+    /*
+     * The note is secondary: it takes the short form when the long one does not
+     * fit, and gives up its place when neither does. The identifiers never do.
+     */
+    const char *note = (st.note[0] != '\0') ? st.note : st.noteShort;
+
+    if ((note == NULL) || (note[0] == '\0'))
+        return;
+
+    if ((id_end + gap
+         + (int16_t)gfx_getTextWidth(layout.line2_font, note)) > right) {
+        note = st.noteShort;
+
+        if ((note == NULL) || (note[0] == '\0'))
+            return;
+
+        if ((id_end + gap
+             + (int16_t)gfx_getTextWidth(layout.line2_font, note)) > right)
+            return;
+    }
+
+    gfx_print((point_t){ right, layout.line2_pos.y }, layout.line2_font,
+              TEXT_ALIGN_RIGHT, color_white, "%s", note);
+}
+
 #ifdef UI_MODE_DMR
 /**
- * DMR colour code, timeslot and call state, on line 2 (replacing the channel
- * mode line) and line 1 (where TETRA puts its demodulator figures).
- *
- * Without an own DMR ID the transmitter does not key (rtx/DmrKey.h) and this
- * line says so instead of the colour code: the operator looks here for the
- * state of the modem, and a radio that silently refuses the PTT is what
- * docs/TX_SAFETY.md exists to prevent. The row that fixes it is Settings ->
- * Identity, and the colour code and the timeslot stay readable in the DMR
- * quick menu.
+ * DMR: without an own DMR ID the transmitter does not key (rtx/DmrKey.h) and
+ * the main screen says so instead of the colour code. That warning is state
+ * too, and the most important one in the mode: a radio that silently refuses
+ * the PTT is what docs/TX_SAFETY.md exists to prevent. The row that fixes it is
+ * Settings -> Identity.
  */
-static void _ui_drawDmrInfo(void)
+static void _ui_drawDmrWarning(void)
 {
-    struct dmrStatus ds;
-    dmr_getStatus(&ds);
-    const uint16_t pad = layout.horizontal_pad;
-    char a[32];
-
-    if (!settings_dmrIdValid(state.settings.dmr_id)) {
-        const char *noTx[] = { "NO TX: DMR ID 0", "NO TX: NO ID", "NO TX" };
-        _ui_printFitWarn(layout.line2_pos, layout.line2_font, pad, noTx, 3);
-        return;
-    }
-
-    if (!ds.sync) {
-        const char *searching[] = { "DMR searching" };
-        _ui_printFit(layout.line2_pos, layout.line2_font, pad, searching, 1);
-        return;
-    }
-
-    if (ds.colourCode >= 0)
-        snprintf(a, sizeof(a), "CC%u TS%d", ds.colourCode,
-                 (ds.timeslot > 0) ? ds.timeslot : 0);
-    else
-        snprintf(a, sizeof(a), "CC- TS%d", (ds.timeslot > 0) ? ds.timeslot : 0);
-
-    const char *info[] = { a };
-    _ui_printFit(layout.line2_pos, layout.line2_font, pad, info, 1);
-}
-
-/**
- * Line 1 in DMR: what the last burst was, and how open its eye is.
- */
-static void _ui_drawDmrLine1(void)
-{
-    struct dmrStatus ds;
-    dmr_getStatus(&ds);
-    const uint16_t pad = layout.horizontal_pad;
-    char a[40], b[40], c[24];
-
-    if (!ds.sync)
+    if (settings_dmrIdValid(state.settings.dmr_id))
         return;
 
-    const char *state = ds.voice ? "Voice" : "Data";
-    if (!ds.voice && (ds.lastType >= 0))
-        state = dmr_data_type_name((uint8_t)ds.lastType);
-
-    snprintf(a, sizeof(a), "%s e%u%%", state, (unsigned)(ds.evm / 10));
-    snprintf(b, sizeof(b), "e%u%%", (unsigned)(ds.evm / 10));
-    snprintf(c, sizeof(c), "%s", state);
-    const char *texts[] = { a, b, c };
-    _ui_printFit(layout.line1_pos, layout.line1_font, pad, texts, 3);
-}
-#endif
-
-#ifdef UI_MODE_NXDN
-/*
- * NXDN line 2: the RAN the receiver locked to and the demodulator's state, or
- * SRCH while nothing decodes. Line 1 carries the counters that matter when the
- * eye is marginal: EVM and decoded frames.
- */
-static void _ui_drawNxdnInfo(void)
-{
-    struct nxdnStatus st;
-    const uint16_t pad = layout.horizontal_pad;
-    char a[32], b[32], c[24];
-
-    nxdn_getStatus(&st);
-
-    if (!st.sync) {
-        const char *searching[] = { "NXDN SRCH", "SRCH" };
-        _ui_printFit(layout.line2_pos, layout.line2_font, pad, searching, 2);
-        return;
-    }
-
-    if (st.ran >= 0) {
-        snprintf(a, sizeof(a), "RAN%u %.2s", (unsigned)st.ran,
-                 st.voice ? "VOX" : "");
-        snprintf(b, sizeof(b), "RAN%u", (unsigned)st.ran);
-    } else {
-        snprintf(a, sizeof(a), "SYNC %.2s", st.voice ? "VOX" : "");
-        snprintf(b, sizeof(b), "SYNC");
-    }
-    snprintf(c, sizeof(c), "%s", st.voice ? "VOX" : "SYNC");
-
-    const char *texts[] = { a, b, c };
-    _ui_printFit(layout.line2_pos, layout.line2_font, pad, texts, 3);
-}
-
-static void _ui_drawNxdnLine1(void)
-{
-    struct nxdnStatus st;
-    const uint16_t pad = layout.horizontal_pad;
-    char a[40], b[40], c[24];
-
-    nxdn_getStatus(&st);
-
-    if (!st.sync)
-        return;
-
-    snprintf(a, sizeof(a), "e%u%% f%lu", (unsigned)(st.evm / 10),
-             (unsigned long)st.frames);
-    snprintf(b, sizeof(b), "e%u%%", (unsigned)(st.evm / 10));
-    snprintf(c, sizeof(c), "f%lu", (unsigned long)st.frames);
-
-    const char *texts[] = { a, b, c };
-    _ui_printFit(layout.line1_pos, layout.line1_font, pad, texts, 3);
+    const char *noTx[] = { "NO TX: DMR ID 0", "NO TX: NO ID", "NO TX" };
+    _ui_printFitWarn(layout.line2_pos, layout.line2_font,
+                     layout.horizontal_pad, noTx, 3);
 }
 #endif
 
@@ -636,74 +637,9 @@ static void _ui_drawAirbandTxPrompt(void)
  * the frame grid and the CCH CRC, so it is the only "is anyone there" flag the
  * engine has; dPMR has no per-frame counters published to the UI yet.
  */
-static void _ui_drawDpmrInfo(void)
-{
-    const uint16_t pad = layout.horizontal_pad;
-    const char *texts[] = { "dPMR RX", "RX", "SRCH" };
-
-    if (rtx_rxSquelchOpen())
-        _ui_printFit(layout.line2_pos, layout.line2_font, pad, texts, 2);
-    else
-        _ui_printFit(layout.line2_pos, layout.line2_font, pad, &texts[2], 1);
-}
 #endif
 
 #ifdef UI_MODE_P25
-/*
- * P25 line 2: the NAC the receiver locked to and whether it is voice or control
- * channel, or SRCH while nothing decodes. Line 1 carries the data unit of the
- * last frame and the group>source of the last link control.
- */
-static void _ui_drawP25Info(void)
-{
-    struct p25Status st;
-    const uint16_t pad = layout.horizontal_pad;
-    char a[32], b[32], c[24];
-
-    p25Status_get(&st);
-
-    if (!st.sync) {
-        const char *searching[] = { "P25 SRCH", "SRCH" };
-        _ui_printFit(layout.line2_pos, layout.line2_font, pad, searching, 2);
-        return;
-    }
-
-    if (st.nac >= 0) {
-        snprintf(a, sizeof(a), "NAC%03X %s", (unsigned)st.nac,
-                 st.voice ? "VOX" : "CC");
-        snprintf(b, sizeof(b), "NAC%03X", (unsigned)st.nac);
-    } else {
-        snprintf(a, sizeof(a), "P25 %s", st.voice ? "VOX" : "SYNC");
-        snprintf(b, sizeof(b), "P25");
-    }
-    snprintf(c, sizeof(c), "%s", st.voice ? "VOX" : "SYNC");
-
-    const char *texts[] = { a, b, c };
-    _ui_printFit(layout.line2_pos, layout.line2_font, pad, texts, 3);
-}
-
-static void _ui_drawP25Line1(void)
-{
-    struct p25Status st;
-    const uint16_t pad = layout.horizontal_pad;
-    char a[40], b[40], c[24];
-
-    p25Status_get(&st);
-
-    if (!st.sync)
-        return;
-
-    if (st.source >= 0)
-        snprintf(a, sizeof(a), "D%X %ld>%d", (unsigned)(st.duid & 0xF),
-                 (long)st.source, (int)st.talkgroup);
-    else
-        snprintf(a, sizeof(a), "DUID%X", (unsigned)(st.duid & 0xF));
-    snprintf(b, sizeof(b), "DUID%X", (unsigned)(st.duid & 0xF));
-    snprintf(c, sizeof(c), "f%lu", (unsigned long)st.frames);
-
-    const char *texts[] = { a, b, c };
-    _ui_printFit(layout.line1_pos, layout.line1_font, pad, texts, 3);
-}
 #endif
 
 #ifdef UI_MODE_YSF
@@ -711,66 +647,9 @@ static void _ui_drawP25Line1(void)
  * System Fusion line 2: the frame layer publishes only "a carrier is being
  * tracked", so that is what the line says.
  */
-static void _ui_drawYsfInfo(void)
-{
-    const uint16_t pad = layout.horizontal_pad;
-    const char *texts[] = { "YSF RX", "RX", "SRCH" };
-
-    if (rtx_rxSquelchOpen())
-        _ui_printFit(layout.line2_pos, layout.line2_font, pad, texts, 2);
-    else
-        _ui_printFit(layout.line2_pos, layout.line2_font, pad, &texts[2], 1);
-}
 #endif
 
 #ifdef UI_MODE_DSTAR
-/*
- * D-STAR line 2: the callsigns of the last header, "MY>UR", or SRCH. Line 1
- * carries the access repeater and the slow-data text of the last frames.
- */
-static void _ui_drawDstarInfo(void)
-{
-    struct dstarStatus st;
-    const uint16_t pad = layout.horizontal_pad;
-    char a[40], b[40], c[24];
-
-    dstar_getStatus(&st);
-
-    if (!st.sync) {
-        const char *searching[] = { "DSTAR SRCH", "SRCH" };
-        _ui_printFit(layout.line2_pos, layout.line2_font, pad, searching, 2);
-        return;
-    }
-
-    snprintf(a, sizeof(a), "%s>%s", st.my, st.ur);
-    snprintf(b, sizeof(b), "%s", st.my);
-    snprintf(c, sizeof(c), "%s", st.voice ? "VOX" : "DV");
-
-    const char *texts[] = { a, b, c };
-    _ui_printFit(layout.line2_pos, layout.line2_font, pad, texts, 3);
-}
-
-static void _ui_drawDstarLine1(void)
-{
-    struct dstarStatus st;
-    const uint16_t pad = layout.horizontal_pad;
-    char a[48], b[40], c[24];
-
-    dstar_getStatus(&st);
-
-    if (!st.sync)
-        return;
-
-    if (st.text[0] != '\0')
-        snprintf(a, sizeof(a), "%s %s", st.rpt1, st.text);
-    else
-        snprintf(a, sizeof(a), "%s", st.rpt1);
-    snprintf(b, sizeof(b), "%s", st.rpt1);
-    snprintf(c, sizeof(c), "f%lu", (unsigned long)st.frames);
-
-    const char *texts[] = { a, b, c };
-    _ui_printFit(layout.line1_pos, layout.line1_font, pad, texts, 3);
-}
 #endif
 
 #ifdef UI_MODE_WFM
@@ -888,7 +767,14 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
 
 #ifdef UI_MODE_DMR
         case OPMODE_DMR:
-            _ui_drawDmrInfo();
+            /*
+             * Without a DMR ID the warning takes line 2 and there is nothing
+             * to decode yet, so the block is not drawn under it. With an ID,
+             * the block shows sync, colour code, timeslot, call and quality.
+             */
+            _ui_drawDmrWarning();
+            if (settings_dmrIdValid(state.settings.dmr_id))
+                _ui_drawModeState();
             break;
 #endif
 
@@ -981,47 +867,31 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
         }
         #endif
 
-        #ifdef CONFIG_TETRA
+        #ifdef UI_MODE_TETRA
         case OPMODE_TETRA:
             (void) ui_state;
+            /* A call owns lines 1..4; otherwise the block draws the cell and
+               the registration and _ui_drawTetraLine1() keeps line 1 */
             _ui_drawTetraInfo();
+            if (!_ui_callShown())
+                _ui_drawModeState();
             break;
         #endif
 
-        #ifdef UI_MODE_NXDN
+        /*
+         * The digital receive modes and DMR: everything they decode goes
+         * through the one state block (see _ui_drawModeState), so the sync
+         * state, the identifiers, the call and the quality read the same in
+         * all of them and no mode can grow a private line again.
+         */
         case OPMODE_NXDN:
-            (void) ui_state;
-            _ui_drawNxdnInfo();
-            break;
-        #endif
-
-        #ifdef UI_MODE_DPMR
         case OPMODE_DPMR:
-            (void) ui_state;
-            _ui_drawDpmrInfo();
-            break;
-        #endif
-
-        #ifdef UI_MODE_P25
         case OPMODE_P25:
-            (void) ui_state;
-            _ui_drawP25Info();
-            break;
-        #endif
-
-        #ifdef UI_MODE_YSF
         case OPMODE_YSF:
-            (void) ui_state;
-            _ui_drawYsfInfo();
-            break;
-        #endif
-
-        #ifdef UI_MODE_DSTAR
         case OPMODE_DSTAR:
             (void) ui_state;
-            _ui_drawDstarInfo();
+            _ui_drawModeState();
             break;
-        #endif
 
         #ifdef UI_MODE_AIRBAND
         case OPMODE_AIRBAND:
@@ -1285,34 +1155,15 @@ void _ui_drawMainVFO(ui_state_t* ui_state)
         _ui_drawFrequency();
 
 /*
- * Line 1 is the burst the demodulator last saw, which the host builds do not
- * have (ui_mode_status.c stubs the status, not dmr_data_type_name): it stays a
- * firmware line. Line 2 above is drawn in both, so the simulator shows the
- * same "no ID, no transmit" warning the radio does.
+ * Line 1 of the digital modes belongs to the state block, drawn above with
+ * line 2 and line 4 (ui_mode_state.h). The three modes that keep a line of
+ * their own are the ones whose line 1 is not a decoded state: TETRA's SDS and
+ * demodulator figures, broadcast FM's level and SNR, and the aeronautical
+ * band's AGC, squelch and TX state.
  */
-#ifdef CONFIG_DMR
-    if(last_state.channel.mode == OPMODE_DMR)
-        _ui_drawDmrLine1();
-#endif
-
     #ifdef CONFIG_TETRA
     if(last_state.channel.mode == OPMODE_TETRA)
         _ui_drawTetraLine1(ui_state);
-    #endif
-
-    #ifdef UI_MODE_NXDN
-    if(last_state.channel.mode == OPMODE_NXDN)
-        _ui_drawNxdnLine1();
-    #endif
-
-    #ifdef UI_MODE_P25
-    if(last_state.channel.mode == OPMODE_P25)
-        _ui_drawP25Line1();
-    #endif
-
-    #ifdef UI_MODE_DSTAR
-    if(last_state.channel.mode == OPMODE_DSTAR)
-        _ui_drawDstarLine1();
     #endif
 
     #ifdef UI_MODE_WFM
@@ -1353,11 +1204,6 @@ void _ui_drawMainMEM(ui_state_t* ui_state)
         _ui_drawBankChannel();
         _ui_drawFrequency();
     }
-
-    #ifdef UI_MODE_NXDN
-    if(last_state.channel.mode == OPMODE_NXDN)
-        _ui_drawNxdnLine1();
-    #endif
 
     _ui_drawMainBottom();
 }

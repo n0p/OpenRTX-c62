@@ -38,6 +38,16 @@ struct dmrStatus {
     uint16_t evm;         ///< Link quality of the last bursts, thousandths
     int8_t lastType;      ///< Last data type seen, -1 if none
 
+    /*
+     * The call the last link control announced: the main screen shows
+     * "source>destination" while it is in progress, which is the row the
+     * operator used to have to open the quick menu for.
+     */
+    bool idsValid;        ///< src and dst come from a decoded link control
+    bool group;           ///< Group call (talkgroup) rather than private
+    uint32_t src;         ///< Source radio ID
+    uint32_t dst;         ///< Talkgroup or destination radio ID
+
     uint32_t bursts;      ///< Bursts decoded since the mode was enabled
     uint32_t voiceBursts; ///< Of which voice
     uint32_t frames;      ///< AMBE+2 frames handed to the vocoder

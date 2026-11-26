@@ -278,32 +278,13 @@ void qm_am_set_if(int wide);
 #endif
 
 /*
- * Formatters of the receive-only digital modes. They are the rows' own, so a
- * test can check what a screen would print (and that nothing prints a zero
- * where there is no data) without opening the popup.
+ * The decoded state of the modes is no longer a set of rows: it is the state
+ * block of the main screen (ui/ui_mode_state.h), which every receive mode fills
+ * and tests/unit/ui_modes.cpp checks. A formatter of a row would be a second
+ * place where "what this mode has decoded" is spelled, and the two would drift
+ * apart - which is why the qm_*_fmt_* helpers that used to live here are gone
+ * with the rows that called them.
  */
-#ifdef UI_MODE_DPMR
-void qm_dpmr_fmt_sync(char *buf, int len);
-#endif
-
-#ifdef UI_MODE_P25
-void qm_p25_fmt_sync(char *buf, int len);
-void qm_p25_fmt_nac(char *buf, int len);
-void qm_p25_fmt_type(char *buf, int len);
-void qm_p25_fmt_call(char *buf, int len);
-#endif
-
-#ifdef UI_MODE_YSF
-void qm_ysf_fmt_sync(char *buf, int len);
-#endif
-
-#ifdef UI_MODE_DSTAR
-void qm_dstar_fmt_sync(char *buf, int len);
-void qm_dstar_fmt_my(char *buf, int len);
-void qm_dstar_fmt_ur(char *buf, int len);
-void qm_dstar_fmt_rpt(char *buf, int len);
-void qm_dstar_fmt_text(char *buf, int len);
-#endif
 
 #ifdef __cplusplus
 }

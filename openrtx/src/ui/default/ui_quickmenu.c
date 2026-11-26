@@ -480,14 +480,6 @@ void qm_m17_fmt_dest(char *buf, int len)
         snprintf(buf, len, "%s", state.settings.m17_dest);
 }
 
-void qm_m17_fmt_src(char *buf, int len)
-{
-    if (state.settings.callsign[0] == '\0')
-        snprintf(buf, len, "-");
-    else
-        snprintf(buf, len, "%s", state.settings.callsign);
-}
-
 void qm_m17_fmt_meta(char *buf, int len)
 {
     if (state.settings.M17_meta_text[0] == '\0')
@@ -560,94 +552,6 @@ void qm_tetra_set_cellul(int value)
     }
 }
 
-void qm_tetra_fmt_cell(char *buf, int len)
-{
-    struct tetraStatus ts;
-    tetra_getStatus(&ts);
-    if (ts.cell)
-        snprintf(buf, len, "%03u-%02u", (unsigned)ts.mcc, (unsigned)ts.mnc);
-    else
-        snprintf(buf, len, "---");
-}
-
-void qm_tetra_fmt_lacc(char *buf, int len)
-{
-    struct tetraStatus ts;
-    tetra_getStatus(&ts);
-    if (ts.sysinfo)
-        snprintf(buf, len, "LA%u CC%u", (unsigned)ts.la,
-                 (unsigned)ts.colourCode);
-    else
-        snprintf(buf, len, "LA- CC%u", (unsigned)ts.colourCode);
-}
-
-void qm_tetra_fmt_call(char *buf, int len)
-{
-    struct tetraStatus ts;
-    tetra_getStatus(&ts);
-    if (!ts.call) {
-        snprintf(buf, len, "IDLE");
-        return;
-    }
-    snprintf(buf, len, "%lu>%lu%s%s", (unsigned long)ts.talker,
-             (unsigned long)ts.callDst, ts.callGroup ? " G" : "",
-             ts.callEncrypted ? " E" : "");
-}
-
-/**
- * Registration state of the mobile station in the cell, as reported by the
- * cell's mobility management (D-LOCATION-UPDATE-ACCEPT / REJECT). This radio
- * is a monitor: it does not register itself, it reports what the network
- * tells the mobiles it can hear.
- */
-void qm_tetra_fmt_reg(char *buf, int len)
-{
-    struct tetraStatus ts;
-    tetra_getStatus(&ts);
-    if (ts.registered)
-        snprintf(buf, len, "ACC G%u", (unsigned)ts.groups);
-    else if (ts.mmCause != 0)
-        snprintf(buf, len, "REJ %u", (unsigned)ts.mmCause);
-    else
-        snprintf(buf, len, "-");
-}
-
-/**
- * Network broadcast: neighbours announced, cell load and network time
- * (UTC plus the local offset the cell broadcasts).
- */
-void qm_tetra_fmt_net(char *buf, int len)
-{
-    struct tetraStatus ts;
-    tetra_getStatus(&ts);
-    if (!ts.haveNet) {
-        snprintf(buf, len, "-");
-        return;
-    }
-    if (!ts.netTime) {
-        snprintf(buf, len, "NB%u L%u", (unsigned)ts.neighbours,
-                 (unsigned)ts.netLoad);
-        return;
-    }
-    int32_t s = (int32_t)(ts.netUtc % 86400u) + 60 * (int32_t)ts.netOffsetMin;
-    s = ((s % 86400) + 86400) % 86400;
-    snprintf(buf, len, "NB%u %02d:%02d", (unsigned)ts.neighbours,
-             (int)(s / 3600), (int)((s / 60) % 60));
-}
-
-/**
- * Uplink activity: a transmitter of the cell heard on the uplink frequency.
- */
-void qm_tetra_fmt_ul(char *buf, int len)
-{
-    struct tetraStatus ts;
-    tetra_getStatus(&ts);
-    if (!ts.uplink) {
-        snprintf(buf, len, "-");
-        return;
-    }
-    snprintf(buf, len, "SSI %lu", (unsigned long)ts.uplinkSs);
-}
 #endif /* UI_MODE_TETRA */
 
 /* ------------------------------------------------------------------------- */
@@ -655,35 +559,6 @@ void qm_tetra_fmt_ul(char *buf, int len)
 /* ------------------------------------------------------------------------- */
 
 #ifdef UI_MODE_DMR
-void qm_dmr_fmt_cc(char *buf, int len)
-{
-    struct dmrStatus st;
-    dmr_getStatus(&st);
-    if (st.colourCode < 0)
-        snprintf(buf, len, "CC-");
-    else
-        snprintf(buf, len, "CC%u", (unsigned)st.colourCode);
-}
-
-void qm_dmr_fmt_ts(char *buf, int len)
-{
-    struct dmrStatus st;
-    dmr_getStatus(&st);
-    if (st.timeslot <= 0)
-        snprintf(buf, len, "TS-");
-    else
-        snprintf(buf, len, "TS%u", (unsigned)st.timeslot);
-}
-
-void qm_dmr_fmt_sync(char *buf, int len)
-{
-    struct dmrStatus st;
-    dmr_getStatus(&st);
-    if (st.sync)
-        snprintf(buf, len, "SYNC e%u%%", (unsigned)(st.evm / 10));
-    else
-        snprintf(buf, len, "SRCH");
-}
 #endif /* UI_MODE_DMR */
 
 /* ------------------------------------------------------------------------- */
@@ -744,57 +619,6 @@ void qm_nxdn_set_bw(int narrow)
     qm_requestSync();
 }
 
-void qm_nxdn_fmt_sync(char *buf, int len)
-{
-    struct nxdnStatus st;
-
-    nxdn_getStatus(&st);
-
-    if (st.sync)
-        snprintf(buf, len, "SYNC e%u%%", (unsigned)(st.evm / 10));
-    else
-        snprintf(buf, len, "SRCH");
-}
-
-/*
- * The last layer 3 message the SACCH of a superframe carried: who is calling
- * whom. Empty until four CRC-clean SACCH blocks have arrived, and never a zero
- * that would read as a real identifier.
- */
-void qm_nxdn_fmt_call(char *buf, int len)
-{
-    struct nxdnStatus st;
-
-    nxdn_getStatus(&st);
-
-    if (!st.message.valid) {
-        snprintf(buf, len, "---");
-        return;
-    }
-
-    snprintf(buf, len, "%u>%u", (unsigned)st.message.source,
-             (unsigned)st.message.dest);
-}
-
-void qm_nxdn_fmt_type(char *buf, int len)
-{
-    struct nxdnStatus st;
-
-    nxdn_getStatus(&st);
-
-    if (!st.message.valid) {
-        snprintf(buf, len, "-");
-        return;
-    }
-
-    switch (st.message.type) {
-        case 0x01: snprintf(buf, len, "VCALL"); break;
-        case 0x08: snprintf(buf, len, "TXREL"); break;
-        case 0x11: snprintf(buf, len, "DISC");  break;
-        default:   snprintf(buf, len, "0x%02X",
-                            (unsigned)st.message.type); break;
-    }
-}
 #endif /* UI_MODE_NXDN */
 
 /* ------------------------------------------------------------------------- */
@@ -934,20 +758,6 @@ void qm_am_set_if(int wide)
 {
     state.channel.bandwidth = wide ? BW_25 : BW_12_5;
     qm_requestSync();
-}
-
-/* Designator of the 8.33 kHz channel the receiver is on, e.g. "118.005" */
-void qm_am_fmt_ch(char *buf, int len)
-{
-    char name[AIRBAND_NAME_LEN];
-
-    if (!airband_inBand(state.channel.rx_frequency)) {
-        snprintf(buf, len, "-");
-        return;
-    }
-
-    airband_channelName(state.channel.rx_frequency, name, sizeof(name));
-    snprintf(buf, len, "%s", name);
 }
 #endif /* UI_MODE_AIRBAND */
 
@@ -1158,7 +968,6 @@ static const qm_item_t qm_items_m17[] =
     QM_ITEM_GOTO("CALL", SETTINGS_IDENTITY, ID_CALLSIGN),
     QM_ITEM_INT("CAN", 0, 15, 1, qm_m17_get_can, qm_m17_set_can),
     QM_ITEM_TOGGLE("CANRX", qm_m17_get_canrx, qm_m17_set_canrx),
-    QM_ITEM_INFO("SRC", qm_m17_fmt_src),
     QM_ITEM_GOTO("META", SETTINGS_M17, M17_METATEXT),
     QM_ITEM_INT_F("PWR", 1000, 5000, 500, qm_get_power, qm_set_power,
                   qm_fmt_power),
@@ -1182,12 +991,6 @@ static const qm_item_t qm_items_tetra[] =
     /* Off / On / NO UL: listen to the cell's uplink (docs/TETRA_LIB.md) */
     QM_ITEM_ENUM("CELL UL", 0, 2, qm_tetra_get_cellul, qm_tetra_set_cellul,
                  qm_names_cellul, NULL),
-    QM_ITEM_INFO("CELL", qm_tetra_fmt_cell),
-    QM_ITEM_INFO("LA/CC", qm_tetra_fmt_lacc),
-    QM_ITEM_INFO("REG", qm_tetra_fmt_reg),
-    QM_ITEM_INFO("NET", qm_tetra_fmt_net),
-    QM_ITEM_INFO("UL", qm_tetra_fmt_ul),
-    QM_ITEM_INFO("CALL", qm_tetra_fmt_call),
     QM_ITEM_INT("BKL", 5, 100, 5, qm_get_brightness, qm_set_brightness),
 #ifdef CONFIG_KEY_BACKLIGHT
     QM_ITEM_TOGGLE("KEYLIT", qm_get_keylight, qm_set_keylight),
@@ -1201,9 +1004,6 @@ static const qm_item_t qm_items_tetra[] =
 #ifdef UI_MODE_DMR
 static const qm_item_t qm_items_dmr[] =
 {
-    QM_ITEM_INFO("CC", qm_dmr_fmt_cc),
-    QM_ITEM_INFO("TS", qm_dmr_fmt_ts),
-    QM_ITEM_INFO("SYNC", qm_dmr_fmt_sync),
     QM_ITEM_DMR_DEST()
 #ifdef CONFIG_RX_FINE_OFFSET
     QM_ITEM_INT_FF("FINE", -500, 500, 10, 100, qm_get_rx_fine,
@@ -1221,10 +1021,11 @@ static const qm_item_t qm_items_dmr[] =
 
 #ifdef UI_MODE_NXDN
 /*
- * NXDN, receive only. The first rows are what the mode can be told to do (RAN
- * filter, channel spacing of the demodulator), the next three are what the
- * demodulator reports (sync and error, the call the SACCH carried, its type),
- * and the rest is the tail every table shares.
+ * NXDN, receive only, and like every mode's table this one holds only what can
+ * be *changed*: the RAN receive filter and the channel spacing of the
+ * demodulator, then the tail every table shares. What the demodulator decoded
+ * (sync, RAN, the call the SACCH carried, its type, the EVM) is state and is
+ * drawn on the main screen (ui_mode_state.h).
  */
 static const qm_item_t qm_items_nxdn[] =
 {
@@ -1233,9 +1034,6 @@ static const qm_item_t qm_items_nxdn[] =
                    qm_nxdn_set_ran, qm_nxdn_fmt_ran),
     QM_ITEM_ENUM("BW", 0, 1, qm_nxdn_get_bw, qm_nxdn_set_bw,
                  qm_names_nxdn_bw, NULL),
-    QM_ITEM_INFO("SYNC", qm_nxdn_fmt_sync),
-    QM_ITEM_INFO("CALL", qm_nxdn_fmt_call),
-    QM_ITEM_INFO("TYPE", qm_nxdn_fmt_type),
 #ifdef CONFIG_RX_FINE_OFFSET
     QM_ITEM_INT_FF("FINE", -500, 500, 10, 100, qm_get_rx_fine,
                    qm_set_rx_fine, qm_fmt_fine),
@@ -1253,8 +1051,9 @@ static const qm_item_t qm_items_nxdn[] =
 #ifdef UI_MODE_AIRBAND
 /*
  * Airband AM, receive only. Squelch, audio AGC, raster and the snap to it, the
- * designator of the channel the receiver is on, the IF filter, and the shared
- * tail. No PWR row: there is no transmitter in this mode.
+ * IF filter, and the shared tail. No PWR row: there is no transmitter in this
+ * mode. The designator of the channel the receiver is on is state and is on the
+ * main screen, next to the raster.
  */
 static const qm_item_t qm_items_airband[] =
 {
@@ -1263,7 +1062,6 @@ static const qm_item_t qm_items_airband[] =
     QM_ITEM_ENUM("STEP", 0, 1, qm_am_get_step, qm_am_set_step,
                  qm_names_am_25_833, NULL),
     QM_ITEM_TOGGLE("SNAP", qm_am_get_snap, qm_am_set_snap),
-    QM_ITEM_INFO("CH", qm_am_fmt_ch),
     QM_ITEM_ENUM("IF", 0, 1, qm_am_get_if, qm_am_set_if,
                  qm_names_am_if, NULL),
 #ifdef CONFIG_C62_AIR_TX
@@ -1291,17 +1089,11 @@ static const qm_item_t qm_items_airband[] =
 /*
  * dPMR, receive only. The mode has no knob of its own: dPMR is one 6.25 kHz
  * carrier with no timeslots and no channel spacing to pick, and the frame grid
- * either locks or does not. What the operator needs on this screen is whether a
- * call is being followed, and the shared tail.
+ * either locks or does not - which is why the table is the shared tail and the
+ * sync state is a line of the main screen (ui_mode_state.h).
  */
-void qm_dpmr_fmt_sync(char *buf, int len)
-{
-    snprintf(buf, len, "%s", rtx_rxSquelchOpen() ? "RX" : "SRCH");
-}
-
 static const qm_item_t qm_items_dpmr[] =
 {
-    QM_ITEM_INFO("SYNC", qm_dpmr_fmt_sync),
 #ifdef CONFIG_RX_FINE_OFFSET
     QM_ITEM_INT_FF("FINE", -500, 500, 10, 100, qm_get_rx_fine,
                    qm_set_rx_fine, qm_fmt_fine),
@@ -1318,58 +1110,13 @@ static const qm_item_t qm_items_dpmr[] =
 
 #ifdef UI_MODE_P25
 /*
- * P25 Phase 1, receive only. The first rows are what the receiver reports: the
- * sync state, the NAC it locked to, the data unit of the last frame and the
- * group and source of the last link control. "SRCH" and "---" while nothing
- * decodes, never a zero that would read as a real identifier.
+ * P25 Phase 1, receive only. P25 has nothing to configure beyond the shared
+ * tail, so what is left is the tail: the NAC, the sync state, the data unit and
+ * the last link control are state, and the main screen draws them (the NAC on
+ * line 2, the call and the FEC quality on line 1, the DUID on line 4).
  */
-void qm_p25_fmt_sync(char *buf, int len)
-{
-    struct p25Status st;
-
-    p25Status_get(&st);
-    snprintf(buf, len, "%s", st.sync ? (st.voice ? "VOX" : "SYNC") : "SRCH");
-}
-
-void qm_p25_fmt_nac(char *buf, int len)
-{
-    struct p25Status st;
-
-    p25Status_get(&st);
-    if (st.nac < 0)
-        snprintf(buf, len, "---");
-    else
-        snprintf(buf, len, "%03X", (unsigned)st.nac);
-}
-
-void qm_p25_fmt_type(char *buf, int len)
-{
-    struct p25Status st;
-
-    p25Status_get(&st);
-    if (st.duid < 0)
-        snprintf(buf, len, "---");
-    else
-        snprintf(buf, len, "DUID %X", (unsigned)st.duid);
-}
-
-void qm_p25_fmt_call(char *buf, int len)
-{
-    struct p25Status st;
-
-    p25Status_get(&st);
-    if ((st.source < 0) && (st.talkgroup < 0))
-        snprintf(buf, len, "---");
-    else
-        snprintf(buf, len, "%ld>%d", (long)st.source, (int)st.talkgroup);
-}
-
 static const qm_item_t qm_items_p25[] =
 {
-    QM_ITEM_INFO("SYNC", qm_p25_fmt_sync),
-    QM_ITEM_INFO("NAC", qm_p25_fmt_nac),
-    QM_ITEM_INFO("TYPE", qm_p25_fmt_type),
-    QM_ITEM_INFO("CALL", qm_p25_fmt_call),
 #ifdef CONFIG_RX_FINE_OFFSET
     QM_ITEM_INT_FF("FINE", -500, 500, 10, 100, qm_get_rx_fine,
                    qm_set_rx_fine, qm_fmt_fine),
@@ -1387,17 +1134,11 @@ static const qm_item_t qm_items_p25[] =
 #ifdef UI_MODE_YSF
 /*
  * System Fusion, receive only. The frame layer publishes nothing to the UI yet
- * beyond "a carrier is being tracked", which is what the squelch of the mode
- * says, so the table is that row and the shared tail.
+ * beyond "a carrier is being tracked", which the main screen shows as RX or
+ * SRCH, so the table is the shared tail and nothing else.
  */
-void qm_ysf_fmt_sync(char *buf, int len)
-{
-    snprintf(buf, len, "%s", rtx_rxSquelchOpen() ? "RX" : "SRCH");
-}
-
 static const qm_item_t qm_items_ysf[] =
 {
-    QM_ITEM_INFO("SYNC", qm_ysf_fmt_sync),
 #ifdef CONFIG_RX_FINE_OFFSET
     QM_ITEM_INT_FF("FINE", -500, 500, 10, 100, qm_get_rx_fine,
                    qm_set_rx_fine, qm_fmt_fine),
@@ -1414,72 +1155,13 @@ static const qm_item_t qm_items_ysf[] =
 
 #ifdef UI_MODE_DSTAR
 /*
- * D-STAR DV, receive. The callsigns are the mode: the header carries who is
- * talking, to whom and through which repeater, and the slow data carries a
- * 20-character message. The rows show the last header's MY/UR/RPT and the last
- * message; "---" until one arrives.
+ * D-STAR DV, receive. The callsigns are the mode, so they are state: the main
+ * screen shows MY>UR on line 2, the access repeater and the Viterbi's corrected
+ * bits on line 1 and the slow-data text on line 4. Nothing here is a setting
+ * beyond the shared tail.
  */
-void qm_dstar_fmt_sync(char *buf, int len)
-{
-    struct dstarStatus st;
-
-    dstar_getStatus(&st);
-    snprintf(buf, len, "%s", st.sync ? (st.voice ? "VOX" : "SYNC") : "SRCH");
-}
-
-void qm_dstar_fmt_my(char *buf, int len)
-{
-    struct dstarStatus st;
-
-    dstar_getStatus(&st);
-    if ((st.my[0] == '\0') || (!st.sync))
-        snprintf(buf, len, "---");
-    else if (st.sfx[0] != '\0')
-        snprintf(buf, len, "%s/%s", st.my, st.sfx);
-    else
-        snprintf(buf, len, "%s", st.my);
-}
-
-void qm_dstar_fmt_ur(char *buf, int len)
-{
-    struct dstarStatus st;
-
-    dstar_getStatus(&st);
-    if ((st.ur[0] == '\0') || (!st.sync))
-        snprintf(buf, len, "---");
-    else
-        snprintf(buf, len, "%s", st.ur);
-}
-
-void qm_dstar_fmt_rpt(char *buf, int len)
-{
-    struct dstarStatus st;
-
-    dstar_getStatus(&st);
-    if ((st.rpt1[0] == '\0') || (!st.sync))
-        snprintf(buf, len, "---");
-    else
-        snprintf(buf, len, "%s", st.rpt1);
-}
-
-void qm_dstar_fmt_text(char *buf, int len)
-{
-    struct dstarStatus st;
-
-    dstar_getStatus(&st);
-    if (st.text[0] == '\0')
-        snprintf(buf, len, "---");
-    else
-        snprintf(buf, len, "%s", st.text);
-}
-
 static const qm_item_t qm_items_dstar[] =
 {
-    QM_ITEM_INFO("SYNC", qm_dstar_fmt_sync),
-    QM_ITEM_INFO("MY", qm_dstar_fmt_my),
-    QM_ITEM_INFO("UR", qm_dstar_fmt_ur),
-    QM_ITEM_INFO("RPT", qm_dstar_fmt_rpt),
-    QM_ITEM_INFO("TXT", qm_dstar_fmt_text),
 #ifdef CONFIG_RX_FINE_OFFSET
     QM_ITEM_INT_FF("FINE", -500, 500, 10, 100, qm_get_rx_fine,
                    qm_set_rx_fine, qm_fmt_fine),
@@ -1496,48 +1178,14 @@ static const qm_item_t qm_items_dstar[] =
 
 #ifdef UI_MODE_WFM
 /*
- * Broadcast FM, receive only. Everything here is what the BK1080 reports about
- * the channel it is on: the stereo pilot and decoder state, the level in dBuV,
- * its own SNR estimate and the channel index of the CCIR raster. There is no
- * PWR row and no squelch to set: the tuner's AFC says whether there is a
- * station, and the analog volume pot is the volume.
+ * Broadcast FM, receive only. What the BK1080 reports - the stereo pilot, the
+ * level in dBuV, its SNR estimate and the channel of the CCIR raster - is on
+ * the main screen, which is the tuner's own read-out and has nothing else to
+ * show. There is no PWR row and no squelch to set: the tuner's AFC says whether
+ * there is a station, and the analog volume pot is the volume.
  */
-void qm_wfm_fmt_level(char *buf, int len)
-{
-    snprintf(buf, len, "%u dBuV", (unsigned)state.wfm.rssi);
-}
-
-void qm_wfm_fmt_snr(char *buf, int len)
-{
-    snprintf(buf, len, "%u/15", (unsigned)state.wfm.snr);
-}
-
-void qm_wfm_fmt_stereo(char *buf, int len)
-{
-    if (!state.wfm.tuned)
-        snprintf(buf, len, "SRCH");
-    else if (state.wfm.stereoSync)
-        snprintf(buf, len, "STEREO");
-    else if (state.wfm.stereo)
-        snprintf(buf, len, "PILOT");
-    else
-        snprintf(buf, len, "MONO");
-}
-
-void qm_wfm_fmt_chan(char *buf, int len)
-{
-    if (!state.wfm.tuned)
-        snprintf(buf, len, "---");
-    else
-        snprintf(buf, len, "CH %u", (unsigned)state.wfm.chan);
-}
-
 static const qm_item_t qm_items_wfm[] =
 {
-    QM_ITEM_INFO("ST", qm_wfm_fmt_stereo),
-    QM_ITEM_INFO("LVL", qm_wfm_fmt_level),
-    QM_ITEM_INFO("SNR", qm_wfm_fmt_snr),
-    QM_ITEM_INFO("CH", qm_wfm_fmt_chan),
     QM_ITEM_INT("BKL", 5, 100, 5, qm_get_brightness, qm_set_brightness),
 #ifdef CONFIG_KEY_BACKLIGHT
     QM_ITEM_TOGGLE("KEYLIT", qm_get_keylight, qm_set_keylight),
