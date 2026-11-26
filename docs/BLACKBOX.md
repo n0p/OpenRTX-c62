@@ -312,8 +312,12 @@ tools/cps/blackbox.py -f volcado_0x2b6000.bin
 * `state` de cada hilo: `pended` es un hilo esperando algo (un mutex, una cola,
   un stream); `ready` en el hilo parado suele ser un bucle sin dormir.
 * `free` muy bajo (o 0) en un hilo es un desbordamiento de pila a punto de
-  ocurrir; con `reason: FATAL` y `detail` 3 (`K_ERR_STACK_CHK_FAIL`) es lo que
-  ya ocurrió.
+  ocurrir; con `reason: FATAL` y `detail` **2** (`K_ERR_STACK_CHK_FAIL`) es lo
+  que ya ocurrió. El `detail` de un `FATAL` es el `k_fatal_error_reason` de
+  Zephyr tal cual: 0 excepción de CPU, 1 interrupción espuria, **2 desbordamiento
+  de pila**, 3 oops del kernel, 4 panic. (Este documento decía 3; el enum de
+  `fatal_types.h` de este árbol dice 2, y un registro real de DMR con
+  `FATAL detail 0x2` y 496 B libres en el hilo de la UI lo confirma.)
 * Las migajas, leídas al revés desde la última: la última marca es el último
   camino que el firmware entró antes de pararse. `MODE_ENTER` seguido de nada es
   un cambio de modo que no llegó a `MODE_READY`; `RADIO_CONF` es
