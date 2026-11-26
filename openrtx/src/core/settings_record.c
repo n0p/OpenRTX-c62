@@ -46,7 +46,13 @@ static void write_u32(uint8_t *p, uint32_t v)
 
 static void settings_recordUpgradeV7(settings_t *s)
 {
-    s->pc_port = (uint8_t)PORT_MODE_AUTO;
+    /*
+     * A version 7 record says nothing about the pad, so it takes to-day's
+     * factory value: the PTT switch.  Handing the pad to the serial port on an
+     * upgrade would leave an operator with a radio that does not transmit and
+     * no cable in hand to find out why (docs/ACCESSORY.md).
+     */
+    s->pc_port = (uint8_t)PORT_MODE_NEVER;
 }
 
 int settings_recordPack(uint8_t *buf, size_t cap, const settings_t *s)

@@ -79,11 +79,11 @@ Se eligen en **Ajustes ▸ Radio ▸ Puerto PC** (la fila va detrás de `TX Powe
 se guardan en `settings_t.pc_port` (`enum portMode`,
 `openrtx/include/core/settings.h`) y **se aplican al instante**: el transporte del
 protocolo lee el ajuste en cada pasada de su bucle (1 ms) y remuxa el pad, sin
-reiniciar. El valor por defecto es `Auto`.
+reiniciar. El valor por defecto es `Never`.
 
 | modo | pad | protocolo serie | pulsador del microaltavoz |
 |---|---|---|---|
-| **Auto** (por defecto) | UART2 RXD, leído por el receptor (`FE`/`BI`) | disponible | sí, con la regla de los 30 ms |
+| **Auto** | UART2 RXD, leído por el receptor (`FE`/`BI`) | disponible | **no medido: no lo ve** (ver abajo) |
 | **Always** | UART2 RXD | disponible, siempre | **no** — es el comportamiento de todas las builds anteriores a este ajuste |
 | **Never** | GPIO puro con pull-up | **no disponible** | sí, 100 % fiable (el nivel, sin regla) |
 
@@ -126,10 +126,35 @@ línea de recepción ya no está conectada al UART; el transporte cierra la sesi
 y devuelve el log a la consola, de modo que el terminal serie sigue viendo el
 firmware como siempre (solo deja de responder a tramas).
 
-`Never` es la elección para quien use el radio con microaltavoz y no quiera
-saber nada del CPS. `Always` es la elección para un banco de pruebas o un CPS
-permanente, donde el pulsador del accesorio no se usa. `Auto` es lo que quiere
-casi todo el mundo.
+`Never` es el valor de fábrica y la elección de quien use el radio con
+microaltavoz: el pad es GPIO, el nivel se lee sin regla y no hay nada que
+interpretar. `Always` es la elección para un banco de pruebas o un CPS
+permanente, donde el pulsador del accesorio no se usa.
+
+### Lo que la placa dice de `Auto`, y no es lo que decía este documento
+
+Medido con la imagen `final-20261126i`, puerto en `Auto`, un cliente conectado
+pidiendo `DBG_INFO` cada 250 ms y el operador pulsando el botón dos o tres veces
+por ventana, tres veces seguidas:
+
+- `portPtt` no se movió ni una vez;
+- `portLost` se quedó en los 6 bytes del arranque, así que **no llegó ni un
+  carácter** con `FE`/`BI`: el receptor no entrega nada mientras la línea está
+  sujeta a cero;
+- el log del firmware no emitió ni una línea `port: pad ...`, o sea que ninguno
+  de los tres testigos (nivel del pad, break, caracteres retenidos) cambió.
+
+La hipótesis de la sección 1 —que un pulsador sostenido produce caracteres con
+`FE`/`BI` durante toda la pulsación— **no se sostiene en esta placa**: el
+receptor necesita un flanco de subida para volver a entramar y, con la línea
+clavada a cero, se queda esperando. El `DATAIN` del GPIO, mientras el pad es del
+UART, tampoco sirve (medido antes: lee bajo siempre). En la práctica `Auto`
+ofrece el puerto serie y **no** ve el pulsador, igual que `Always`.
+
+Por eso `Never` es el valor de fábrica. Un `Auto` que funcione de verdad pide
+otra fuente de nivel: muestrear el pad como GPIO cambiando la función durante
+unos microsegundos, o separar el PTT del RX en el cableado. Las dos cosas están
+fuera de lo que este ajuste puede hacer sin banco encima.
 
 ## 3. Qué cuesta `Auto`: las tramas que llegan durante la pulsación
 

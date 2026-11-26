@@ -103,9 +103,10 @@ display_timer_t;
  */
 typedef enum
 {
-    PORT_MODE_AUTO   = 0, /**< Protocol and PTT share the pad (default)      */
+    PORT_MODE_AUTO   = 0, /**< Protocol and PTT share the pad                */
     PORT_MODE_ALWAYS = 1, /**< The pad is the serial port, never the PTT     */
-    PORT_MODE_NEVER  = 2  /**< The pad is the PTT switch, no serial protocol */
+    PORT_MODE_NEVER  = 2  /**< The pad is the PTT switch (default): the
+                               radio transmits out of the box              */
 }
 portMode_t;
 
@@ -384,7 +385,8 @@ static const settings_t default_settings =
     100,                          // 100 ms SLOTTIME
     330,                          // The AX.25 ceiling, FCS included
 #endif
-    PORT_MODE_AUTO,               // Accessory pad: protocol and PTT share it
+    PORT_MODE_NEVER,              // Accessory pad: the PTT switch, so a radio
+                                  // that has just been flashed transmits
 };
 
 /**
