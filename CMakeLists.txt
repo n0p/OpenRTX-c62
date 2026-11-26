@@ -122,6 +122,7 @@ target_sources(app
     # Post-mortem recorder: breadcrumbs, liveness beats, the crash record
     # (docs/BLACKBOX.md).  Portable C; the platform side lives in the target.
     openrtx/src/core/blackbox.c
+    openrtx/src/core/backup_image.c
     openrtx/src/core/audio_codec.c
     openrtx/src/core/audio_stream.c
     openrtx/src/core/audio_path.cpp
@@ -186,6 +187,7 @@ target_sources(app
     openrtx/src/ui/default/ui_contacts.c
     openrtx/src/ui/default/ui_messages.c
     openrtx/src/ui/default/ui_tools.c
+    openrtx/src/ui/default/ui_backup.c
     openrtx/src/ui/default/ui_spectrum.c
 
     subprojects/codec2/src/dump.c
