@@ -147,14 +147,16 @@ TEST_CASE("The DMR air delay, the AM depth and the port mode end the record",
     REQUIRE(settings_txPowerValid(dflt().tx_power));
 
     /*
-     * Version 8 appends the accessory port mode: Auto, which is both the
-     * protocol and the speaker-mic PTT (docs/ACCESSORY.md).  A reset must not
-     * silently take the cable away from a radio that was being programmed, nor
-     * leave a speaker-microphone that does nothing.
+     * Version 8 appends the accessory port mode: Never, the speaker-mic PTT,
+     * so a radio that has just been flashed transmits (docs/ACCESSORY.md).
+     * Auto is reachable from the CPS and applies at once, but it is not the
+     * factory value: it is the mode whose switch detection is still being
+     * confirmed on hardware, and a radio handed to an operator with the pad on
+     * the UART is a radio whose PTT does nothing.
      */
-    REQUIRE(dflt().pc_port == PORT_MODE_AUTO);
+    REQUIRE(dflt().pc_port == PORT_MODE_NEVER);
     REQUIRE(settings_portModeValid(dflt().pc_port));
-    REQUIRE(std::string(settings_portModeName(dflt().pc_port)) == "Auto");
+    REQUIRE(std::string(settings_portModeName(dflt().pc_port)) == "Never");
 }
 
 TEST_CASE("A version 7 record is migrated, not dropped", "[settings]")
@@ -202,8 +204,9 @@ TEST_CASE("A version 7 record is migrated, not dropped", "[settings]")
     REQUIRE(out.scan_dwell == 22);
     REQUIRE(out.dmr_id == 2142001);
     /* The appended field is the default, never the byte that followed it on
-     * flash. */
-    REQUIRE(out.pc_port == PORT_MODE_AUTO);
+     * flash.  A version 7 record says nothing about the pad, so it takes the
+     * factory value: the PTT switch (docs/ACCESSORY.md). */
+    REQUIRE(out.pc_port == PORT_MODE_NEVER);
 
     /* A v7 record whose CRC does not cover its own length is still corrupt: the
      * migration must not read a truncated or damaged payload. */
