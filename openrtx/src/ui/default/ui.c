@@ -3274,7 +3274,8 @@ void ui_updateFSM(bool *sync_rtx)
                                 state.step_index++;
                                 state.step_index %= n_freq_steps;
                             }
-                            else if(msg.keys & KEY_DOWN || msg.keys & KEY_LEFT || msg.keys & KNOB_LEFT)
+                            else if(msg.keys & (KEY_DOWN | KEY_LEFT | KEY_F1 |
+                                                KNOB_LEFT))
                             {
                                 state.step_index += n_freq_steps;
                                 state.step_index--;
