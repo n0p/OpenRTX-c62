@@ -70,21 +70,47 @@ hueco por la que un CC inestable se ve en la radio y no en los tests.
 
 ## 4. Protocolo, CPS y banco
 
-- `tests/host/pc_proto_host/run.sh`: 4 suites sobre un PTY (43+11+20+7).
+- `tests/host/pc_proto_host/run.sh`: 4 suites sobre un PTY (43+15+20+7).
 - Mensajes: `status`, `diag`, `settings`, banco (arm/tune/ptt/capture), KISS,
   caja negra, captura de audio.
-- Reglas del cable: 115200; el token del banco se gasta en cada PTT (re-armar);
-  el cliente necesita `client_caps` y 2 s de plazo; por encima de 2 Hz se pierden
-  respuestas (limitación conocida del cliente en Python).
+- Reglas del cable: 115200; el testigo de sesión lo gastan **el siguiente
+  `HELLO`**, y un `PTT` que lo presente gastado se rechaza con `not_allowed`
+  sin tocar la PA — un run que clavea dos veces con el mismo testigo es lo
+  normal, y así está fijado (`unit/pc_proto_bench`, `tools/bench/tests/
+  test_bench_proto.py`); el cliente necesita anunciar `PC_CAP_EVENTS` en `HELLO`
+  para recibir eventos (el flanco de PTT que mide la latencia) y 2 s de plazo
+  para tener respuesta (`unit/pc_proto_bench`: sin la capacidad hay respuestas y
+  ningún evento; `tools/cps/tests/test_pcproto.py`: con el cerrojo tomado,
+  `status` contesta en menos de 100 ms y las lecturas que lo necesitan
+  responden `busy`, no silencio). El «1-2 Hz» de las notas era del cliente que
+  dispara sin esperar la respuesta: con peticiones serializadas el enlace
+  contesta a más de 10 Hz, y la suite lo comprueba.
 
 ## 5. Plataforma
 
-- **Presupuesto de pila por hilo, comprobado en compilación**: `rtx_stack_budget`
-  (rtx) y el `_Static_assert` de `DmrSpeech.c` (voz). Faltan teclado, códec y
-  protocolo.
+- **Presupuesto de pila por hilo, comprobado en compilación**: `rtx`
+  (`unit/rtx_stack_budget`), voz DMR (`core/stack_budget.h`, el
+  `_Static_assert` sigue en `DmrSpeech.c`) y **todos los demás** en
+  `openrtx/include/core/stack_budget.h`, con suelo y margen: teclado, worker del
+  códec, `pcproto`, `bb_supervisor` y las tres voces de playback (TETRA, D-STAR,
+  DMR). El suelo está calculado sobre lo medido (`-fstack-usage` en Cortex-M33
+  para D-STAR: 2 704 B en `parms_repeat_model`; en el host, `-Os`, para
+  `pcproto`; las cifras documentadas en el propio fuente para el códec, el
+  supervisor y la voz DMR). Bajarlo rompe la compilación, en el firmware y en
+  `unit/thread_stacks`. Lo que no se pudo medir aquí (teclado, voz TETRA) tiene
+  por suelo el valor que vuela, así que sólo puede subir; el hilo que lo cierra
+  es el recorrido de hilos de la caja negra (`free` por hilo,
+  `tools/cps/blackbox.py`).
+- **Que la llamada exista**: `unit/platform_wiring` lee las fuentes y falla si
+  el bucle principal deja de llamar a `rtx_supervise()`, si el perro se alimenta
+  fuera de la regla de la UI, si un hilo vuelve a escribir su pila como literal
+  o si un mensaje del banco pierde la puerta del testigo. Es la clase de fallo
+  que ningún test de valor ve: el camino correcto que nadie llama.
 - Cerrojos: nada de llamar al DSP con el mutex de audio tomado; esperas con plazo.
-- Perros: el de aplicación se alimenta sólo mientras la UI avanza; el de TX corta
-  a los 90 s de aire (`unit/tx_watch`, `unit/tx_guard`, `unit/key_gate`).
+- Perros: el de aplicación se alimenta sólo mientras la UI avanza
+  (`core/ui_watchdog.h`, `unit/tx_watch`); el de TX corta a los 90 s de aire
+  (`unit/tx_watch`, `unit/tx_guard`, `unit/key_gate`) y el corte está probado de
+  punta a punta por el camino real de `rtx.cpp` en `unit/mode_switch`.
 - Caja negra: se lee con `tools/cps/blackbox.py`; un `FATAL detail 2` es
   desbordamiento de pila (enum de `fatal_types.h`).
 
