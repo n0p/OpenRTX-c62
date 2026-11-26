@@ -1968,6 +1968,22 @@ fm_ctcss_test = executable('fm_ctcss_test',
                                      ['tests/unit/fm_ctcss.cpp'],
                            kwargs  : unit_test_opts)
 
+# The airband mode with its transmitter compiled in: CONFIG_C62_AIR_TX is what
+# the shipped image carries, and the mode's keying is a dialogue with the
+# operator that only exists when it is on. Built twice like the protocol tests,
+# so the option is part of the test and not of the emulator.
+airband_tx_opts = {'c_args' : linux_c_args + ['-DCONFIG_C62_AIR_TX'],
+                   'cpp_args' : linux_cpp_args + ['-DCONFIG_C62_AIR_TX'],
+                   'include_directories' : linux_inc,
+                   'dependencies' : [sdl_dep, threads_dep, codec2_dep,
+                                     catch2_dep],
+                   'link_args' : linux_l_args}
+
+airband_mode_test = executable('airband_mode_test',
+                               sources : unit_test_src +
+                                         ['tests/unit/airband_mode.cpp'],
+                               kwargs  : airband_tx_opts)
+
 audio_codec_test = executable('audio_codec_test',
                               sources : unit_test_src + ['tests/unit/audio_codec.cpp'],
                               kwargs  : unit_test_opts)
@@ -2142,6 +2158,7 @@ test('PC Bench Production Test', pc_bench_nobench_test)
 test('Zones Test',           zones_test)
 test('FM Squelch Test',      fm_squelch_test, timeout : 120)
 test('FM CTCSS Test',        fm_ctcss_test, timeout : 120)
+test('Airband Mode Test',    airband_mode_test, timeout : 120)
 test('AGC Test',             agc_test)
 test('AM TX Test',           am_tx_test)
 test('Airband Test',         airband_test)
