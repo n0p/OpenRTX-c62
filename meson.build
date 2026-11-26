@@ -1984,6 +1984,15 @@ airband_mode_test = executable('airband_mode_test',
                                          ['tests/unit/airband_mode.cpp'],
                                kwargs  : airband_tx_opts)
 
+# Tuning step and band limits through the UI FSM: the step table, the airband
+# raster (25 kHz / 8.33 kHz) put back when the mode or one of its channels is
+# selected, the snap that keeps an 8.33 kHz step on a carrier, stepping stopped
+# at the platform's band edge, and the service band that limits transmitting
+# but not tuning.
+fm_step_test = executable('fm_step_test',
+                          sources : unit_test_src + ['tests/unit/fm_step.cpp'],
+                          kwargs  : unit_test_opts)
+
 audio_codec_test = executable('audio_codec_test',
                               sources : unit_test_src + ['tests/unit/audio_codec.cpp'],
                               kwargs  : unit_test_opts)
@@ -2159,6 +2168,7 @@ test('Zones Test',           zones_test)
 test('FM Squelch Test',      fm_squelch_test, timeout : 120)
 test('FM CTCSS Test',        fm_ctcss_test, timeout : 120)
 test('Airband Mode Test',    airband_mode_test, timeout : 120)
+test('FM Step And Limits Test', fm_step_test, timeout : 120)
 test('AGC Test',             agc_test)
 test('AM TX Test',           am_tx_test)
 test('Airband Test',         airband_test)
