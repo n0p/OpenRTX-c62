@@ -1682,6 +1682,14 @@ ui_messages_test = executable('ui_messages_test',
                               sources : unit_test_src + ['tests/unit/ui_messages.cpp'],
                               kwargs : unit_test_opts)
 
+# The messaging queue as a state machine (tests/unit/messaging_fsm.cpp):
+# queue -> begin -> retries up to MSG_MAX_ATTEMPTS -> FAILED, SENT against
+# DELIVERED per the confirmation asked, cancel, a full outbox, and the record
+# that keeps the outbox, the inbox and the draft. The model, not the screens.
+messaging_fsm_test = executable('messaging_fsm_test',
+                                sources : unit_test_src + ['tests/unit/messaging_fsm.cpp'],
+                                kwargs  : unit_test_opts)
+
 ui_layout_test = executable('ui_layout_test',
                             sources : unit_test_src + ['tests/unit/ui_layout.cpp'],
                             kwargs : unit_test_opts)
@@ -2430,6 +2438,7 @@ test('DMR Glue Test',        dmr_glue_test)
 test('DMR RX Status Test',   dmr_rx_status_test)
 test('User Stores Test',     user_stores_test)
 test('UI Messages Test',     ui_messages_test)
+test('Messaging FSM Test',   messaging_fsm_test)
 test('UI Layout Test',       ui_layout_test)
 test('UI Zones Test',        ui_zones_test)
 test('UI Tools Test',        ui_tools_test)
@@ -2809,6 +2818,30 @@ if python3.found() and zlib_dep.found()
                                    link_args : linux_l_args)
 
   test('UI Empty State Test', ui_empty_state_test, timeout : 300)
+
+  # The in-radio channel editor (tests/unit/ui_channels_editor.cpp): create,
+  # edit, save, delete behind a long press and a confirmation, and the list that
+  # opens on the channel the radio was on at power-off. Built like the
+  # simulator because what it asserts on is what the editor drew -- the title,
+  # the rows, the inverted selection and the caret rectangle -- through the
+  # frame recorder, and the keys it presses are the keypad's.
+  ui_channels_editor_test = executable('ui_channels_editor_test',
+                                       sources : unit_test_src + ui_menu_audit_aprs_src + [
+                                         'openrtx/src/ui/default/ui_packet.c',
+                                         'openrtx/src/core/gfx_capture.c',
+                                         'openrtx/src/ui/default/ui_dump.c',
+                                         'platform/targets/linux/emulator/sim_control.c',
+                                         'platform/targets/linux/emulator/sim_png.c',
+                                         'tests/unit/ui_channels_editor.cpp'],
+                                       include_directories : linux_inc,
+                                       dependencies : [sdl_dep, threads_dep,
+                                                       codec2_dep, catch2_dep,
+                                                       zlib_dep],
+                                       c_args   : linux_c_args + sim_def,
+                                       cpp_args : linux_cpp_args + sim_def,
+                                       link_args : linux_l_args)
+
+  test('UI Channels Editor Test', ui_channels_editor_test, timeout : 300)
 endif
 
 # The PC protocol's own harness (tests/host/pc_proto_host): three device builds
