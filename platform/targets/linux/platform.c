@@ -152,6 +152,31 @@ const hwInfo_t *platform_getHwInfo()
     return &hwInfo;
 }
 
+#ifdef CONFIG_KEY_BACKLIGHT
+/**
+ * Keypad backlight of the C62 simulator: a single LED, on or off.
+ *
+ * The radio drives the LED from platform/targets/c62 (documented in
+ * platform/targets/c62/hwconfig.h). The host has no such LED, so the state is
+ * kept and printed: it is what tells a script that Settings -> Display ->
+ * Key Light reached the platform and not just the settings record.
+ */
+static bool keyBacklightOn = true;
+
+void c62_setKeyBacklight(bool on)
+{
+    if (on != keyBacklightOn)
+        printf("c62_setKeyBacklight(%s)\n", on ? "on" : "off");
+
+    keyBacklightOn = on;
+}
+
+bool c62_getKeyBacklight(void)
+{
+    return keyBacklightOn;
+}
+#endif
+
 const struct gpsDevice *platform_initGps()
 {
     extern struct gpsDevice gps;

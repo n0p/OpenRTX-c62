@@ -15,11 +15,15 @@
 #include "core/event.h"
 #include "hwconfig.h"
 #include "core/ui.h"
+#include "ui/ui_modes.h"
 
 // Maximum menu entry length
 #define MAX_ENTRY_LEN 21
-// Frequency digits
-#define FREQ_DIGITS 7
+// Frequency digits. Eight gives 10 Hz resolution (446.00625 MHz), which the
+// BK4819 supports and the 6.25 kHz step needs.
+#define FREQ_DIGITS 8
+// Frequency resolution of the last entered digit, in Hz
+#define FREQ_DIGIT_RESOLUTION 10
 // Time & Date digits
 #define TIMEDATE_DIGITS 10
 // Max number of UI events
@@ -35,6 +39,7 @@ enum uiScreen
     MENU_TOP,
     MENU_BANK,
     MENU_CHANNEL,
+    MENU_ZONES,
     MENU_CONTACTS,
     MENU_GPS,
     MENU_SETTINGS,
@@ -48,12 +53,161 @@ enum uiScreen
     SETTINGS_DISPLAY,
     SETTINGS_GPS,
     SETTINGS_RADIO,
+    /*
+     * The station identity (docs/UI.md). Appended here, next to the other
+     * fixed settings pages, and not at the end of the enum: nothing reaches a
+     * screen by its number -- the quick menu's QM_GOTO rows use the constant,
+     * the tour and the coverage test compare names (ui_dump_screenName).
+     */
+    SETTINGS_IDENTITY,
+    SETTINGS_AUDIO,
     SETTINGS_M17,
+#ifdef CONFIG_TETRA_AFC
+    SETTINGS_TETRA,
+#endif
     SETTINGS_FM,
+    /*
+     * A mode's own page: the mode's quick menu rows drawn as a list, so NXDN
+     * and AM (and every mode registered with UI_MODE_PAGE) get one without new
+     * code here. Which mode is in qm_page_state.qm (ui_quickmenu.h).
+     */
+    SETTINGS_MODE,
     SETTINGS_ACCESSIBILITY,
     SETTINGS_RESET2DEFAULTS,
-    LOW_BAT
+    /*
+     * APRS screens. They live in ui_aprs.c so that the rework of the menus
+     * and of the hints row can proceed in parallel: this enum block and the
+     * two dispatch points in ui.c are the only places the two touch.
+     */
+    MENU_APRS,
+    APRS_DETAIL,
+    APRS_MSGS,
+    APRS_MSG_VIEW,
+    APRS_MSG_EDIT,
+    APRS_CFG,
+    /*
+     * Messaging screens (ui_messages.c): transport agnostic inbox, sent
+     * folder, composer and delivery status. Owned by their module, the same
+     * way the APRS screens are.
+     */
+    /*
+     * Packet modem screens (ui_packet.c), same arrangement as the APRS ones:
+     * the configuration page and the counters page.
+     */
+    PKT_CFG,
+    PKT_STATUS,
+    MENU_MESSAGES,
+    MSG_VIEW,
+    MSG_SENT,
+    MSG_COMPOSE,
+    MSG_STATUS,
+    LOW_BAT,
+    /*
+     * The spectrum analyser (ui_spectrum.c). At the end of the enum on purpose:
+     * the screens above are reached by number from the quick menu's QM_GOTO
+     * rows and from tests, and inserting in the middle renumbers them all.
+     */
+    SPECTRUM,
+    /*
+     * The tools menu (ui_tools.c), P1 held down on a main screen. Also at the
+     * end, for the same reason: it is reached from a key, never by number.
+     */
+    TOOLS_MENU
 };
+
+/**
+ * Key claim trace.
+ *
+ * The dispatch in ui_updateFSM() is a chain of blocks that each consume the
+ * key event when it belongs to them; every one of them records itself here
+ * before returning. A screen that takes no claim is a key that goes nowhere
+ * (the "deaf screen" defect), and two claims on one event mean two blocks are
+ * eating the same key. tests/unit/ui_menu_audit.cpp walks every screen with
+ * every key and requires exactly one claim, in the block docs/UI.md documents.
+ */
+enum uiKeyClaim
+{
+    UI_CLAIM_NONE = 0,   /**< Nobody took the key: a defect                */
+    UI_CLAIM_STANDBY,    /**< Coming out of standby swallowed it           */
+    UI_CLAIM_SEARCH,     /**< The carrier search stopped on it             */
+    UI_CLAIM_QM,         /**< The quick menu owns the keypad               */
+    UI_CLAIM_SPECTRUM,   /**< The analyser's screen                        */
+    UI_CLAIM_QM_OPEN,    /**< P2 short on a main screen opened the popup    */
+    UI_CLAIM_APRS,       /**< One of the APRS screens                      */
+    UI_CLAIM_PACKET,     /**< The packet modem screens                     */
+    UI_CLAIM_MSGS,       /**< One of the messaging screens                 */
+    UI_CLAIM_CONTACTS,   /**< The contact book                             */
+    UI_CLAIM_ZONES,      /**< The zone browser                             */
+    UI_CLAIM_APRS_ENTER, /**< P2 long in FM opened the APRS screens        */
+    UI_CLAIM_MACRO,      /**< The macro grid (MONI or P2 long)             */
+    UI_CLAIM_TOOLS_OPEN, /**< P1 long opened the tools menu                 */
+    UI_CLAIM_CHANNELS,   /**< The channel list or editor                   */
+    UI_CLAIM_SCREEN,     /**< The case of the screen in the big switch     */
+    UI_CLAIM_UNLOCK,     /**< Red held down while the keypad was locked    */
+    UI_CLAIM_TOOLS       /**< The tools menu and its mode submenu          */
+};
+
+/**
+ * What the UI thinks is selected, and whether it is editing a field.
+ *
+ * `ui_state` is a static of ui.c; these two accessors are what a test (or the
+ * remote control) needs to see the state that the screens act on, without
+ * opening the struct.
+ */
+uint8_t ui_menu_selected(void);
+bool ui_edit_mode(void);
+
+/**
+ * True while the macro grid is drawn over the screen (MONI pressed, or P2 held
+ * with the latch on).
+ *
+ * The grid dims the screen with an overlay and draws its cells on top of it, so
+ * the strings underneath it are still recorded but are dark: a layout check has
+ * to know the difference between "two texts collide" and "a popup covers the
+ * screen on purpose" (tests/unit/ui_fit.cpp).
+ */
+bool ui_macroGridOpen(void);
+
+/**
+ * Ask for a redraw on the next ui_updateGUI() pass.
+ *
+ * The FSM asks for it on every key event and screen change; a caller that
+ * writes `state` or a module's screen directly -- a test, the simulator's
+ * `inject`, the remote control -- has to ask too, or the next dump describes
+ * the screen before the change.
+ */
+void ui_requestRedraw(void);
+
+/** Block that consumed the last key event (enum uiKeyClaim). */
+uint8_t ui_lastClaim(void);
+
+/** How many blocks consumed the last key event: 1 when it is correct. */
+uint8_t ui_lastClaimCount(void);
+
+/**
+ * Passes of the drawing loop since power on.
+ *
+ * Counted whether or not the screen changed, so it advances at the UI frame
+ * rate (~40 Hz). The host simulator waits for it before reading a screen: see
+ * docs/SIMULATOR.md.
+ */
+uint32_t ui_frames(void);
+
+/**
+ * Key events queued and not yet dispatched by ui_updateFSM().
+ *
+ * A key press reaches the FSM through the keypad queue *and* the event queue,
+ * and the FSM dispatches one event per pass. The simulator waits for this to
+ * reach zero before it reads a screen, so that "no keys pending" means "the
+ * screen already shows what the keys did".
+ */
+uint8_t ui_pendingEvents(void);
+
+/**
+ * Payload of the last key event dispatched: bit 0 is the long press, the rest
+ * are the KEY_* bits of a kbd_msg_t.
+ */
+uint32_t ui_lastKeyEvent(void);
 
 enum SetRxTx
 {
@@ -67,11 +221,14 @@ enum menuItems
 {
     M_BANK = 0,
     M_CHANNEL,
+    M_ZONES,
     M_CONTACTS,
+    M_MESSAGES,
 #ifdef CONFIG_GPS
     M_GPS,
 #endif
     M_SETTINGS,
+    M_BACKUP_RESTORE,
     M_INFO,
     M_ABOUT
 };
@@ -86,10 +243,30 @@ enum settingsItems
     S_GPS,
 #endif
     S_RADIO,
-#ifdef CONFIG_M17
+    /*
+     * The station identity: the callsign every transmitting mode shares and the
+     * numeric DMR ID (docs/UI.md). Its own page and not a row of a mode's page
+     * because the callsign is not a mode's property -- M17 sends it as the
+     * source address, APRS as the base of its AX.25 address, and DMR has no
+     * callsign at all. One row, one field, one place.
+     */
+    S_IDENTITY,
+    S_AUDIO,
+#ifdef UI_MODE_M17
     S_M17,
 #endif
+#ifdef CONFIG_TETRA_AFC
+    S_TETRA,
+#endif
     S_FM,
+    /*
+     * One page per mode that has its own settings (UI_MODE_PAGES in
+     * ui/ui_modes.h). The list is generated, in the same order, into
+     * settings_items[] in ui.c: registering a mode there adds its page here.
+     */
+#define UI_MODE_PAGE(id, title) S_PAGE_##id,
+    UI_MODE_PAGES(UI_MODE_PAGE)
+#undef UI_MODE_PAGE
     S_ACCESSIBILITY,
     S_RESET2DEFAULTS,
 };
@@ -109,7 +286,10 @@ enum displayItems
     D_CONTRAST,
 #endif
     D_TIMER,
-    D_BATTERY
+    D_BATTERY,
+#ifdef CONFIG_KEY_BACKLIGHT
+    D_KEYLIGHT,
+#endif
 };
 
 #ifdef CONFIG_GPS
@@ -126,8 +306,6 @@ enum settingsGPSItems
 enum settingsAccessibilityItems
 {
     A_MACRO_LATCH = 0,
-    A_LEVEL,
-    A_PHONETIC,
 };
 
 enum settingsRadioItems
@@ -135,20 +313,62 @@ enum settingsRadioItems
     R_OFFSET,
     R_DIRECTION,
     R_STEP,
+    R_SQUELCH,
+    R_POWER,
+};
+
+enum settingsAudioItems
+{
+    AU_VOICE = 0,
+    AU_PHONETIC,
+    AU_NOISE,
+};
+
+/*
+ * Settings -> Identity (docs/UI.md): the two halves of who this radio is on the
+ * air. The first is text in the callsign alphabet, the second a 24-bit number.
+ */
+enum settingsIdentityItems
+{
+    ID_CALLSIGN = 0,
+    ID_DMR_ID
+};
+
+/*
+ * What the Identity page says under its rows when the last confirm was refused.
+ * The value was not applied and not stored: an out-of-range DMR ID would put a
+ * source nobody can answer into every link control, and an empty or malformed
+ * callsign making it to the M17 source field is a call from nobody.
+ */
+enum identityAlert
+{
+    ID_ALERT_NONE = 0,
+    ID_ALERT_CALLSIGN,   /**< 1..9 characters, A-Z 0-9 / -                  */
+    ID_ALERT_DMR_ID      /**< 1..16777215, 0 means "no identity"            */
 };
 
 enum settingsM17Items
 {
-    M17_CALLSIGN = 0,
-    M17_METATEXT,
+    M17_METATEXT = 0,
     M17_CAN,
     M17_CAN_RX
 };
 
+#ifdef CONFIG_TETRA_AFC
+enum settingsTetraItems
+{
+    T_AFC = 0,
+#ifdef CONFIG_RX_FINE_OFFSET
+    T_FINE,
+#endif
+};
+#endif
+
 enum settingsFMItems
 {
     CTCSS_Tone,
-    CTCSS_Enabled
+    CTCSS_Enabled,
+    FM_BANDWIDTH,
 };
 
 /**
@@ -215,8 +435,8 @@ typedef struct ui_state_t
     long long last_keypress;
     freq_t new_rx_frequency;
     freq_t new_tx_frequency;
-    char new_rx_freq_buf[14];
-    char new_tx_freq_buf[14];
+    char new_rx_freq_buf[16];
+    char new_tx_freq_buf[16];
     size_t m17_meta_text_scroll_position;
     long long m17_meta_text_last_scroll_tick;
     char new_meta_text[53];
@@ -229,6 +449,14 @@ typedef struct ui_state_t
 #endif
     char new_callsign[10];
     freq_t new_offset;
+    /*
+     * Identity page: the DMR ID being typed and the reason the last confirm was
+     * refused (enum identityAlert, drawn under the rows). Both are UI state
+     * only: nothing is applied until the value passes the range check.
+     */
+    uint32_t new_dmr_id;
+    uint8_t new_dmr_id_digits;
+    uint8_t identity_alert;
     // Which state to return to when we exit menu
     uint8_t last_main_state;
 #if defined(CONFIG_UI_NO_KEYBOARD)
@@ -245,8 +473,14 @@ extern const char *settings_items[];
 extern const char *display_items[];
 extern const char *settings_gps_items[];
 extern const char *settings_radio_items[];
+extern const char *settings_audio_items[];
+extern const char *settings_identity_items[];
 extern const char *settings_m17_items[];
 extern const char *settings_fm_items[];
+#ifdef CONFIG_TETRA_AFC
+extern const char *settings_tetra_items[];
+extern const uint8_t settings_tetra_num;
+#endif
 extern const char * settings_accessibility_items[];
 extern const char *backup_restore_items[];
 extern const char *info_items[];
@@ -256,7 +490,11 @@ extern const uint8_t settings_num;
 extern const uint8_t display_num;
 extern const uint8_t settings_gps_num;
 extern const uint8_t settings_radio_num;
+extern const uint8_t settings_audio_num;
+extern const uint8_t settings_identity_num;
+#ifdef UI_MODE_M17
 extern const uint8_t settings_m17_num;
+#endif
 extern const uint8_t settings_fm_num;
 extern const uint8_t settings_accessibility_num;
 extern const uint8_t backup_restore_num;
@@ -266,5 +504,27 @@ extern const color_t color_black;
 extern const color_t color_grey;
 extern const color_t color_white;
 extern const color_t yellow_fab413;
+
+/**
+ * Move the cursor of the screen that is being shown (the menus keep it in
+ * ui_state.menu_selected). Used by the quick menu when it opens a Settings
+ * page on a given row, so that "META" lands on the meta text field and not on
+ * the first entry of the page.
+ */
+void ui_menu_select(uint8_t index);
+
+/**
+ * Switch screen from an overlay (the quick menu, the macro grid).
+ *
+ * Everything a menu entry does by hand - remember where to come back to, set
+ * the cursor, stop the radio from transmitting while a screen that owns the
+ * keypad is open, and call the module's own open() - happens in one place, so
+ * the quick menu and the menus can never disagree about what opening the
+ * message list means.
+ *
+ * @param screen: destination, one of enum uiScreen.
+ * @param item: row to select on the destination screen, 0 for the first.
+ */
+void ui_open_screen(uint8_t screen, uint8_t item);
 
 #endif /* UI_DEFAULT_H */

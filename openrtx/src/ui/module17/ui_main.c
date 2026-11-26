@@ -121,8 +121,9 @@ static void _ui_drawModeInfo(ui_state_t* ui_state)
                     last = rtxStatus.M17_src;
 
                 // Print CAN
-                gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_RIGHT,
-                          color_white, "CAN %02d", state.settings.m17_can);
+                gfx_print(gfx_right_edge(layout.top_pos), layout.top_font,
+                          TEXT_ALIGN_RIGHT, color_white, "CAN %02d",
+                          state.settings.m17_can);
                 gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
                           color_white, last);
                 // Print M17 Destination ID on line 2
@@ -133,13 +134,15 @@ static void _ui_drawModeInfo(ui_state_t* ui_state)
                     // Print Button Info
                     gfx_print(layout.line5_pos, layout.line5_font, TEXT_ALIGN_LEFT,
                               color_white, "Cancel");
-                    gfx_print(layout.line5_pos, layout.line5_font, TEXT_ALIGN_RIGHT,
+                    gfx_print(gfx_right_edge(layout.line5_pos),
+                              layout.line5_font, TEXT_ALIGN_RIGHT,
                               color_white, "Accept");
                 }
                 else
                 {
                     // Menu
-                    gfx_print(layout.line5_pos, layout.line5_font, TEXT_ALIGN_RIGHT,
+                    gfx_print(gfx_right_edge(layout.line5_pos),
+                              layout.line5_font, TEXT_ALIGN_RIGHT,
                               color_white, "Menu");
                 }
                 break;
