@@ -1729,6 +1729,16 @@ blackbox_test = executable('blackbox_test',
                            sources : unit_test_src + ['tests/unit/blackbox.cpp'],
                            kwargs  : unit_test_opts)
 
+# La reacción por defecto al atasco (core/blackbox.c, bb_platformHang()): el
+# registro se escribe y DESPUÉS se pide el reinicio, se pide aunque la escritura
+# falle, y un atasco se informa una sola vez en lugar de reescribir el sector
+# cada 100 ms.  En su propio binario porque el test de arriba sustituye el hook
+# para no reiniciar, y con él sustituido este camino no se ejecuta nunca.
+blackbox_hang_test = executable('blackbox_hang_test',
+                                sources : unit_test_src +
+                                          ['tests/unit/blackbox_hang.cpp'],
+                                kwargs  : unit_test_opts)
+
 # APRS: validacion de indicativo, SSID y path antes de emitir
 aprs_config_test = executable('aprs_config_test',
                               sources : unit_test_src + [
@@ -2107,6 +2117,7 @@ test('UI Spectrum Test',     ui_spectrum_test)
 test('Settings Record Test', settings_record_test)
 test('Accessory Port Test',  port_mode_test)
 test('Blackbox Test',        blackbox_test)
+test('Blackbox Hang Test',   blackbox_hang_test)
 test('P25 IMBE Vocoder Test', imbe_vocoder_test)
 test('P25 IMBE Robustness Test', imbe_robust_test)
 test('APRS Config Test',     aprs_config_test)

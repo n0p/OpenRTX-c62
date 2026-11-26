@@ -40,6 +40,7 @@
 #include "interfaces/platform.h"
 #include "interfaces/radio.h"
 #include "rtx/rtx.h"
+#include "dsp.h"
 
 /**
  * The record's own sector inside the storage partition.
@@ -314,9 +315,39 @@ int bb_platformPersist(const uint8_t *rec, size_t len)
 
 void bb_platformReboot(void)
 {
+    /*
+     * The same two steps platform_terminate() takes, and for the same reason
+     * stated there: on this board a core reset that leaves the DSP running is
+     * not a reset.  With the charger connected the chip stays powered through
+     * NVIC_SystemReset(), the CP core keeps executing its audio firmware and
+     * its UART interrupt is what the next boot trips over first.  Stopping the
+     * DSP first is what makes the reset land on a chip where nothing is left
+     * running.
+     *
+     * The PA is dropped before either of them: the record has been written, so
+     * from here the radio is going down, and it has to go down not
+     * transmitting whatever the mode thought it was doing.
+     */
+    radio_disableRtx();
+    lsf_dsp_terminate();
+
     /* Same path platform_terminate() uses: the SoC reset clears the
      * peripherals too, so the next boot finds the chip where it left it. */
     sys_reboot(SYS_REBOOT_COLD);
+
+    /*
+     * Only reached when the SoC did not take the reset.  Do not idle here: the
+     * application watchdog is armed and nothing feeds it any more, so the
+     * hardware resets the radio within its window -- but only while the core
+     * is *not* asleep, which is why platform_wdtStart() no longer asks for
+     * WDT_OPT_PAUSE_IN_SLEEP.  A tight loop with interrupts on is what gives
+     * the watchdog its chance, and it also keeps the console usable long
+     * enough to say why.
+     */
+    printk("C62: the SoC refused the reset, waiting for the watchdog\n");
+    for (;;) {
+        __asm__ volatile("nop");
+    }
 }
 
 /* ------------------------------------------------------------------------- */
@@ -333,6 +364,8 @@ static void bbSupervisor(void *p1, void *p2, void *p3)
      * exist yet, and a detector that fires before the radio is up is noise. */
     bb_resume();
 
+    bool hung = false;
+
     for (;;) {
         k_sleep(K_MSEC(BB_PERIOD_MS));
 
@@ -341,12 +374,19 @@ static void bbSupervisor(void *p1, void *p2, void *p3)
         /*
          * The watchdog is fed from here as well as from the device thread, and
          * that is the point: the supervisor is the only thread that cannot be
-         * waiting on anything the firmware could be stuck behind.  When it
-         * detects a hang it writes the record and reboots before the watchdog
-         * window closes; when *it* stops running, nothing feeds the watchdog
-         * and the hardware does what it does today.
+         * waiting on anything the firmware could be stuck behind.
+         *
+         * After a hang it is never fed again.  bb_supervise() has written the
+         * record and asked the platform for a reset; if that reset did not
+         * take -- the SoC refusing it, a flash write that wedged -- feeding the
+         * watchdog would be helping the radio stay dead with a frozen screen.
+         * Not feeding it is what turns the last hole in the recovery into a
+         * reboot a couple of seconds later.
          */
-        if (!bb_supervise(now))
+        if (bb_supervise(now))
+            hung = true;
+
+        if (!hung)
             platform_wdtFeed();
     }
 }
@@ -434,17 +474,12 @@ void arch_system_halt(unsigned int reason)
         bb_capture(BB_REASON_FATAL, (uint32_t)reason, k_uptime_get_32());
     }
 
-    sys_reboot(SYS_REBOOT_COLD);
-
     /*
-     * Only reached when the SoC did not take the reset.  Interrupts are locked
-     * here (z_fatal_error took them), so the hardware watchdog is the only way
-     * out: spin, and do not sleep -- a watchdog reset is not an interrupt and
-     * would never wake an idle core.
+     * The same way out a detected stall takes -- PA off, DSP stopped, SoC
+     * reset, and a watchdog-backed spin if the reset does not take -- so a
+     * crash and a freeze end in the same reboot.
      */
-    for (;;) {
-        __asm__ volatile("nop");
-    }
+    bb_platformReboot();
 }
 
 /* ------------------------------------------------------------------------- */

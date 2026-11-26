@@ -800,6 +800,7 @@ void radio_setOpmode(const enum opmode mode)
          * AGC of core/agc.h on the audio on its way to the speaker, installed
          * here because it is part of the receive path.
          */
+        bb_mark(BB_M_AIRBAND_LOAD);
         bk4819_setAmReceive(&c62_bk4819, (config->bandwidth == BW_25)
                                              ? BK4819_AM_WIDE
                                              : BK4819_AM_NARROW);

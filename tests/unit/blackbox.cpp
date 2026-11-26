@@ -212,12 +212,38 @@ TEST_CASE("A thread that stops beating is a stall after two seconds", "[bb]")
     REQUIRE((hangMask & (1U << BB_BEAT_RTX)) == 0);
     REQUIRE((hangMask & (1U << BB_BEAT_PROTO)) == 0);
     REQUIRE((hangMask & (1U << BB_BEAT_MAIN)) == 0);
+    REQUIRE((hangMask & (1U << BB_BEAT_KBD)) == 0);
 
-    /* The detector must not declare the same hang twice: it has already handed
-     * it to the platform, which reboots. */
+    /* And a hang is reported once: the platform has been handed a mask, it
+     * writes the record and resets, and the supervisor must not come back every
+     * pass to erase and rewrite that record (tests/unit/blackbox_hang.cpp
+     * checks the same thing through the default hook, which is what runs on
+     * the radio). */
     hangCalled = false;
-    bb_supervise(1000 + BB_STALL_MS + 100);
-    REQUIRE(hangCalled == true); /* still stuck, still reported */
+    REQUIRE(bb_supervise(1000 + BB_STALL_MS + 100) == false);
+    REQUIRE(hangCalled == false);
+}
+
+TEST_CASE("The keypad scanner has a beat, and a name", "[bb]")
+{
+    hangCalled = false;
+    hangMask = 0;
+
+    bb_suspend();
+    bb_clear();
+
+    /* The keypad is its own thread on the C62 (keyboard_c62.c).  It is watched
+     * like the rest: a matrix that stops being scanned is a radio where no key
+     * does anything, whatever the screen and the receiver are doing. */
+    bb_beat(BB_BEAT_KBD);
+
+    fakeNow = 30000;
+    bb_resume();
+    REQUIRE(bb_supervise(30000) == false);
+
+    REQUIRE(bb_supervise(30000 + BB_STALL_MS) == true);
+    REQUIRE(hangMask == (1U << BB_BEAT_KBD));
+    REQUIRE(std::string(bb_beatName(BB_BEAT_KBD)) == "kbd");
 }
 
 TEST_CASE("A thread that keeps beating is not a stall", "[bb]")
@@ -563,12 +589,14 @@ TEST_CASE("The dump is readable and names what it can", "[bb]")
     bb_mark(BB_M_MODE_ENTER);
     bb_tick(4300);
     bb_mark(BB_M_RADIO_CONF);
+    bb_tick(4350);
+    bb_mark(BB_M_DISP_DROP);
     bb_tick(4400);
     bb_mark(BB_M_HANG);
 
     uint8_t rec[BB_RECORD_SIZE];
     REQUIRE(bb_recordBuild(rec, sizeof(rec), 4500, BB_REASON_STALL,
-                           (1U << BB_BEAT_UI))
+                           (1U << BB_BEAT_UI) | (1U << BB_BEAT_KBD))
             == BB_RECORD_SIZE);
 
     std::vector<std::string> lines;
@@ -592,7 +620,7 @@ TEST_CASE("The dump is readable and names what it can", "[bb]")
     REQUIRE(find("C62 post-mortem: record v1"));
     REQUIRE(find("crc ok"));
     REQUIRE(find("reason: STALL"));
-    REQUIRE(find("[ui]"));
+    REQUIRE(find("[ui kbd]"));
     REQUIRE(find("uptime: 4500 ms"));
     REQUIRE(find("rtx=AM(10)"));
     REQUIRE(find("threads: 3"));
@@ -602,6 +630,7 @@ TEST_CASE("The dump is readable and names what it can", "[bb]")
     REQUIRE(find("breadcrumbs:"));
     REQUIRE(find("MODE_ENTER"));
     REQUIRE(find("RADIO_CONF"));
+    REQUIRE(find("DISP_DROP"));
     REQUIRE(find("HANG"));
 
     /* Every line has to fit the console and the log ring it travels in. */

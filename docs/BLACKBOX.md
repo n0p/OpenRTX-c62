@@ -35,6 +35,17 @@ Cada hilo que importa incrementa su contador una vez por vuelta:
 | `BB_BEAT_RTX` | primera línea de `rtx_task()` | 30 ms |
 | `BB_BEAT_PROTO` | bucle de `pcProtoMain()` (`pc_proto_c62.c`) | 1 ms |
 | `BB_BEAT_MAIN` | bucle de `main_thread()` | 5 ms |
+| `BB_BEAT_KBD` | hilo `kbd_thread` (`platform/drivers/keyboard/keyboard_c62.c`) | 20 ms |
+
+El teclado tiene hilo propio y por eso tiene latido propio. El escaneo de la
+matriz 4 × 5 (cuatro filas manejadas, cinco columnas leídas) lo hacía antes
+quien pedía las teclas —el hilo de UI cuarenta veces por segundo, el principal
+para el botón de encendido, el de RTX para el PTT—, y eso tenía dos
+consecuencias: tres hilos tocando los mismos GPIO, y la vida del teclado atada a
+la del hilo de UI. Un hilo que se queda en el volcado de pantalla se lleva por
+delante el PTT y el botón de encendido sin que nada lo diga; ahora el escáner es
+uno, los demás leen su última pasada, y su latido permite que el registro
+señale el teclado parado por sí solo (`detail` bit 4).
 
 `bb_beat()` es un incremento, una lectura de reloj y un store. Además refresca
 el reloj grueso que estampan las migajas.
@@ -80,10 +91,15 @@ Las marcas que hay hoy:
 |---|---|
 | arranque / apagado | `BOOT`, `TERM` |
 | cambio de modo (`rtx.cpp:switchMode`) | `MODE_ENTER`, `MODE_READY`, `MODE_FAIL`, `MODE_OFF` |
-| reconfiguración | `RTX_CONF`, `RADIO_CONF`, `RX_ON`, `TX_ON`, `TX_OFF` |
+| reconfiguración | `RTX_CONF`, `RADIO_CONF`, `RX_ON`, `TX_ON`, `TX_OFF`, `AIRBAND_LOAD` |
 | transmisión | `TX_ON`, `TX_OFF`, `TX_ABORT` |
 | rutas de audio (`core/audio_path.cpp`) | `AUDIO_OPEN`, `AUDIO_CLOSE` |
+| volcado de pantalla (`display_c62.c`) | `DISP_DROP` (una por racha, no por frame) |
 | antes de escribir el registro | `HANG` |
+
+Una marca nueva se añade **al final** del `enum bbMark`: el número es lo que
+queda grabado en el registro y el lector lo traduce con `bb_markName()`, así que
+insertar una en medio cambiaría el significado de los registros viejos.
 
 Para añadir una: un valor en `enum bbMark`, su nombre en `bb_markName()` y la
 llamada. Nada más.
@@ -145,8 +161,8 @@ si es un hilo que no se vigila) · `pc`, `lr`, `sp` (u32).
 Una migaja (4 B): `id << 24 | (ms & 0xFFFFFF)`.
 
 El `role` es lo que hace legible la tabla: los hilos vigilados se reconocen por
-su papel (`ui`, `rtx`, `proto`, `main`) aunque el sistema operativo los llame de
-otra forma. El nombre real se guarda igual (`CONFIG_THREAD_NAME`).
+su papel (`ui`, `rtx`, `proto`, `main`, `kbd`) aunque el sistema operativo los
+llame de otra forma. El nombre real se guarda igual (`CONFIG_THREAD_NAME`).
 
 ### 2.3 De dónde salen PC y LR
 
@@ -168,10 +184,18 @@ manejador, y ese es el que se guarda.
 
 ## 3. Qué pasa cuando se detecta
 
-1. `bb_capture()` construye el registro (instantánea del RTX, `state`, tabla de
+1. `bb_supervise()` deja de vigilar (`bbArmed = false`) y llama al hook de
+   plataforma. **Un atasco se informa una sola vez**: si el reinicio no prende,
+   el supervisor no vuelve cada 100 ms a borrar y reescribir el sector (diez
+   borrados por segundo borrarían el registro del cuelgue con el registro de la
+   reescritura).
+2. `bb_capture()` construye el registro (instantánea del RTX, `state`, tabla de
    hilos, migajas) y calcula el CRC.
-2. `bb_platformPersist()` borra el sector `0x6000` y escribe los 516 bytes.
-3. `sys_reboot(SYS_REBOOT_COLD)`: la radio vuelve a recepción sola.
+3. `bb_platformPersist()` borra el sector `0x6000` y escribe los 516 bytes.
+4. `bb_platformReboot()`: PA fuera (`radio_disableRtx()`), DSP parado
+   (`lsf_dsp_terminate()`) y `sys_reboot(SYS_REBOOT_COLD)`. Después, si el SoC
+   no toma el reinicio, un bucle apretado con las interrupciones abiertas —nunca
+   `k_cpu_idle()`— para que el perro guardián de hardware reinicie en su ventana.
 
 Al arrancar, `bb_c62_init()` (desde `platform_init_csk6()`, justo después de
 `nvm_init()`) lee el registro; si es válido lo imprime por el UART de consola
@@ -180,7 +204,26 @@ de validez (4 bytes, sin borrar el sector: un `1 -> 0` sobre el bloque de
 escritura es legal en NOR). El registro queda además en RAM para servirlo por el
 protocolo hasta el siguiente cuelgue.
 
-### 3.1 Fallo duro, no cuelgue
+### 3.1 El reinicio, extremo a extremo
+
+El camino se escribió como si «pedir el reinicio» bastara, y no basta: el 26 de
+noviembre de 2026 la radio registró un `STALL` a los 17,2 s y siguió viva hasta
+los 75 s, con la UI muerta y el protocolo contestando. Los tres puntos donde se
+puede quedar atascado el reinicio, y lo que hace este puerto con cada uno:
+
+| punto | qué puede pasar | qué se hace |
+|---|---|---|
+| el registro no se puede escribir | el sector está gastado o el driver de flash se atasca | se pide el reinicio **igual**: un post-mortem no puede ser el precio de volver a recibir |
+| el reinicio de la SoC no prende | `sys_reboot()` termina en un `k_cpu_idle()` eterno (el respaldo del kernel), y el perro guardián **pausado en reposo** no lo ve | el bucle del paso 4 no duerme, `platform_wdtStart()` ya no pide `WDT_OPT_PAUSE_IN_SLEEP`, y el supervisor deja de alimentarlo en cuanto hay atasco |
+| el DSP sigue corriendo | `dsp.h` lo dice en la declaración de `lsf_dsp_terminate()`: «un reset del núcleo de aplicación deja el DSP corriendo». Y el comentario de `platform_terminate()` añade lo que se ve después: con el cargador puesto el chip no se apaga con el reset, y la interrupción del UART del DSP es lo primero con lo que tropieza el arranque siguiente | `lsf_dsp_terminate()` antes de `sys_reboot()`, igual que en el apagado |
+
+Nada de esto toma un cerrojo ni escribe flash *después* del registro: el PA y el
+DSP son escrituras de registro, `sys_reboot()` toma las interrupciones y nada
+más, y la única escritura de flash del camino es la del propio registro, que ya
+ocurrió. Si algo de eso se atasca, el camino que queda es el perro guardián, que
+es justo el que el supervisor deja de alimentar en ese instante.
+
+### 3.2 Fallo duro, no cuelgue
 
 Un *hard fault*, un `assert` o un desbordamiento de pila no son un atasco: el
 hilo no se para, se muere. El puerto CSK6 instala su propio
@@ -192,10 +235,12 @@ defecto deja la radio muerta hasta el mando de volumen.
 
 El nuevo `arch_system_halt()` escribe el registro (`reason = FATAL`, `detail` =
 motivo de Zephyr, PC/LR leídos del marco de excepción que el hardware apiló en
-el PSP del hilo) y reinicia. Antes suspende al supervisor, y el kernel llama al
-hook con las interrupciones cerradas: si la escritura se atasca (un fallo dentro
-del driver de flash es posible), el perro guardián de hardware reinicia igual y
-el registro es el del cuelgue anterior.
+el PSP del hilo) y reinicia **por el mismo camino que un atasco detectado**
+(`bb_platformReboot()`: PA fuera, DSP parado, reset y respaldo por perro
+guardián). Antes suspende al supervisor, y el kernel llama al hook con las
+interrupciones cerradas: si la escritura se atasca (un fallo dentro del driver
+de flash es posible), el perro guardián de hardware reinicia igual y el registro
+es el del cuelgue anterior.
 
 ---
 
@@ -260,8 +305,10 @@ tools/cps/blackbox.py -f volcado_0x2b6000.bin
 ## 5. Cómo se interpreta
 
 * `reason: STALL` con `detail` = máscara: los bits dicen qué latido se paró
-  (bit0 ui, bit1 rtx, bit2 proto, bit3 main). `[rtx]` significa que el hilo de
-  radio dejó de dar vueltas.
+  (bit0 ui, bit1 rtx, bit2 proto, bit3 main, bit4 kbd). `[rtx]` significa que el
+  hilo de radio dejó de dar vueltas. Los cinco son hilos distintos: `[kbd]` a
+  secas apunta a la matriz del teclado o a sus GPIO, y `[ui kbd]` es algo que se
+  lleva por delante a los dos a la vez.
 * `state` de cada hilo: `pended` es un hilo esperando algo (un mutex, una cola,
   un stream); `ready` en el hilo parado suele ser un bucle sin dormir.
 * `free` muy bajo (o 0) en un hilo es un desbordamiento de pila a punto de
@@ -302,6 +349,11 @@ tabla de hilos en algo legible (nombre, estado, mínimo histórico de pila libre
 con `k_thread_stack_space_get()`). Sin ellas el registro sigue escribiéndose,
 con nombres vacíos y sin mínimo histórico.
 
+El hilo del teclado (`kbd_thread`, 1 KiB de pila) no es de la caja negra: llegó
+con el arreglo de la congelación de la banda aérea, porque el latido del teclado
+exige un hilo que lo merezca (docs/RX_AIRBAND.md §9). Cuesta 1 KiB de RAM más
+~20 B de TCB, y ahorra los dos hilos que antes escaneaban la matriz a la vez.
+
 ---
 
 ## 7. Límites
@@ -311,8 +363,14 @@ con nombres vacíos y sin mínimo histórico.
   registro: el `ap_wdt` reinicia a ciegas, como antes.
 * Si el cuelgue está dentro del driver de flash, la escritura del registro no
   completa: el CRC lo delata y el reinicio lo da el perro guardián.
+* **El reinicio no es una garantía del software, es una cadena de tres.** El
+  reset de la SoC, si el SoC lo toma; si no, el bucle sin dormir del paso 4; si
+  no, el `ap_wdt` sin alimentar y **sin pausa en reposo**. Lo que sí está
+  garantizado por código —y comprobado en el host— es que no se toma ningún
+  cerrojo ni se escribe flash después del registro: los tres eslabones dependen
+  del hardware, no de un hilo que pueda estar atascado.
 * El registro es **uno**: el siguiente cuelgue pisa al anterior. Se lee al
-  arrancar justo por eso.
+  arrancar justo por eso. Un atasco se informa una vez y no se reescribe.
 * Un hilo que se pasa 2 s dentro de una sola operación —una escritura grande de
   canales desde el CPS, por ejemplo— se considera colgado. Es deliberado: un
   hilo que no da una vuelta en 2 s no está sirviendo a nadie, y las escrituras
@@ -332,7 +390,7 @@ meson setup build_linux && meson compile -C build_linux blackbox_test
 meson test -C build_linux "Blackbox Test"     # o la suite entera
 ```
 
-`tests/unit/blackbox.cpp` (10 casos, 132 aserciones):
+`tests/unit/blackbox.cpp` (11 casos, 140 aserciones):
 
 | caso | qué comprueba |
 |---|---|
@@ -344,5 +402,17 @@ meson test -C build_linux "Blackbox Test"     # o la suite entera
 | captura sin flash | si la escritura falla, el registro se construyó igual (lo que ve el banco) |
 | lectura al arrancar | flash falsa con semántica NOR: vacía no hay registro, tras el cuelgue se lee, la invalidación son 4 bytes sin borrar el sector, y no se sirve dos veces |
 | escritura a medias | 200 de 516 bytes: registro inválido, no un registro equivocado |
-| texto | el volcado nombra motivo, hilos, PC y migajas; ninguna línea pasa de 120 caracteres |
+| texto | el volcado nombra motivo, hilos, PC y migajas (con `DISP_DROP` y `[ui kbd]` entre ellas); ninguna línea pasa de 120 caracteres |
 | sin hilos ni migajas | sigue renderizando |
+| teclado vigilado | el latido del escáner de teclado para por sí solo: máscara `1<<4` y nombre `kbd` |
+
+`tests/unit/blackbox_hang.cpp` (4 casos, 44 aserciones) prueba el camino que el
+otro fichero sustituye: la reacción **por defecto** a un atasco, la que corre en
+la radio.
+
+| caso | qué comprueba |
+|---|---|
+| atasco → registro → reinicio | el registro se escribe **antes** de pedir el reinicio, con `STALL`, la máscara y el uptime del instante |
+| escritura imposible | si la flash falla, el reinicio se pide igual |
+| un atasco, un registro | veinte pasadas más después del reinicio fallido: ni una escritura más, ni un reinicio más |
+| teclado vigilado | el `detail` del registro nombra el teclado cuando es el teclado el que se para |

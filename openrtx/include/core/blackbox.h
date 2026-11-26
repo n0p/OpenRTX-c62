@@ -139,12 +139,17 @@ extern "C" {
  * Threads whose liveness is watched.  The record's thread table names them
  * through their role, so a reader does not depend on how the platform names
  * its threads.
+ *
+ * The value is also the bit in the record's stall mask, so a new beat is
+ * appended, never inserted: a record written by an older firmware has to keep
+ * reading as what it was.
  */
 typedef enum bbBeat {
     BB_BEAT_UI = 0, /**< the user interface thread: keys, screen, FSM    */
     BB_BEAT_RTX,    /**< the radio thread: modes, chip, audio streams    */
     BB_BEAT_PROTO,  /**< the PC protocol transport thread                */
     BB_BEAT_MAIN,   /**< the device thread: state, watchdog, supervise   */
+    BB_BEAT_KBD,    /**< the keypad scanner thread: the matrix, at 50 Hz  */
     BB_BEAT_COUNT
 } bbBeat_t;
 
@@ -179,7 +184,7 @@ typedef enum bbMark {
     BB_M_TX_ABORT,     /**< rtx_supervise() had to unkey                 */
     BB_M_AUDIO_OPEN,   /**< audioPath_request() opened a path            */
     BB_M_AUDIO_CLOSE,  /**< audioPath_release() closed one               */
-    BB_M_AIRBAND_LOAD, /**< the airband DSP tables were (re)loaded       */
+    BB_M_AIRBAND_LOAD, /**< radio_setOpmode(): the AM profile was written  */
     BB_M_WFM_ENTER,    /**< the broadcast FM tuner was started           */
     BB_M_SETTINGS,     /**< settings were written                        */
     BB_M_CHAN_LOAD,    /**< a stored channel was applied to the radio    */
@@ -187,6 +192,7 @@ typedef enum bbMark {
     BB_M_BACKUP,       /**< the internal backup of the stores was written */
     BB_M_RESTORE,      /**< the internal backup was restored             */
     BB_M_HANG,         /**< dropped just before the record was written   */
+    BB_M_DISP_DROP,    /**< the screen dropped a frame on its deadline    */
     BB_M_COUNT
 } bbMark_t;
 
@@ -268,8 +274,15 @@ void bb_resume(void);
  * Compares every watched beat with the value it had at the previous pass: a
  * counter that has not moved for BB_STALL_MS is a stall.  Beats that have
  * never been stamped (thread not in this build, not started yet) are not
- * watched.  When something is stuck it calls the platform hook, which writes
- * the record and reboots; this function does not return in that case.
+ * watched.
+ *
+ * A stall is reported **once**.  The pass that finds one stops watching before
+ * it calls the platform hook: the hook writes the record and resets the radio,
+ * and if the reset does not take -- the SoC refusing it, a platform that
+ * cannot reset, a test -- the supervisor must not come back every 100 ms to
+ * erase the record's flash sector and write it again.  One hang, one record,
+ * one reset attempt; the hardware watchdog is the fallback, not a rewrite
+ * loop.
  *
  * @param nowMs: monotonic clock, milliseconds.  Passed in, not read, so the
  *               host test can drive it deterministically.
