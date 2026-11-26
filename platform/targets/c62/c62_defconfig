@@ -52,3 +52,22 @@ CONFIG_REBOOT=y
 CONFIG_THREAD_MONITOR=y
 CONFIG_THREAD_NAME=y
 CONFIG_INIT_STACKS=y
+
+# ---------------------------------------------------------------------------
+# Time slicing
+#
+# The RTX thread is a loop without a sleep: it yields only when something
+# inside it blocks. The UI thread runs at the same priority, so with a zero
+# slice -- the default -- whichever of the two is running keeps the CPU, and a
+# mode whose update never blocks (AM's squelch path is one) freezes the screen
+# while the radio keeps receiving and keeps answering the cable. That is the
+# freeze the post-mortem recorded as STALL [ui] on an RTX thread spinning in
+# the clock: the UI was never scheduled, not stuck.
+#
+# A slice of 5 ms is the kernel rotating two threads of equal priority, not a
+# change in how either of them is written: the RTX loop keeps its tight
+# timing between slices, and the UI gets the CPU at least every 5 ms.
+# ---------------------------------------------------------------------------
+CONFIG_TIMESLICING=y
+CONFIG_TIMESLICE_SIZE=5
+CONFIG_TIMESLICE_PRIORITY=0

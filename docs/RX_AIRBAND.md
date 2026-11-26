@@ -409,6 +409,27 @@ actividad funcionando, que fue lo que permitió localizarlo—. Esta sección es
 ruta completa de la conmutación, la traza que dio la caja negra, lo que se
 arregló y el límite que queda.
 
+### La causa, medida en la radio
+
+La caja negra lo dijo sin ambigüedad: `STALL [ui]` con el hilo de RTX **vivo**,
+girando en `sys_clock_cycle_get_32`, y el de UI en estado *queued* —en la cola de
+listos, sin que nadie lo elija—. No era un semáforo: era el planificador.
+
+`rtx_threadFunc()` es un bucle sin espera: llama a `rtx_task()` una y otra vez y
+solo cede cuando algo de dentro se bloquea. El hilo de UI corre **a la misma
+prioridad** (14), y la imagen venía con `CONFIG_TIMESLICE_SIZE=0`, que en Zephyr
+significa que dos hilos de igual prioridad no se rotan nunca: el que está
+corriendo sigue corriendo. En FM el camino del modo se bloquea en algún punto y
+la UI recupera el CPU; en AM el `update()` de la banda aérea no se bloquea, así
+que el RTX se queda el procesador para siempre. Lo que se veía como «la radio se
+cuelga en AM» era la pantalla y el teclado sin turno.
+
+El volcado con plazo y la caja negra no eran el arreglo de esto —el arreglo es
+`CONFIG_TIMESLICE_SIZE=5`: el kernel rota dos hilos de la misma prioridad, el RTX
+conserva su ritmo entre turnos y la UI recibe CPU cada 5 ms como mucho—, pero sin
+ellos no se habría sabido: el registro nombra al hilo parado y su estado, que es
+lo que descartó el panel como culpable.
+
 ### La secuencia
 
 La pide la UI (`state.channel.mode`) y la ejecuta el hilo de RTX, que es el dueño
