@@ -489,9 +489,15 @@ static bool inboxKey(kbd_msg_t *msg, bool sent)
         const struct message *r = listAt(sent, mg.sel);
         if (r != NULL) {
             mg.id = r->id;
-            if (!sent && ((r->flags & MSG_FLAG_UNREAD) != 0))
-                messaging_markReadId((int)r->id);
-            state.ui_screen = MSG_VIEW;
+            if (sent) {
+                /* The bar says STATUS: an outbound entry opens the delivery
+                   page (state, attempts), not the text it carries. */
+                state.ui_screen = MSG_STATUS;
+            } else {
+                if ((r->flags & MSG_FLAG_UNREAD) != 0)
+                    messaging_markReadId((int)r->id);
+                state.ui_screen = MSG_VIEW;
+            }
         }
     } else if (msg->keys & KEY_F1) {
         /* Switch folder */
@@ -694,8 +700,10 @@ static void drawFolder(bool sent)
         gfx_print((point_t){ CONFIG_SCREEN_WIDTH / 2, UI_LIST_TOP + 40 },
                   FONT_SIZE_5PT, TEXT_ALIGN_CENTER, color_white,
                   "P1 switches folder");
-        ui_hints_draw(&(ui_hints_t){ sent ? "STATUS" : "OPEN", "INBOX",
-                                      sent ? "CANC" : "REPLY", "BACK" });
+        /* An empty folder has nothing for green to open: the bar hides it
+           instead of offering a key with no target (docs/UI.md, hints) */
+        ui_hints_draw(&(ui_hints_t){ sent ? NULL : "OPEN", "INBOX",
+                                      NULL, "BACK" });
         return;
     }
 
@@ -728,8 +736,20 @@ static void drawFolder(bool sent)
                   sent ? msg_service_statusText(r->state) : tpName(r->transport));
     }
 
-    ui_hints_draw(&(ui_hints_t){ sent ? "STATUS" : "OPEN", "SWAP",
-                                  sent ? "CANC" : "REPLY", "BACK" });
+    /*
+     * "CANC" only where it can do something: an entry that is already on the
+     * air (or delivered) cannot be recalled, and msg_service_cancel() refuses
+     * it. A bar that offers the key anyway is the defect this replaced.
+     */
+    const struct message *selMsg = sent ? listAt(true, mg.sel) : NULL;
+    const bool canCancel = (selMsg != NULL)
+                        && ((selMsg->state == MSG_STATE_QUEUED)
+                            || (selMsg->state == MSG_STATE_SENDING));
+
+    ui_hints_draw(&(ui_hints_t){ sent ? "STATUS" : "OPEN",
+                                  sent ? NULL : "SWAP",
+                                  sent ? (canCancel ? "CANC" : NULL) : "REPLY",
+                                  "BACK" });
 }
 
 static void drawView(void)
@@ -863,10 +883,16 @@ static void drawStatus(void)
                   FONT_SIZE_5PT, TEXT_ALIGN_LEFT, color_white, "%s", lines[i]);
     }
 
+    /* Same rule as the sent folder: the cancel key appears only while the
+       message can still be cancelled (msg_service_cancel refuses the rest) */
+    const bool cancellable = (r->state == MSG_STATE_QUEUED)
+                          || (r->state == MSG_STATE_SENDING);
+
     if (mg.msg[0] != '\0' && getTick() < mg.msgUntil)
         ui_hints_draw(&(ui_hints_t){ mg.msg, NULL, NULL, NULL });
     else
-        ui_hints_draw(&(ui_hints_t){ "BACK", NULL, "CANCEL", "BACK" });
+        ui_hints_draw(&(ui_hints_t){ "BACK", NULL,
+                                      cancellable ? "CANCEL" : NULL, "BACK" });
 }
 
 void ui_msgs_draw(uint8_t screen)

@@ -2143,7 +2143,7 @@ void ui_updateFSM(bool *sync_rtx)
          * did not mean) and the popup, which is opened from inside it, has
          * already had its turn above.
          */
-        if (state.ui_screen == SPECTRUM)
+        if ((state.ui_screen == SPECTRUM) && (ui_channels_isOpen() == false))
         {
             if (ui_spectrum_handleEvent(&msg, sync_rtx))
             {
@@ -2886,6 +2886,8 @@ void ui_updateFSM(bool *sync_rtx)
                         vp_replayLastPrompt();
                     f1Handled = true;
                 }
+                else if(msg.keys & KEY_ENTER)
+                    _ui_menuBack(MENU_TOP);   /* green is "OK" on the bar */
                 else if(msg.keys & KEY_ESC)
                     _ui_menuBack(MENU_TOP);
                 break;
@@ -3001,6 +3003,8 @@ void ui_updateFSM(bool *sync_rtx)
                     _ui_menuUp(info_num);
                 else if(msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
                     _ui_menuDown(info_num);
+                else if(msg.keys & KEY_ENTER)
+                    _ui_menuBack(MENU_TOP);   /* green is "OK" on the bar */
                 else if(msg.keys & KEY_ESC)
                     _ui_menuBack(MENU_TOP);
                 break;
@@ -3013,6 +3017,8 @@ void ui_updateFSM(bool *sync_rtx)
                 }
                 else if(msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
                     ui_state.menu_selected += 1;
+                else if(msg.keys & KEY_ENTER)
+                    _ui_menuBack(MENU_TOP);   /* green is "OK" on the bar */
                 else if(msg.keys & KEY_ESC)
                     _ui_menuBack(MENU_TOP);
                 break;
