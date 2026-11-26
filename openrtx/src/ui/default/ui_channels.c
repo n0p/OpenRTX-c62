@@ -17,6 +17,9 @@
 #include "ui/ui_channels.h"
 #include "ui/ui_hints.h"
 #include "ui/ui_layout.h"
+#ifdef UI_CAPTURE
+#include "core/gfx_capture.h"
+#endif
 
 /*
  * In-radio channel editor.
@@ -1042,8 +1045,11 @@ static void drawEditor(void)
             uint16_t x1 = (uint16_t)(vp.x + prefixWidth(FONT_SIZE_5PT, value,
                                                         (uint8_t)(cursor + 1)));
             point_t upos = { (int16_t)x0, (int16_t)(y + CH_FIELD_H - 3) };
-            gfx_drawRect(upos, (uint16_t)((x1 > x0) ? (x1 - x0) : 5), 1,
-                         color_white, true);
+            uint16_t uw = (uint16_t)((x1 > x0) ? (x1 - x0) : 5);
+            gfx_drawRect(upos, uw, 1, color_white, true);
+#ifdef UI_CAPTURE
+            gfx_capture_caret(upos.x, upos.y, uw);
+#endif
         }
 
         row++;

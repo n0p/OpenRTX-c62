@@ -96,6 +96,14 @@ void gfx_capture_header(const char *title, const char *right)
     copy_text(building->right, sizeof(building->right), right);
 }
 
+void gfx_capture_caret(int16_t x, int16_t y, uint16_t w)
+{
+    building->caret = true;
+    building->caret_x = x;
+    building->caret_y = y;
+    building->caret_w = w;
+}
+
 void gfx_capture_selection(int16_t top, uint8_t row_h, bool filled)
 {
     building->selection = true;
