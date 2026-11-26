@@ -54,6 +54,15 @@
  */
 #define THREAD_STACK 7168
 #endif
+/*
+ * The measurement behind the number, as a rule the build enforces: 4 096 B
+ * overflowed with the PC inside dmr_rfft256 (1 KiB of float scratch on the
+ * stack) and the LR in synth_unvoiced.  Anything smaller than this is a radio
+ * that reboots when it tries to speak.
+ */
+_Static_assert(THREAD_STACK >= 7168,
+               "the DMR synthesis needs 7 KiB: dmr_rfft256 + synth_unvoiced");
+
 #define STATS_MS 10000
 
 /*
