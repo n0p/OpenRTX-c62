@@ -50,7 +50,9 @@ extern "C" {
 #include "protocols/DMR/DmrStatus.h"
 #include "protocols/DMR/dmr_demod.h"
 #include "protocols/DMR/dmr_fec.h"
+#include "protocols/DMR/dmr_glue.h"
 #include "protocols/DMR/dmr_proto.h"
+#include "protocols/DMR/dmr_sms.h"
 #include "protocols/DMR/dmr_tx.h"
 #include "protocols/DMR/dmr_voice.h"
 }
@@ -577,4 +579,57 @@ TEST_CASE("A miscorrected colour code does not overwrite the one on the air",
         highest = top;
     }
     REQUIRE(highest == kCc + 4);
+}
+
+/*
+ * Packet data: a text message (the same builder the SMS tests use) put on the
+ * air as a repeater's bursts, with one byte of its last block wrong.  The
+ * status carries the two figures the stats page shows - the data blocks that
+ * had a CRC and those that passed it - so a failed CRC-32 is visible there,
+ * and a passed one cannot be counted as failed.
+ */
+TEST_CASE("A DMR packet whose CRC fails is not counted as a good one",
+          "[dmr][rx]")
+{
+    for (int broken = 1; broken >= 0; broken--) {
+        resetReceiver();
+
+        constexpr int kMaxBursts = 32;
+        uint8_t dt[kMaxBursts];
+        uint8_t bytes[kMaxBursts][12];
+        const int n = dmrSms_build(kTg, true, DMR_SMS_ETSI_IP, "hola", kSrc,
+                                   dt, bytes, kMaxBursts);
+
+        REQUIRE(n > 2);
+        if (broken) {
+            /* A payload byte of the last block: BPTC still decodes it, so
+             * what fails is the packet's CRC-32 and nothing else */
+            bytes[n - 1][6] ^= 0x5Au;
+        }
+
+        Gen g;
+        uint8_t burst[kBurstSyms];
+
+        dmr_mod_init(&g.mod, kTxLevel, true);
+        for (int i = 0; i < n; i++) {
+            for (int ts = 1; ts <= 2; ts++) {
+                if (ts != 1) {
+                    idleBurst(burst, kCc);
+                    appendSlot(g, burst, true, ts, "idle");
+                    continue;
+                }
+                dmr_tx_block(kCc, dt[i], bytes[i], burst);
+                putSync(burst, kSyncBsData);
+                appendSlot(g, burst, true, ts, "data");
+            }
+        }
+
+        const struct dmrStatus st = feed(g.s).back().st;
+
+        REQUIRE(st.crcChecks > 0);
+        if (broken)
+            REQUIRE(st.crcOk == 0);
+        else
+            REQUIRE(st.crcOk == st.crcChecks);
+    }
 }
