@@ -48,8 +48,9 @@ openrtx/src/protocols/P25/
 openrtx/src/rtx/OpMode_P25.cpp
 openrtx/include/rtx/OpMode_P25.hpp
 tests/host/p25_phy_host/    the firmware PHY on a host, on the same captures
-tests/unit/p25_phy.cpp      frame-cut test on a synthetic C4FM frame
-tests/unit/p25_frame_bits.h one real LDU1 as bits, for that test
+tests/unit/p25_phy.cpp      frame-cut tests on synthetic C4FM frames
+tests/unit/p25_frame_bits.h one real LDU1 as bits, for those tests
+tests/unit/p25_tsdu_bits.h  one real TSDU (720 bits) as bits
 work/dsp-probe/p25phy/      bare-metal cost harness (QEMU mps2-an505)
 ```
 
@@ -69,10 +70,16 @@ work/dsp-probe/p25phy/      bare-metal cost harness (QEMU mps2-an505)
   TSBK: three 196-bit trellis blocks, CRC-16 masked 0xFFFF, one per frame
 ```
 
-A frame is 1728 bits (864 symbols, 180 ms): 48 sync bits, a 64-bit NID, and a
-24-symbol status field inside both. Frames arrive back to back, so once the
-sync is found the next one is predicted; the prediction is checked over +-8
-samples and the search falls back to a scan of the ring when it fails.
+A voice frame is 1728 bits (864 symbols, 180 ms): 48 sync bits, a 64-bit NID,
+and a 24-symbol status field inside both. Frames arrive back to back, so once
+the sync is found the next one is predicted; the prediction is checked over
++-8 samples and the search falls back to a scan of the ring when it fails.
+
+Not every P25 frame is 864 symbols, and the demodulator cuts each one to the
+length its own data unit announces: 864 for an LDU1/LDU2 (or a PDU), 396 for an
+HDU, **360 for the TSDU of a control channel**, 216 for a TDULC and 72 for a
+TDU. `p25_frame_symbols()` in `P25Defs.c` is that table, and *The frame cut*
+below is why it exists.
 
 ## The defect that kept the firmware from decoding
 
@@ -125,6 +132,101 @@ metric that collapses at a bad phase, so a true sync that only the *interpolated
 phase would have saved was rejected at the sample phase first. The gate now runs
 on the interpolated phases like in the prototype.
 
+## The frame cut: a fixed 864-symbol window
+
+With the sync and the sampling phase right, the demodulator still cut every
+frame to the 864 symbols of a voice LDU, whatever the NID said that frame was.
+That is the right window for voice and the wrong one for everything else, and
+the control channel is where it shows: a TSDU is 720 bits, 360 symbols.
+
+Instrumented (`p25Phy_syncTries()`, `p25Phy_gridMisses()` and the span in the
+frame struct), on the captures of the repo, the old code was:
+
+| capture | frame on the air | window cut | frames | grid misses | candidates/frame | host cpu/frame |
+|---|---|---|---|---|---|---|
+| voice, 5.4 s | 864 (LDU) | 864 | 31 | 9 | 338.9 | 688 us |
+| control, 54.4 s | **360 (TSDU)** | **864** | 725 | **725** | 374.9 | 551 us |
+| 20 s of contiguous LDUs | 864 | 864 | 112 | 1 | 53.8 | 404 us |
+
+Where the window went wrong, in numbers, for the TSDU case:
+
+* the frame is 360 symbols and the window 864, so **504 symbols of every window
+  (58 %) belonged to the frames that follow the frame** - their sync, their NID
+  and part of their payload were sliced into the same `bits[]`;
+* the per-frame DC and outer level were fitted over 2.4 frames, two of whose
+  sync fields are all outer levels, so the levels were measured on a different
+  stretch of air than the one being sliced;
+* the grid predicted the next sync at `start + 864 symbols`, i.e. **504 symbols
+  (140 %) past where it is**, so on a control channel the prediction could never
+  be right: **725 grid misses in 725 frames**;
+* every miss fell back to scanning the ring one candidate per symbol, which is
+  where the 375 candidates per decoded frame came from.
+
+The fix is the frame's own structure, not a shifted offset. The sync and the NID
+are 57 symbols for every data unit (the NID's 64 bits carry one status symbol,
+which is why the payload of a TSDU starts at symbol 57), so they are sliced
+first, on the levels of the sync field alone: that field is all outer levels and
+sign balanced, so it fixes DC and outer level by itself. The NID then names the
+data unit, `p25_frame_symbols()` turns that into a length, and the rest of the
+frame is sliced to it, with the levels refitted over the frame and nobody
+else's symbols in the window. The grid advances by the same length. A frame
+longer than what the ring holds yet is left where it is and cut on a later push,
+instead of reading the samples the ring held one wrap ago.
+
+Two more defects the same instrument turned up, both in the same place:
+
+* the grid was predicted from the integer ring position the candidate search
+  started at, not from the phase the sync was actually found at. That error (up
+  to a symbol) ate most of the +-8 sample window that exists for the symbol
+  clock's own drift, so a voice frame whose phase sat late was re-acquired by
+  hand: 9 of 31 frames on the voice capture. Predicting from the interpolated
+  phase leaves 1 - the frame after the last one, which is genuinely absent.
+* `p25Phy_reset()` started the search at the bottom of the ring, a negative
+  position with nothing written in it, and walked forward from there: every
+  acquisition paid a few thousand candidates that all interpolated sample 0.
+  Starting at 0 took the voice capture from 10505 candidates to 1217.
+
+After the fix, same captures, same instrument, median of seven runs on the host:
+
+| capture | frames | grid misses | candidates/frame | host cpu/frame |
+|---|---|---|---|---|
+| voice, 5.4 s | 31 | 1 | **39.3** | **418 us** (-39 %) |
+| control, 54.4 s | 725 | **1** | **5.3** | **158 us** (-71 %) |
+| 20 s of contiguous LDUs | 112 | 1 | 19.6 | 372 us (-8 %) |
+
+The host figures are x86-64 CPU time per decoded frame (`tests/host/p25_phy_host`
+timing `p25Phy_push()` with `CLOCK_PROCESS_CPUTIME_ID`), median of seven runs of
+each binary interleaved on an otherwise idle machine; run to run they spread by
++-10 % on this host, so the ratio is the number to read, not the absolute. They
+are a ratio, not a budget - the M33 numbers are the QEMU ones under *Cost*. What did **not** change is the payload: the voice
+capture still gives NAC 0x293, 15/15 link controls and 261/261 IMBE frames with
+zero corrected bits, byte for byte the same as the reference receiver's own
+dump of the same file, and the control channel still gives 725/725 TSBK blocks
+with a good CRC-16.
+
+**Phase and level.** The cut does not depend on either, and the old and new
+chains were run side by side on the same voice capture, resampled and
+re-levelled:
+
+| capture variant | frames before / after | IMBE frames | corrected bits |
+|---|---|---|---|
+| as recorded | 31 / 31 | 261 | 0 |
+| clipped at 2x amplitude | 29 / 29 | 261 | 1197 |
+| scaled to 0.25 | 31 / 31 | 261 | 0 |
+| + noise, 24 dB | 31 / 31 | 261 | 0 |
+| + noise, 20 dB | 31 / 31 | 261 | 15 |
+| + noise, 16 dB | 31 / 31 | 261 | 85 |
+| + noise, 12 dB | 31 / 31 | 261 | 371 |
+| + noise, 8 dB | 24 / 24 | 207 | 1046 |
+
+Identical in every row, which is the point: the frame length is not a tuning
+constant that trades robustness for cost. One thing that measurement did force:
+on a marginal signal 24 sync symbols are a thin estimate of DC and outer level
+for the first pass, so when the NID does not decode there the cut is retried
+with the levels the previous frame settled on (864 symbols of measurement on
+the same channel). That is what keeps the 8 dB row at 24 frames instead of 23;
+it costs a second BCH decode on candidates that were about to fail anyway.
+
 ## Evidence
 
 Firmware PHY (`tests/host/p25_phy_host`), fed the same files as the prototype:
@@ -136,10 +238,20 @@ Firmware PHY (`tests/host/p25_phy_host`), fed the same files as the prototype:
 | control channel (`P25_C4FM-CC_BEE0014C_IF.wav`, discriminator converted to 48 kHz) | **725/725 TSBK blocks with 725/725 CRC-16 good**, NAC 0x140 |
 | 20 s of contiguous frames built from one LDU1 (`gen_stream.py`) | 112/112 frames, 1008/1008 IMBE frames, 0 corrected bits |
 
-The `syncErrors` counter in the frame struct sums the sign errors found in the
-sync fields (18 over the 36 frames of the voice capture): a diagnostic, not a
-defect — a frame whose sync has a sign error still slices bit-exactly, which is
-why the IMBE and link-control error counts above are what the assertions use.
+The `syncErrors` counter in the frame struct is the sign errors found in the
+sync field at the phase the frame was actually cut at: 0 over the 31 frames of
+the voice capture since the cut lands on the eye (it was 18 while the grid was
+predicted from the integer start position and frames were re-acquired by hand).
+It is a diagnostic, not a defect — a frame whose sync has a sign error still
+slices bit-exactly, which is why the IMBE and link-control error counts above
+are what the assertions use.
+
+**Zero tolerance against the reference.** The firmware's dump of the voice
+capture (261 IMBE parameter sets of 11 bytes, 15 link controls of 9 bytes) is
+byte-identical to `work/p25-rx`'s own `--imbe-out` dump of the same file: 0
+differences over 261 frames, and the link control bytes are the same 9 bytes on
+all 15 LDU1s. Both directions of that comparison are reproducible with
+`--imbe-hex` on the harness and `--imbe-out` on the prototype.
 
 The prototype reports 30 frames on the voice capture (it stops at the last LDU2
 and misses the terminator); the firmware finds the TDU as well. On the control
@@ -155,13 +267,28 @@ symbol period (with a residual carrier of 0.15 of the outer level and the
 amplitude of a real discriminator), fed in 20 ms blocks, and the PHY has to
 return the frame bit for bit: NAC 0x293, LDU1, talkgroup 1, source 1, nine IMBE
 codewords with zero corrected bits and zero corrected LC symbols. That is the
-regression for the defect above: four phases in five used to be lost. The test
-also checks an inverted discriminator and that noise produces no frame.
+regression for the sync defect above: four phases in five used to be lost. The
+test also checks an inverted discriminator and that noise produces no frame.
+
+Three more cases in the same file pin the frame cut:
+
+* the link control (9 bytes) and the nine IMBE parameter sets (9 x 11 bytes) of
+  that frame have to be exactly the ones the reference receiver decodes from the
+  same off-air LDU1 - zero tolerance, 108 bytes, at all 40 phases;
+* a real TSDU (`tests/unit/p25_tsdu_bits.h`, 720 bits, 360 symbols, NAC 0x140)
+  has to come out with `spanSymbols == 360` and a good TSBK CRC at ten phases
+  over the symbol period;
+* a train of 12 TSDUs and a train of 8 LDUs have to keep the grid: at most one
+  grid miss (the frame after the last one, which is not there) and at most 200
+  candidate positions over the whole train. Cutting 864 symbols for a TSDU gave
+  one miss per frame and 4650 candidates; the fixed code measures 126 for the
+  TSDUs and 132 for the voice train.
 
 The steady-state capture is built by `tests/host/p25_phy_host/gen_stream.py`,
 which tiles one real LDU1 back to back at 4800 symbols/s: the demodulator has to
 hold its grid for the whole file, which is what a live control channel looks
-like.
+like. It is also where the 20 s row of the tables under *The frame cut* comes
+from.
 
 FEC: the tables were ported from the prototype without being rewritten, and the
 exhaustive round-trip self-test that checks them lives there
@@ -177,13 +304,22 @@ RS symbol corrected, 725 trellis blocks with a good CRC-16).
 ## Cost
 
 QEMU `mps2-an505` (Cortex-M33, `-O2`, the plugin counts executed instructions
-per second of audio; `work/dsp-probe/p25phy`):
+per second of audio; `work/dsp-probe/p25phy`), measured before the frame cut was
+taken from the frame structure:
 
 | scenario | instructions per second of audio | per 180 ms frame | of 300 MHz at 1 IPC |
 |---|---|---|---|
 | synced, contiguous frames (steady state) | 23.6 M | 4.25 M | **7.9 %** |
 | noise, no signal (the search runs all the time) | 89.1 M | 16.0 M | 29.7 % |
-| the control-channel capture (frames 360 symbols apart, so the grid misses and the scan runs every frame) | 93.5 M | 16.8 M | 31.2 % |
+| the control-channel capture (frames 360 symbols apart, so the grid missed and the scan ran every frame) | 93.5 M | 16.8 M | 31.2 % |
+
+The control-channel row is what the frame cut fixed: with the grid holding
+(1 miss in 725 frames) that capture stops paying for the ring scan and lands
+on the steady-state row instead of the three-times-the-steady-state one. The
+host measures the ratio directly, 551 us to 158 us per decoded frame
+(**-71 %**); the QEMU row was not re-run here because the probe needs the
+cross toolchain under QEMU, so the figure to quote for the M33 is the
+steady-state 23.6 M, not a new number.
 
 Where the steady-state cost goes: the matched filter (81 taps at 48 kHz) is
 about a third of it, the slicing and the per-frame levels most of the rest. The
@@ -191,10 +327,36 @@ first working version cost 109 M instructions per second (36 %) because the
 interpolator paid a 64-bit modulo and an FP division per tap and the matched
 filter carried two wrap-around tests per tap pair; both are gone (ring length a
 power of two with a mask, history written twice so the kernel reads forward).
+The frame cut added one NID decode and one 57-symbol slice per frame (the NID
+has to be read before the length is known) and removed the extra interpolation
+work of a window that was 2.4 frames long on a control channel.
 
 The search is what costs while unsynced, and that is the honest number for a
 scanner: 5 sub-phases x 24 interpolations per sample position, one position per
-sample.
+sample. Two thirds of the candidates the old code examined were worse than
+that - negative ring positions with nothing written in them, and the walk back
+after a grid prediction that could not hold - which is why the same captures
+dropped from 339 and 375 candidates per frame to 39 and 5.
+
+### What the front end could still do, measured, not done
+
+* **`p25Frame.evm` is declared and never computed.** The four levels are in
+  hand when the frame is sliced, so the RMS distance of the symbols to them
+  (what the prototype prints as `evm=0.10-0.11` on the voice capture) is one
+  more pass over the frame: **0.76 us per 864-symbol frame on this host**,
+  0.2 % of the 418 us the demodulator takes per frame, so it is affordable on
+  the M33 and would give the UI a real squelch/quality figure instead of "a
+  frame decoded".
+* **The trellis decoder takes hard bits.** The slicer already knows how far each
+  symbol sat from its level and throws that away; soft input is where a coded
+  196-bit block earns its 2-3 dB. That is a change of the FEC interface
+  (`p25Fec_trellisDecode()` takes `uint8_t` bits), so it is a project of its own
+  and is not in this change.
+* **The search still walks one candidate per symbol while unsynced.** A
+  correlator that runs on every sample (the matched filter output is already
+  there) would find the sync without decimating the hunt to symbols, at 5x the
+  correlations: worth measuring on the M33 before believing it, since the
+  unsynced case is already 29.7 % of the core.
 
 ## Memory
 
@@ -293,6 +455,14 @@ it).
 
 ## Not tested
 
+* **The frame lengths other than the LDU and the TSDU.** Those two are measured
+  frame after frame on the captures (863-865 and 359-361 symbols between two
+  syncs, 725 and 261 frames). The HDU's 396, the TDULC's 216 and the TDU's 72
+  come from the frame structure *and* from one capture each (396 symbols
+  HDU->LDU1 on the voice file; 216 and 72 on the APCO data capture), so a system
+  that pads its headers differently would still decode - the cut would be
+  short and the grid would miss - but the numbers are less worn than the other
+  two.
 * **On the air.** Every number above comes from captures on a host and from
   QEMU. The firmware has not decoded P25 with the radio's own discriminator:
   the audio path, the receiver's filters in this mode and the sample rate the

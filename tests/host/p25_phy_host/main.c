@@ -18,17 +18,23 @@
  *   ./tests/host/p25_phy_host/build/p25_phy_host capture.wav [block]
  *
  * A WAV (16-bit PCM mono) or raw s16le file is accepted.
+ *
+ * The summary carries what the framing costs: the symbols cut per frame
+ * (span), how many positions the sync search examined per decoded frame, how
+ * often the frame-length prediction missed, and the CPU time per frame.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "protocols/P25/P25Defs.h"
 #include "protocols/P25/P25Phy.h"
 
 static long frames, ldu, ldu1, ldu2, tsbk, tsbkOk, imbe, imbeBad, imbeErrs;
 static long lcValid, syncErrors;
+static bool imbeHex;
 
 static void onFrame(const struct p25Frame *f, void *user)
 {
@@ -58,8 +64,28 @@ static void onFrame(const struct p25Frame *f, void *user)
     if (f->lcValid)
         lcValid++;
 
-    printf("%6ld %-6s NAC=%03X bch=%d sync=%d", f->symbol, p25_duid_name(f->duid),
-           f->nac, f->bchErrors, f->syncErrors);
+    /*
+     * Machine-readable IMBE dump: the 88 parameters of each frame as 11 bytes
+     * of hex, one line per voice frame, the same line the host prototype
+     * writes with --imbe-out, so the two receivers can be diffed byte for
+     * byte on the same capture.
+     */
+    if (imbeHex)
+    {
+        if (f->duid != P25_DUID_LDU1 && f->duid != P25_DUID_LDU2)
+            return;
+        for (int v = 0; v < f->voiceCount; v++)
+        {
+            for (int b = 0; b < P25_IMBE_BYTES; b++)
+                printf("%02x", f->voice[v][b]);
+            printf(" errs=%d\n", f->imbeErrors);
+        }
+        return;
+    }
+
+    printf("%6ld %-6s NAC=%03X bch=%d sync=%d span=%u", f->symbol,
+           p25_duid_name(f->duid), f->nac, f->bchErrors, f->syncErrors,
+           f->spanSymbols);
     if (f->lcValid)
         printf(" LC(tg=%u src=%u rs=%d)", f->talkgroup, f->source, f->lcRsErrors);
     if (f->duid == P25_DUID_LDU1 || f->duid == P25_DUID_LDU2)
@@ -70,21 +96,44 @@ static void onFrame(const struct p25Frame *f, void *user)
     printf("\n");
 }
 
+static double cpuSeconds(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts);
+    return (double)ts.tv_sec + 1e-9 * (double)ts.tv_nsec;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2)
     {
-        fprintf(stderr, "usage: %s capture.wav|raw [block_samples]\n", argv[0]);
+        fprintf(stderr, "usage: %s capture.wav|raw [block_samples] "
+                        "[--imbe-hex]\n", argv[0]);
         return 2;
     }
 
-    const size_t block = (argc > 2) ? (size_t)atoi(argv[2]) : 960;
+    size_t block = 960;
+    for (int i = 2; i < argc; i++)
+    {
+        if (strcmp(argv[i], "--imbe-hex") == 0)
+            imbeHex = true;
+        else
+            block = (size_t)atoi(argv[i]);
+    }
+    if (block == 0 || block > 8192)
+        block = 960;
     FILE *f = fopen(argv[1], "rb");
     if (f == NULL)
     {
         perror("fopen");
         return 1;
     }
+
+    static int16_t samples[8192];
+    static int16_t silence[17280];     /* two frames of zeros at 48 kHz */
+    size_t have = 0;
+    long long total = 0;
+    double cpu = 0.0;
 
     /* Skip a RIFF header if there is one: find the "data" chunk */
     unsigned char hdr[12];
@@ -107,16 +156,14 @@ int main(int argc, char **argv)
         rewind(f);
     }
 
-    static int16_t samples[8192];
-    static int16_t silence[17280];     /* two frames of zeros at 48 kHz */
-    size_t have = 0;
-
     p25Phy_init();
+    const double t0 = cpuSeconds();
 
     for (;;)
     {
         size_t got = fread(samples + have, sizeof(int16_t), block - have, f);
         have += got;
+        total += (long long)got;
         if (have == block)
         {
             p25Phy_push(samples, have, onFrame, NULL);
@@ -139,12 +186,24 @@ int main(int argc, char **argv)
     memset(silence, 0, sizeof(silence));
     p25Phy_push(silence, sizeof(silence) / sizeof(silence[0]), onFrame, NULL);
 
+    cpu = cpuSeconds() - t0;
+
 done:
     fclose(f);
 
-    printf("\n%ld frames: %ld LDU1 %ld LDU2 %ld TSBK | LC %ld | TSBK CRC %ld | "
+    /* In hex mode stdout is the dump itself, so the summary goes to stderr and
+     * the dump can be diffed against the prototype's with a plain diff. */
+    FILE *sum = imbeHex ? stderr : stdout;
+
+    fprintf(sum, "\n%ld frames: %ld LDU1 %ld LDU2 %ld TSBK | LC %ld | TSBK CRC %ld | "
            "IMBE %ld bad %ld errs %ld | sync errors %ld | synced %d\n",
            frames, ldu1, ldu2, tsbk, lcValid, tsbkOk, imbe, imbeBad, imbeErrs,
            syncErrors, p25Phy_synced() ? 1 : 0);
+    fprintf(sum, "framing: sync tries %u (%.2f per frame), grid misses %u | "
+           "cpu %.1f ms for %.2f s of audio, %.1f us per frame\n",
+           p25Phy_syncTries(),
+           frames ? (double)p25Phy_syncTries() / (double)frames : 0.0,
+           p25Phy_gridMisses(), 1e3 * cpu, (double)total / 48000.0,
+           frames ? 1e6 * cpu / (double)frames : 0.0);
     return 0;
 }

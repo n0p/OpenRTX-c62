@@ -14,14 +14,20 @@ CC       ?= cc
 CFLAGS   ?= -O2 -g -Wall -Wextra -Wno-unused-parameter
 CFLAGS   += -I$(OPENRTX)/include -I$(OPENRTX)/src
 
+ifeq ($(TRACE),1)
+CFLAGS   += -DP25_PHY_TRACE
+endif
+
 SRCS := main.c \
         $(OPENRTX)/src/protocols/P25/P25Phy.c \
         $(OPENRTX)/src/protocols/P25/P25Fec.c \
         $(OPENRTX)/src/protocols/P25/P25Defs.c \
         $(OPENRTX)/src/protocols/P25/P25Tables.c
 
-$(BUILD)/p25_phy_host: $(SRCS) | $(BUILD)
-	$(CC) $(CFLAGS) -DP25_PHY_TRACE=$(TRACE) -o $@ $(SRCS) -lm
+HDRS := $(wildcard $(OPENRTX)/include/protocols/P25/*.h)
+
+$(BUILD)/p25_phy_host: $(SRCS) $(HDRS) | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ $(SRCS) -lm
 
 $(BUILD):
 	mkdir -p $(BUILD)
