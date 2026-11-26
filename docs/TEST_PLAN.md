@@ -47,7 +47,7 @@ hueco por la que un CC inestable se ve en la radio y no en los tests.
 Todo lo de esta sección se decide en el host; nada de aquí necesita el banco.
 
 - **Ninguna fila muerta, en ninguna pantalla.** `tools/simulator/menu_audit.py`
-  recorre las 53 pantallas fila a fila (236 filas) y termina en error si una fila
+  recorre las 54 pantallas fila a fila (239 filas) y termina en error si una fila
   no contesta a ninguna tecla (P2, P1, verde) ni cambia un valor, una pantalla,
   el registro de ajustes o el receptor. Es el test `Simulator Menu Audit`. Las
   filas de las pantallas de datos (Info, Zonas, Contactos, Mensajes, APRS, PKT,
