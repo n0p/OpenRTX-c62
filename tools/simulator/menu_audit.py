@@ -14,6 +14,21 @@ and P2 did to each) plus `audit.md`, the table this pass is built on.  A row
 whose three keys change nothing on the screen, in `settings` and in `radio`
 is reported as dead.
 
+It is also the regression that keeps the two promises of the reworked menus:
+
+  * **no dead row**: every row of every screen either changes a value, opens a
+    screen or runs an action (a `QM_INFO` row of a popup is the receiver's
+    state and is reported as such, not as a dead row);
+  * **one place per setting**: a settings field may be changed from the popup
+    and from the Settings page of its own mode -- they are the same table -- but
+    not twice from one screen, not from two fixed Settings pages, and not from a
+    second mode unless it is one of the quick-access fields declared in
+    SHARED_SETTINGS below.  This is how the accessory port, which three screens
+    could set, is kept to its one row of the tools menu.
+
+Either one makes the run exit non-zero, which is what `meson test -C
+build_linux "Simulator Menu Audit"` turns into a red suite.
+
 Every screen is reached with the keys the operator uses, from a clean radio
 with a store of its own, so a run is reproducible.
 """
@@ -41,20 +56,74 @@ MODE_PAGE_TITLE = {"FM": "FM", "M17": "M17", "TETRA": "TETRA"}
 ROW_TOP = 20
 ROW_BOTTOM = 116
 
+# Settings that more than one screen may change, and why.
+#
+# A settings field is changed from one place; this is the list of the exceptions
+# the interface makes on purpose.  They are the operator's quick-access block,
+# carried by the table of each mode next to the settings that mode owns, which
+# is what makes the popup worth opening without leaving the main screen.  Every
+# other field that two screens can change is a defect: the accessory port, which
+# Settings -> Radio, every mode's popup and the tools menu could all set, is the
+# one this rule was written for (docs/MENU_AUDIT.md, "What the walk found").
+#
+# A second row *inside* one screen is a defect whatever this list says, and so
+# is a field two fixed Settings pages can change.
+SHARED_SETTINGS = {
+    "brightness":
+        "BKL in every mode's table, Brightness in Settings -> Display: the "
+        "display is the one thing an operator changes on the air",
+    "key_backlight":
+        "KEYLIT in every mode's table, Key Light in Settings -> Display",
+    "sql":
+        "SQL in the FM and AM tables, Squelch in Settings -> Radio: the "
+        "squelch is what a scanning operator moves, and the mode pages that "
+        "have one carry it",
+    "rx_fine":
+        "FINE in the tables of the modes that decode, the manual RX trim is "
+        "per-receiver and not per-mode",
+}
+
 
 def now_iso():
     import datetime
     return datetime.datetime.now().isoformat(timespec="seconds")
 
 
+def settings_diff(before, after):
+    """
+    The settings fields a key press moved, as names, not as one blob.
+
+    `settings`, `aprs` and `packet` are three blocks of the dump (ui_dump.c);
+    a field of the two smaller ones is reported as `aprs.ssid`, so that the
+    owner of a value is a name the report can print and the test can assert on.
+    """
+    fields = []
+    for block in ("settings", "aprs", "packet"):
+        b = before.get(block) or {}
+        a = after.get(block) or {}
+        for k in sorted(set(b) | set(a)):
+            if b.get(k) != a.get(k):
+                fields.append(k if block == "settings" else block + "." + k)
+    return fields
+
+
+def note_settings(item, before, after):
+    """Add to a row record the settings fields this key press changed."""
+    for f in settings_diff(before, after):
+        item.setdefault("settings_fields", [])
+        if f not in item["settings_fields"]:
+            item["settings_fields"].append(f)
+
+
 class Audit:
-    def __init__(self, binary=None):
+    def __init__(self, binary=None, env=None):
         self.tmp = tempfile.mkdtemp(prefix="c62-menu-audit-")
-        env = {
-            "XDG_STATE_HOME": os.path.join(self.tmp, "state"),
-            "OPENRTX_SIM_STORE": os.path.join(self.tmp, "store.img"),
-        }
-        os.makedirs(env["XDG_STATE_HOME"], exist_ok=True)
+        if env is None:
+            env = {
+                "XDG_STATE_HOME": os.path.join(self.tmp, "state"),
+                "OPENRTX_SIM_STORE": os.path.join(self.tmp, "store.img"),
+            }
+            os.makedirs(env["XDG_STATE_HOME"], exist_ok=True)
         self.sim = Simulator(binary=binary, shots=os.path.join(self.tmp, "shots"),
                              env=env)
         self.screens = []
@@ -185,6 +254,20 @@ class Audit:
             self.key("DOWN")
         raise RuntimeError("no %r page in Settings" % label)
 
+    @staticmethod
+    def family_of_page(label):
+        """
+        Which screen family a Settings page belongs to.
+
+        The mode pages -- the four hand-written ones (FM, M17, TETRA) and the
+        generic one every other mode opens -- are the mode's own screen, and the
+        popup of that mode shows the same table: they are one family.  Every
+        other page is "general": the display, the radio, the identity and the
+        tools menu are the radio's, and none of them may repeat a setting
+        another of them already owns.
+        """
+        return label if label in MODES else "general"
+
     def page_cursor_label(self):
         """Label under the cursor on a Settings list or page."""
         d = self.d()
@@ -255,6 +338,7 @@ class Audit:
                 value = before["quickmenu"]["rows"][before["quickmenu"]["selected"]]["value"]
             self.key(key)
             after = self.d()
+            note_settings(out, before, after)
             changed = []
             if after["screen"]["name"] != before["screen"]["name"]:
                 changed.append("opens %s" % after["screen"]["name"])
@@ -286,7 +370,7 @@ class Audit:
         rows = self.list_rows(d)
         screen = d["screen"]["name"]
         result = {"screen": screen, "title": page_label, "rows": [],
-                  "probed": "rows"}
+                  "probed": "rows", "family": self.family_of_page(page_label)}
 
         for i, row in enumerate(rows):
             # Every row starts from the page, cursor on it, nothing open: a
@@ -303,6 +387,7 @@ class Audit:
             b = self.d()
             self.key("GREEN")
             a = self.d()
+            note_settings(item, b, a)
 
             if a["screen"]["name"] != screen:
                 item["enter"] = ["opens %s" % a["screen"]["name"]]
@@ -324,6 +409,7 @@ class Audit:
                     b2 = self.d()
                     self.key(key)
                     a2 = self.d()
+                    note_settings(item, b2, a2)
                     ch = []
                     if a2["screen"]["name"] != b2["screen"]["name"]:
                         ch.append("opens %s" % a2["screen"]["name"])
@@ -395,7 +481,7 @@ class Audit:
         q = self.open_qm()
         rows = list(q["rows"])
         screen = {"screen": "POPUP", "title": "quick menu, mode %s" % mode,
-                  "rows": [], "probed": "rows"}
+                  "rows": [], "probed": "rows", "family": mode}
         for i, row in enumerate(rows):
             screen["rows"].append(self.probe_qm_row(mode, i, row["label"]))
         # values as the popup opens, before anything is touched
@@ -426,7 +512,7 @@ class Audit:
         q = d["quickmenu"]
         names = [r["label"] for r in q["rows"]]
         screen = {"screen": "MODE_PAGE", "title": "%s (Settings)" % label,
-                  "rows": [], "probed": "rows"}
+                  "rows": [], "probed": "rows", "family": label}
         for i, name in enumerate(names):
             # Fresh page per row: probing LOCK turns the keypad off, and the
             # next row would be read through a deaf one.
@@ -462,6 +548,7 @@ class Audit:
                 b = self.d()
                 self.key(key)
                 a = self.d()
+                note_settings(item, b, a)
                 ch = []
                 qa = a["quickmenu"]
                 if a["screen"]["name"] != b["screen"]["name"]:
@@ -495,18 +582,21 @@ class Audit:
         d = self.d()
         rows = list(d["tools"]["rows"])
         screen = {"screen": "TOOLS_MENU", "title": "tools (P1 long)", "rows": [],
-                  "probed": "rows"}
+                  "probed": "rows", "family": "general"}
         for i, row in enumerate(rows):
             self.tools_to(row["label"])
             item = {"label": row["label"], "value": row["value"]}
             b = self.d()
             self.key("P2")
             a = self.d()
+            note_settings(item, b, a)
             item["p2"] = (["cursor %d" % a["tools"]["selected"]]
                           if a["tools"]["selected"] != b["tools"]["selected"]
                           else ["no change"])
+            b = a
             self.key("P1")
             a = self.d()
+            note_settings(item, b, a)
             item["p1"] = (["cursor %d" % a["tools"]["selected"]]
                           if a["tools"]["selected"] != b["tools"]["selected"]
                           else ["no change"])
@@ -515,6 +605,7 @@ class Audit:
             b = self.d()
             self.key("GREEN")
             a = self.d()
+            note_settings(item, b, a)
             ch = []
             if a["screen"]["name"] != b["screen"]["name"]:
                 ch.append("opens %s" % a["screen"]["name"])
@@ -541,7 +632,7 @@ class Audit:
         self.key("GREEN")
         d = self.d()
         sub = {"screen": "TOOLS_MODES", "title": "tools > Mode", "rows": [],
-               "probed": "rows"}
+               "probed": "rows", "family": "general"}
         for row in d["tools"]["rows"]:
             item = {"label": row["label"], "value": row["value"]}
             self.tools_to(row["label"])
@@ -790,9 +881,78 @@ class Audit:
             self.findings.append("the accessory port row appears %d times: %s"
                                  % (len(ports), ports))
 
+        self.duplicates, self.setting_uses = self.analyse_settings()
+
         return {"when": now_iso(), "screens": self.screens,
                 "dead": self.dead, "status": self.status,
-                "port_rows": ports, "findings": self.findings}
+                "port_rows": ports, "findings": self.findings,
+                "duplicates": self.duplicates,
+                "setting_uses": self.setting_uses}
+
+    def analyse_settings(self):
+        """
+        Which screen changes which setting, and the duplicates.
+
+        The rows were probed with one key at a time and each probe recorded the
+        settings fields it moved (note_settings), so this is measured, not
+        declared: a row that writes a field its screen was not supposed to own
+        shows up here the day someone adds it.
+
+        The rules, in the words of docs/MENU_AUDIT.md:
+
+          * one row per setting *per screen* -- an edit page that lists the same
+            field twice (the FM page used to carry CTCSS TX, CTCSS RX and
+            Cancel CT on top of CTCSS En.) is a page that lies about it;
+          * one fixed page per setting: two pages of Settings that change the
+            same field is the accessory port defect, and no exception is made;
+          * a mode's popup and that mode's Settings page are the same table and
+            may carry the same field; a *second* mode may not, unless the field
+            is one of the quick-access ones declared in SHARED_SETTINGS.
+        """
+        uses = {}
+        for s in self.screens:
+            if s.get("probed") != "rows":
+                continue
+            for r in s["rows"]:
+                for field in r.get("settings_fields", []):
+                    uses.setdefault(field, []).append({
+                        "family": s.get("family", "general"),
+                        "screen": s["screen"],
+                        "title": s["title"],
+                        "label": r["label"],
+                    })
+
+        duplicates = []
+        for field, where in sorted(uses.items()):
+            # 1. the same field twice on one screen
+            per_screen = {}
+            for u in where:
+                per_screen.setdefault(u["title"], set()).add(u["label"])
+            for title, labels in per_screen.items():
+                if len(labels) > 1:
+                    duplicates.append(
+                        "%s is changed by %d rows of %s: %s"
+                        % (field, len(labels), title,
+                           ", ".join(sorted(labels))))
+
+            # 2. two fixed screens that both own it
+            fixed = sorted({u["title"] for u in where
+                            if u["family"] == "general"})
+            if len(fixed) > 1:
+                duplicates.append("%s is changed from %d fixed screens: %s"
+                                  % (field, len(fixed), ", ".join(fixed)))
+
+            # 3. a second mode that is not a declared quick-access setting
+            families = sorted({u["family"] for u in where})
+            if len(families) > 1 and field not in SHARED_SETTINGS:
+                duplicates.append(
+                    "%s is changed from %d screen families (%s); if that is "
+                    "meant, say why in SHARED_SETTINGS"
+                    % (field, len(families),
+                       ", ".join("%s/%s" % (u["family"], u["label"])
+                                 for u in where)))
+
+        return duplicates, uses
 
     def save(self, out):
         data = self.report()
@@ -848,7 +1008,39 @@ def to_markdown(data):
                        % (r["label"], r.get("type", ""), r.get("value", ""),
                           fmt("enter"), fmt("p1"), fmt("p2")))
         out.append("")
+    out.extend(settings_markdown(data))
     return "\n".join(out)
+
+
+def settings_markdown(data):
+    """The setting -> screen map the duplicate rule is built on."""
+    out = ["## Which screen changes which setting", "",
+           "One row per field of the settings record, measured: the screens "
+           "whose rows moved it, and the row that did.", "",
+           "| Setting | Changed from | Why more than one |",
+           "|---|---|---|"]
+    uses = data.get("setting_uses") or {}
+    for field in sorted(uses):
+        where = uses[field]
+        places = sorted({"%s / `%s`" % (u["title"], u["label"]) for u in where})
+        why = SHARED_SETTINGS.get(field, "")
+        if len(places) == 1:
+            why = ""                     # one row, nothing to explain
+        out.append("| `%s` | %s | %s |" % (field, ", ".join(places), why))
+    out.append("")
+
+    out.append("## Settings changed from more than one place")
+    out.append("")
+    if data.get("duplicates"):
+        for d in data["duplicates"]:
+            out.append("- **%s**" % d)
+    else:
+        out.append("None. Every field of the settings record has one screen "
+                   "that owns it, apart from the quick-access block declared "
+                   "in `menu_audit.py` (`SHARED_SETTINGS`), and no screen "
+                   "lists a field twice.")
+    out.append("")
+    return out
 
 
 def main():
@@ -859,6 +1051,8 @@ def main():
                     help="comma separated: popup,page,fixed,tools,top")
     ap.add_argument("--modes", default=None,
                     help="comma separated subset of the eleven modes")
+    ap.add_argument("--allow-defects", action="store_true",
+                    help="report dead rows and duplicate settings, exit 0")
     args = ap.parse_args()
 
     modes = args.modes.split(",") if args.modes else MODES
@@ -897,15 +1091,24 @@ def main():
         a.sim.quit()
 
     data = a.save(args.out)
-    print("screens: %d, rows: %d, dead: %d"
+    print("screens: %d, rows: %d, dead: %d, duplicate settings: %d"
           % (len(data["screens"]), sum(len(s["rows"]) for s in data["screens"]),
-             len(data["dead"])))
+             len(data["dead"]), len(data["duplicates"])))
     for d in data["dead"]:
         print("DEAD", d)
+    for d in data["duplicates"]:
+        print("DUPLICATE", d)
     print("port rows:", data["port_rows"])
     for f in data["findings"]:
         print("NOTE", f)
 
+    # The two promises of the reworked menus. A walk of part of the UI cannot
+    # claim the whole interface is clean -- but a defect it does find is real,
+    # so it fails just the same.
+    if args.allow_defects:
+        return 0
+    return 1 if (data["dead"] or data["duplicates"] or data["findings"]) else 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

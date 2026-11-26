@@ -2278,6 +2278,36 @@ if python3.found() and zlib_dep.found()
        env : ['OPENRTX_SIM_BIN=' + openrtx_c62_sim.full_path()],
        timeout : 600)
 
+  # The menu audit (docs/MENU_AUDIT.md): every screen of the interface, walked
+  # row by row, and the two promises of the reworked menus as its exit status --
+  # no row that no key can actuate, and no settings field that two screens can
+  # change (the quick-access block declared in the tool is the only exception).
+  # It is the slowest of the simulator tests: it probes every row with three
+  # keys and dumps the screen between them, ~12 minutes on a laptop, which is
+  # the price of asserting the whole interface instead of a sample of it.
+  sim_audit_py = files('tools/simulator/menu_audit.py')
+  test('Simulator Menu Audit',
+       python3,
+       args : [sim_audit_py, '--out', meson.current_build_dir() / 'sim-audit'],
+       depends : openrtx_c62_sim,
+       env : ['OPENRTX_SIM_BIN=' + openrtx_c62_sim.full_path()],
+       timeout : 2400)
+
+  # The settings record across a restart and a power cut: a change made on a
+  # Settings page and one made in the tools menu survive a power cycle, the
+  # deferred write lands inside the debounce window of core/state.c and a
+  # record the firmware has to repair is written back. The simulator saves the
+  # way the radio does (platform/targets/linux/hwconfig.h), and `powercut` is
+  # what makes the difference between "saved" and "written on the way out"
+  # visible at all.
+  sim_persist_py = files('tools/simulator/settings_persist.py')
+  test('Simulator Settings Persistence',
+       python3,
+       args : [sim_persist_py, '--out', meson.current_build_dir() / 'sim-persist'],
+       depends : openrtx_c62_sim,
+       env : ['OPENRTX_SIM_BIN=' + openrtx_c62_sim.full_path()],
+       timeout : 600)
+
   # The coverage contract (tests/unit/sim_coverage.cpp): the modes, the menu
   # tables and the screens the firmware registers, and every screen its own key
   # walk can reach, against the list the tour declares. The list is not written
