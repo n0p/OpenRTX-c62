@@ -34,7 +34,16 @@
 #include <interfaces/display.h>
 #include <core/blackbox.h>
 #include <core/display_flush.h>
-#include <hwconfig.h>
+/* hwconfig.h pulls in the BK4819 driver header, which declares OpenRTX's own
+ * spi_release(const struct spiDevice *) and cannot coexist with the kernel's
+ * SPI API this file needs. What is used from there is the backlight PWM, which
+ * is declared right here from the same devicetree node. */
+extern const struct pwm_dt_spec pwm_lcd_backlight;
+
+/* The panel's geometry, from the same devicetree node hwconfig.h would use. */
+#define DISPLAY DT_CHOSEN(zephyr_display)
+#define CONFIG_SCREEN_WIDTH  DT_PROP(DISPLAY, width)
+#define CONFIG_SCREEN_HEIGHT DT_PROP(DISPLAY, height)
 #include <errno.h>
 #include <string.h>
 #include <math.h>
@@ -67,10 +76,10 @@ static const struct device *displayDev;
  */
 static const struct spi_dt_spec panelBusA =
     SPI_DT_SPEC_GET(DT_CHOSEN(zephyr_display),
-                    SPI_OP_MODE_MASTER | SPI_WORD_SET(8));
+                    SPI_OP_MODE_MASTER | SPI_WORD_SET(8), 0);
 static const struct spi_dt_spec panelBusB =
     SPI_DT_SPEC_GET(DT_CHOSEN(zephyr_display),
-                    SPI_OP_MODE_MASTER | SPI_WORD_SET(8));
+                    SPI_OP_MODE_MASTER | SPI_WORD_SET(8), 0);
 
 static const struct spi_dt_spec *panelBus = &panelBusA;
 
@@ -123,8 +132,8 @@ static int panelSubmit(void *ctx, bool isData, const void *buf, size_t len)
 
     gpio_pin_set_dt(&panelDc, isData ? 0 : 1);
 
-    int ret = spi_transceive_async(panelBus->bus, &panelBus->config, &txBufs,
-                                   NULL, panelComplete, NULL);
+    int ret = spi_transceive_cb(panelBus->bus, &panelBus->config, &txBufs,
+                                NULL, panelComplete, NULL);
     return (ret < 0) ? ret : 0;
 }
 
@@ -148,7 +157,7 @@ static void panelAbandon(void *ctx)
      * it also drives CS high), which is what keeps the *next* frame from
      * parking on that lock.
      */
-    (void)spi_release(panelBus->bus, &panelBus->config);
+    (void)z_impl_spi_release(panelBus->bus, &panelBus->config);
     k_sem_reset(&panelDone);
 }
 

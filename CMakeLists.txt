@@ -123,6 +123,7 @@ target_sources(app
     # (docs/BLACKBOX.md).  Portable C; the platform side lives in the target.
     openrtx/src/core/blackbox.c
     openrtx/src/core/backup_image.c
+    openrtx/src/core/display_flush.c
     openrtx/src/core/audio_codec.c
     openrtx/src/core/audio_stream.c
     openrtx/src/core/audio_path.cpp
