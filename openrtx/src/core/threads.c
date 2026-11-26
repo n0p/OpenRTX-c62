@@ -190,7 +190,6 @@ void *main_thread(void *arg)
 {
     (void) arg;
 
-    printf("main: thread up, cc=%lu\r\n", (unsigned long)getTick());
 
     long long time = 0;
 
