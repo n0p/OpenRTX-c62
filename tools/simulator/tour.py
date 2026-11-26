@@ -1103,7 +1103,7 @@ class Tour:
         self.assert_alive("after the identity page")
 
     def phase_tools(self):
-        """P1 held down: the tools menu, its five rows and the mode submenu."""
+        """P1 held down: the tools menu, its six rows and the mode submenu."""
         self.step_name = "tools"
         self.goto_mode("FM")
         self.home()
@@ -1113,21 +1113,25 @@ class Tour:
 
         d = self.capture("tools-list", screen="TOOLS_MENU",
                          need=["TOOLS", "Mode", "Scan", "VFO scan", "Spectrum",
-                               "Channels"])
+                               "Channels", "Puerto"])
         self.check(d["radio"]["tx_disable"],
                    "the tools menu does not disable the transmitter")
         self.check(d["tools"]["selected"] == 0,
                    "the tools menu does not open on the first row")
 
         rows = [r["label"] for r in d["tools"]["rows"]]
-        self.check(rows == ["Mode", "Scan", "VFO scan", "Spectrum", "Channels"],
-                   "the rows of the tools menu are %s, not the five of the "
+        # The accessory port is one row of this menu (docs/ACCESSORY.md): it
+        # used to be the last row of every mode's table, which is also every
+        # mode's Settings page.
+        self.check(rows == ["Mode", "Scan", "VFO scan", "Spectrum", "Channels",
+                            "Puerto"],
+                   "the rows of the tools menu are %s, not the six of the "
                    "design" % rows)
         self.check(d["tools"]["rows"][0]["value"] == "FM",
                    "the Mode row does not show the mode in use: %r"
                    % d["tools"]["rows"][0]["value"])
 
-        # Walk the five rows: each one selectable, in order
+        # Walk the rows: each one selectable, in order
         for index, label in enumerate(rows):
             if not self.tools_to(label):
                 return

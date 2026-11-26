@@ -261,9 +261,13 @@ void *main_thread(void *arg)
         if (!stalled)
             platform_wdtFeed();
 
-        /* The accessory-port necklace, defined in platform/targets/c62/pc_proto_c62.c */
+#ifdef C62_PC_PROTO
+        /* The accessory-port necklace, in platform/targets/c62/pc_proto_c62.c.
+           It only exists with the protocol: a build without it links the same
+           main loop and has no port to report. */
         void c62_portNecklace(void);
         c62_portNecklace();
+#endif
         #else
         (void)UI_THREAD_STALL_MS;
         #endif
