@@ -300,6 +300,17 @@ def cmd_diag(link, args):
         print("flash       %d / %d B" % (d["flash_used"], d["flash_total"]))
         print("ram         %d / %d B" % (d["ram_used"], d["ram_total"]))
     print("agc         %s" % ("unknown" if d["agc"] == 0xFF else d["agc"]))
+    # The screen path (docs/RX_AIRBAND.md §9): a frozen panel with a live radio
+    # used to leave nothing to read, so it is printed even when it is healthy.
+    sc = d.get("disp") or {}
+    line = "screen      %d frames, %d dropped, last %d ms, worst %d ms" % (
+        sc.get("frames", 0), sc.get("drops", 0), sc.get("last_ms", 0),
+        sc.get("max_ms", 0))
+    print(line)
+    if sc.get("drops"):
+        print("            last loss: chunk %d, %d bytes of %s" % (
+            sc.get("fail_chunk", 0), sc.get("fail_len", 0),
+            "pixel data" if sc.get("fail_data") else "a command"))
     for t in d["tasks"]:
         print("stack       %-10s %4d free of %4d" % (t["name"], t["unused"],
                                                      t["size"]))

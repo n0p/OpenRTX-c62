@@ -315,6 +315,28 @@ int pc_dbg_info(struct pcReq *r)
         off = pc_tlv_bytes(r->out, r->outCap, off, PC_TAG_TASK_STACK,
                            d.tasks,
                            (size_t)d.taskCount * sizeof(pcProtoTaskStack_t));
+        /*
+         * The screen path.  A frozen panel with a live radio used to leave
+         * nothing behind (docs/RX_AIRBAND.md §9): these four numbers and the
+         * descriptor of the transfer that was lost are what turns the next
+         * reproduction into a one-line answer.
+         */
+        off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_DISP_FRAMES,
+                         d.dispFrames);
+        off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_DISP_DROPS,
+                         d.dispDrops);
+        off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_DISP_MS, d.dispLastMs);
+        off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_DISP_MAX_MS,
+                         d.dispMaxMs);
+        if (d.dispDrops > 0) {
+            uint8_t fail[4];
+            fail[0] = (uint8_t)(d.dispFailLen & 0xFF);
+            fail[1] = (uint8_t)(d.dispFailLen >> 8);
+            fail[2] = d.dispFailChunk;
+            fail[3] = d.dispFailData;
+            off = pc_tlv_bytes(r->out, r->outCap, off, PC_TAG_DISP_FAIL, fail,
+                               sizeof(fail));
+        }
     }
 
     off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_DROPPED,

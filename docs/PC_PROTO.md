@@ -334,6 +334,16 @@ relleno de alineación): `u8 zone`, `u16 index`, `name[8]`, `u32 rx`, `u32 tx`,
 | 0x008C `PORT_PTT` | u8, 1 si el pulsador del microaltavoz está abajo ahora mismo (solo en `DBG_INFO`) |
 | 0x008D `PORT_LOST` | u32 bytes y errores de tramado tirados porque el pulsador tenía el pad |
 | 0x00EF `TX_REASON` | str, `none` o por qué no transmitiría (docs/TX_SAFETY.md) |
+| 0x00F3 `DISP_FRAMES` | u32 frames que llegaron al panel (solo en `DBG_INFO`) |
+| 0x00F4 `DISP_DROPS` | u32 frames descartados al vencer su plazo (docs/RX_AIRBAND.md §9) |
+| 0x00F5 `DISP_MS` / 0x00F6 `DISP_MAX_MS` | u32 ms del último frame completo y del peor desde el arranque |
+| 0x00F7 `DISP_FAIL` | bytes: u16 longitud, u8 índice en el frame, u8 1 si era dato de píxeles; la transferencia que se perdió, solo si `DISP_DROPS` > 0 |
+
+`DISP_*` es el camino de la pantalla con plazo: **siempre** viaja en `DBG_INFO`,
+también cuando está sano (`DISP_DROPS` = 0). Es la respuesta a «la pantalla se
+quedó congelada y la radio seguía contestando»: el frame que no completó se
+descarta, se cuenta, y el descriptor dice cuál fue. El mecanismo y la traza
+están en `docs/RX_AIRBAND.md` §9.
 
 `TX_POWER` y `TX_REASON` viajan en **todo** estado (respuesta de `STATUS_GET` y
 eventos `EVT_STATUS`), y también en `DBG_INFO`: un PTT que no hace nada se
@@ -551,6 +561,7 @@ psram       1105920 / 4194304 B free
 flash       601132 / 4194304 B
 ram         219704 / 262144 B
 agc         unknown
+screen      4128 frames, 0 dropped, last 17 ms, worst 24 ms
 stack       main        1024 free of 2048
 stack       pcproto     3100 free of 4096
 log dropped 0
