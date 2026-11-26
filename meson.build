@@ -2015,6 +2015,22 @@ thread_stacks_test = executable('thread_stacks_test',
                                            'link_args'          : linux_l_args})
 test('Thread Stack Budget Test', thread_stacks_test)
 
+# The guarantees that are in the source text and not in a value: the supervisor
+# is called from the main loop, the watchdog feed hangs off the UI rule, the
+# transmit clock is sampled there from the driver state, and every thread takes
+# its stack from the budget header instead of a literal.
+platform_wiring_test = executable('platform_wiring_test',
+                                  sources : ['tests/unit/platform_wiring.cpp'],
+                                  kwargs  : {'c_args'             : linux_c_args,
+                                             'cpp_args'           : linux_cpp_args +
+                                                  ['-DPLAT_SRC_ROOT="' +
+                                                   meson.project_source_root() + '"'],
+                                             'include_directories': linux_inc +
+                                                  ['openrtx/include'],
+                                             'dependencies'       : [catch2_dep],
+                                             'link_args'          : linux_l_args})
+test('Platform Wiring Test', platform_wiring_test)
+
 key_gate_test = executable('key_gate_test',
                            sources : ['tests/unit/key_gate.cpp'],
                            kwargs  : {'c_args'             : linux_c_args,

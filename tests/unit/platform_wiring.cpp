@@ -233,3 +233,35 @@ TEST_CASE("the audio thread stacks in core/threads.h keep their floors",
     REQUIRE(countOf(src, "#define CODEC2_THREAD_STKSIZE") == 1);
     REQUIRE(countOf(src, "#define AUDIO_THREAD_STKSIZE") == 1);
 }
+
+TEST_CASE("the transmit clock is fed from the driver state, in the supervisor",
+          "[wiring][txwatch]")
+{
+    /*
+     * tests/unit/tx_watch.cpp proves the rule cuts at 90 s of air;
+     * tests/unit/mode_switch.cpp proves the supervisor's cut reaches the PA.
+     * What neither can see is whether the clock is still plugged in: a
+     * rtx_supervise() that stopped sampling the driver, or a txw_tick() moved
+     * out of it, leaves every test above passing and the radio transmitting
+     * until the battery dies.  The sample's second argument is the driver's
+     * state, not the PTT: a keying is a keying whoever asked for it.
+     */
+    const std::string src = readSource("openrtx/src/rtx/rtx.cpp");
+
+    REQUIRE_MSG(countOf(src, "txw_sample(&txWatch, now, keyed)") == 1,
+                "the supervisor samples the clock from the PA state");
+    REQUIRE_MSG(countOf(src, "txw_tick(&txWatch, now)") == 1,
+                "the supervisor is what turns a spent bar into a cut");
+
+    /* And the cut really unkeys: PA off before the mode is told to unwind, so
+     * the thread that is stuck in a stream wakes up with the radio in RX. */
+    const size_t abortAt = src.find("static void abortTransmission");
+    REQUIRE(abortAt != std::string::npos);
+    const std::string abortFn = src.substr(abortAt, 1200);
+    REQUIRE_MSG(abortFn.find("radio_disableRtx()") != std::string::npos,
+                "an abort unkeys the PA");
+    REQUIRE_MSG(abortFn.find("radio_txPathOff()") != std::string::npos,
+                "and checks that the PA is really off");
+    REQUIRE_MSG(abortFn.find("abortTx()") != std::string::npos,
+                "before it asks the mode to unwind");
+}
