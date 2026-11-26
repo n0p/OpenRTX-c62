@@ -2231,6 +2231,117 @@ tetra_demod_test = executable('tetra_demod_test',
                                          'link_args'          : linux_l_args})
 test('TETRA Demodulator Bounded Test', tetra_demod_test, timeout : 120)
 
+# What the TETRA mode publishes, and the SDS message path, from real PDUs.
+#
+# TetraStatus.c is the translation unit the UI reads: the cell, the location
+# area and MCC-MNC the main screen draws, the registration the MM layer
+# reports (D-LOCATION-UPDATE-ACCEPT/REJECT, group attach), the D-NWRK-BROADCAST
+# (neighbours, cell load, network time) and the uplink activity. It is written
+# only by libtetra's event callback, so on the host it has no writer at all and
+# ui_mode_status.c stands in for it -- with "nothing decoded", which is what
+# the simulator needs and what leaves every one of those states untested.
+#
+# These tests are the stand-in: the real libtetra, fed with real PDUs (the
+# downlink recording excerpt the module ships as tests/vectors/tmo_call.dibits
+# and the MM PDUs from its own capture replay), writes the events; the
+# firmware's TetraStatus.c turns them into the published state; and
+# ui_mode_state.c turns that into the texts the main screen draws.
+#
+# libtetra is a west module and is not vendored (docs/TETRA_LIB.md), so the
+# tests are registered only when it is there; -Dtetra_lib_dir points at a tree
+# outside the workspace.
+tetra_module_dir = get_option('tetra_lib_dir')
+if tetra_module_dir == ''
+  tetra_module_dir = join_paths(meson.current_source_dir(), 'modules/lib/libtetra')
+endif
+
+fs = import('fs')
+if not fs.exists(join_paths(tetra_module_dir, 'include/tetra/tetra.h'))
+  warning('libtetra not found in "' + tetra_module_dir + '": the TETRA status and SDS tests are not registered. Point -Dtetra_lib_dir at a libtetra tree to run them (docs/TETRA_LIB.md).')
+else
+  # The module's own source list (its CMakeLists.txt), without the crypto
+  # translation units: TETRA_ENABLE_CRYPTO is off in the firmware and in the
+  # fallback include/tetra/tetra_config.h this build uses, which is the same
+  # configuration the radio compiles (uplink detect and decode on).
+  tetra_lib_src = files(
+    join_paths(tetra_module_dir, 'src/common.c'),
+    join_paths(tetra_module_dir, 'src/dmo_rx.c'),
+    join_paths(tetra_module_dir, 'src/tmo_rx.c'),
+    join_paths(tetra_module_dir, 'src/l1/burst.c'),
+    join_paths(tetra_module_dir, 'src/l1/l1.c'),
+    join_paths(tetra_module_dir, 'src/l2/coding.c'),
+    join_paths(tetra_module_dir, 'src/l2/conv.c'),
+    join_paths(tetra_module_dir, 'src/l2/dmo_mac.c'),
+    join_paths(tetra_module_dir, 'src/l2/lmac.c'),
+    join_paths(tetra_module_dir, 'src/l2/speech.c'),
+    join_paths(tetra_module_dir, 'src/l2/tmo_mac.c'),
+    join_paths(tetra_module_dir, 'src/l2/tmo_ul_mac.c'),
+    join_paths(tetra_module_dir, 'src/l3/dmo_cc.c'),
+    join_paths(tetra_module_dir, 'src/l3/lip.c'),
+    join_paths(tetra_module_dir, 'src/l3/sds.c'),
+    join_paths(tetra_module_dir, 'src/l3/tmo_l3.c'),
+    join_paths(tetra_module_dir, 'src/l3/tmo_mle.c'),
+    join_paths(tetra_module_dir, 'src/util/bits.c'))
+
+  tetra_lib_inc = [join_paths(tetra_module_dir, 'include'),
+                   # tmo_int.h, the seam between the receiver and its layer 3:
+                   # the tests deliver a PDU where the MAC would have handed
+                   # it over, which is what libtetra's own L3 tests do.
+                   join_paths(tetra_module_dir, 'src')]
+
+  tetra_host_lib = static_library('tetra_host', tetra_lib_src,
+                                  include_directories : tetra_lib_inc,
+                                  c_args : ['-std=gnu17'],
+                                  override_options : ['warning_level=2'])
+
+  # The firmware's own units, as the radio compiles them: the status layer and
+  # the UI block that renders it, plus the SDS message model and ring.
+  tetra_chain_src = ['openrtx/src/protocols/TETRA/TetraStatus.c',
+                     'openrtx/src/protocols/TETRA/SdsMsg.c',
+                     'openrtx/src/protocols/TETRA/SdsHist.c',
+                     'openrtx/src/protocols/TETRA/TetraSdsEnc.c',
+                     'openrtx/src/ui/default/ui_mode_state.c']
+
+  # The TETRA test compiles the TETRA screens of ui_mode_state.c and nothing
+  # else: the other UI_TEST_* the host build carries would pull in the status
+  # modules (and the squelch of rtx) of every other mode, none of which this
+  # test says anything about.
+  tetra_test_def = ['-DUI_TEST_TETRA',
+                    '-DTETRA_VECTOR_DIR="' +
+                      join_paths(tetra_module_dir, 'tests/vectors') + '"']
+  tetra_test_c_args = tetra_test_def
+  tetra_test_cpp_args = tetra_test_def
+
+  foreach a : linux_c_args
+    if not a.startswith('-DUI_TEST_')
+      tetra_test_c_args += a
+    endif
+  endforeach
+
+  foreach a : linux_cpp_args
+    if not a.startswith('-DUI_TEST_')
+      tetra_test_cpp_args += a
+    endif
+  endforeach
+
+  # UI_TEST_TETRA is what the host builds use for the TETRA screens (the
+  # simulator's ui_mode_status.c is its fixture); here the state behind them
+  # is the real one.
+  tetra_test_opts = {'c_args'             : tetra_test_c_args,
+                     'cpp_args'           : tetra_test_cpp_args,
+                     'include_directories': linux_inc + tetra_lib_inc + ['tests/unit'],
+                     'dependencies'       : [catch2_dep, threads_dep],
+                     'link_with'          : tetra_host_lib,
+                     'link_args'          : linux_l_args}
+
+  tetra_status_test = executable('tetra_status_test',
+                                 sources : ['tests/unit/tetra_status.cpp'] +
+                                           tetra_chain_src,
+                                 kwargs  : tetra_test_opts)
+  test('TETRA Status Stand-in Test', tetra_status_test)
+endif
+
+
 # VFO carrier search: the machine (core/vfo_search.c) is pure — the time and a
 # sample of the receiver are arguments — so this test sweeps a band with a
 # synthetic squelch, frames and a published frequency, and measures its cost.

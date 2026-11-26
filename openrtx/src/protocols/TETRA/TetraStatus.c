@@ -173,6 +173,17 @@ void tetraStatus_onEvent(void *user, const struct tetra_event *ev)
                 case TETRA_MM_LOC_UPDATE_ACCEPT:
                     status.registered = true;
                     status.mmCause = 0;
+                    /*
+                     * The accept carries the group identities it attached
+                     * (EN 300 392-2 clause 16.10.5, the same list as
+                     * D-ATTACH/DETACH) and the screen draws their count
+                     * beside the registration. An accept without a list
+                     * leaves what the last attach said.
+                     */
+                    if (m->ngroups > 0) {
+                        status.groups = m->ngroups;
+                        status.detachAll = m->detach_all;
+                    }
                     break;
                 case TETRA_MM_LOC_UPDATE_REJECT:
                     status.registered = false;
