@@ -111,6 +111,16 @@ void nxdnStatus_simSet(bool sync, int ran, bool voice, unsigned evm,
                        bool msgValid, unsigned source, unsigned dest,
                        unsigned type, unsigned frames);
 
+/*
+ * dPMR: sync, the channel code the frames that carry it announce, whether the
+ * grid is locked right now, the call of the header (addresses and type) and the
+ * status message of an END frame (-1 for none).
+ */
+void dpmrStatus_simSet(bool sync, bool receiving, int channelCode,
+                       unsigned evm, unsigned frames, bool idsValid,
+                       unsigned long source, unsigned long dest,
+                       unsigned callType, int endStatus);
+
 void p25Status_simSet(bool sync, bool voice, int nac, int duid, long source,
                       int talkgroup, unsigned imbe, unsigned imbeBad,
                       unsigned frames);

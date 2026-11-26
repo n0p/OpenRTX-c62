@@ -408,6 +408,44 @@ static bool injectNxdn(int argc, char **argv)
     return true;
 }
 
+static bool injectDpmr(int argc, char **argv)
+{
+    if (argc < 3)
+        return false;
+
+    /* "inject dpmr -" is a receiver that is locked and has no code yet */
+    int cc = (strcmp(argv[2], "-") == 0) ? -1 : (int)strtol(argv[2], NULL, 0);
+    unsigned evm = 0, frames = 0, type = 0;
+    unsigned long src = 0, dst = 0;
+    int endStatus = -1;
+    bool ids = false, receiving = true;
+
+    for (int i = 3; i < argc; i++) {
+        if ((strcmp(argv[i], "evm") == 0) && (i + 1 < argc))
+            evm = (unsigned)strtoul(argv[++i], NULL, 0);
+        else if ((strcmp(argv[i], "frames") == 0) && (i + 1 < argc))
+            frames = (unsigned)strtoul(argv[++i], NULL, 0);
+        else if ((strcmp(argv[i], "rx") == 0) && (i + 1 < argc))
+            receiving = atoi(argv[++i]) != 0;
+        else if ((strcmp(argv[i], "end") == 0) && (i + 1 < argc)) {
+            /* An END frame is what closes a call: TX_REL, with its status */
+            endStatus = (int)strtol(argv[++i], NULL, 0);
+            type = 2;
+        } else if ((strcmp(argv[i], "call") == 0) && (i + 3 < argc)) {
+            src = strtoul(argv[++i], NULL, 0);
+            dst = strtoul(argv[++i], NULL, 0);
+            type = (unsigned)strtoul(argv[++i], NULL, 0);
+            ids = true;
+        }
+    }
+
+    dpmrStatus_simSet(true, receiving, cc, evm, frames, ids, src, dst, type,
+                      endStatus);
+    say("#inject dpmr CC%d call=%s type=%u rx=%d evm=%u frames=%u", cc,
+        ids ? "yes" : "no", type, receiving ? 1 : 0, evm, frames);
+    return true;
+}
+
 static bool injectP25(int argc, char **argv)
 {
     if (argc < 3)
@@ -611,6 +649,15 @@ static bool cmd_inject(int argc, char **argv)
         return injectNxdn(argc, argv);
     }
 
+    if (strcmp(argv[1], "dpmr") == 0) {
+        if ((argc == 3) && (strcmp(argv[2], "clear") == 0)) {
+            dpmrStatus_simSet(false, false, -1, 0, 0, false, 0, 0, 0, -1);
+            say("#inject dpmr clear");
+            return true;
+        }
+        return injectDpmr(argc, argv);
+    }
+
     if (strcmp(argv[1], "p25") == 0) {
         if ((argc == 3) && (strcmp(argv[2], "clear") == 0)) {
             p25Status_simSet(false, false, -1, -1, -1, -1, 0, 0, 0);
@@ -632,6 +679,7 @@ static bool cmd_inject(int argc, char **argv)
     if (strcmp(argv[1], "mode-state") == 0) {
         dmr_sim_clear();
         nxdnStatus_simSet(false, -1, false, 0, false, 0, 0, 0, 0);
+        dpmrStatus_simSet(false, false, -1, 0, 0, false, 0, 0, 0, -1);
         p25Status_simSet(false, false, -1, -1, -1, -1, 0, 0, 0);
         dstarStatus_simSet(false, false, "", "", "", 0, "");
         tetra_sim_clearCell();
@@ -798,17 +846,37 @@ static void cmd_ptt(const char *arg)
 /** Result of one command line. */
 enum cmd_result { CMD_OK = 0, CMD_ERR, CMD_QUIT };
 
+/*
+ * One command is at most this many words. It is 16 and not 12 because an
+ * `inject` with every option of a mode (`inject dpmr CC call S D TYPE frames N
+ * evm N rx 0`) is 13, and the day the tokeniser hit its ceiling it dropped the
+ * tail in silence: `rx 0` never arrived and the screen kept showing "RX". A
+ * command that does not fit is answered with an error instead.
+ */
+#define CMD_MAX_WORDS 16
+
 static enum cmd_result execute(char *line)
 {
-    char *argv[12];
+    char *argv[CMD_MAX_WORDS];
     int argc = 0;
+    bool overflow = false;
 
-    for (char *tok = strtok(line, " \t\r\n"); tok != NULL && argc < 12;
-         tok = strtok(NULL, " \t\r\n"))
+    for (char *tok = strtok(line, " \t\r\n"); tok != NULL;
+         tok = strtok(NULL, " \t\r\n")) {
+        if (argc >= CMD_MAX_WORDS) {
+            overflow = true;
+            break;
+        }
         argv[argc++] = tok;
+    }
 
     if (argc == 0)
         return CMD_OK;
+
+    if (overflow) {
+        say("#error too many words: a command is at most %d", CMD_MAX_WORDS);
+        return CMD_ERR;
+    }
 
     const char *cmd = argv[0];
 

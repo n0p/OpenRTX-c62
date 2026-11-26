@@ -57,6 +57,10 @@
 #include "protocols/TETRA/TetraStatus.h"
 #endif
 
+#ifdef UI_MODE_DPMR
+#include "protocols/DPMR/DpmrStatus.h"
+#endif
+
 /* --------------------------------------------------------------- helpers -- */
 
 static void setText(char *dst, const char *fmt, ...)
@@ -172,13 +176,54 @@ static void nxdnState(ui_mode_state_t *out)
 #ifdef UI_MODE_DPMR
 static void dpmrState(ui_mode_state_t *out)
 {
+    struct dpmrStatus st;
+
+    dpmr_getStatus(&st);
+    out->sync = st.sync;
+
+    if (!st.sync) {
+        setText(out->id, "dPMR SRCH");
+        return;
+    }
+
     /*
-     * dPMR publishes no frame counters: the squelch opens with the frame grid
-     * and the CCH CRC, and that is the only "is anyone there" flag the engine
-     * has (ui_quickmenu.c said the same when this was a row).
+     * The channel code of clause 6.1.5 is dPMR's colour code: it opens frames 2
+     * and 4 of a superframe, so it trails the first header by a frame and is
+     * unknown ("dPMR SYNC") until one of them closes its CCH CRC. "RX" is the
+     * squelch -- the frame grid being locked right now -- and not the same
+     * thing: the identifiers stay readable after the transmission ends, which
+     * is when the END status of a call is worth reading.
      */
-    out->sync = rtx_rxSquelchOpen();
-    setText(out->id, out->sync ? "dPMR RX" : "SRCH");
+    const char *rx = st.receiving ? " RX" : "";
+
+    if (st.channelCode >= 0)
+        setText(out->id, "CC%03X%s", (unsigned)st.channelCode, rx);
+    else
+        setText(out->id, "dPMR%s%s", st.receiving ? "" : " SYNC", rx);
+
+    /* Who calls whom: the two 24 bit addresses the header frame carried */
+    if (st.idsValid) {
+        out->call = true;
+        setText(out->callTxt, "%06lX>%06lX", (unsigned long)st.source,
+                (unsigned long)st.dest);
+    }
+
+    /* What the call is doing, and the status message of an END that carried one */
+    const char *name = dpmrStatus_callName(st.callType);
+
+    if (name != NULL) {
+        if (st.endHasStatus && (st.callType == DPMR_CALLTYPE_TX_REL)) {
+            setText(out->note, "%s S%u", name, (unsigned)st.endStatus);
+            /* The type alone when the status does not fit beside the code */
+            setText(out->noteShort, "%s", name);
+        } else {
+            setText(out->note, "%s", name);
+        }
+    }
+
+    /* Quality: the demodulator's level error and the frames it has decoded */
+    setText(out->qual, "e%u%% f%lu", (unsigned)(st.evm / 10),
+            (unsigned long)st.frames);
 }
 #endif /* UI_MODE_DPMR */
 

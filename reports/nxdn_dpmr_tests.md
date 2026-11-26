@@ -61,6 +61,8 @@ single group can be run on its own, e.g. `./build_linux/nxdn_tx_test "[ran]"`.
   main screen shows `dPMR RX`/`SRCH` only (`reports/mode_status.md`, and
   `ui_mode_state.c` says so in a comment). Making that provable means giving
   dPMR a status module like `NxdnStatus` — a product change, not a test.
+  **Closed later**: `DpmrStatus.c` publishes it and `unit/dpmr_status` asserts
+  both the struct and the texts the main screen draws (branch `t/dpmrstatus`).
 - **RF behaviour**: deviation, occupied bandwidth, sensitivity, BER against a
   real signal, and the transmitter's spectral mask after the PA. `docs/TX_NXDN.md`
   and `docs/RX_DPMR.md` are where those numbers live; they need the bench.

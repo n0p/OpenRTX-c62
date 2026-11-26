@@ -83,7 +83,7 @@ broadcast FM's dBuV and SNR.
 |---|---|---|
 | DMR | `CC1 TS2` (line 2), `src>dst` and `LC n%` (line 1), burst type (line 2 right) | `CC`, `TS`, `SYNC` |
 | NXDN | `RAN12 VOX` (line 2), `src>dst` + `e n% f n` (line 1), `VCALL`/`TX_REL`/`DISC` (line 2 right) | `SYNC`, `CALL`, `TYPE` |
-| dPMR | `dPMR RX` / `SRCH` (line 2) | `SYNC` |
+| dPMR | `CC0DD` + `RX` (line 2), `000135>00393D` + `e n% f n` (line 1), `VCALL`/`TX_REL`/`DISC` and the END status (line 2 right) | `SYNC` |
 | P25 | `NAC293 VOX` (line 2), `src>tg` + `ok n% f n` (line 1), `DUIDn` (line 2 right) | `SYNC`, `NAC`, `TYPE`, `CALL` |
 | YSF | `YSF RX` / `SRCH` (line 2) | `SYNC` |
 | D-STAR | `MY/SFX>UR` (line 2), `b n RPT` (line 1), slow-data text (line 2 right) | `SYNC`, `MY`, `UR`, `RPT`, `TXT` |

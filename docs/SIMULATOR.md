@@ -148,6 +148,21 @@ inject aprs-message EA5XYZ hola desde el aire          # to N0CALL-0 by default
 inject message 1234 hola                               # a message in the inbox
 ```
 
+`inject dmr`, `inject nxdn`, `inject dpmr`, `inject p25` and `inject dstar` fill
+the state block a mode draws on its main screen, and `inject mode-state` empties
+all of them: a screen that only says something once the receiver has decoded can
+be looked at without a radio. dPMR, for example:
+
+```sh
+inject dpmr 0x0DD call 0x135 0x393D 1 frames 12 evm 40  # CC0DD, 000135>00393D, VCALL
+inject dpmr 0x0DD call 0x135 0x393D 2 end 21 rx 0       # released, "TX_REL S21"
+inject dpmr - rx 1                                      # locked, no channel code: "dPMR RX"
+```
+
+A command is at most 16 words; a longer line is answered with `#error too many
+words` instead of being cut short, because a silently dropped option leaves the
+default in place and the screen then shows something nobody asked for.
+
 A short press is two entries in the keypad queue (press, release); a long press
 is the same key *held* for 700 ms, which is why `hold` re-feeds the queue: the
 firmware emits the long-press event itself, and no command can fake it.
