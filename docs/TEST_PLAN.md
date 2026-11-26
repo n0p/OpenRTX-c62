@@ -42,6 +42,25 @@ que alimente `OpMode_*::update()` con muestras sintéticas y compruebe el estado
 que se publica (sync, identificadores, calidad). Es exactamente la clase de
 hueco por la que un CC inestable se ve en la radio y no en los tests.
 
+## 1bis. La configuración del chip, por modo
+
+Lo que el firmware le pide al BK4819 al entrar en cada modo —canal y filtros de
+FI (`REG_43`), audio (`AF bypass` frente a de-énfasis y compander), ganancias de
+RX y TX (`REG_47`/`REG_48`/`REG_31`), DC y AGC (`REG_7E`), desviación de TX,
+portadora de AM— es hoy una secuencia de **efectos** repartida por
+`radio_C62.cpp`, y por eso no se puede comprobar sin radio. Ahí vivió el fallo de
+DMR: 25 kHz y filtros de 9 kHz donde el firmware de fábrica usa 12,5 kHz y 4,5.
+
+La regla que se adopta: esa configuración es **dato**, no efecto. Un plan por
+modo —`{registro, máscara, valor}`— que el driver recorre, y un test en el host
+que compara el plan con una tabla de oro por modo. Un cambio de ancho de banda,
+de filtro DC o de ganancia rompe el build en vez de aparecer en el aire.
+
+Se prueba, por modo: campo de canal y filtros de `REG_43`; modo de audio; bits
+de DC/AGC de `REG_7E` (DMR y M17 con el paso-alto **apagado**, TETRA encendido);
+ganancias; desviación de TX; y el camino de AM. `docs/RADIO_CONFIG.md` lleva la
+tabla con el porqué de cada valor.
+
 ## 2. Menús y ajustes
 
 - Recorrido completo con el simulador: `tools/simulator/menu_audit.py` (53
@@ -110,6 +129,7 @@ hacer push:
 7. **UI/UX** — teclas por pantalla, layout, máquinas de estado, estados vacíos.
 8. **Plataforma y protocolo** — pilas por hilo, cerrojos, perros, mensajes del
    CPS y del banco.
+9. **Configuración del chip por modo** — plan puro y tabla de oro (sección 1bis).
 
 Criterio de aceptación de cada sección: tests nuevos que **fallen si el
 comportamiento se rompe**, `meson test -C build_linux` en verde, y un informe con
