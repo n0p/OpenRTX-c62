@@ -203,7 +203,7 @@ Everything an overlay opens goes through `ui_open_screen(screen, item)` and
 nothing else. That one function remembers the main screen to come back to,
 clears a stale `edit_mode` (a leftover edit mode made the first key on the new
 screen mean "leave edit" instead of "move"), calls the module's own `open()`,
-selects the requested row — the quick menu's `DEST` and `META` used to land on
+selects the requested row — the quick menu's `CALL` and `META` used to land on
 the first field of the settings page — and arms or disarms the transmitter the
 way the destination screen needs. `MSGS` and `MSG` from the popup therefore
 behave exactly like the same entries in the menu.
@@ -468,9 +468,13 @@ broke.
 
 ### M17 (11 rows)
 
-`DEST` (opens Settings → M17 → callsign), `CAN` 0..15, `CANRX` toggle, `SRC`
-(read only), `META` (opens the meta text editor), `PWR`, `BKL`, `KEYLIT`,
-`LOCK`, `MSGS`, `MSG`.
+`CALL` (opens Settings → Identity → callsign, the station's one callsign), `CAN`
+0..15, `CANRX` toggle, `SRC` (read only), `META` (opens the meta text editor),
+`PWR`, `BKL`, `KEYLIT`, `LOCK`, `MSGS`, `MSG`.
+
+`CALL` is a rename: the row used to be `DEST` and opened the *own* callsign
+editor, which is the source address and not a destination. The destination of an
+M17 call is not settable from this radio.
 
 ### TETRA, receive only (10 rows)
 

@@ -157,6 +157,8 @@ const char *ui_dump_screenName(uint8_t screen)
             return "SETTINGS_GPS";
         case SETTINGS_RADIO:
             return "SETTINGS_RADIO";
+        case SETTINGS_IDENTITY:
+            return "SETTINGS_IDENTITY";
         case SETTINGS_AUDIO:
             return "SETTINGS_AUDIO";
         case SETTINGS_M17:
@@ -310,7 +312,7 @@ size_t ui_dump_text(char *buf, size_t len)
 
     append(buf, len, &pos,
            "settings: bright %u  sql %u  tx_power %umW  rx_fine %dHz  "
-           "keylight %s  brightness_timer %u\n",
+           "keylight %s  brightness_timer %u  callsign %s  dmr_id %lu\n",
            state.settings.brightness, state.settings.sqlLevel,
            (unsigned)state.settings.tx_power, (int)state.settings.rxFineHz,
 #ifdef CONFIG_KEY_BACKLIGHT
@@ -318,7 +320,8 @@ size_t ui_dump_text(char *buf, size_t len)
 #else
            "n/a",
 #endif
-           state.settings.display_timer);
+           state.settings.display_timer,
+           state.settings.callsign, (unsigned long)state.settings.dmr_id);
 
     append(buf, len, &pos,
            "modules: channels %s  contacts %s (%d)  zones %s  "
@@ -454,7 +457,8 @@ size_t ui_dump_json(char *buf, size_t len)
     append(buf, len, &pos,
            ",\"settings\":{\"brightness\":%u,\"sql\":%u,\"tx_power\":%u,"
            "\"rx_fine\":%d,\"key_backlight\":%s,\"m17_can\":%u,"
-           "\"display_timer\":%u,\"vol_prompt\":%u}",
+           "\"display_timer\":%u,\"vol_prompt\":%u,"
+           "\"callsign\":\"%s\",\"dmr_id\":%lu}",
            state.settings.brightness, state.settings.sqlLevel,
            (unsigned)state.settings.tx_power, (int)state.settings.rxFineHz,
 #ifdef CONFIG_KEY_BACKLIGHT
@@ -463,7 +467,8 @@ size_t ui_dump_json(char *buf, size_t len)
            "null",
 #endif
            state.settings.m17_can, state.settings.display_timer,
-           state.settings.vpLevel);
+           state.settings.vpLevel, state.settings.callsign,
+           (unsigned long)state.settings.dmr_id);
 
 #ifdef CONFIG_APRS
     append(buf, len, &pos,

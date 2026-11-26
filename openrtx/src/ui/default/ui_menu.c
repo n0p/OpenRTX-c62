@@ -11,6 +11,7 @@
 #include "core/utils.h"
 #include "ui/ui_default.h"
 #include "ui/ui_layout.h"
+#include "ui/ui_hints.h"
 #include "ui/ui_messages.h"
 #include "interfaces/nvmem.h"
 #include "interfaces/cps_io.h"
@@ -506,10 +507,6 @@ int _ui_getM17ValueName(char *buf, uint8_t max_len, uint8_t index)
 
     switch(index)
     {
-        case M17_CALLSIGN:
-            sniprintf(buf, max_len, "%s", last_state.settings.callsign);
-            break;
-
         case M17_METATEXT:
             // limit display to 8 characters
             if (strlen(last_state.settings.M17_meta_text) > 7)
@@ -682,6 +679,45 @@ int _ui_getAudioValueName(char *buf, uint8_t max_len, uint8_t index)
             sniprintf(buf, max_len, "%s", last_state.settings.vpPhoneticSpell ?
                                           currentLanguage->on :
                                           currentLanguage->off);
+            break;
+    }
+    return 0;
+}
+
+int _ui_getIdentityEntryName(char *buf, uint8_t max_len, uint8_t index)
+{
+    if(index >= settings_identity_num) return -1;
+    sniprintf(buf, max_len, "%s", settings_identity_items[index]);
+    return 0;
+}
+
+int _ui_getIdentityValueName(char *buf, uint8_t max_len, uint8_t index)
+{
+    if(index >= settings_identity_num) return -1;
+
+    switch(index)
+    {
+        case ID_CALLSIGN:
+            /* An empty field is a cleared record, not an identity: show it as
+             * nothing rather than as a blank the operator takes for a value. */
+            if(last_state.settings.callsign[0] == '\0')
+                sniprintf(buf, max_len, "-");
+            else
+                sniprintf(buf, max_len, "%s", last_state.settings.callsign);
+            break;
+
+        case ID_DMR_ID:
+            /*
+             * 0 is "no identity" (a call with 0 in the source field cannot be
+             * answered, docs/DMR_TX.md), and a read-only row shows "---" rather
+             * than a zero that reads as a real ID. The DMR main screen says the
+             * rest: no ID, no transmit.
+             */
+            if(settings_dmrIdValid(last_state.settings.dmr_id))
+                sniprintf(buf, max_len, "%lu",
+                          (unsigned long)last_state.settings.dmr_id);
+            else
+                sniprintf(buf, max_len, "---");
             break;
     }
     return 0;
@@ -1053,23 +1089,6 @@ void _ui_drawSettingsTimeDateSet(ui_state_t* ui_state)
 #ifdef UI_MODE_M17
 void _ui_drawSettingsM17(ui_state_t* ui_state)
 {
-    if((ui_state->edit_mode) && (ui_state->menu_selected == M17_CALLSIGN))
-    {
-        uint16_t rect_width = CONFIG_SCREEN_WIDTH - (layout.horizontal_pad * 2);
-        uint16_t rect_height = (CONFIG_SCREEN_HEIGHT - (layout.top_h + layout.bottom_h))/2;
-        point_t rect_origin = {(CONFIG_SCREEN_WIDTH - rect_width) / 2,
-                               (CONFIG_SCREEN_HEIGHT - rect_height) / 2};
-
-        gfx_printLine(1, 4, layout.top_h, CONFIG_SCREEN_HEIGHT - layout.bottom_h,
-                    layout.horizontal_pad, layout.menu_font,
-                    TEXT_ALIGN_LEFT, color_white, currentLanguage->callsign);
-        gfx_drawRect(rect_origin, rect_width, rect_height, color_white, false);
-        // Print M17 callsign being typed
-        gfx_printLine(1, 1, layout.top_h, CONFIG_SCREEN_HEIGHT - layout.bottom_h,
-                      layout.horizontal_pad, layout.input_font,
-                      TEXT_ALIGN_CENTER, color_white, ui_state->new_callsign);
-    }
-    else
     if((ui_state->edit_meta_text) && (ui_state->menu_selected == M17_METATEXT))
     {
         const uint8_t BOX_PAD = 2;
@@ -1209,6 +1228,91 @@ void _ui_drawSettingsAudio(ui_state_t* ui_state)
 {
     _ui_drawMenuListValue("Audio", ui_state, ui_state->menu_selected,
                           _ui_getAudioEntryName, _ui_getAudioValueName);
+}
+
+/**
+ * Box with a caption and the text being typed, in the middle of the screen.
+ *
+ * The callsign entry of this page is the one the M17 page used to draw, moved
+ * here with the row: same caption (the voice prompt's "callsign"), same box,
+ * same font. It is drawn as its own screen because the field is being typed
+ * character by character and the list behind it would only get in the way.
+ */
+static void _ui_drawTextEntryBox(const char *caption, const char *text)
+{
+    /* The entry replaces the list: it is its own screen, not an overlay on the
+     * rows, so the rows behind it must go (the M17 page drew the box over the
+     * list and let them show through). */
+    gfx_clearScreen();
+
+    uint16_t rect_width = CONFIG_SCREEN_WIDTH - (layout.horizontal_pad * 2);
+    uint16_t rect_height = (CONFIG_SCREEN_HEIGHT - (layout.top_h + layout.bottom_h)) / 2;
+    point_t rect_origin = {(CONFIG_SCREEN_WIDTH - rect_width) / 2,
+                           (CONFIG_SCREEN_HEIGHT - rect_height) / 2};
+
+    gfx_printLine(1, 4, layout.top_h, CONFIG_SCREEN_HEIGHT - layout.bottom_h,
+                  layout.horizontal_pad, layout.menu_font,
+                  TEXT_ALIGN_LEFT, color_white, caption);
+    gfx_drawRect(rect_origin, rect_width, rect_height, color_white, false);
+    gfx_printLine(1, 1, layout.top_h, CONFIG_SCREEN_HEIGHT - layout.bottom_h,
+                  layout.horizontal_pad, layout.input_font,
+                  TEXT_ALIGN_CENTER, color_white, text);
+}
+
+/**
+ * Settings -> Identity: the callsign row (text) and the DMR ID row (digits).
+ *
+ * Nothing is applied while a row is being edited: the number and the text live
+ * in ui_state until ENTER, and a value the field cannot hold is refused there
+ * and never reaches settings_t. That is why the page can afford to draw the
+ * entry as a box over the list: the list still shows the value in force.
+ */
+void _ui_drawSettingsIdentity(ui_state_t* ui_state)
+{
+    if(ui_state->edit_mode && (ui_state->menu_selected == ID_CALLSIGN))
+    {
+        _ui_drawTextEntryBox(currentLanguage->callsign, ui_state->new_callsign);
+    }
+    else if(ui_state->edit_mode && (ui_state->menu_selected == ID_DMR_ID))
+    {
+        char digits[12];
+        sniprintf(digits, sizeof(digits), "%lu",
+                  (unsigned long)ui_state->new_dmr_id);
+        _ui_drawTextEntryBox(settings_identity_items[ID_DMR_ID], digits);
+    }
+    else
+    {
+        _ui_drawMenuListValue("Identity", ui_state, ui_state->menu_selected,
+                              _ui_getIdentityEntryName, _ui_getIdentityValueName);
+    }
+
+    /*
+     * The refused value, under the rows and above the hints -- whether the
+     * entry box or the list is on screen, because a refused confirm keeps the
+     * edit open. The row still holds what is in force, and the operator is told
+     * the range instead of finding out when the radio will not key. The page
+     * has two rows, so the band above the hints is free.
+     */
+    const char *alert = NULL;
+
+    switch(ui_state->identity_alert)
+    {
+        case ID_ALERT_CALLSIGN:
+            alert = "Not saved: 1-9 A-Z 0-9 / -";
+            break;
+        case ID_ALERT_DMR_ID:
+            alert = "Not saved: 1-16777215";
+            break;
+        default:
+            break;
+    }
+
+    if(alert != NULL)
+    {
+        point_t pos = { 0, (int16_t)(CONFIG_SCREEN_HEIGHT - UI_HINTS_H - 4) };
+        gfx_print(pos, FONT_SIZE_5PT, TEXT_ALIGN_CENTER, yellow_fab413,
+                  "%s", alert);
+    }
 }
 
 void _ui_drawMacroTop()

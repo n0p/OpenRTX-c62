@@ -70,6 +70,7 @@ const ui_hints_t *ui_hints_for_screen(uint8_t screen)
 
         case SETTINGS_DISPLAY:
         case SETTINGS_RADIO:
+        case SETTINGS_IDENTITY:
         case SETTINGS_AUDIO:
         case SETTINGS_M17:
 #ifdef CONFIG_TETRA_AFC

@@ -130,6 +130,7 @@ extern void _ui_drawSettingsTetra(ui_state_t* ui_state);
 extern void _ui_drawSettingsVoicePrompts(ui_state_t* ui_state);
 extern void _ui_drawSettingsReset2Defaults(ui_state_t* ui_state);
 extern void _ui_drawSettingsRadio(ui_state_t* ui_state);
+extern void _ui_drawSettingsIdentity(ui_state_t* ui_state);
 extern void _ui_drawSettingsAudio(ui_state_t* ui_state);
 extern bool _ui_drawMacroMenu(ui_state_t* ui_state);
 extern void _ui_reset_menu_anouncement_tracking();
@@ -166,6 +167,7 @@ const char *settings_items[] =
     "GPS",
 #endif
     "Radio",
+    "Identity",
     "Audio",
 #ifdef UI_MODE_M17
     "M17",
@@ -225,9 +227,19 @@ const char *settings_audio_items[] =
     "Phonetic",
 };
 
-const char * settings_m17_items[] =
+/*
+ * Settings -> Identity. Two rows, and no mode owns either: the callsign is the
+ * station's name on every mode that carries one, the DMR ID the number DMR
+ * carries in the source field of every link control.
+ */
+const char *settings_identity_items[] =
 {
     "Callsign",
+    "DMR ID",
+};
+
+const char * settings_m17_items[] =
+{
     "Meta Txt",
     "CAN",
     "CAN RX Check"
@@ -330,6 +342,7 @@ const uint8_t settings_gps_num = sizeof(settings_gps_items)/sizeof(settings_gps_
 #endif
 const uint8_t settings_radio_num = sizeof(settings_radio_items)/sizeof(settings_radio_items[0]);
 const uint8_t settings_audio_num = sizeof(settings_audio_items)/sizeof(settings_audio_items[0]);
+const uint8_t settings_identity_num = sizeof(settings_identity_items)/sizeof(settings_identity_items[0]);
 #ifdef UI_MODE_M17
 const uint8_t settings_m17_num = sizeof(settings_m17_items)/sizeof(settings_m17_items[0]);
 #endif
@@ -2871,6 +2884,9 @@ void ui_updateFSM(bool *sync_rtx)
                         case S_RADIO:
                             state.ui_screen = SETTINGS_RADIO;
                             break;
+                        case S_IDENTITY:
+                            state.ui_screen = SETTINGS_IDENTITY;
+                            break;
                         case S_AUDIO:
                             state.ui_screen = SETTINGS_AUDIO;
                             break;
@@ -3316,6 +3332,169 @@ void ui_updateFSM(bool *sync_rtx)
                 else if(msg.keys & KEY_ESC)
                     _ui_menuBack(MENU_SETTINGS);
                 break;
+            /*
+             * Settings -> Identity (docs/UI.md): the callsign every
+             * transmitting mode shares and the radio's own DMR ID.
+             *
+             * Both rows edit a field of settings_t and nothing else: the RTX
+             * thread copies them into rtx_cfg on the next pass (core/threads.c),
+             * so confirming asks for that pass with *sync_rtx, and the debouncer
+             * in state_task() writes the record three seconds later like any
+             * other setting. There is no second copy anywhere -- a CPS
+             * `settings set --callsign --dmr-id` over the PC protocol lands in
+             * the same two fields (docs/PC_PROTO.md).
+             *
+             * A value that fails the range check is refused, not clamped: it is
+             * not written to the settings, the page says why under the rows
+             * (enum identityAlert) and edit mode stays on so the operator can
+             * correct the digits or leave with red.
+             */
+            case SETTINGS_IDENTITY:
+                /*
+                 * The reason a confirm was refused stays on the page until the
+                 * operator presses a key, and no longer: this branch runs on
+                 * every pass of the loop (the periodic part included, with no
+                 * keys), so clearing it unconditionally would leave the warning
+                 * on screen for one frame and no more.
+                 */
+                if(msg.keys != 0)
+                    ui_state.identity_alert = ID_ALERT_NONE;
+                if(ui_state.edit_mode)
+                {
+                    switch (ui_state.menu_selected)
+                    {
+                        case ID_CALLSIGN:
+                            if(msg.keys & KEY_ENTER)
+                            {
+                                _ui_textInputConfirm(ui_state.new_callsign);
+                                if(settings_callsignValid(ui_state.new_callsign))
+                                {
+                                    memset(state.settings.callsign, 0,
+                                           sizeof(state.settings.callsign));
+                                    strncpy(state.settings.callsign,
+                                            ui_state.new_callsign,
+                                            sizeof(state.settings.callsign) - 1);
+                                    *sync_rtx = true;
+                                    ui_state.edit_mode = false;
+                                    vp_announceBuffer(&currentLanguage->callsign,
+                                                      false, true,
+                                                      state.settings.callsign);
+                                }
+                                else
+                                {
+                                    /* Empty, too long or outside the alphabet */
+                                    ui_state.identity_alert = ID_ALERT_CALLSIGN;
+                                }
+                            }
+                            else if(msg.keys & KEY_ESC)
+                            {
+                                ui_state.edit_mode = false;
+                                vp_announceBuffer(&currentLanguage->callsign,
+                                                  false, true,
+                                                  state.settings.callsign);
+                            }
+                            else if(msg.keys & KEY_UP || msg.keys & KEY_DOWN ||
+                                    msg.keys & KEY_LEFT || msg.keys & KEY_RIGHT ||
+                                    msg.keys & KNOB_LEFT || msg.keys & KNOB_RIGHT)
+                            {
+                                _ui_textInputDel(ui_state.new_callsign);
+                            }
+                            else if(input_isCharPressed(msg))
+                            {
+                                _ui_textInputKeypad(ui_state.new_callsign,
+                                                    SETTINGS_CALLSIGN_LEN - 1,
+                                                    msg, true);
+                            }
+                            else if (msg.long_press && (msg.keys & KEY_F1) &&
+                                     (state.settings.vpLevel > vpBeep))
+                            {
+                                vp_announceBuffer(&currentLanguage->callsign,
+                                                  true, true,
+                                                  ui_state.new_callsign);
+                                f1Handled=true;
+                            }
+                            break;
+                        case ID_DMR_ID:
+                            if(msg.keys & KEY_ENTER)
+                            {
+                                if(settings_dmrIdValid(ui_state.new_dmr_id))
+                                {
+                                    state.settings.dmr_id = ui_state.new_dmr_id;
+                                    *sync_rtx = true;
+                                    ui_state.edit_mode = false;
+                                    vp_queueInteger((int32_t)state.settings.dmr_id);
+                                }
+                                else
+                                {
+                                    /* 0, or more than 24 bits */
+                                    ui_state.identity_alert = ID_ALERT_DMR_ID;
+                                }
+                            }
+                            else if(msg.keys & KEY_ESC)
+                            {
+                                ui_state.edit_mode = false;
+                                vp_queueInteger((int32_t)state.settings.dmr_id);
+                            }
+                            else if(input_isNumberPressed(msg))
+                            {
+                                _ui_numberInputKeypad(&ui_state.new_dmr_id, msg);
+                                if(ui_state.new_dmr_id_digits < 8)
+                                    ui_state.new_dmr_id_digits++;
+                            }
+                            else if((msg.keys & (KEY_UP | KEY_DOWN | KEY_LEFT |
+                                                 KEY_RIGHT | KNOB_LEFT |
+                                                 KNOB_RIGHT)) &&
+                                    (ui_state.new_dmr_id_digits > 0))
+                            {
+                                /* Backspace: drop the last digit typed */
+                                ui_state.new_dmr_id /= 10;
+                                ui_state.new_dmr_id_digits--;
+                                ui_state.last_keypress = 0;
+                                vp_queueInteger((int32_t)ui_state.new_dmr_id);
+                            }
+                            break;
+                        default:
+                            state.ui_screen = SETTINGS_IDENTITY;
+                    }
+                }
+                else
+                {
+                    if(msg.keys & KEY_UP || msg.keys & KNOB_LEFT)
+                        _ui_menuUp(settings_identity_num);
+                    else if(msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
+                        _ui_menuDown(settings_identity_num);
+                    else if(msg.keys & KEY_ENTER)
+                    {
+                        ui_state.edit_mode = true;
+                        ui_state.input_position = 0;
+                        ui_state.input_set = 0;
+                        ui_state.input_number = 0;
+                        ui_state.last_keypress = 0;
+
+                        if(ui_state.menu_selected == ID_CALLSIGN)
+                        {
+                            /* The entry starts empty: the operator types the
+                             * whole callsign, as the M17 page did before this
+                             * row moved here. */
+                            _ui_textInputReset(ui_state.new_callsign,
+                                               sizeof(ui_state.new_callsign));
+                            vp_announceBuffer(&currentLanguage->callsign,
+                                              true, true,
+                                              ui_state.new_callsign);
+                        }
+                        else
+                        {
+                            /* Digits accumulate from zero; the current ID is
+                             * already on the row if the operator wants it. */
+                            ui_state.new_dmr_id = 0;
+                            ui_state.new_dmr_id_digits = 0;
+                            vp_queueInteger((int32_t)ui_state.new_dmr_id);
+                        }
+                    }
+                    else if(msg.keys & KEY_ESC)
+                        _ui_menuBack(MENU_SETTINGS);
+                }
+                break;
 #ifdef UI_MODE_M17
             // M17 Settings
             case SETTINGS_M17:
@@ -3323,40 +3502,6 @@ void ui_updateFSM(bool *sync_rtx)
                 {
                     switch (ui_state.menu_selected)
                     {
-                        case M17_CALLSIGN:
-                            // Handle text input for M17 callsign
-                            if(msg.keys & KEY_ENTER)
-                            {
-                                _ui_textInputConfirm(ui_state.new_callsign);
-                                // Save selected callsign and disable input mode
-                                strncpy(state.settings.callsign, ui_state.new_callsign, 10);
-                                ui_state.edit_mode = false;
-                                vp_announceBuffer(&currentLanguage->callsign,
-                                                  false, true, state.settings.callsign);
-                            }
-                            else if(msg.keys & KEY_ESC)
-                            {
-                                // Discard selected callsign and disable input mode
-                                ui_state.edit_mode = false;
-                                vp_announceBuffer(&currentLanguage->callsign,
-                                                  false, true, state.settings.callsign);
-                            }
-                            else if(msg.keys & KEY_UP || msg.keys & KEY_DOWN ||
-                                     msg.keys & KEY_LEFT || msg.keys & KEY_RIGHT)
-                            {
-                                _ui_textInputDel(ui_state.new_callsign);
-                            }
-                            else if(input_isCharPressed(msg))
-                            {
-                                _ui_textInputKeypad(ui_state.new_callsign, 9, msg, true);
-                            }
-                            else if (msg.long_press && (msg.keys & KEY_F1) && (state.settings.vpLevel > vpBeep))
-                            {
-                                vp_announceBuffer(&currentLanguage->callsign,
-                                                  true, true, ui_state.new_callsign);
-                                f1Handled=true;
-                            }
-                            break;
                         case M17_METATEXT:
                             // Handle text input for the M17 meta text
                             if(msg.keys & KEY_ENTER)
@@ -3425,14 +3570,6 @@ void ui_updateFSM(bool *sync_rtx)
                         // Enable edit mode
                         ui_state.edit_mode = true;
 
-                        // If callsign input, reset text input variables
-                        if(ui_state.menu_selected == M17_CALLSIGN)
-                        {
-                            _ui_textInputReset(ui_state.new_callsign,
-                                    sizeof(ui_state.new_callsign));
-                            vp_announceBuffer(&currentLanguage->callsign,
-                                            true, true, ui_state.new_callsign);
-                        }
                         // If message input, reset text input variables
                         if(ui_state.menu_selected == M17_METATEXT)
                         {
@@ -3986,6 +4123,10 @@ bool ui_updateGUI()
         // Voice prompts and phonetics
         case SETTINGS_AUDIO:
             _ui_drawSettingsAudio(&ui_state);
+            break;
+        // Station identity: callsign and DMR ID
+        case SETTINGS_IDENTITY:
+            _ui_drawSettingsIdentity(&ui_state);
             break;
         // Low battery screen
         case LOW_BAT:

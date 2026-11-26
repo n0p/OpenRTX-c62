@@ -49,6 +49,7 @@ import argparse
 import json
 import os
 import shutil
+import struct
 import sys
 import tempfile
 import time
@@ -69,7 +70,7 @@ MODES = {
         "SQL", "PWR", "CTCSS", "TONE", "BW", "SHIFT", "1750", "BKL",
         "KEYLIT", "LOCK", "MSGS", "ESPECTRO", "MSG", "APRS", "PKT"]},
     "M17": {"tx": True, "page": "SETTINGS_M17", "rows": [
-        "DEST", "CAN", "CANRX", "SRC", "META", "PWR", "BKL", "KEYLIT",
+        "CALL", "CAN", "CANRX", "SRC", "META", "PWR", "BKL", "KEYLIT",
         "LOCK", "MSGS", "MSG"]},
     "TETRA": {"tx": False, "page": "SETTINGS_TETRA", "rows": [
         "AFC", "FINE", "CELL", "LA/CC", "REG", "NET", "UL", "CALL", "BKL",
@@ -107,9 +108,9 @@ TOP_MENU = ["Banks", "Channels", "Zones", "Contacts", "Messages", "GPS",
             "Settings", "Backup", "Info", "About"]
 
 # Settings pages, in menu order (ui.c, settings_items[]).
-SETTINGS_PAGES = ["Display", "Time & Date", "GPS", "Radio", "Audio", "M17",
-                  "TETRA", "FM", "DMR", "NXDN", "dPMR", "P25", "YSF", "DSTAR",
-                  "AM", "WFM", "Accessibility", "Default Settings"]
+SETTINGS_PAGES = ["Display", "Time & Date", "GPS", "Radio", "Identity", "Audio",
+                  "M17", "TETRA", "FM", "DMR", "NXDN", "dPMR", "P25", "YSF",
+                  "DSTAR", "AM", "WFM", "Accessibility", "Default Settings"]
 
 # Every screen of this build the tour visits (ui/ui_default.h, enum uiScreen;
 # the names are the ones ui_dump_screenName() prints).
@@ -119,7 +120,8 @@ SCREENS = [
     "MENU_GPS", "MENU_SETTINGS", "MENU_BACKUP_RESTORE", "MENU_BACKUP",
     "MENU_RESTORE", "MENU_INFO", "MENU_ABOUT",
     "SETTINGS_TIMEDATE", "SETTINGS_TIMEDATE_SET", "SETTINGS_DISPLAY",
-    "SETTINGS_GPS", "SETTINGS_RADIO", "SETTINGS_AUDIO", "SETTINGS_M17",
+    "SETTINGS_GPS", "SETTINGS_RADIO", "SETTINGS_IDENTITY", "SETTINGS_AUDIO",
+    "SETTINGS_M17",
     "SETTINGS_TETRA", "SETTINGS_FM", "SETTINGS_MODE", "SETTINGS_ACCESSIBILITY",
     "SETTINGS_RESET2DEFAULTS",
     "MENU_APRS", "APRS_DETAIL", "APRS_MSGS", "APRS_MSG_VIEW", "APRS_MSG_EDIT",
@@ -900,6 +902,122 @@ class Tour:
         self.key("RED")
         self.home()
 
+    def phase_identity(self):
+        """
+        Settings -> Identity: the station callsign and the DMR ID (docs/UI.md).
+
+        The two halves of who the radio is on the air, and the only settings
+        rows that are typed. The tour checks the whole path: that the DMR screen
+        refuses to transmit while there is no ID and says why, that the callsign
+        entry takes the callsign alphabet, that a value the field cannot hold is
+        refused with the range on screen, and that a good one lands in
+        state.settings -- which is the same field a `settings set --callsign
+        --dmr-id` writes over the PC protocol.
+        """
+        self.step_name = "identity"
+
+        # A default record has no DMR ID, and the DMR main screen says so
+        self.goto_mode("DMR")
+        d = self.capture("identity-dmr-no-id")
+        self.check(d["settings"]["dmr_id"] == 0,
+                   "the tour does not start with an empty DMR ID (%d)"
+                   % d["settings"]["dmr_id"])
+        self.check("NO TX" in self.text_of(d),
+                   "the DMR screen does not say the radio will not transmit "
+                   "without a DMR ID: %s" % self.text_of(d))
+
+        # The page: two rows, the callsign and the number
+        self.settings_list()
+        self.menu_to(SETTINGS_PAGES.index("Identity"), on="MENU_SETTINGS")
+        self.key("GREEN")
+        d = self.capture("settings-identity", screen="SETTINGS_IDENTITY")
+        rows = self.rows_of(d)
+        if rows != ["Callsign", "DMR ID"]:
+            self.fail("the Identity page draws %s, not Callsign and DMR ID"
+                      % rows)
+        self.check("N0CALL" in self.text_of(d),
+                   "the callsign row does not show the callsign in force: %s"
+                   % self.text_of(d))
+        self.check("---" in self.text_of(d),
+                   "an empty DMR ID does not read as no identity: %s"
+                   % self.text_of(d))
+
+        # 1. The callsign: one press per key -- D, G, T, 0
+        self.key("GREEN")
+        d = self.capture("settings-identity-callsign-entry",
+                         screen="SETTINGS_IDENTITY")
+        for k in ("3", "4", "8", "0"):
+            self.key(k)
+        self.capture("settings-identity-callsign-typed")
+        self.key("GREEN")
+        d = self.capture("settings-identity-callsign-saved")
+        self.check(d["settings"]["callsign"] == "DGT0",
+                   "the callsign entry did not reach the settings (%r)"
+                   % d["settings"]["callsign"])
+        self.check("DGT0" in self.text_of(d),
+                   "the row does not show the new callsign: %s"
+                   % self.text_of(d))
+
+        # 2. An out-of-range DMR ID: refused, with the range on screen, and
+        #    nothing written half way
+        self.menu_to(1, on="SETTINGS_IDENTITY")
+        self.key("GREEN")
+        for _ in range(8):
+            self.key("9")
+        self.capture("settings-identity-dmr-typed")
+        self.key("GREEN")
+        # One more pass of the UI loop before the dump: the refused confirm is
+        # a redraw that does not change the screen's structure, and the dump
+        # reads the last *committed* frame -- a key that draws and commits
+        # inside the same millisecond can leave it one frame behind.
+        self.sim.sleep(50)
+        self.sim.sync()
+        d = self.capture("settings-identity-dmr-refused")
+        self.check("Not saved" in self.text_of(d),
+                   "a DMR ID of 99999999 is refused with no word on screen: %s"
+                   % self.text_of(d))
+        self.check(d["settings"]["dmr_id"] == 0,
+                   "the refused DMR ID was stored anyway (%d)"
+                   % d["settings"]["dmr_id"])
+
+        # Red drops the refused entry; the talkgroup call is still not a call
+        self.key("RED")
+        d = self.capture("settings-identity-dmr-unchanged")
+        self.check(d["settings"]["dmr_id"] == 0,
+                   "red after a refused entry wrote the value")
+
+        # 3. A valid one: 2143001, the ID the PC protocol test uses
+        self.key("GREEN")
+        for k in ("2", "1", "4", "3", "0", "0", "1"):
+            self.key(k)
+        self.key("GREEN")
+        d = self.capture("settings-identity-dmr-saved")
+        self.check(d["settings"]["dmr_id"] == 2143001,
+                   "the DMR ID entry did not reach the settings (%d)"
+                   % d["settings"]["dmr_id"])
+        self.check("2143001" in self.text_of(d),
+                   "the row does not show the new DMR ID: %s"
+                   % self.text_of(d))
+
+        for _ in range(3):
+            if self.dump()["screen"]["name"] == "MENU_SETTINGS":
+                break
+            self.key("RED")
+        self.check(self.dump()["screen"]["name"] == "MENU_SETTINGS",
+                   "red does not come back to the Settings list from Identity")
+        self.home()
+
+        # 4. The DMR screen keeps quiet now, and the mode is back to its own
+        #    line (the colour code and the timeslot are in its quick menu)
+        self.goto_mode("DMR")
+        d = self.capture("identity-dmr-with-id")
+        self.check("NO TX" not in self.text_of(d),
+                   "the DMR screen still refuses to transmit with an ID: %s"
+                   % self.text_of(d))
+        self.goto_mode("FM")
+        self.home()
+        self.assert_alive("after the identity page")
+
     def phase_tools(self):
         """P1 held down: the tools menu, its five rows and the mode submenu."""
         self.step_name = "tools"
@@ -1524,6 +1642,39 @@ class Tour:
                  % (len(SCREENS) - len(missing), len(SCREENS), len(MODE_ORDER),
                     len(TOP_MENU), len(SETTINGS_PAGES)))
 
+    def phase_identity_record(self):
+        """
+        The settings record on disk, after a clean power-off.
+
+        The tour edited the callsign and the DMR ID through the keys; the radio
+        stores state.settings in its NVM and this is the same file a real board
+        boots from. The simulator writes it on shutdown (state_terminate(),
+        core/openrtx.c), so the run ends here: quit, then read the record the
+        way the next power-up will. Without this the tour would only prove that
+        the settings *structure* changed, not that the value survives the radio
+        being switched off -- and the whole point of the page is that the
+        operator types an identity once.
+        """
+        self.step_name = "identity record"
+        self.sim.quit()
+
+        path = os.path.join(self.tmp, "state", "OpenRTX", "state.bin")
+        if not os.path.exists(path):
+            self.fail("the simulator wrote no settings record at %s" % path)
+            return
+
+        with open(path, "rb") as f:
+            blob = f.read()
+
+        self.check(b"DGT0" in blob,
+                   "the callsign typed on the radio is not in the settings "
+                   "record on disk (%d bytes)" % len(blob))
+
+        # state.settings.dmr_id as the struct holds it, little endian
+        self.check(struct.pack("<I", 2143001) in blob,
+                   "the DMR ID typed on the radio is not in the settings "
+                   "record on disk")
+
     # ------------------------------------------------------------------ run --
 
     def run(self):
@@ -1533,6 +1684,7 @@ class Tour:
         self.phase_frequency_entry()
         self.phase_top_menu()
         self.phase_settings()
+        self.phase_identity()
         self.phase_modes()
         self.phase_quick_menu_fm()
         self.phase_dmr_tx()
@@ -1553,6 +1705,9 @@ class Tour:
         self.capture("end-main-vfo", screen="MAIN_VFO")
 
         self.phase_coverage()
+
+        # Last, because it ends the run: what the radio boots with next time.
+        self.phase_identity_record()
 
         elapsed = time.time() - started
         screens = sorted({r["screen"] for r in self.records})

@@ -13,7 +13,7 @@
  *   - the keypad enters a frequency and ENTER applies it;
  *   - three seconds of a held arrow start the carrier search;
  *   - the main menu carries Messages and it opens the inbox;
- *   - DMR can key the transmitter (its PTT gate).
+ *   - DMR does not key a transmitter that has no DMR ID, and says why.
  *
  * The tests exist because every one of these paths was covered *below* the
  * dispatch (qm_open(), qm_page_open(), _ui_fsm_insertVFONumber(), the search
@@ -412,30 +412,40 @@ TEST_CASE("Symptom: the main menu carries Messages and it opens the inbox",
 
 /* ---------------------------------------------------------------- symptom 1 */
 
-TEST_CASE("Symptom: DMR can key the transmitter", "[ui][dmr][tx]")
+TEST_CASE("Symptom: DMR needs an identity to key", "[ui][dmr][tx]")
 {
     /*
-     * The PTT gate of OpMode_DMR. What has to hold is that a radio whose
-     * settings record was reset -- the usual result of a firmware update that
-     * grows the record, so the personal DMR ID comes back as 0 -- still keys,
-     * with the default talkgroup as the destination.
+     * The PTT gate of OpMode_DMR. A settings record that came back reset (the
+     * usual result of a firmware update that grows the record) has dmr_id 0,
+     * and 0 in the source field of a link control is a call from nobody: the
+     * radio refuses to key and the DMR screen says why (ui_main.c,
+     * "NO TX: DMR ID 0"), which is what makes the refusal honest instead of a
+     * dead PTT. The ID is set in Settings -> Identity or with
+     * `cps.py settings set --dmr-id`, both of which write the same field.
      */
     const settings_t *d = &default_settings;
 
     REQUIRE(d->dmr_dest_type == DMR_DEST_GROUP);
-    REQUIRE(dmrKey_allowed(d->dmr_dest_type, d->dmr_dest_id, 0));
+    REQUIRE(d->dmr_id == 0);
+    REQUIRE_FALSE(settings_dmrIdValid(d->dmr_id));
+
+    /* No own ID: nothing keys, whatever the destination is */
+    REQUIRE_FALSE(dmrKey_allowed(d->dmr_dest_type, d->dmr_dest_id, 0));
+    REQUIRE_FALSE(dmrKey_allowed(DMR_DEST_NONE, d->dmr_dest_id, 0));
+
+    /* With one, the default talkgroup is a call */
     REQUIRE(dmrKey_allowed(d->dmr_dest_type, d->dmr_dest_id, 1234567));
 
-    /* No destination at all resolves to the default talkgroup, group call */
-    REQUIRE(dmrKey_allowed(DMR_DEST_NONE, d->dmr_dest_id, 0));
-
-    /* A unit call needs an identifier to put in the header */
-    REQUIRE(dmrKey_allowed(DMR_DEST_USER, 1234567, 0));
+    /* A unit call needs an identifier to put in the header as well */
+    REQUIRE(dmrKey_allowed(DMR_DEST_USER, 1234567, 1234567));
     REQUIRE_FALSE(dmrKey_allowed(DMR_DEST_USER, 0, 1234567));
     REQUIRE_FALSE(dmrKey_allowed(DMR_DEST_GROUP, 0, 1234567));
 
     /* An unknown type is a corrupted record, not a call */
     REQUIRE_FALSE(dmrKey_allowed(42, 9, 1234567));
+
+    /* And beyond 24 bits is not an identifier */
+    REQUIRE_FALSE(dmrKey_allowed(d->dmr_dest_type, d->dmr_dest_id, 16777216U));
 
     /* And the capability itself: DMR is a transmitting mode in this build */
 #if defined(CONFIG_DMR_TX)

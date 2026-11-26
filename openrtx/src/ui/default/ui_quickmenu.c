@@ -1065,7 +1065,9 @@ static const qm_item_t qm_items_fm[] =
 
 static const qm_item_t qm_items_m17[] =
 {
-    QM_ITEM_GOTO("DEST", SETTINGS_M17, M17_CALLSIGN),
+    /* The callsign is the station's, not M17's: the row lands on the one
+     * Identity page every transmitting mode shares (docs/UI.md). */
+    QM_ITEM_GOTO("CALL", SETTINGS_IDENTITY, ID_CALLSIGN),
     QM_ITEM_INT("CAN", 0, 15, 1, qm_m17_get_can, qm_m17_set_can),
     QM_ITEM_TOGGLE("CANRX", qm_m17_get_canrx, qm_m17_set_canrx),
     QM_ITEM_INFO("SRC", qm_m17_fmt_src),

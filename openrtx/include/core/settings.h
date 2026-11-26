@@ -10,6 +10,7 @@
 #include "hwconfig.h"
 #include "core/datatypes.h"
 #include <stdbool.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -116,7 +117,7 @@ typedef struct
     uint8_t voxLevel;             // Vox level
     int8_t  utc_timezone;         // Timezone, in units of half hours
     bool    gps_enabled;          // GPS active
-    char    callsign[10];         // Plaintext callsign
+    char    callsign[10];         // Station callsign, 9 chars + NUL (see below)
     uint8_t display_timer   : 4,  // Standby timer
             m17_can         : 4;  // M17 CAN
     uint8_t vpLevel         : 3,  // Voice prompt level
@@ -394,6 +395,47 @@ static const settings_t default_settings =
 static inline bool settings_dmrIdValid(uint32_t id)
 {
     return (id >= DMR_ID_MIN) && (id <= DMR_ID_MAX);
+}
+
+/**
+ * Length of settings_t.callsign, terminator included: nine characters and the
+ * NUL.  Nine is not an arbitrary budget.  The M17 link setup frame carries the
+ * source address in 48 bits of base-40, which is exactly nine symbols of the
+ * callsign alphabet, and the PC protocol refuses a tenth byte for the same
+ * reason (`settingsFields[]`, core/pc_proto_ops.c).  A tenth character would
+ * live in the field with no room left for its terminator, and every consumer
+ * that treats the field as a string -- the M17 encoder, the APRS service, the
+ * splash screen -- would read past it.
+ */
+#define SETTINGS_CALLSIGN_LEN 10
+
+/**
+ * True if cs is a callsign the radio can put on the air: one to nine characters
+ * of the ITU-T E.161 alphabet the callsign entry offers -- A-Z, 0-9, '/', '-'
+ * -- with no leading or trailing blank.  The blank is in the entry's alphabet
+ * (it is the alternate symbol of the 0 key) so that a multi-tap mistake can be
+ * cycled through, but a callsign that starts or ends with one is a typo, not an
+ * identity: the M17 source and the APRS base address would carry it verbatim.
+ */
+static inline bool settings_callsignValid(const char *cs)
+{
+    if ((cs == NULL) || (cs[0] == '\0') || (cs[0] == ' '))
+        return false;
+
+    size_t n = 0;
+
+    for (; cs[n] != '\0'; n++) {
+        char c = cs[n];
+        bool ok = ((c >= 'A') && (c <= 'Z')) || ((c >= '0') && (c <= '9')) ||
+                  (c == '/') || (c == '-') || (c == ' ');
+        if (!ok)
+            return false;
+    }
+
+    if ((n >= SETTINGS_CALLSIGN_LEN) || (cs[n - 1] == ' '))
+        return false;
+
+    return true;
 }
 
 /**

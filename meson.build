@@ -1463,7 +1463,11 @@ ui_vfo_search_test = executable('ui_vfo_search_test',
 # La segunda, sin APRS, es la que demuestra que las pantallas de mensajes,
 # contactos y zonas siguen despachandose: su bloque vivia dentro de
 # `#ifdef CONFIG_APRS`, asi que en esa configuracion no habia menu de mensajes.
-ui_regressions_src = ['tests/unit/ui_regressions.cpp']
+# The Identity page (callsign and DMR ID) has its own file: it is the only
+# settings page whose rows are typed, and its harness (keys, NVM) is the same
+# one the regressions use, so it rides in the same binary.
+ui_regressions_src = ['tests/unit/ui_regressions.cpp',
+                      'tests/unit/ui_identity.cpp']
 ui_regressions_aprs_src = ['openrtx/src/ui/default/ui_aprs.c',
                            'openrtx/src/core/aprs_service.c',
                            'openrtx/src/core/messaging_aprs.c',

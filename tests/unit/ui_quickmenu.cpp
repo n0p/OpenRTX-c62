@@ -151,7 +151,10 @@ TEST_CASE("Quick menu has a table per operating mode", "[ui][quickmenu]")
 #ifdef CONFIG_M17
     const qm_menu_t *m17 = qm_findMenu(OPMODE_M17);
     REQUIRE(m17->mode == OPMODE_M17);
-    REQUIRE(rowOf(m17, "DEST") == 0);
+    /* The callsign row is "CALL" and lands on the shared Identity page */
+    REQUIRE(rowOf(m17, "CALL") == 0);
+    REQUIRE(m17->items[rowOf(m17, "CALL")].goto_screen == SETTINGS_IDENTITY);
+    REQUIRE(m17->items[rowOf(m17, "CALL")].goto_item == ID_CALLSIGN);
 #endif
 
 #ifdef CONFIG_TETRA

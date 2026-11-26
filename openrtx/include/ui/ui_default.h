@@ -53,6 +53,13 @@ enum uiScreen
     SETTINGS_DISPLAY,
     SETTINGS_GPS,
     SETTINGS_RADIO,
+    /*
+     * The station identity (docs/UI.md). Appended here, next to the other
+     * fixed settings pages, and not at the end of the enum: nothing reaches a
+     * screen by its number -- the quick menu's QM_GOTO rows use the constant,
+     * the tour and the coverage test compare names (ui_dump_screenName).
+     */
+    SETTINGS_IDENTITY,
     SETTINGS_AUDIO,
     SETTINGS_M17,
 #ifdef CONFIG_TETRA_AFC
@@ -215,6 +222,14 @@ enum settingsItems
     S_GPS,
 #endif
     S_RADIO,
+    /*
+     * The station identity: the callsign every transmitting mode shares and the
+     * numeric DMR ID (docs/UI.md). Its own page and not a row of a mode's page
+     * because the callsign is not a mode's property -- M17 sends it as the
+     * source address, APRS as the base of its AX.25 address, and DMR has no
+     * callsign at all. One row, one field, one place.
+     */
+    S_IDENTITY,
     S_AUDIO,
 #ifdef UI_MODE_M17
     S_M17,
@@ -288,10 +303,32 @@ enum settingsAudioItems
     AU_PHONETIC,
 };
 
+/*
+ * Settings -> Identity (docs/UI.md): the two halves of who this radio is on the
+ * air. The first is text in the callsign alphabet, the second a 24-bit number.
+ */
+enum settingsIdentityItems
+{
+    ID_CALLSIGN = 0,
+    ID_DMR_ID
+};
+
+/*
+ * What the Identity page says under its rows when the last confirm was refused.
+ * The value was not applied and not stored: an out-of-range DMR ID would put a
+ * source nobody can answer into every link control, and an empty or malformed
+ * callsign making it to the M17 source field is a call from nobody.
+ */
+enum identityAlert
+{
+    ID_ALERT_NONE = 0,
+    ID_ALERT_CALLSIGN,   /**< 1..9 characters, A-Z 0-9 / -                  */
+    ID_ALERT_DMR_ID      /**< 1..16777215, 0 means "no identity"            */
+};
+
 enum settingsM17Items
 {
-    M17_CALLSIGN = 0,
-    M17_METATEXT,
+    M17_METATEXT = 0,
     M17_CAN,
     M17_CAN_RX
 };
@@ -394,6 +431,14 @@ typedef struct ui_state_t
 #endif
     char new_callsign[10];
     freq_t new_offset;
+    /*
+     * Identity page: the DMR ID being typed and the reason the last confirm was
+     * refused (enum identityAlert, drawn under the rows). Both are UI state
+     * only: nothing is applied until the value passes the range check.
+     */
+    uint32_t new_dmr_id;
+    uint8_t new_dmr_id_digits;
+    uint8_t identity_alert;
     // Which state to return to when we exit menu
     uint8_t last_main_state;
 #if defined(CONFIG_UI_NO_KEYBOARD)
@@ -411,6 +456,7 @@ extern const char *display_items[];
 extern const char *settings_gps_items[];
 extern const char *settings_radio_items[];
 extern const char *settings_audio_items[];
+extern const char *settings_identity_items[];
 extern const char *settings_m17_items[];
 extern const char *settings_fm_items[];
 #ifdef CONFIG_TETRA_AFC
@@ -427,6 +473,7 @@ extern const uint8_t display_num;
 extern const uint8_t settings_gps_num;
 extern const uint8_t settings_radio_num;
 extern const uint8_t settings_audio_num;
+extern const uint8_t settings_identity_num;
 #ifdef UI_MODE_M17
 extern const uint8_t settings_m17_num;
 #endif

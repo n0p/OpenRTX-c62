@@ -436,6 +436,16 @@ bool OpMode_DMR::startTx(const rtxStatus_t *status)
         return txRefuse("no hay codificador AMBE+2 en esta imagen");
     }
 
+    if (!settings_dmrIdValid(status->dmrSourceId)) {
+        /*
+         * No own ID: the link control would carry 0 in its source field, a call
+         * from nobody that no repeater can answer. The screen says the same
+         * thing (ui_main.c, "NO TX: DMR ID 0") and Settings -> Identity is
+         * where the number is set.
+         */
+        return txRefuse("sin ID propio: Ajustes > Identidad, 1..16777215");
+    }
+
     if (!dmrKey_allowed(status->dmrDestType, status->dmrDestId,
                         status->dmrSourceId)) {
         /*

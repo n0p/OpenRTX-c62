@@ -30,7 +30,13 @@
 #ifdef UI_MODE_DSTAR
 #include "protocols/DSTAR/DStarStatus.h"
 #endif
-#ifdef CONFIG_DMR
+/*
+ * The DMR screens read the demodulator's status, which the host builds link as
+ * a stub (platform/targets/linux/emulator/ui_mode_status.c), so they are keyed
+ * on the UI flag like NXDN's, P25's and D-STAR's above: the simulator draws
+ * them, and the firmware and the host build show the same screen.
+ */
+#ifdef UI_MODE_DMR
 #include "protocols/DMR/DmrDefs.h"
 #include "protocols/DMR/DmrStatus.h"
 #endif
@@ -64,9 +70,11 @@
  * @param left: left margin, pixels.
  * @param texts: candidate texts, longest first.
  * @param n: number of candidates.
+ * @param color: ink colour; a warning passes its own so that it does not read
+ *               as the value it replaces.
  */
-static void _ui_printFit(point_t pos, fontSize_t font, uint16_t left,
-                         const char *const *texts, size_t n)
+static void _ui_printFitColor(point_t pos, fontSize_t font, uint16_t left,
+                              const char *const *texts, size_t n, color_t color)
 {
     uint16_t avail = 0;
     if (CONFIG_SCREEN_WIDTH > 2 * left)
@@ -75,7 +83,20 @@ static void _ui_printFit(point_t pos, fontSize_t font, uint16_t left,
     size_t i = 0;
     while (i + 1 < n && gfx_getTextWidth(font, texts[i]) > avail)
         i++;
-    gfx_print(pos, font, TEXT_ALIGN_CENTER, color_white, "%s", texts[i]);
+    gfx_print(pos, font, TEXT_ALIGN_CENTER, color, "%s", texts[i]);
+}
+
+static void _ui_printFit(point_t pos, fontSize_t font, uint16_t left,
+                         const char *const *texts, size_t n)
+{
+    _ui_printFitColor(pos, font, left, texts, n, color_white);
+}
+
+/** Print the same, in colour: a warning is not the reading it replaces. */
+static void _ui_printFitWarn(point_t pos, fontSize_t font, uint16_t left,
+                             const char *const *texts, size_t n)
+{
+    _ui_printFitColor(pos, font, left, texts, n, yellow_fab413);
 }
 
 /**
@@ -365,10 +386,17 @@ const char* _ui_getToneEnabledString(bool tone_tx_enable, bool tone_rx_enable,
     return strings[use_abbreviation][index];
 }
 
-#ifdef CONFIG_DMR
+#ifdef UI_MODE_DMR
 /**
  * DMR colour code, timeslot and call state, on line 2 (replacing the channel
  * mode line) and line 1 (where TETRA puts its demodulator figures).
+ *
+ * Without an own DMR ID the transmitter does not key (rtx/DmrKey.h) and this
+ * line says so instead of the colour code: the operator looks here for the
+ * state of the modem, and a radio that silently refuses the PTT is what
+ * docs/TX_SAFETY.md exists to prevent. The row that fixes it is Settings ->
+ * Identity, and the colour code and the timeslot stay readable in the DMR
+ * quick menu.
  */
 static void _ui_drawDmrInfo(void)
 {
@@ -376,6 +404,12 @@ static void _ui_drawDmrInfo(void)
     dmr_getStatus(&ds);
     const uint16_t pad = layout.horizontal_pad;
     char a[32];
+
+    if (!settings_dmrIdValid(state.settings.dmr_id)) {
+        const char *noTx[] = { "NO TX: DMR ID 0", "NO TX: NO ID", "NO TX" };
+        _ui_printFitWarn(layout.line2_pos, layout.line2_font, pad, noTx, 3);
+        return;
+    }
 
     if (!ds.sync) {
         const char *searching[] = { "DMR searching" };
@@ -834,7 +868,7 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
             break;
         }
 
-#ifdef CONFIG_DMR
+#ifdef UI_MODE_DMR
         case OPMODE_DMR:
             _ui_drawDmrInfo();
             break;
@@ -1232,6 +1266,12 @@ void _ui_drawMainVFO(ui_state_t* ui_state)
     if(_ui_callShown() == false)
         _ui_drawFrequency();
 
+/*
+ * Line 1 is the burst the demodulator last saw, which the host builds do not
+ * have (ui_mode_status.c stubs the status, not dmr_data_type_name): it stays a
+ * firmware line. Line 2 above is drawn in both, so the simulator shows the
+ * same "no ID, no transmit" warning the radio does.
+ */
 #ifdef CONFIG_DMR
     if(last_state.channel.mode == OPMODE_DMR)
         _ui_drawDmrLine1();

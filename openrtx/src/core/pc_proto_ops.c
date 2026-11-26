@@ -829,7 +829,17 @@ static int settingsApply(const struct settingsField *f, settings_t *s,
         case SK_U32:
             if (!pc_tlv_get_u32(tlv, tlvLen, f->tag, &u32))
                 return PC_ERR_BAD_REQUEST;
-            if (u32 > 16777215u) /* 24 bits on the air */
+            if (f->tag == PC_TAG_SET_DMR_ID) {
+                /*
+                 * The radio's own ID is the source field of every link control:
+                 * 0 there is a call from nobody, so it is refused here exactly
+                 * as the Identity page refuses it (settings_dmrIdValid, and the
+                 * transmitter will not key with it either).
+                 */
+                if (!settings_dmrIdValid(u32))
+                    return PC_ERR_INVALID_VALUE;
+            }
+            else if (u32 > 16777215u) /* 24 bits on the air */
                 return PC_ERR_INVALID_VALUE;
             base[0] = (uint8_t)(u32 & 0xFF);
             base[1] = (uint8_t)((u32 >> 8) & 0xFF);
@@ -842,6 +852,20 @@ static int settingsApply(const struct settingsField *f, settings_t *s,
                 return PC_ERR_BAD_REQUEST;
             if (strLen >= f->len)
                 return PC_ERR_TOO_LARGE;
+            if (f->tag == PC_TAG_SET_CALLSIGN) {
+                /*
+                 * One alphabet for the callsign, whichever side types it: the
+                 * one the radio's callsign entry offers and the M17 source
+                 * field can carry (settings_callsignValid). An empty callsign
+                 * is refused as well -- it would clear the identity of a radio
+                 * that transmits, and the UI cannot produce one either.
+                 */
+                char text[SETTINGS_CALLSIGN_LEN];
+                memcpy(text, str, strLen);
+                text[strLen] = '\0';
+                if (!settings_callsignValid(text))
+                    return PC_ERR_INVALID_VALUE;
+            }
             memset(base, 0, f->len);
             memcpy(base, str, strLen);
             return PC_OK;
