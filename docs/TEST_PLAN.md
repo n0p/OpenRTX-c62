@@ -44,15 +44,43 @@ hueco por la que un CC inestable se ve en la radio y no en los tests.
 
 ## 2. Menús y ajustes
 
-- Recorrido completo con el simulador: `tools/simulator/menu_audit.py` (53
-  pantallas, 265 filas) y `tour.py` (314 pantallas). Debe dar **0 filas no
-  actuables**.
-- Un ajuste por pantalla, no dos: el puerto de accesorio vive sólo en el menú de
-  P1 (`tests/unit/ui_menu_audit.cpp` lo fija con tres aserciones).
-- Persistencia: cambiar un ajuste, reiniciar el simulador, comprobarlo; y que un
-  registro viejo migre sin perder lo del operador (`unit/settings_record`).
-- P1/P2 cambian el valor en toda edición de Ajustes; flechas también.
-- Guardado diferido: un cambio sobrevive a apagar (el debouncer escribe a los 3 s).
+Todo lo de esta sección se decide en el host; nada de aquí necesita el banco.
+
+- **Ninguna fila muerta, en ninguna pantalla.** `tools/simulator/menu_audit.py`
+  recorre las 53 pantallas fila a fila (236 filas) y termina en error si una fila
+  no contesta a ninguna tecla (P2, P1, verde) ni cambia un valor, una pantalla,
+  el registro de ajustes o el receptor. Es el test `Simulator Menu Audit`. Las
+  filas de las pantallas de datos (Info, Zonas, Contactos, Mensajes, APRS, PKT,
+  Espectro) las mide el recorrido a nivel de pantalla y las cubre fila a fila
+  `tests/unit/ui_menu_audit.cpp`.
+- **Un ajuste, un sitio.** El mismo recorrido atribuye cada fila a los campos de
+  `settings_t` que escribe (diff del bloque `settings` del dump, que ahora lleva
+  el registro entero) y falla si un campo se cambia dos veces en una pantalla,
+  desde dos páginas fijas de Ajustes, o desde dos familias de pantallas que no
+  sean el bloque de acceso rápido declarado en el propio `menu_audit.py`
+  (`SHARED_SETTINGS`: brillo, luz de teclas, squelch y ajuste fino de RX). El
+  puerto de accesorio tiene además su aserción estructural en
+  `unit/ui_menu_audit` ("The accessory port is one row, in the tools menu").
+- **Persistencia.** `tools/simulator/settings_persist.py` (test `Simulator
+  Settings Persistence`): un cambio en Ajustes ▸ Pantalla y el puerto de
+  accesorio, cambiado en el menú de P1, siguen ahí tras apagar y encender.
+- **Guardado diferido.** El mismo test: medio segundo después del cambio el
+  registro del disco todavía tiene el valor viejo (un corte de corriente lo
+  pierde, y así se comprueba: `powercut` sale sin secuencia de apagado) y a los
+  4,5 s tiene el nuevo, que sobrevive al corte. Y un valor que el firmware
+  corrige al cargar (brillo > 100) se escribe de vuelta en el registro.
+- **Migración.** `unit/settings_record`: un registro de la versión 7 se migra
+  byte a byte (memcmp de todo el prefijo, con todos los bloques que se añadieron
+  después rellenos), el campo añadido vuelve a su valor de fábrica y el registro
+  que se escribe después ya es de la versión 8.
+- **P1/P2 cambian el valor en toda edición de Ajustes**; las flechas también
+  (`unit/ui_menu_audit`, "P1 and P2 change the value in a Settings edit"); el
+  `Simulator Menu Audit` lo vuelve a medir fila a fila.
+- **Lo que no cubre:** los campos de canal que editan las páginas de modo
+  (CTCSS, tono, ancho de banda de FM) no son `settings_t` y quedan fuera de la
+  regla de duplicados; los ajustes que se escriben con el teclado (indicativo,
+  DMR ID) no cambian con una tecla y no aparecen en el mapa; y las pantallas de
+  datos se miden a nivel de pantalla, como se ha dicho arriba.
 
 ## 3. Lógica de UI/UX
 

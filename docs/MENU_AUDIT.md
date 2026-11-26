@@ -25,6 +25,10 @@ radio draws.
 - **A dead row** would be a row whose three keys change nothing and which is not
   a status row. The list at the end of this file is empty: this pass was the one
   that removed the last ones.
+- The last two sections are the other half of the audit: **which screen changes
+  which field of the settings record**, measured by diffing the `settings` block
+  of the dump across each key press, and the list of fields that more than one
+  screen can change.
 
 ## What the walk found
 
@@ -35,6 +39,13 @@ radio draws.
 | 3 | Settings ▸ Display, Radio, Audio, Accessibility, FM, M17, TETRA | P1/P2 did nothing in an edit: the pages only answered the arrows, so the same row read one way in the popup and another here | P1/P2 change the value, as everywhere else | `ui: P1 and P2 change the value in a Settings edit` |
 | 4 | Settings ▸ Radio, the eleven popups, the tools menu | the accessory port could be set from three screens, and the code for two of them (the `R_PC_PORT` row, `QM_ITEM_PORT`, the docs that still pointed at them) stayed behind after cb779871 | one row, in the tools menu; the leftovers are gone and a test forbids a second row | `ui: the port is one row, and the code for the other two is gone` |
 | 5 | tools menu (P1 long) | the tour still declared five rows and failed on the sixth | the tour knows the `Puerto` row and flips it | `sim: a menu audit, and the tour knows the tools menu has six rows` |
+
+The pass that made these guarantees permanent found no new defect: 53 screens,
+236 rows, none dead, one row for the accessory port. It did find the table below
+stale — the mode-status pass that landed with it moved the receiver's state to
+the main screen, so the popups no longer carry `CC`/`TS`/`SYNC` rows — and
+regenerated it from a fresh walk. What it added is the machinery of "What keeps
+this true" below.
 
 Two rows that are **not** dead but are worth knowing about, and were left alone:
 
@@ -51,6 +62,52 @@ Two rows that are **not** dead but are worth knowing about, and were left alone:
 - **`AM ▸ STEP`** and **Settings ▸ Radio ▸ Step** both drive the global tuning
   step (the mode's raster also stores `am_step` and re-applies it on entry);
   they are two settings that interact, not one setting written twice.
+
+## What keeps this true
+
+The table above is a snapshot; two rules and three tests are what stop it going
+stale, and they are what the menu pass left behind.
+
+**No dead row.** `menu_audit.py` presses P2, P1 and ENTER on every row of every
+screen and fails if none of them changes the value, the screen, the settings
+record, the receiver or the keypad lock — unless the row is a `QM_INFO` row of a
+popup, which is the receiver's state and is reported as `status`. A `QM_INFO`
+row *inside* a Settings page is a defect, not a status: `qm_page_open()` builds
+those pages without them and the audit fails if one comes back. The run is
+`meson test -C build_linux "Simulator Menu Audit"`, and it exits non-zero on the
+first defect it finds.
+
+**One place per setting.** The same walk attributes each row to the fields of
+`settings_t` it writes, and applies three rules:
+
+1. *one row per field per screen* — a page that lists a field twice is the FM
+   page of the last pass, which carried `CTCSS TX`, `CTCSS RX` and `Cancel CT`
+   on top of `CTCSS En.`;
+2. *one fixed page per field* — no exception: two fixed pages that change the
+   same field is the accessory port, which `Settings ▸ Radio`, every mode's
+   popup and the tools menu could set;
+3. *a mode's popup and that mode's own Settings page are one family* (they are
+   the same table, `qm_page_open()`), so they may carry the same field; a second
+   family may too, but only if the field is declared in `SHARED_SETTINGS` at the
+   top of `menu_audit.py` with the reason. That list is the operator's
+   quick-access block — brightness, the keypad light, the squelch and the manual
+   RX trim — and nothing else.
+
+**The record survives.** `settings_persist.py` (`meson test -C build_linux
+"Simulator Settings Persistence"`) changes a value on a Settings page and the
+accessory port in the tools menu, power-cycles the simulator and reads them
+back; it also measures the deferred write of `core/state.c` — nothing on the
+flash half a second after a change, the new value 4.5 s later, with no shutdown
+sequence at all — and that a value the firmware repairs at load is written back.
+`tests/unit/settings_record.cpp` covers the upgrade: a version 7 record loses
+nothing, byte for byte, and the record written next is a version 8 one.
+
+What the walks still do not cover: the rows of the data screens (Info, Zones,
+Contacts, Messages, APRS, Packet, Spectrum) are measured at screen level by
+`menu_audit.py` and row by row by `tests/unit/ui_menu_audit.cpp`; the channel
+fields a mode's page edits (CTCSS, tone, bandwidth) are not `settings_t` and are
+outside the duplicate rule; and a setting typed in with the keypad (callsign,
+DMR ID) changes no value on one key press, so it has no field in the map below.
 
 ## Reproducing the walk
 
@@ -86,10 +143,23 @@ python3 tools/simulator/tour.py --out /tmp/tour
 meson test -C build_sim "Simulator Menu Tour"
 ```
 
+The two checks behind those rules are the audit itself — it exits 1 on a dead
+row or on a settings field that two screens change — and the persistence walk:
+
+```sh
+python3 tools/simulator/menu_audit.py --out /tmp/menu-audit
+python3 tools/simulator/settings_persist.py --out /tmp/persist
+meson test -C build_linux "Simulator Menu Audit" "Simulator Settings Persistence"
+```
+
+The audit is the slowest test of the tree (it dumps the screen between every key
+press of every row, ~12 minutes); `--only popup,page --modes FM` walks one mode
+while developing, and `--allow-defects` reports without failing.
+
 ## The table
 # Menu audit
 
-Generated by `tools/simulator/menu_audit.py` on 2026-11-26T18:56:45.
+Generated by `tools/simulator/menu_audit.py` on 2026-11-26T19:55:26.
 
 `enter` is GREEN, `p1`/`p2` are F1/F2. A dash means the key changed
 nothing on the screen, in `settings` or in `radio`.
@@ -134,12 +204,11 @@ Screen `POPUP`.
 |---|---|---|---|---|---|
 | `CALL` | goto |  | opens SETTINGS_IDENTITY | — | — |
 | `CAN` | int | 0 | 0 -> 1, settings | 1 -> 0, settings | 0 -> 1, settings |
-| `CANRX` | toggle | OFF | OFF -> ON | ON -> OFF | OFF -> ON |
-| `SRC` | info | N0CALL | status | status | status |
+| `CANRX` | toggle | OFF | OFF -> ON, settings | ON -> OFF, settings | OFF -> ON, settings |
 | `META` | goto |  | opens SETTINGS_M17 | — | — |
-| `PWR` | int | 1W | 1W -> 1.5W | 1.5W -> 1W | 1W -> 1.5W |
+| `PWR` | int | 1.5W | 1.5W -> 2W | 2W -> 1.5W | 1.5W -> 2W |
 | `BKL` | int | 100 | 95 -> 100, settings | 100 -> 95, settings | — |
-| `KEYLIT` | toggle | ON | ON -> OFF, settings | OFF -> ON, settings | ON -> OFF, settings |
+| `KEYLIT` | toggle | OFF | OFF -> ON, settings | ON -> OFF, settings | OFF -> ON, settings |
 | `LOCK` | toggle | OFF | OFF -> ON, lock True | ON -> OFF, lock False | OFF -> ON, lock True |
 | `MSGS` | goto |  | opens MENU_MESSAGES | — | — |
 | `MSG` | goto |  | opens MSG_COMPOSE | — | — |
@@ -152,7 +221,7 @@ Screen `MODE_PAGE`.
 |---|---|---|---|---|---|
 | `Meta Txt` |  | OpenRTX | edit | — | — |
 | `CAN` |  | 1 | edit | 2 -> 1, settings | 1 -> 2, settings |
-| `CAN RX Check` |  | ON | edit | OFF -> ON | ON -> OFF |
+| `CAN RX Check` |  | ON | edit | OFF -> ON, settings | ON -> OFF, settings |
 
 ## quick menu, mode TETRA
 
@@ -160,15 +229,9 @@ Screen `POPUP`.
 
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
-| `AFC` | toggle | ON | ON -> OFF | OFF -> ON | ON -> OFF |
+| `AFC` | toggle | ON | ON -> OFF, settings | OFF -> ON, settings | ON -> OFF, settings |
 | `FINE` | int | +0Hz | +0Hz -> +10Hz, settings | +10Hz -> +0Hz, settings | +0Hz -> +10Hz, settings |
 | `CELL UL` | enum | OFF | NO UL -> OFF | — | OFF -> NO UL |
-| `CELL` | info | --- | status | status | status |
-| `LA/CC` | info | LA- CC0 | status | status | status |
-| `REG` | info | - | status | status | status |
-| `NET` | info | - | status | status | status |
-| `UL` | info | - | status | status | status |
-| `CALL` | info | IDLE | status | status | status |
 | `BKL` | int | 100 | 95 -> 100, settings | 100 -> 95, settings | — |
 | `KEYLIT` | toggle | ON | ON -> OFF, settings | OFF -> ON, settings | ON -> OFF, settings |
 | `LOCK` | toggle | OFF | OFF -> ON, lock True | ON -> OFF, lock False | OFF -> ON, lock True |
@@ -181,7 +244,7 @@ Screen `MODE_PAGE`.
 
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
-| `AFC` |  | OFF | edit | ON -> OFF | OFF -> ON |
+| `AFC` |  | OFF | edit | ON -> OFF, settings | OFF -> ON, settings |
 
 ## quick menu, mode DMR
 
@@ -189,14 +252,11 @@ Screen `POPUP`.
 
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
-| `CC` | info | CC- | status | status | status |
-| `TS` | info | TS- | status | status | status |
-| `SYNC` | info | SRCH | status | status | status |
-| `CALL` | enum | GROUP | GROUP -> USER | USER -> GROUP | GROUP -> USER |
-| `DEST` | int | ID9 | ID9 -> ID10 | ID10 -> ID9 | ID9 -> ID10 |
-| `FINE` | int | +0Hz | +0Hz -> +10Hz, settings | +10Hz -> +0Hz, settings | +0Hz -> +10Hz, settings |
+| `CALL` | enum | GROUP | GROUP -> USER, settings | USER -> GROUP, settings | GROUP -> USER, settings |
+| `DEST` | int | ID9 | ID9 -> ID10, settings | ID10 -> ID9, settings | ID9 -> ID10, settings |
+| `FINE` | int | +10Hz | +10Hz -> +20Hz, settings | +20Hz -> +10Hz, settings | +10Hz -> +20Hz, settings |
 | `BKL` | int | 100 | 95 -> 100, settings | 100 -> 95, settings | — |
-| `KEYLIT` | toggle | ON | ON -> OFF, settings | OFF -> ON, settings | ON -> OFF, settings |
+| `KEYLIT` | toggle | OFF | OFF -> ON, settings | ON -> OFF, settings | OFF -> ON, settings |
 | `LOCK` | toggle | OFF | OFF -> ON, lock True | ON -> OFF, lock False | OFF -> ON, lock True |
 | `MSGS` | goto |  | opens MENU_MESSAGES | — | — |
 | `MSG` | goto |  | opens MSG_COMPOSE | — | — |
@@ -207,11 +267,11 @@ Screen `MODE_PAGE`.
 
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
-| `CALL` | enum | USER | USER -> GROUP | GROUP -> USER | USER -> GROUP |
-| `DEST` | int | TG10 | TG10 -> TG11 | TG11 -> TG10 | TG10 -> TG11 |
-| `FINE` | int | +10Hz | +10Hz -> +20Hz, settings | +20Hz -> +10Hz, settings | +10Hz -> +20Hz, settings |
+| `CALL` | enum | USER | USER -> GROUP, settings | GROUP -> USER, settings | USER -> GROUP, settings |
+| `DEST` | int | TG10 | TG10 -> TG11, settings | TG11 -> TG10, settings | TG10 -> TG11, settings |
+| `FINE` | int | +20Hz | +20Hz -> +30Hz, settings | +30Hz -> +20Hz, settings | +20Hz -> +30Hz, settings |
 | `BKL` | int | 100 | 95 -> 100, settings | 100 -> 95, settings | — |
-| `KEYLIT` | toggle | OFF | OFF -> ON, settings | ON -> OFF, settings | OFF -> ON, settings |
+| `KEYLIT` | toggle | ON | ON -> OFF, settings | OFF -> ON, settings | ON -> OFF, settings |
 | `LOCK` | toggle | OFF | toggles the keypad lock | toggles the keypad lock | lock True |
 | `MSGS` | goto |  | opens MENU_MESSAGES | — | — |
 | `MSG` | goto |  | opens MSG_COMPOSE | — | — |
@@ -222,14 +282,11 @@ Screen `POPUP`.
 
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
-| `RAN` | int | ANY | RAN 63 -> ANY | ANY -> RAN 63 | — |
+| `RAN` | int | ANY | RAN 63 -> ANY, settings | ANY -> RAN 63, settings | — |
 | `BW` | enum | 12.5 | 12.5 -> 6.25 | 6.25 -> 12.5 | 12.5 -> 6.25 |
-| `SYNC` | info | SRCH | status | status | status |
-| `CALL` | info | --- | status | status | status |
-| `TYPE` | info | - | status | status | status |
-| `FINE` | int | +0Hz | +0Hz -> +10Hz, settings | +10Hz -> +0Hz, settings | +0Hz -> +10Hz, settings |
+| `FINE` | int | +30Hz | +30Hz -> +40Hz, settings | +40Hz -> +30Hz, settings | +30Hz -> +40Hz, settings |
 | `BKL` | int | 100 | 95 -> 100, settings | 100 -> 95, settings | — |
-| `KEYLIT` | toggle | ON | ON -> OFF, settings | OFF -> ON, settings | ON -> OFF, settings |
+| `KEYLIT` | toggle | OFF | OFF -> ON, settings | ON -> OFF, settings | OFF -> ON, settings |
 | `LOCK` | toggle | OFF | OFF -> ON, lock True | ON -> OFF, lock False | OFF -> ON, lock True |
 | `MSGS` | goto |  | opens MENU_MESSAGES | — | — |
 | `MSG` | goto |  | opens MSG_COMPOSE | — | — |
@@ -240,11 +297,11 @@ Screen `MODE_PAGE`.
 
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
-| `RAN` | int | ANY | RAN 63 -> ANY | ANY -> RAN 63 | — |
+| `RAN` | int | ANY | RAN 63 -> ANY, settings | ANY -> RAN 63, settings | — |
 | `BW` | enum | 6.25 | 6.25 -> 12.5 | 12.5 -> 6.25 | 6.25 -> 12.5 |
-| `FINE` | int | +10Hz | +10Hz -> +20Hz, settings | +20Hz -> +10Hz, settings | +10Hz -> +20Hz, settings |
+| `FINE` | int | +40Hz | +40Hz -> +50Hz, settings | +50Hz -> +40Hz, settings | +40Hz -> +50Hz, settings |
 | `BKL` | int | 100 | 95 -> 100, settings | 100 -> 95, settings | — |
-| `KEYLIT` | toggle | OFF | OFF -> ON, settings | ON -> OFF, settings | OFF -> ON, settings |
+| `KEYLIT` | toggle | ON | ON -> OFF, settings | OFF -> ON, settings | ON -> OFF, settings |
 | `LOCK` | toggle | OFF | toggles the keypad lock | toggles the keypad lock | lock True |
 | `MSGS` | goto |  | opens MENU_MESSAGES | — | — |
 | `MSG` | goto |  | opens MSG_COMPOSE | — | — |
@@ -255,13 +312,12 @@ Screen `POPUP`.
 
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
-| `SYNC` | info | SRCH | status | status | status |
-| `FINE` | int | +0Hz | +0Hz -> +10Hz, settings | +10Hz -> +0Hz, settings | +0Hz -> +10Hz, settings |
+| `FINE` | int | +50Hz | +50Hz -> +60Hz, settings | +60Hz -> +50Hz, settings | +50Hz -> +60Hz, settings |
 | `BKL` | int | 100 | 95 -> 100, settings | 100 -> 95, settings | — |
-| `KEYLIT` | toggle | ON | ON -> OFF, settings | OFF -> ON, settings | ON -> OFF, settings |
+| `KEYLIT` | toggle | OFF | OFF -> ON, settings | ON -> OFF, settings | OFF -> ON, settings |
 | `LOCK` | toggle | OFF | OFF -> ON, lock True | ON -> OFF, lock False | OFF -> ON, lock True |
-| `MSGS` | goto |  | opens MENU_MESSAGES | — | — |
-| `MSG` | goto |  | opens MSG_COMPOSE | — | — |
+| `MSGS` | goto |  | opens MENU_MESSAGES,  -> ON | — | — |
+| `MSG` | goto |  | opens MSG_COMPOSE,  -> OFF | — | — |
 
 ## dPMR (Settings)
 
@@ -269,9 +325,9 @@ Screen `MODE_PAGE`.
 
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
-| `FINE` | int | +10Hz | +10Hz -> +20Hz, settings | +20Hz -> +10Hz, settings | +10Hz -> +20Hz, settings |
+| `FINE` | int | +60Hz | +60Hz -> +70Hz, settings | +70Hz -> +60Hz, settings | +60Hz -> +70Hz, settings |
 | `BKL` | int | 100 | 95 -> 100, settings | 100 -> 95, settings | — |
-| `KEYLIT` | toggle | OFF | OFF -> ON, settings | ON -> OFF, settings | OFF -> ON, settings |
+| `KEYLIT` | toggle | ON | ON -> OFF, settings | OFF -> ON, settings | ON -> OFF, settings |
 | `LOCK` | toggle | OFF | toggles the keypad lock | toggles the keypad lock | lock True |
 | `MSGS` | goto |  | opens MENU_MESSAGES | — | — |
 | `MSG` | goto |  | opens MSG_COMPOSE | — | — |
@@ -282,13 +338,9 @@ Screen `POPUP`.
 
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
-| `SYNC` | info | SRCH | status | status | status |
-| `NAC` | info | --- | status | status | status |
-| `TYPE` | info | --- | status | status | status |
-| `CALL` | info | --- | status | status | status |
-| `FINE` | int | +0Hz | +0Hz -> +10Hz, settings | +10Hz -> +0Hz, settings | +0Hz -> +10Hz, settings |
+| `FINE` | int | +70Hz | +70Hz -> +80Hz, settings | +80Hz -> +70Hz, settings | +70Hz -> +80Hz, settings |
 | `BKL` | int | 100 | 95 -> 100, settings | 100 -> 95, settings | — |
-| `KEYLIT` | toggle | ON | ON -> OFF, settings | OFF -> ON, settings | ON -> OFF, settings |
+| `KEYLIT` | toggle | OFF | OFF -> ON, settings | ON -> OFF, settings | OFF -> ON, settings |
 | `LOCK` | toggle | OFF | OFF -> ON, lock True | ON -> OFF, lock False | OFF -> ON, lock True |
 | `MSGS` | goto |  | opens MENU_MESSAGES | — | — |
 | `MSG` | goto |  | opens MSG_COMPOSE | — | — |
@@ -299,9 +351,9 @@ Screen `MODE_PAGE`.
 
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
-| `FINE` | int | +10Hz | +10Hz -> +20Hz, settings | +20Hz -> +10Hz, settings | +10Hz -> +20Hz, settings |
+| `FINE` | int | +80Hz | +80Hz -> +90Hz, settings | +90Hz -> +80Hz, settings | +80Hz -> +90Hz, settings |
 | `BKL` | int | 100 | 95 -> 100, settings | 100 -> 95, settings | — |
-| `KEYLIT` | toggle | OFF | OFF -> ON, settings | ON -> OFF, settings | OFF -> ON, settings |
+| `KEYLIT` | toggle | ON | ON -> OFF, settings | OFF -> ON, settings | ON -> OFF, settings |
 | `LOCK` | toggle | OFF | toggles the keypad lock | toggles the keypad lock | lock True |
 | `MSGS` | goto |  | opens MENU_MESSAGES | — | — |
 | `MSG` | goto |  | opens MSG_COMPOSE | — | — |
@@ -312,10 +364,9 @@ Screen `POPUP`.
 
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
-| `SYNC` | info | SRCH | status | status | status |
-| `FINE` | int | +0Hz | +0Hz -> +10Hz, settings | +10Hz -> +0Hz, settings | +0Hz -> +10Hz, settings |
+| `FINE` | int | +90Hz | +90Hz -> +100Hz, settings | +100Hz -> +90Hz, settings | +90Hz -> +100Hz, settings |
 | `BKL` | int | 100 | 95 -> 100, settings | 100 -> 95, settings | — |
-| `KEYLIT` | toggle | ON | ON -> OFF, settings | OFF -> ON, settings | ON -> OFF, settings |
+| `KEYLIT` | toggle | OFF | OFF -> ON, settings | ON -> OFF, settings | OFF -> ON, settings |
 | `LOCK` | toggle | OFF | OFF -> ON, lock True | ON -> OFF, lock False | OFF -> ON, lock True |
 | `MSGS` | goto |  | opens MENU_MESSAGES | — | — |
 | `MSG` | goto |  | opens MSG_COMPOSE | — | — |
@@ -326,9 +377,9 @@ Screen `MODE_PAGE`.
 
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
-| `FINE` | int | +10Hz | +10Hz -> +20Hz, settings | +20Hz -> +10Hz, settings | +10Hz -> +20Hz, settings |
+| `FINE` | int | +100Hz | +100Hz -> +110Hz, settings | +110Hz -> +100Hz, settings | +100Hz -> +110Hz, settings |
 | `BKL` | int | 100 | 95 -> 100, settings | 100 -> 95, settings | — |
-| `KEYLIT` | toggle | OFF | OFF -> ON, settings | ON -> OFF, settings | OFF -> ON, settings |
+| `KEYLIT` | toggle | ON | ON -> OFF, settings | OFF -> ON, settings | ON -> OFF, settings |
 | `LOCK` | toggle | OFF | toggles the keypad lock | toggles the keypad lock | lock True |
 | `MSGS` | goto |  | opens MENU_MESSAGES | — | — |
 | `MSG` | goto |  | opens MSG_COMPOSE | — | — |
@@ -339,14 +390,9 @@ Screen `POPUP`.
 
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
-| `SYNC` | info | SRCH | status | status | status |
-| `MY` | info | --- | status | status | status |
-| `UR` | info | --- | status | status | status |
-| `RPT` | info | --- | status | status | status |
-| `TXT` | info | --- | status | status | status |
-| `FINE` | int | +0Hz | +0Hz -> +10Hz, settings | +10Hz -> +0Hz, settings | +0Hz -> +10Hz, settings |
+| `FINE` | int | +110Hz | +110Hz -> +120Hz, settings | +120Hz -> +110Hz, settings | +110Hz -> +120Hz, settings |
 | `BKL` | int | 100 | 95 -> 100, settings | 100 -> 95, settings | — |
-| `KEYLIT` | toggle | ON | ON -> OFF, settings | OFF -> ON, settings | ON -> OFF, settings |
+| `KEYLIT` | toggle | OFF | OFF -> ON, settings | ON -> OFF, settings | OFF -> ON, settings |
 | `LOCK` | toggle | OFF | OFF -> ON, lock True | ON -> OFF, lock False | OFF -> ON, lock True |
 | `MSGS` | goto |  | opens MENU_MESSAGES | — | — |
 | `MSG` | goto |  | opens MSG_COMPOSE | — | — |
@@ -357,9 +403,9 @@ Screen `MODE_PAGE`.
 
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
-| `FINE` | int | +10Hz | +10Hz -> +20Hz, settings | +20Hz -> +10Hz, settings | +10Hz -> +20Hz, settings |
+| `FINE` | int | +120Hz | +120Hz -> +130Hz, settings | +130Hz -> +120Hz, settings | +120Hz -> +130Hz, settings |
 | `BKL` | int | 100 | 95 -> 100, settings | 100 -> 95, settings | — |
-| `KEYLIT` | toggle | OFF | OFF -> ON, settings | ON -> OFF, settings | OFF -> ON, settings |
+| `KEYLIT` | toggle | ON | ON -> OFF, settings | OFF -> ON, settings | ON -> OFF, settings |
 | `LOCK` | toggle | OFF | toggles the keypad lock | toggles the keypad lock | lock True |
 | `MSGS` | goto |  | opens MENU_MESSAGES | — | — |
 | `MSG` | goto |  | opens MSG_COMPOSE | — | — |
@@ -370,15 +416,14 @@ Screen `POPUP`.
 
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
-| `SQL` | int | 3 | 3 -> 4, settings | 4 -> 3, settings | 3 -> 4, settings |
-| `AGC` | toggle | ON | ON -> OFF | OFF -> ON | ON -> OFF |
-| `STEP` | enum | 25k | 25k -> 8.33k | 8.33k -> 25k | 25k -> 8.33k |
-| `SNAP` | toggle | OFF | OFF -> ON | ON -> OFF | OFF -> ON |
-| `CH` | info | - | status | status | status |
-| `IF` | enum | 25 | 25 -> 12.5 | 12.5 -> 25 | 25 -> 12.5 |
-| `FINE` | int | +0Hz | +0Hz -> +10Hz, settings | +10Hz -> +0Hz, settings | +0Hz -> +10Hz, settings |
+| `SQL` | int | 4 | 4 -> 5, settings | 5 -> 4, settings | 4 -> 5, settings |
+| `AGC` | toggle | ON | ON -> OFF, settings | OFF -> ON, settings | ON -> OFF, settings |
+| `STEP` | enum | 25k | 25k -> 8.33k, settings | 8.33k -> 25k, settings | 25k -> 8.33k, settings |
+| `SNAP` | toggle | OFF | OFF -> ON, settings | ON -> OFF, settings | OFF -> ON, settings |
+| `IF` | enum | 12.5 | 12.5 -> 25 | 25 -> 12.5 | 12.5 -> 25 |
+| `FINE` | int | +130Hz | +130Hz -> +140Hz, settings | +140Hz -> +130Hz, settings | +130Hz -> +140Hz, settings |
 | `BKL` | int | 100 | 95 -> 100, settings | 100 -> 95, settings | — |
-| `KEYLIT` | toggle | ON | ON -> OFF, settings | OFF -> ON, settings | ON -> OFF, settings |
+| `KEYLIT` | toggle | OFF | OFF -> ON, settings | ON -> OFF, settings | OFF -> ON, settings |
 | `LOCK` | toggle | OFF | OFF -> ON, lock True | ON -> OFF, lock False | OFF -> ON, lock True |
 | `MSGS` | goto |  | opens MENU_MESSAGES | — | — |
 | `ESPECTRO` | goto |  | opens SPECTRUM | — | — |
@@ -390,14 +435,14 @@ Screen `MODE_PAGE`.
 
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
-| `SQL` | int | 4 | 4 -> 5, settings | 5 -> 4, settings | 4 -> 5, settings |
-| `AGC` | toggle | OFF | OFF -> ON | ON -> OFF | OFF -> ON |
-| `STEP` | enum | 8.33k | 8.33k -> 25k | 25k -> 8.33k | 8.33k -> 25k |
-| `SNAP` | toggle | ON | ON -> OFF | OFF -> ON | ON -> OFF |
-| `IF` | enum | 12.5 | 12.5 -> 25 | 25 -> 12.5 | 12.5 -> 25 |
-| `FINE` | int | +10Hz | +10Hz -> +20Hz, settings | +20Hz -> +10Hz, settings | +10Hz -> +20Hz, settings |
+| `SQL` | int | 5 | 5 -> 6, settings | 6 -> 5, settings | 5 -> 6, settings |
+| `AGC` | toggle | OFF | OFF -> ON, settings | ON -> OFF, settings | OFF -> ON, settings |
+| `STEP` | enum | 8.33k | 8.33k -> 25k, settings | 25k -> 8.33k, settings | 8.33k -> 25k, settings |
+| `SNAP` | toggle | ON | ON -> OFF, settings | OFF -> ON, settings | ON -> OFF, settings |
+| `IF` | enum | 25 | 25 -> 12.5 | 12.5 -> 25 | 25 -> 12.5 |
+| `FINE` | int | +140Hz | +140Hz -> +150Hz, settings | +150Hz -> +140Hz, settings | +140Hz -> +150Hz, settings |
 | `BKL` | int | 100 | 95 -> 100, settings | 100 -> 95, settings | — |
-| `KEYLIT` | toggle | OFF | OFF -> ON, settings | ON -> OFF, settings | OFF -> ON, settings |
+| `KEYLIT` | toggle | ON | ON -> OFF, settings | OFF -> ON, settings | ON -> OFF, settings |
 | `LOCK` | toggle | OFF | toggles the keypad lock | toggles the keypad lock | lock True |
 | `MSGS` | goto |  | opens MENU_MESSAGES | — | — |
 | `ESPECTRO` | goto |  | opens SPECTRUM | — | — |
@@ -409,15 +454,11 @@ Screen `POPUP`.
 
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
-| `ST` | info | SRCH | status | status | status |
-| `LVL` | info | 0 dBuV | status | status | status |
-| `SNR` | info | 0/15 | status | status | status |
-| `CH` | info | --- | status | status | status |
 | `BKL` | int | 100 | 95 -> 100, settings | 100 -> 95, settings | — |
-| `KEYLIT` | toggle | ON | ON -> OFF, settings | OFF -> ON, settings | ON -> OFF, settings |
+| `KEYLIT` | toggle | OFF | OFF -> ON, settings | ON -> OFF, settings | OFF -> ON, settings |
 | `LOCK` | toggle | OFF | OFF -> ON, lock True | ON -> OFF, lock False | OFF -> ON, lock True |
-| `MSGS` | goto |  | opens MENU_MESSAGES | — | — |
-| `MSG` | goto |  | opens MSG_COMPOSE | — | — |
+| `MSGS` | goto |  | opens MENU_MESSAGES,  -> OFF | — | — |
+| `MSG` | goto |  | opens MSG_COMPOSE,  -> 12.5 | — | — |
 
 ## WFM (Settings)
 
@@ -426,7 +467,7 @@ Screen `MODE_PAGE`.
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
 | `BKL` | int | 100 | 95 -> 100, settings | 100 -> 95, settings | — |
-| `KEYLIT` | toggle | OFF | OFF -> ON, settings | ON -> OFF, settings | OFF -> ON, settings |
+| `KEYLIT` | toggle | ON | ON -> OFF, settings | OFF -> ON, settings | ON -> OFF, settings |
 | `LOCK` | toggle | OFF | toggles the keypad lock | toggles the keypad lock | lock True |
 | `MSGS` | goto |  | opens MENU_MESSAGES | — | — |
 | `MSG` | goto |  | opens MSG_COMPOSE | — | — |
@@ -439,16 +480,15 @@ Screen `SETTINGS_DISPLAY`.
 |---|---|---|---|---|---|
 | `Brightness` |  | 100 | edit | 100 -> 95, settings | — |
 | `Timer` |  | 30 s | edit | 1 min -> 30 s, settings | 30 s -> 1 min, settings |
-| `Battery Icon` |  | OFF | edit | OFF -> ON | — |
-| `Key Light` |  | ON | edit | OFF -> ON, settings | ON -> OFF, settings |
+| `Battery Icon` |  | OFF | edit | OFF -> ON, settings | — |
+| `Key Light` |  | OFF | edit | ON -> OFF, settings | OFF -> ON, settings |
 
 ## Time & Date
 
 Screen `SETTINGS_TIMEDATE`.
 
-
-| Row | Value |
-|---|---|
+| Row | Kind | Value | ENTER | P1 | P2 |
+|---|---|---|---|---|---|
 
 ## Radio
 
@@ -458,9 +498,9 @@ Screen `SETTINGS_RADIO`.
 |---|---|---|---|---|---|
 | `Offset` |  | 0.0 Hz | edit | — | — |
 | `Direction` |  | + | edit | — | — |
-| `Step` |  | 12.5kHz | edit | — | 12.5kHz -> 15.0kHz |
-| `Squelch` |  | 3 | edit | 4 -> 3, settings | 3 -> 4, settings |
-| `TX Power` |  | 1W | edit | 1.5W -> 1W | 1W -> 1.5W |
+| `Step` |  | 25.0kHz | edit | 50.0kHz -> 25.0kHz | 25.0kHz -> 50.0kHz |
+| `Squelch` |  | 6 | edit | 7 -> 6, settings | 6 -> 7, settings |
+| `TX Power` |  | 2W | edit | 2.5W -> 2W | 2W -> 2.5W |
 
 ## Identity
 
@@ -478,7 +518,7 @@ Screen `SETTINGS_AUDIO`.
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
 | `Voice` |  | OFF | edit | Beep -> OFF, settings | OFF -> Beep, settings |
-| `Phonetic` |  | OFF | edit | ON -> OFF | OFF -> ON |
+| `Phonetic` |  | OFF | edit | ON -> OFF, settings | OFF -> ON, settings |
 
 ## M17
 
@@ -487,8 +527,8 @@ Screen `SETTINGS_M17`.
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
 | `Meta Txt` |  | OpenRTX | edit | — | — |
-| `CAN` |  | 0 | edit | 1 -> 0, settings | 0 -> 1, settings |
-| `CAN RX Check` |  | OFF | edit | ON -> OFF | OFF -> ON |
+| `CAN` |  | 1 | edit | 2 -> 1, settings | 1 -> 2, settings |
+| `CAN RX Check` |  | ON | edit | OFF -> ON, settings | ON -> OFF, settings |
 
 ## TETRA
 
@@ -496,7 +536,7 @@ Screen `SETTINGS_TETRA`.
 
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
-| `AFC` |  | ON | edit | OFF -> ON | ON -> OFF |
+| `AFC` |  | OFF | edit | ON -> OFF, settings | OFF -> ON, settings |
 
 ## FM
 
@@ -504,9 +544,9 @@ Screen `SETTINGS_FM`.
 
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
-| `CTCSS Tone` |  | 67.0 | edit | 69.3 -> 67.0 | 67.0 -> 69.3 |
-| `CTCSS En.` |  | None | edit | Both -> None | None -> Both |
-| `Bandwidth` |  | 25 | edit | 6.25 -> 25 | 25 -> 6.25 |
+| `CTCSS Tone` |  | 69.3 | edit | 71.9 -> 69.3 | 69.3 -> 71.9 |
+| `CTCSS En.` |  | Encode | edit | Decode -> Encode | Encode -> Decode |
+| `Bandwidth` |  | 12.5 | edit | 25 -> 12.5 | 12.5 -> 25 |
 
 ## Accessibility
 
@@ -514,7 +554,7 @@ Screen `SETTINGS_ACCESSIBILITY`.
 
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
-| `Macro Latch` |  | ON | edit | ON -> OFF | — |
+| `Macro Latch` |  | ON | edit | ON -> OFF, settings | — |
 
 ## tools (P1 long)
 
@@ -522,12 +562,12 @@ Screen `TOOLS_MENU`.
 
 | Row | Kind | Value | ENTER | P1 | P2 |
 |---|---|---|---|---|---|
-| `Mode` |  | FM | mode submenu | — | cursor 1 |
-| `Scan` |  | 0 CH | opens MAIN_VFO, mode submenu | — | cursor 2 |
-| `VFO scan` |  | UP | opens MAIN_VFO, mode submenu | — | cursor 3 |
-| `Spectrum` |  |  | opens SPECTRUM, mode submenu | — | cursor 4 |
-| `Channels` |  | 0 CH | opens MAIN_VFO, mode submenu, modules {'channels': True} | — | cursor 5 |
-| `Puerto` |  | PTT | — | — | cursor 0 |
+| `Mode` |  | FM | mode submenu, FM -> TX | cursor 0 | cursor 1 |
+| `Scan` |  | 0 CH | opens MAIN_VFO | cursor 1 | cursor 2 |
+| `VFO scan` |  | UP | opens MAIN_VFO | cursor 2 | cursor 3 |
+| `Spectrum` |  |  | opens SPECTRUM | cursor 3 | cursor 4 |
+| `Channels` |  | 0 CH | opens MAIN_VFO, modules {'channels': True} | cursor 4 | cursor 5 |
+| `Puerto` |  | PTT | PTT -> SERIE, settings | cursor 5 | cursor 0 |
 
 ## tools > Mode
 
@@ -784,7 +824,7 @@ Screen `MENU_APRS`.
 Hint bar: `MENU P1: MSG P2: SETUP EXIT`.
 
 - **ENTER on the selected row:** nothing
-- **P1 on the selected row:** opens APRS_MSGS
+- **P1 on the selected row:** nothing
 - **P2 on the selected row:** opens APRS_CFG
 
 | Row | Value |
@@ -845,40 +885,46 @@ Hint bar: `Centrar P1: Span P2: Menu Exit`.
 | Row | Value |
 |---|---|
 
+## Which screen changes which setting
+
+One row per field of the settings record, measured: the screens whose rows moved it, and the row that did.
+
+| Setting | Changed from | Why more than one |
+|---|---|---|
+| `am_agc` | AM (Settings) / `AGC`, quick menu, mode AM / `AGC` | |
+| `am_snap` | AM (Settings) / `SNAP`, quick menu, mode AM / `SNAP` | |
+| `am_step` | AM (Settings) / `STEP`, quick menu, mode AM / `STEP` | |
+| `battery_icon` | Display / `Battery Icon` | |
+| `brightness` | AM (Settings) / `BKL`, DMR (Settings) / `BKL`, DSTAR (Settings) / `BKL`, Display / `Brightness`, NXDN (Settings) / `BKL`, P25 (Settings) / `BKL`, WFM (Settings) / `BKL`, YSF (Settings) / `BKL`, dPMR (Settings) / `BKL`, quick menu, mode AM / `BKL`, quick menu, mode DMR / `BKL`, quick menu, mode DSTAR / `BKL`, quick menu, mode FM / `BKL`, quick menu, mode M17 / `BKL`, quick menu, mode NXDN / `BKL`, quick menu, mode P25 / `BKL`, quick menu, mode TETRA / `BKL`, quick menu, mode WFM / `BKL`, quick menu, mode YSF / `BKL`, quick menu, mode dPMR / `BKL` | BKL in every mode's table, Brightness in Settings -> Display: the display is the one thing an operator changes on the air |
+| `display_timer` | Display / `Timer` | |
+| `dmr_dest` | DMR (Settings) / `DEST`, quick menu, mode DMR / `DEST` | |
+| `dmr_dest_type` | DMR (Settings) / `CALL`, quick menu, mode DMR / `CALL` | |
+| `key_backlight` | AM (Settings) / `KEYLIT`, DMR (Settings) / `KEYLIT`, DSTAR (Settings) / `KEYLIT`, Display / `Key Light`, NXDN (Settings) / `KEYLIT`, P25 (Settings) / `KEYLIT`, WFM (Settings) / `KEYLIT`, YSF (Settings) / `KEYLIT`, dPMR (Settings) / `KEYLIT`, quick menu, mode AM / `KEYLIT`, quick menu, mode DMR / `KEYLIT`, quick menu, mode DSTAR / `KEYLIT`, quick menu, mode FM / `KEYLIT`, quick menu, mode M17 / `KEYLIT`, quick menu, mode NXDN / `KEYLIT`, quick menu, mode P25 / `KEYLIT`, quick menu, mode TETRA / `KEYLIT`, quick menu, mode WFM / `KEYLIT`, quick menu, mode YSF / `KEYLIT`, quick menu, mode dPMR / `KEYLIT` | KEYLIT in every mode's table, Key Light in Settings -> Display |
+| `m17_can` | M17 / `CAN`, quick menu, mode M17 / `CAN` | |
+| `m17_can_rx` | M17 / `CAN RX Check`, quick menu, mode M17 / `CANRX` | |
+| `macro_latch` | Accessibility / `Macro Latch` | |
+| `nxdn_ran` | NXDN (Settings) / `RAN`, quick menu, mode NXDN / `RAN` | |
+| `pc_port` | tools (P1 long) / `Puerto` | |
+| `phonetic` | Audio / `Phonetic` | |
+| `rx_fine` | AM (Settings) / `FINE`, DMR (Settings) / `FINE`, DSTAR (Settings) / `FINE`, NXDN (Settings) / `FINE`, P25 (Settings) / `FINE`, YSF (Settings) / `FINE`, dPMR (Settings) / `FINE`, quick menu, mode AM / `FINE`, quick menu, mode DMR / `FINE`, quick menu, mode DSTAR / `FINE`, quick menu, mode NXDN / `FINE`, quick menu, mode P25 / `FINE`, quick menu, mode TETRA / `FINE`, quick menu, mode YSF / `FINE`, quick menu, mode dPMR / `FINE` | FINE in the tables of the modes that decode, the manual RX trim is per-receiver and not per-mode |
+| `sql` | AM (Settings) / `SQL`, Radio / `Squelch`, quick menu, mode AM / `SQL`, quick menu, mode FM / `SQL` | SQL in the FM and AM tables, Squelch in Settings -> Radio: the squelch is what a scanning operator moves, and the mode pages that have one carry it |
+| `tetra_afc_off` | TETRA / `AFC`, quick menu, mode TETRA / `AFC` | |
+| `vol_prompt` | Audio / `Voice` | |
+
+## Settings changed from more than one place
+
+None. Every field of the settings record has one screen that owns it, apart from the quick-access block declared in `menu_audit.py` (`SHARED_SETTINGS`), and no screen lists a field twice.
+
 ## Dead rows still in the tree
 
 None. Every row of every screen either changes a value, opens a screen or runs an action; the two rows that are empty on this hardware are the classic codeplug lists, documented above.
 
 ## Rows the audit reports as status, not as options
 
-The popup keeps the receiver's state as rows (`SYNC`, `CC`, `NAC`, `MY`, the WFM meter); `dump` now marks them `info`, and they are listed here so that "this row does nothing with P1/P2" is never confused with a dead row. They are the same rows the mode pages no longer show.
-
-- quick menu, mode AM / CH
-- quick menu, mode DMR / CC
-- quick menu, mode DMR / SYNC
-- quick menu, mode DMR / TS
-- quick menu, mode DSTAR / MY
-- quick menu, mode DSTAR / RPT
-- quick menu, mode DSTAR / SYNC
-- quick menu, mode DSTAR / TXT
-- quick menu, mode DSTAR / UR
-- quick menu, mode M17 / SRC
-- quick menu, mode NXDN / CALL
-- quick menu, mode NXDN / SYNC
-- quick menu, mode NXDN / TYPE
-- quick menu, mode P25 / CALL
-- quick menu, mode P25 / NAC
-- quick menu, mode P25 / SYNC
-- quick menu, mode P25 / TYPE
-- quick menu, mode TETRA / CALL
-- quick menu, mode TETRA / CELL
-- quick menu, mode TETRA / LA/CC
-- quick menu, mode TETRA / NET
-- quick menu, mode TETRA / REG
-- quick menu, mode TETRA / UL
-- quick menu, mode WFM / CH
-- quick menu, mode WFM / LVL
-- quick menu, mode WFM / SNR
-- quick menu, mode WFM / ST
-- quick menu, mode YSF / SYNC
-- quick menu, mode dPMR / SYNC
+None. The popups used to keep the receiver's state as rows (`SYNC`, `CC`, `NAC`,
+`MY`, the WFM meter); `dump` marked them `info` and they were listed here so that
+"this row does nothing with P1/P2" was never confused with a dead row. The
+mode-status pass moved that state to the main screen and the popup tables carry
+no `QM_INFO` row at all any more, which is why this list is empty. A `QM_INFO`
+row that comes back to a popup is reported here again; one that comes back to a
+Settings page is a dead row and fails the audit.
