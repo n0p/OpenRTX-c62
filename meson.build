@@ -1801,6 +1801,63 @@ dmr_glue_test = executable('dmr_glue_test',
                                'tests/unit/dmr_glue.cpp'],
                            kwargs  : dmr_test_opts)
 
+# The DMR receiver with a stand-in for the radio (tests/unit/dmr_rx_status.cpp):
+# a repeater's baseband built by the mode's own modulator, fed to the
+# demodulator in the block size OpMode_DMR::feed() uses, asserting what
+# dmr_getStatus() publishes (sync, colour code, timeslot, the call's source and
+# destination, quality) and what it must refuse (silence, a link control whose
+# checksum failed, a miscorrected colour code).  The whole receive chain is
+# linked -- demodulator, FEC, bursts and slots, the embedded LC, the vocoder --
+# because the status can only be right if all of them are.  The emulator's stub
+# of DmrStatus.c and of the demodulator is deliberately NOT linked: this test
+# is about the real ones.  See docs/TEST_PLAN.md.
+dmr_rx_status_test = executable(
+    'dmr_rx_status_test',
+    sources : [
+        'tests/unit/dmr_rx_status.cpp',
+        'openrtx/src/protocols/DMR/DmrDefs.c',
+        'openrtx/src/protocols/DMR/DmrStatus.c',
+        'openrtx/src/protocols/DMR/dmr_glue.c',
+        'openrtx/src/protocols/DMR/dmr_demod.c',
+        'openrtx/src/protocols/DMR/dmr_fec.c',
+        'openrtx/src/protocols/DMR/dmr_trellis.c',
+        'openrtx/src/protocols/DMR/dmr_proto.c',
+        'openrtx/src/protocols/DMR/dmr_data.c',
+        'openrtx/src/protocols/DMR/dmr_lrrp.c',
+        'openrtx/src/protocols/DMR/dmr_track.c',
+        'openrtx/src/protocols/DMR/dmr_voice.c',
+        'openrtx/src/protocols/DMR/dmr_sms.c',
+        'openrtx/src/protocols/DMR/dmr_ep.c',
+        'openrtx/src/protocols/DMR/dmr_aes.c',
+        'openrtx/src/protocols/DMR/dmr_hytera.c',
+        'openrtx/src/protocols/DMR/aes/tinyaes.c',
+        'openrtx/src/protocols/DMR/aes/tinyaes128.c',
+        'openrtx/src/protocols/DMR/aes/des.c',
+        'openrtx/src/protocols/DMR/dmr_tx.c',
+        'openrtx/src/protocols/DMR/trunk/dmr_trunk.c',
+        'openrtx/src/protocols/DMR/trunk/t3_ms.c',
+        'openrtx/src/protocols/DMR/trunk/t3_pdu.c',
+        'openrtx/src/protocols/DMR/trunk/t3_plan.c',
+        'openrtx/src/protocols/DMR/trunk/t3_sys.c',
+        # The voice path the firmware uses for DMR (lib/dmr_vocoder): without
+        # it dmr_voice_burst() is a no-op and the AMBE+2 frame count of the
+        # status would be untestable.
+        'lib/dmr_vocoder/dmr_vocoder.c',
+        'lib/dmr_vocoder/dmr_decoder.c',
+        'lib/dmr_vocoder/dmr_fft.c',
+    ],
+    kwargs : {
+        'include_directories' : linux_inc + dmr_inc + ['lib/dmr_vocoder'],
+        # -O2 and -ffp-contract=off as the firmware builds them: the
+        # demodulator's decisions are margins, and they move with -O0.
+        'c_args'       : linux_c_args + ['-O2', '-ffp-contract=off',
+                                         '-DCONFIG_DMR_TRUNK',
+                                         '-DDMR_VOICE_OWN'],
+        'cpp_args'     : linux_cpp_args + ['-O2'],
+        'dependencies' : [catch2_dep],
+        'link_args'    : linux_l_args,
+    })
+
 # dPMR (TS 102 490): capa de codificacion, reparto AMBE+2 contra el camino DMR,
 # datos cortos y una captura real por el demodulador completo.  El vocoder es
 # el mismo lib/dmr_vocoder que usa el modo DMR.
@@ -2149,6 +2206,7 @@ test('dPMR RX Test',          dpmr_rx_test)
 test('dPMR Host Harness',     dpmr_host_exe, args : [dpmr_capture])
 test('dPMR PHY Cost',         dpmr_phy_cost_run, args : [dpmr_capture])
 test('DMR Glue Test',        dmr_glue_test)
+test('DMR RX Status Test',   dmr_rx_status_test)
 test('User Stores Test',     user_stores_test)
 test('UI Messages Test',     ui_messages_test)
 test('UI Layout Test',       ui_layout_test)
