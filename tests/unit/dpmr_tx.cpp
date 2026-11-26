@@ -18,7 +18,11 @@
  *     frame.
  *  3. Two call configurations and two transmit levels (12.5 kHz and 6.25 kHz
  *     deviation).
- *  4. Symbol timing: the same call as one continuous stream through a
+ *  4. The burst layout: every field of a header, a payload and an END frame
+ *     read back from the symbols the transmitter wrote, at the offsets clause
+ *     4.2.2 and 5.1 give them, so the layout is pinned without the
+ *     demodulator agreeing with a transmitter that is wrong the same way.
+ *  5. Symbol timing: the same call as one continuous stream through a
  *     resampler -- an arbitrary start phase inside a symbol, +-100 ppm of
  *     clock drift bit for bit, and past that the framer still holding the CCH
  *     of every frame.  loopback() starts on a symbol boundary with the
@@ -628,5 +632,161 @@ TEST_CASE("dPMR keeps the frame grid far outside the clock tolerance",
         REQUIRE(header == 1);
         REQUIRE(payload >= FRAMES - 2);
         REQUIRE(end >= 1);
+    }
+}
+
+/* ------------------------------------------------------------------ layout --- */
+
+namespace {
+
+/** Dibit of a symbol level, the convention of table 12.1 and DpmrPhy.c. */
+uint8_t levelDibit(int8_t l)
+{
+    return (uint8_t)(((l < 0) ? 2 : 0) | ((std::abs((int)l) == 3) ? 1 : 0));
+}
+
+/** The dibits of a run of symbols. */
+std::vector<uint8_t> symbolsToDibits(const int8_t *levels, int n)
+{
+    std::vector<uint8_t> d((size_t)n);
+
+    for (int i = 0; i < n; i++)
+        d[(size_t)i] = levelDibit(levels[i]);
+
+    return d;
+}
+
+/** The ideal levels of a sync word, for comparison with the air. */
+std::vector<int8_t> syncLevels(enum dpmrSync s)
+{
+    std::vector<int8_t> v(24, 0);
+    size_t n = dpmrDefs_syncLevels(s, v.data());
+
+    v.resize(n);
+
+    return v;
+}
+
+} /* namespace */
+
+TEST_CASE("dPMR bursts put every field at its symbol offset",
+          "[dpmr][tx][layout]")
+{
+    /*
+     * Clause 4.2.2 and 5.1, as DpmrTx.h writes them down:
+     *
+     *   header    P (36) | FS1 (24) | HI0 (60) | CC (12) | HI1 (60)
+     *   payload   FS2 or CC (12) | CCH (36) | TCH (4 x 36)
+     *   end       FS3 (12) | END (36)
+     *
+     * The loopback proves the receiver can read what the transmitter wrote,
+     * which it would also do if both ends were wrong the same way.  This test
+     * reads the burst itself, field by field, against the standard's sync
+     * words and the field decoders, so the layout is pinned independently of
+     * the demodulator.
+     */
+    dpmr_tx_t tx;
+    int8_t levels[DPMR_FRAME_SYMBOLS];
+
+    dpmrTx_setup(&tx, 0x000135, 0x00393D, 0x0DD);
+    dpmrTx_setCallType(&tx, DPMR_MODE_VOICE, 0, DPMR_FMT_PEER);
+
+    /* Preamble: the 0101 1111 pattern of clause 6.1.6, nothing else */
+    dpmrTx_preamble(levels);
+
+    {
+        std::vector<uint8_t> d = symbolsToDibits(levels, DPMR_FRAME_SYMBOLS);
+        /* 0x5F is 01 01 11 11 in dibits: +3 +3 -3 -3, repeated */
+        for (int i = 0; i < DPMR_FRAME_SYMBOLS; i += 4) {
+            REQUIRE(d[i + 0] == 0x1);
+            REQUIRE(d[i + 1] == 0x1);
+            REQUIRE(d[i + 2] == 0x3);
+            REQUIRE(d[i + 3] == 0x3);
+        }
+    }
+
+    /* Header */
+    dpmrTx_header(&tx, DPMR_HT_START, 0x123, levels);
+
+    {
+        std::vector<uint8_t> d = symbolsToDibits(levels, DPMR_FRAME_SYMBOLS);
+        std::vector<int8_t> fs1 = syncLevels(DPMR_SYNC_FS1);
+
+        REQUIRE(fs1.size() == 24);
+        for (int i = 0; i < 24; i++)
+            REQUIRE(levels[36 + i] == fs1[(size_t)i]);
+
+        struct dpmrHeader hdr;
+
+        /* HI0 at 60 symbols, HI1 after the channel code */
+        REQUIRE(dpmrFec_hiDecode(&d[60], &hdr));
+        REQUIRE(hdr.calledId == 0x00393D);
+        REQUIRE(hdr.ownId == 0x000135);
+
+        /* The channel code of the frequency, 12 symbols, all of them outer */
+        REQUIRE(dpmrDefs_channelCode(&d[120]) == 0x0DD);
+        for (int i = 120; i < 132; i++)
+            REQUIRE(std::abs((int)levels[i]) == 3);
+
+        REQUIRE(dpmrFec_hiDecode(&d[132], &hdr));
+        REQUIRE(hdr.ci == 0x123);
+    }
+
+    /* The four payload frames of a superframe */
+    for (int n = 0; n < 4; n++) {
+        uint8_t ambe[DPMR_AMBE_FRAMES][DPMR_AMBE_BYTES];
+
+        for (int v = 0; v < DPMR_AMBE_FRAMES; v++)
+            payloadFrame(n, v, ambe[v]);
+
+        dpmrTx_frame(&tx, ambe, levels);
+
+        std::vector<uint8_t> d = symbolsToDibits(levels, DPMR_FRAME_SYMBOLS);
+
+        if ((n & 1) == 0) {
+            /* Frames 1 and 3 open with FS2 */
+            std::vector<int8_t> fs2 = syncLevels(DPMR_SYNC_FS2);
+
+            REQUIRE(fs2.size() == 12);
+            for (int i = 0; i < 12; i++)
+                REQUIRE(levels[i] == fs2[(size_t)i]);
+        } else {
+            /* Frames 2 and 4 open with the channel code */
+            REQUIRE(dpmrDefs_channelCode(&d[0]) == 0x0DD);
+            for (int i = 0; i < 12; i++)
+                REQUIRE(std::abs((int)levels[i]) == 3);
+        }
+
+        /* CCH at 12 symbols */
+        struct dpmrCch cch;
+
+        REQUIRE(dpmrFec_cchDecode(&d[12], &cch));
+        REQUIRE(cch.fn == (n & 3));
+
+        /* TCH at 48: four groups of 36 symbols, one AMBE+2 frame each */
+        for (int v = 0; v < DPMR_AMBE_FRAMES; v++) {
+            uint8_t back[DPMR_AMBE_BYTES];
+
+            dpmrFec_voiceFrame(&d[48 + 36 * v], back);
+            REQUIRE(std::memcmp(back, ambe[v], DPMR_AMBE_BYTES) == 0);
+        }
+    }
+
+    /* END: FS3, then the 36-symbol field sent twice */
+    dpmrTx_end(&tx, 0x15, levels);
+
+    {
+        std::vector<uint8_t> d = symbolsToDibits(levels, DPMR_END_SYMBOLS);
+        std::vector<int8_t> fs3 = syncLevels(DPMR_SYNC_FS3);
+        struct dpmrEnd end;
+
+        REQUIRE(fs3.size() == 12);
+        for (int i = 0; i < 12; i++)
+            REQUIRE(levels[i] == fs3[(size_t)i]);
+
+        REQUIRE(dpmrFec_endDecode(&d[12], &end));
+        REQUIRE(end.et == 1);
+        REQUIRE(end.status == 0x15);
+        REQUIRE(end.same);
     }
 }

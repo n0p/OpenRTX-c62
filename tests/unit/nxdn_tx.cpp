@@ -28,7 +28,9 @@
  *     screen reads -- sync, RAN, counters, "source>destination" and the
  *     message type -- for a call, a release and a disconnect, and what
  *     nxdnStatus_reset() and nxdnStatus_clear() leave behind.
- *  6. Symbol timing: the same call, built once as one continuous stream and
+ *  6. The burst layout: the SACCH, the four VCHs and the AMBE+2 frames read
+ *     back from the symbols at the offsets of 4.1.2, without the demodulator.
+ *  7. Symbol timing: the same call, built once as one continuous stream and
  *     fed through a resampler, has to decode bit for bit from an arbitrary
  *     start phase, while the two clocks drift by up to 500 ppm, and again
  *     after a lost block resets the demodulator mid-call.  The loopback tests
@@ -967,4 +969,87 @@ TEST_CASE("NXDN publishes a release and a disconnect, not just a call",
         REQUIRE(st.message.dest == 0x0117);
         REQUIRE(std::string(nxdnFecMsgName(st.message.type)) == t.name);
     }
+}
+
+TEST_CASE("NXDN bursts put the SACCH and the VCHs at their symbol offsets",
+          "[nxdn][tx][layout]")
+{
+    /*
+     * One frame is FSW (10 symbols) | LICH (8) | SACCH (30) | 4 x VCH (36),
+     * and every symbol but the sync word is scrambled by sign inversion
+     * (4.1.2, 4.6).  The layout test above pins the sync word and the LICH
+     * through the LICH decoder; this one reads the rest of the burst itself --
+     * not through the demodulator, which would agree with a transmitter that
+     * was wrong the same way -- and reassembles the call's layer 3 message and
+     * the four AMBE+2 frames from where the standard says they are.
+     */
+    nxdn_tx_t tx;
+    int8_t levels[NXDN_FRAME_SYMBOLS];
+    constexpr uint16_t SRC = 0x0123;
+    constexpr uint16_t DST = 0x4567;
+
+    nxdnTx_setup(&tx, SRC, DST, 11, true);
+
+    uint8_t l3[72] = { 0xFF };
+
+    for (int f = 0; f < NXDN_SUPERFRAME; f++) {
+        uint8_t ambe[NXDN_VCH_PER_FRAME][NXDN_AMBE_BYTES];
+
+        for (int v = 0; v < NXDN_VCH_PER_FRAME; v++)
+            payloadFrame(f, v, ambe[v]);
+
+        nxdnTx_frame(&tx, ambe, levels);
+
+        /* The 182 payload symbols after the sync word, as dibits */
+        uint8_t dibits[182];
+
+        for (int i = 0; i < 182; i++) {
+            int8_t l = levels[NXDN_FSW_SYMBOLS + i];
+
+            dibits[i] = (uint8_t)(((l > 0 ? 1 : 0) << 1)
+                                  | (std::abs((int)l) == 3 ? 1 : 0));
+        }
+
+        /* The mask the mode removes, and then the fields where they belong */
+        nxdnFecDescramble(dibits, false);
+
+        /* SACCH: 30 dibits, 60 coded bits, at offset 8 */
+        uint8_t bits[NXDN_SACCH_BITS];
+        uint8_t info[26];
+
+        for (int i = 0; i < NXDN_SACCH_BITS; i++) {
+            int dibit = dibits[NXDN_OFF_SACCH + (i >> 1)];
+
+            bits[i] = (uint8_t)((i & 1) ? (dibit & 1u) : ((dibit >> 1) & 1u));
+        }
+        REQUIRE(nxdnFecSacch(bits, info));
+
+        /*
+         * The 26 bits the block carries are the 8 bits of the SR field and the
+         * 18 layer 3 bits of this segment; the SR field says which slot of the
+         * message the segment is, and the mode places it the same way.
+         */
+        int sr = 0;
+
+        for (int i = 0; i < 8; i++)
+            sr = (sr << 1) | info[i];
+
+        std::memcpy(&l3[(3 - ((sr >> 6) & 3)) * 18], &info[8], 18);
+
+        /* VCHs: 36 dibits each, from offset 38, one AMBE+2 frame apiece */
+        for (int v = 0; v < NXDN_VCH_PER_FRAME; v++) {
+            uint8_t back[NXDN_AMBE_BYTES];
+
+            nxdnFecVchToAmbe(&dibits[NXDN_OFF_VCH1 + NXDN_VCH_DIBITS * v],
+                             back);
+            REQUIRE(std::memcmp(back, ambe[v], NXDN_AMBE_BYTES) == 0);
+        }
+    }
+
+    struct nxdnSacchMessage msg;
+
+    nxdnFecSacchParse(l3, &msg);
+    REQUIRE(msg.type == NXDN_MSG_VCALL);
+    REQUIRE(msg.source == SRC);
+    REQUIRE(msg.dest == DST);
 }
