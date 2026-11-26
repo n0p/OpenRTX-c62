@@ -411,27 +411,6 @@ int _ui_getRadioValueName(char *buf, uint8_t max_len, uint8_t index)
             sniprintf(buf, max_len, "%s", "");
             qm_fmt_power(buf, max_len);
             return 0;
-        case R_PC_PORT:
-            /*
-             * The accessory port (docs/ACCESSORY.md). "Always" hands the pad to
-             * the serial port for good -- which is what every build did before
-             * this setting existed -- so the speaker-microphone's PTT stops
-             * working.  Say it while the value is being chosen, because a PTT
-             * that does nothing is the one failure nobody diagnoses: the note
-             * disappears as soon as the row is left.
-             */
-            if ((last_state.settings.pc_port == PORT_MODE_ALWAYS) &&
-                ui_edit_mode())
-            {
-                sniprintf(buf, max_len, "%s, no PTT",
-                          settings_portModeName(last_state.settings.pc_port));
-            }
-            else
-            {
-                sniprintf(buf, max_len, "%s",
-                          settings_portModeName(last_state.settings.pc_port));
-            }
-            return 0;
     }
 
     // Only returning the sign

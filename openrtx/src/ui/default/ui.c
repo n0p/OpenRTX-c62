@@ -220,11 +220,12 @@ const char *settings_radio_items[] =
     "Squelch",
     "TX Power",
     /*
-     * The accessory jack's pad is not here any more.  It is the last row of the
-     * P2 popup, reachable from every main screen, and having it in two menus
-     * was worse than having it in the wrong one: the operator sets one, sees
-     * the other say something else and cannot tell which one the firmware
-     * obeyed (docs/ACCESSORY.md).
+     * The accessory jack's pad is not here any more either: it is one row of
+     * the tools menu (P1 held down), the only menu reachable from every main
+     * screen. It used to be a row of this page and a row of every mode's
+     * popup at the same time, and an operator who set one and saw the other
+     * say something else could not tell which one the firmware obeyed
+     * (docs/ACCESSORY.md).
      */
 };
 
@@ -3310,38 +3311,6 @@ void ui_updateFSM(bool *sync_rtx)
                                     state.channel.power -= 500;
                                 *sync_rtx = true;
                                 vp_announcePower(state.channel.power, queueFlags);
-                            }
-                            break;
-                        case R_PC_PORT:
-                            /*
-                             * Who owns the pad at the accessory jack
-                             * (docs/ACCESSORY.md).  Nothing to sync with the
-                             * RTX: the transport reads the setting on its next
-                             * pass, 1 ms later, and reroutes the pad and the
-                             * keying itself.  The debouncer in state_task()
-                             * writes the record three seconds later, like any
-                             * other setting.
-                             */
-                            /*
-                             * Two states, not three: Auto is not offered because
-                             * the pad on the UART does not key on this board
-                             * (docs/ACCESSORY.md), and a third position that
-                             * silently leaves the radio mute is the one thing a
-                             * menu must not have.
-                             */
-                            if(msg.keys & (KEY_UP | KEY_RIGHT | KNOB_RIGHT))
-                            {
-                                state.settings.pc_port =
-                                    (state.settings.pc_port == PORT_MODE_ALWAYS)
-                                        ? (uint8_t)PORT_MODE_NEVER
-                                        : (uint8_t)PORT_MODE_ALWAYS;
-                            }
-                            else if(msg.keys & (KEY_DOWN | KEY_LEFT | KNOB_LEFT))
-                            {
-                                state.settings.pc_port =
-                                    (state.settings.pc_port == PORT_MODE_ALWAYS)
-                                        ? (uint8_t)PORT_MODE_NEVER
-                                        : (uint8_t)PORT_MODE_ALWAYS;
                             }
                             break;
                         default:

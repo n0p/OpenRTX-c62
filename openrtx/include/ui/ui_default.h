@@ -294,7 +294,6 @@ enum settingsRadioItems
     R_STEP,
     R_SQUELCH,
     R_POWER,
-    R_PC_PORT,
 };
 
 enum settingsAudioItems

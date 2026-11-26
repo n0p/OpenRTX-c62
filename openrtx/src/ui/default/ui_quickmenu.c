@@ -107,36 +107,6 @@ static const qm_menu_t *qm_active(void)
 /* Items shared by all modes                                                  */
 /* ------------------------------------------------------------------------- */
 
-/*
- * Two names, indexed by the value that reaches the record: Auto has no entry
- * because it is not offered -- the pad on the UART does not key on this board
- * (docs/ACCESSORY.md) -- but its slot stays so the enum and the record do not
- * have to move.
- */
-const char *const qm_names_port[] = { "AUTO", "SERIE", "PTT" };
-
-/*
- * The accessory pad: protocol and PTT on the same line (docs/ACCESSORY.md).
- * Auto hands the pad to the serial port and asks the detector for the switch,
- * Always leaves it to the port, Never makes it a plain GPIO so the radio's own
- * PTT reads. Nothing to sync with the RTX: the transport rereads the setting on
- * its next pass, a millisecond later.
- */
-static int qm_port_get(void)
-{
-    uint8_t mode = state.settings.pc_port;
-    /* Auto is not offered: it comes back as Never, the way a stale record does */
-    return (mode == (uint8_t)PORT_MODE_ALWAYS) ? (int)PORT_MODE_ALWAYS
-                                               : (int)PORT_MODE_NEVER;
-}
-
-static void qm_port_set(int mode)
-{
-    if ((mode < (int)PORT_MODE_AUTO) || (mode > (int)PORT_MODE_NEVER))
-        return;
-    state.settings.pc_port = (uint8_t)mode;
-}
-
 const char *const qm_names_onoff[] = { "OFF", "ON" };
 const char *const qm_names_bw[] = { "12.5", "25", "6.25" };
 const char *const qm_names_ctcss[] = { "OFF", "TX", "RX", "BOTH" };
@@ -996,16 +966,6 @@ void qm_am_applyRaster(void)
  */
 #define QM_ITEM_MSG() \
     { "MSG", QM_GOTO, 0, 0, 1, 0, NULL, NULL, NULL, NULL, MSG_COMPOSE, 0, NULL }
-
-/*
- * The last row of every mode's menu, and always the same row: the setting that
- * makes the PTT work or the cable talk. It carries its own comma so the tables
- * can end with a bare QM_ITEM_MSG().
- */
-#define QM_ITEM_PORT() \
-    QM_ITEM_ENUM("PUERTO", PORT_MODE_ALWAYS, PORT_MODE_NEVER, qm_port_get, \
-                 qm_port_set, qm_names_port, NULL),
-
 
 /*
  * The two optional entries at the end of the FM list carry their own comma, and
