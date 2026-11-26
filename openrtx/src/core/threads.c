@@ -9,6 +9,10 @@
 #include "core/ui.h"
 #include "core/state.h"
 #include "core/threads.h"
+
+#ifdef __ZEPHYR__
+#include <zephyr/kernel.h>
+#endif
 #include "core/graphics.h"
 #include "interfaces/platform.h"
 #include "interfaces/delays.h"
@@ -286,6 +290,17 @@ void *rtx_threadFunc(void *arg)
     while(state.devStatus == RUNNING)
     {
         rtx_task();
+
+#ifdef __ZEPHYR__
+        /*
+         * The RTX loop has no sleep of its own: it yields only when something
+         * inside blocks, and a mode whose update() never blocks keeps the CPU
+         * for as long as it is the running thread at its priority.  Yielding
+         * here costs nothing when nothing else of the same priority is ready
+         * and hands the CPU to the UI when something is (docs/BLACKBOX.md).
+         */
+        k_yield();
+#endif
     }
 
     rtx_terminate();

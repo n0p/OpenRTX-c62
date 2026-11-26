@@ -70,4 +70,10 @@ CONFIG_INIT_STACKS=y
 # ---------------------------------------------------------------------------
 CONFIG_TIMESLICING=y
 CONFIG_TIMESLICE_SIZE=5
-CONFIG_TIMESLICE_PRIORITY=0
+#
+# The ceiling is the *lowest* priority that still gets sliced: threads with a
+# numerically smaller priority are excluded.  Zero therefore slices nobody
+# but the highest-priority thread, which is what left the UI starved while the
+# RTX loop ran.  14 is the priority the UI and the RTX thread share.
+#
+CONFIG_TIMESLICE_PRIORITY=14
