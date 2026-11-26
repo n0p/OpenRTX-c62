@@ -1,4 +1,148 @@
-# OpenRTX Project Guidelines
+# C62 fork: how work happens here
+
+This is the private fork of OpenRTX for the **Retevis C62** (ListenAI CSK6011B:
+Cortex-M33 + HiFi4 + NPU, 1 MB flash, 256 KB SRAM, 16 KB DTCM/ITCM, 1.75 MB
+PSRAM, BK4819 transceiver, BK1080 broadcast tuner, 160×128 ST7735R panel).
+
+Read this before touching anything. The rest of the file is the upstream
+OpenRTX guide and still applies: code style, C99/C++14, 80 columns, clang-format.
+
+## What this fork is, and is not
+
+- **Private.** The firmware is not published and neither are the factory dumps
+  (`factory-c62.bin`), the calibration data or anything under `work/kifo/`. Do
+  not create releases, do not attach images to public places.
+- **One image.** Every mode, TX included, in a single build: DMR/NXDN/dPMR/P25/
+  YSF/D-STAR TX, APRS, KISS, the PC protocol with its debug and bench
+  namespaces, airband AM TX. No per-feature variants.
+- **The operator owns the frequency.** Out-of-band tuning is unlocked with a
+  warning, never blocked.
+
+## Build
+
+Only in the container, never on the host:
+
+```sh
+cd /home/n0p/src/c62/build/c62-ws-mega        # workspace: OpenRTX + zephyr-listenai
+sudo docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/work openrtx-c62 c62-build \
+  -DCONFIG_C62_DMR_RX=y -DCONFIG_C62_APRS=y -DCONFIG_C62_NXDN_RX=y -DCONFIG_C62_YSF=y \
+  -DCONFIG_C62_P25=y -DCONFIG_C62_DPMR_RX=y -DCONFIG_C62_DSTAR=y -DCONFIG_DMR_TX=y \
+  -DCONFIG_NXDN_TX=y -DCONFIG_DPMR_TX=y -DCONFIG_P25_TX=y -DCONFIG_YSF_TX=y \
+  -DCONFIG_C62_KISS=y -DC62_PC_PROTO=ON -DC62_DEBUG_PROTO=ON -DC62_BENCH_PROTO=ON -DC62_AIR_TX=ON
+```
+
+`git -C OpenRTX fetch <worktree> <branch> && git -C OpenRTX reset --hard FETCH_HEAD`
+builds the last **commit**, not the working tree: commit before building.
+
+Host build and tests (meson) are the fast loop and must be green before a
+firmware build is worth doing:
+
+```sh
+meson setup build_linux && meson compile -C build_linux && meson test -C build_linux
+```
+
+`ninja -C build_linux -k 0` instead of `meson compile` when the ARM targets of
+other radios fail on this host (they do: no miosix toolchain).
+
+## Test what you claim
+
+- **`meson test` green** before reporting. It runs the unit tests, the DMR and
+  KISS host harnesses, the PC protocol harness and the simulator tour.
+- **The simulator tour is the UI's test**: `tools/simulator/tour.py` walks every
+  screen, fails on a blank screen, on a row that cannot be selected, on a value
+  that does not change and on a key no block claims. **Adding a mode, a menu row
+  or a screen without declaring it in `tour.py` breaks `Simulator Coverage`** —
+  that is on purpose.
+- Numbers in a report are measured, not estimated. When something could not be
+  verified (usually anything that needs the radio in the hand), say so plainly
+  instead of filling the gap.
+
+## Flash
+
+- Power off = the **volume knob** to the end. It is hardware; it works even with
+  the UI dead.
+- Burn mode = radio off, **secondary PTT held**, power on (blank screen).
+- `cskburn` lives at `/home/n0p/src/c62/forks/cskburn/build/cskburn/cskburn`:
+
+```sh
+cskburn -C venus -s /dev/ttyUSB0 -b 1500000 --no-reset --verify-all \
+    0x000000 zephyr.bin 0x100000 dsp_firmware.bin
+```
+
+- **Every invocation resets the chip.** Probe first (`--chip-id`) and the next
+  one finds nothing ("did not respond after reset"). One command, right after
+  entering burn mode.
+- Flash map: app `0x000000`, DSP `0x100000`, storage `0x2B0000` (settings
+  `+0x0000`, VFO `+0x1000`, black box `+0x6000`, backups `+0x7000`), channel
+  bank `0x3C0000`. Erasing the VFO sector returns the default FM start.
+
+## Bench
+
+- USRP B200mini through `work/bench/b200` (libuhd). The cable goes to **RX2**;
+  with `TX/RX` selected nothing arrives and it looks like the radio is dead.
+  -50 dB of pads between radio and SDR; 500 mW is a sane level.
+- Reference receiver for validating a transmission:
+  `work/dmr-rx/build/dmr_rx --format fc32 --fs 1000000 capture.fc32`.
+- The bench protocol keys with a **known power** (`--power`, 500 mW default) and
+  refuses to key at 0 mW. A transmission that says it is keyed and puts out
+  nothing used to be a whole afternoon.
+
+## Debug on the radio
+
+- PC protocol: `tools/cps/cps.py` (status, diag, log, reg, mem, chan, settings,
+  blackbox) and the bench: `tools/bench/bench.py`.
+- Channel-bank writes take a sector erase: use a 20 s client timeout or the
+  radio will look mute when it is only busy.
+- **Black box**: on a 2 s stall it writes a 516 B post-mortem to flash (threads,
+  stacks, PC/LR, breadcrumbs) and reboots. Read it at boot from the serial port
+  or with `tools/cps/blackbox.py`, then resolve the addresses:
+  `arm-none-eabi-addr2line -f -C -e build_c62/zephyr/zephyr.elf 0x...`.
+
+## Rules that cost us hours
+
+- **The RTX thread's stack is decided by what runs in it**, not by the mode
+  selected: DMR TX encodes AMBE+2 there and needs ~7.1 KiB. Too small plus
+  `CONFIG_HW_STACK_PROTECTION` is not a slow transmitter, it is a dead radio
+  with nothing on the serial port.
+- **No unbounded wait anywhere.** `state_mutex`, the audio route table, the
+  codec locks and the SPI transfer of the display have all frozen the radio.
+  Every wait has a deadline; a failure has to be visible in the log and in the
+  protocol, never a silent `return`.
+- **GPIOA_15 is UART2 RXD and the accessory PTT at the same time.** With the pad
+  in UART mode the GPIO data register does not follow the line: the press is
+  detected from the receiver's framing/break flags, and a press is only a press
+  after the line has been seen released. `Settings ▸ Radio ▸ PC Port`:
+  Auto / Always / Never.
+- **TX power and frequency come from the channel.** In VFO they must be derived
+  (RX as simplex, `settings.tx_power`), or the radio keys at 0 W and nothing
+  comes out.
+- **Identity**: `settings.callsign` is the station's, shared by every mode
+  (M17 source, APRS base); DMR uses the numeric `settings.dmr_id`; TETRA does
+  not transmit. Both are editable in `Settings ▸ Identity`.
+- **POSIX drivers return `-errno`**, never a positive errno: a failed write read
+  as success is how a backup "worked" while losing half the stores.
+- **A submenu's cursor returns to the row it came from**, not to the first one,
+  or the next green does something else entirely.
+- **The audio route table and the mode switch are two threads**: locks with
+  deadlines, checked lookups, and a mode switch that gives up after 300 ms and
+  hands the radio back to the previous mode.
+
+## Working with agents
+
+- One task, one branch, one worktree: `git worktree add ../<task> -b c62/<task>`.
+  Never work on `master`.
+- **Do not push and do not touch `master`** unless the operator asks for it. The
+  parent merges the branches and builds the image.
+- Commit messages in English, explaining **why**; the what is in the diff.
+  Documentation follows the language of the file it lives in.
+- Report with measured numbers and an explicit list of what was not verified.
+  "It compiles" is not a result.
+- If a change alters behaviour the operator will notice (a gate that now
+  refuses, a row that moved), say so in the first lines of the report.
+
+---
+
+# Upstream OpenRTX guidelines
 
 ## Project Overview
 
