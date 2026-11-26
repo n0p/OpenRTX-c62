@@ -18,7 +18,12 @@
  *  3. The scrambler: with it off, the symbols on the air are the same payload
  *     without the mask and the receiver's LICH has to fail, which is what
  *     makes the mask visible in the test at all.
- *  4. Symbol timing: the same call, built once as one continuous stream and
+ *  4. The RAN: the filter the mode applies lives in NxdnDefs.c so that the
+ *     whole policy -- before the first SACCH, on a match, on a mismatch, on a
+ *     lost block and for the "any" setting -- is a table here, and the RAN the
+ *     receiver reports from a synthetic stream is the one the transmitter put
+ *     in the SACCH, which is what the filter reads.
+ *  5. Symbol timing: the same call, built once as one continuous stream and
  *     fed through a resampler, has to decode bit for bit from an arbitrary
  *     start phase, while the two clocks drift by up to 500 ppm, and again
  *     after a lost block resets the demodulator mid-call.  The loopback tests
@@ -640,4 +645,117 @@ TEST_CASE("NXDN frame grid is re-acquired after a lost block",
      * anything.
      */
     checkStream(stream, d, 0x0005, 0xFFF0, FRAMES - 3);
+}
+
+/* --------------------------------------------------------------------- RAN --- */
+
+namespace {
+
+/** A frame with nothing in it but a SACCH result. */
+nxdnFrame ranFrame(bool sacchOk, uint8_t sr)
+{
+    nxdnFrame f;
+
+    std::memset(&f, 0, sizeof(f));
+    f.lichOk = true;
+    f.sacchOk = sacchOk;
+    f.sacchSr = sr;
+
+    return f;
+}
+
+} /* namespace */
+
+TEST_CASE("NXDN RAN filter accepts its own and drops another", "[nxdn][ran]")
+{
+    /*
+     * The RAN rides in the SR field of the SACCH, so the mode cannot filter on
+     * it until a superframe has decoded.  The policy is one function so that it
+     * can be proven here: what the receiver does before it knows the RAN, what
+     * it does when it knows it, and what a lost SACCH block costs.
+     */
+    int lastRan = -1;
+    nxdnFrame noSacch = ranFrame(false, 0);
+
+    /* Before the first SACCH decodes, everything passes and nothing is known */
+    REQUIRE(nxdnRanFrame(17, &lastRan, &noSacch));
+    REQUIRE(lastRan == -1);
+
+    /* The first block that closes sets the RAN of the call */
+    nxdnFrame first = ranFrame(true, (uint8_t)((2 << 6) | 17));
+
+    REQUIRE(nxdnRanFrame(17, &lastRan, &first));
+    REQUIRE(lastRan == 17);
+
+    /* Same RAN: kept.  Another one: dropped, and the call keeps its own RAN */
+    nxdnFrame other = ranFrame(true, (uint8_t)((1 << 6) | 18));
+
+    REQUIRE(!nxdnRanFrame(17, &lastRan, &other));
+    REQUIRE(lastRan == 18);
+
+    /* A lost SACCH block is judged by the last RAN that did decode */
+    nxdnFrame lost = ranFrame(false, 0);
+
+    REQUIRE(!nxdnRanFrame(17, &lastRan, &lost));
+    REQUIRE(lastRan == 18);
+
+    /* "Any" is every setting above 63, which is what the store holds */
+    REQUIRE(nxdnRanFrame(NXDN_RAN_ANY, &lastRan, &other));
+    REQUIRE(nxdnRanFrame(64, &lastRan, &other));
+    REQUIRE(nxdnRanFrame(255, &lastRan, &other));
+
+    /* The edges of the 6 bit field: 0 and 63 are RANs, not "any" */
+    nxdnFrame zero = ranFrame(true, 0);
+    nxdnFrame last = ranFrame(true, 63);
+    int ran0 = -1;
+    int ran63 = -1;
+
+    REQUIRE(nxdnRanFrame(0, &ran0, &zero));
+    REQUIRE(!nxdnRanFrame(1, &ran0, &zero));
+    REQUIRE(nxdnRanFrame(63, &ran63, &last));
+    REQUIRE(!nxdnRanFrame(3, &ran63, &last));
+
+    /* And what a transmitter puts on the air for each setting */
+    REQUIRE(nxdnRanTransmit(NXDN_RAN_ANY) == 63);
+    REQUIRE(nxdnRanTransmit(63) == 63);
+    REQUIRE(nxdnRanTransmit(17) == 17);
+    REQUIRE(nxdnRanTransmit(0) == 0);
+}
+
+TEST_CASE("NXDN RAN on the air is the one the filter reads", "[nxdn][ran]")
+{
+    /*
+     * The other half of the RAN story, and the half a unit test of the policy
+     * cannot see: the RAN the transmitter puts in the SACCH SR field has to be
+     * the one the receiver reports, superframe after superframe, on a stream
+     * with no radio in it.  The filter is then run over the frames the
+     * receiver actually produced: the call is followed with its own RAN and
+     * dropped with another, which is exactly what the mode does.
+     */
+    constexpr uint8_t RAN = 21;
+    AirStream stream = buildStream(0x0123, 0x4567, RAN, 8);
+    Decoded d = runStream(stream.samples, 3.3, 1.0, -1, 0, false, nullptr);
+
+    REQUIRE(d.frames.size() >= 7);
+
+    int accepted = 0;
+    int rejected = 0;
+
+    for (const nxdnFrame &f : d.frames) {
+        int ran = -1;
+
+        REQUIRE(f.sacchOk);
+        REQUIRE(nxdnRanFrame(RAN, &ran, &f));
+        REQUIRE(ran == RAN);
+        accepted++;
+    }
+    REQUIRE(accepted == (int)d.frames.size());
+
+    for (const nxdnFrame &f : d.frames) {
+        int ran = -1;
+
+        if (!nxdnRanFrame((uint8_t)(RAN + 1), &ran, &f))
+            rejected++;
+    }
+    REQUIRE(rejected == accepted);
 }

@@ -146,6 +146,50 @@ void nxdnLichParse(uint8_t raw, struct nxdnLich *lich);
  */
 void nxdnLichVoice(const struct nxdnLich *lich, int *first, int *count);
 
+/** RAN setting that means "follow any RAN": every value above 63. */
+#define NXDN_RAN_ANY 0xFF
+
+struct nxdnFrame;
+
+/**
+ * @brief Whether the receiver follows a frame of a given RAN.
+ *
+ * The RAN travels in the SR field of the SACCH, not in the LICH, so a filter
+ * can only be applied once a superframe has decoded: before the first one
+ * (lastRan < 0) every frame passes, which is what lets the receiver lock onto
+ * a call whose RAN it will then reject.  A setting above 63 is "any": that is
+ * what the settings store holds by default and what the UI shows as "RAN*".
+ *
+ * @param setting configured RAN, 0..63, or any value above 63 for "any".
+ * @param lastRan RAN of the last CRC-verified SACCH block, -1 before the first.
+ * @return true if the frame is to be kept.
+ */
+bool nxdnRanFollows(uint8_t setting, int lastRan);
+
+/**
+ * @brief Take the RAN of a frame and decide whether the frame is kept.
+ *
+ * This is the whole filter the mode applies: a frame whose SACCH closed is the
+ * one that sets the RAN of the call, and a frame whose SACCH did not is judged
+ * by the last RAN that did -- a lost block neither admits another RAN nor
+ * drops the call it belongs to.
+ *
+ * @param setting configured RAN, see nxdnRanFollows().
+ * @param lastRan state kept by the caller: RAN of the last frame that had one,
+ *                -1 until the first SACCH decodes.  Updated here.
+ * @param frame the decoded frame.
+ * @return true if the frame is to be kept.
+ */
+bool nxdnRanFrame(uint8_t setting, int *lastRan, const struct nxdnFrame *frame);
+
+/**
+ * @brief RAN a transmission carries, for a configured setting.
+ *
+ * A transmitter has to put a 6 bit number on the air: "any" is not a RAN, so
+ * a receiver configured to follow any RAN transmits 63.
+ */
+uint8_t nxdnRanTransmit(uint8_t setting);
+
 #ifdef __cplusplus
 }
 #endif

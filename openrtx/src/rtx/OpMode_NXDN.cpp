@@ -77,11 +77,7 @@ void OpMode_NXDN::onFrame(const struct nxdnFrame *frame)
      * layer 3 assembler. 0xFF means "any", which is the default and what the
      * mode did before the row existed.
      */
-    if (frame->sacchOk)
-        lastRan = (int)(frame->sacchSr & 0x3Fu);
-
-    if ((state.settings.nxdn_ran <= 63) && (lastRan >= 0)
-        && (lastRan != (int)state.settings.nxdn_ran))
+    if (!nxdnRanFrame(state.settings.nxdn_ran, &lastRan, frame))
         return;
 
     /* The SACCH of a superframe: 18 bits of layer 3 per frame, in the position
@@ -190,8 +186,7 @@ bool OpMode_NXDN::startBaseband(const rtxStatus_t *status)
 {
     const uint16_t src = (uint16_t)(status->dmrSourceId & 0xFFFFu);
     const uint16_t dst = (uint16_t)(status->dmrDestId & 0xFFFFu);
-    const uint8_t ran = (state.settings.nxdn_ran <= 63)
-                      ? state.settings.nxdn_ran : 63;
+    const uint8_t ran = nxdnRanTransmit(state.settings.nxdn_ran);
     const float level = (status->bandwidth == BW_6_25) ? NXDN_TX_LEVEL_6K25
                                                        : NXDN_TX_LEVEL_12K5;
 
