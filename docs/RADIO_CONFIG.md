@@ -307,8 +307,10 @@ irrelevant (it is a transmit audio filter, and the TX path is bypassed anyway),
 which is why nothing has ever noticed; the test freezes both numbers so that a
 future change has to decide which one it means.
 
-dPMR carries a second slip: it reports M17's narrow word `0x7808` while the chip
-holds the same `0x7e08` as NXDN. Also frozen, also metadata only.
+dPMR reported M17's narrow word `0x7808` while the chip held the same `0x7e08`
+as NXDN. Fixed: the mirror the dump publishes is now the word the chip holds
+(`REG43_DIGI_12K5_MIRROR`), because a capture that reports something else is
+worse than no capture.
 
 One more finding, frozen rather than fixed: **REG_31<3>, the compander, is off in
 every mode**. `bk4819_setAudioMode()` clears it in both of its profiles and

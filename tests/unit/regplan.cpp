@@ -985,12 +985,12 @@ TEST_CASE("Every mode's REG_43 mirror is what the chip holds", "[regplan]")
         { OPMODE_M17, BW_12_5, 0x7808, 0x7808, false },
         { OPMODE_M17, BW_12_5, 0x7e28, 0x7e28, true },
         { OPMODE_DMR, BW_12_5, 0x7e28, 0x7e28, true },
-        { OPMODE_NXDN, BW_12_5, 0x7e48, 0x7e08, true },
-        { OPMODE_P25, BW_12_5, 0x7e48, 0x7e08, true },
-        { OPMODE_YSF, BW_12_5, 0x7e48, 0x7e08, true },
-        { OPMODE_DSTAR, BW_12_5, 0x7e48, 0x7e08, true },
+        { OPMODE_NXDN, BW_12_5, 0x7e08, 0x7e08, true },
+        { OPMODE_P25, BW_12_5, 0x7e08, 0x7e08, true },
+        { OPMODE_YSF, BW_12_5, 0x7e08, 0x7e08, true },
+        { OPMODE_DSTAR, BW_12_5, 0x7e08, 0x7e08, true },
         { OPMODE_TETRA, BW_25, 0x7e28, 0x7e28, true },
-        { OPMODE_DPMR, BW_12_5, 0x7808, 0x7e08, true },
+        { OPMODE_DPMR, BW_12_5, 0x7e08, 0x7e08, true },
     };
 
     for (const auto &row : table) {
@@ -1012,7 +1012,7 @@ TEST_CASE("Every mode's REG_43 mirror is what the chip holds", "[regplan]")
     o.dmr12k5 = true;
     struct radioPlan plan = applyMode(OPMODE_DMR, BW_12_5, &o);
     INFO(planText(plan));
-    REQUIRE(plan.knobs.rxReg43 == 0x7e48);
+    REQUIRE(plan.knobs.rxReg43 == 0x7e08);
     REQUIRE(regOf(0x43) == 0x7e08);
 }
 

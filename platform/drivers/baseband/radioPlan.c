@@ -57,6 +57,15 @@ static const struct planBandwidth planBandwidths[] = {
 /* The REG_43 words the baseband dump reports for the modes that use them */
 #define REG43_M17_NARROW 0x7808
 #define REG43_M17_WIDE 0x7e28
+/*
+ * The word the chip ends up holding in the 12.5 kHz digital path.  The stock
+ * firmware's 0x7e48 is the *intent* quoted in docs/RADIO_CONFIG.md; the TX
+ * audio LPF2 field it carries is cleared by the filter write that follows, so
+ * the register reads 0x7e08.  The mirror the baseband dump publishes is this
+ * one, because a capture that reports a word the chip does not hold is worse
+ * than no capture.
+ */
+#define REG43_DIGI_12K5_MIRROR 0x7e08
 #define REG43_DIGI_12K5 0x7e48 /* the stock firmware's 4FSK setting */
 #define REG43_DIGI_25K 0x7e28
 
@@ -390,7 +399,7 @@ static void buildModeProfile(struct radioPlan *plan, enum opmode mode,
             emitTxDeviation(plan, DMR_TX_DEVIATION);
             if (opt->dmr12k5) {
                 emitBandwidth(plan, BW_12_5);
-                plan->knobs.rxReg43 = REG43_DIGI_12K5;
+                plan->knobs.rxReg43 = REG43_DIGI_12K5_MIRROR;
             } else {
                 emitBandwidth(plan, BW_25);
                 plan->knobs.rxReg43 = REG43_DIGI_25K;
@@ -423,7 +432,7 @@ static void buildModeProfile(struct radioPlan *plan, enum opmode mode,
                 emitRfFilter(plan, 3, 3); /* about 2.9 kHz */
             else
                 emitRfFilter(plan, 7, 7);
-            plan->knobs.rxReg43 = REG43_DIGI_12K5;
+            plan->knobs.rxReg43 = REG43_DIGI_12K5_MIRROR;
             emitTxAudioFilter(plan, DMR_TX_LPF2_BW);
             emitRxAudioGain(plan, DIGI_RX_AUDIO_GAIN1, DIGI_RX_AUDIO_GAIN2);
             emitMicGain(plan, DIGI_MIC_GAIN);
@@ -443,7 +452,7 @@ static void buildModeProfile(struct radioPlan *plan, enum opmode mode,
             emitTxAudioFilter(plan, DMR_TX_LPF2_BW);
             emitRxAudioGain(plan, DIGI_RX_AUDIO_GAIN1, DIGI_RX_AUDIO_GAIN2);
             emitMicGain(plan, DIGI_MIC_GAIN);
-            plan->knobs.rxReg43 = REG43_M17_NARROW;
+            plan->knobs.rxReg43 = REG43_DIGI_12K5_MIRROR;
             break;
 
         case OPMODE_P25:
@@ -459,7 +468,7 @@ static void buildModeProfile(struct radioPlan *plan, enum opmode mode,
             emitTxDeviation(plan, M17_TX_DEVIATION); /* see NXDN */
             emitBandwidth(plan, BW_12_5);
             emitRfFilter(plan, 7, 7);
-            plan->knobs.rxReg43 = REG43_DIGI_12K5;
+            plan->knobs.rxReg43 = REG43_DIGI_12K5_MIRROR;
             emitTxAudioFilter(plan, DMR_TX_LPF2_BW);
             emitRxAudioGain(plan, DIGI_RX_AUDIO_GAIN1, DIGI_RX_AUDIO_GAIN2);
             emitMicGain(plan, DIGI_MIC_GAIN);
