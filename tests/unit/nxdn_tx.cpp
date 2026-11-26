@@ -716,12 +716,18 @@ TEST_CASE("NXDN RAN filter accepts its own and drops another", "[nxdn][ran]")
     /* The edges of the 6 bit field: 0 and 63 are RANs, not "any" */
     nxdnFrame zero = ranFrame(true, 0);
     nxdnFrame last = ranFrame(true, 63);
+    nxdnFrame five = ranFrame(true, 5);
     int ran0 = -1;
     int ran63 = -1;
+    int ran63b = -1;
 
     REQUIRE(nxdnRanFrame(0, &ran0, &zero));
     REQUIRE(!nxdnRanFrame(1, &ran0, &zero));
     REQUIRE(nxdnRanFrame(63, &ran63, &last));
+
+    /* 63 is the last RAN of the field, not the "any" value: a receiver set to
+     * follow it must drop a call of another RAN */
+    REQUIRE(!nxdnRanFrame(63, &ran63b, &five));
     REQUIRE(!nxdnRanFrame(3, &ran63, &last));
 
     /* And what a transmitter puts on the air for each setting */
