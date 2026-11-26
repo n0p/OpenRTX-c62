@@ -1,0 +1,136 @@
+# Ajustes: versión del registro y migración
+
+**Ámbito:** firmware de la C62 (OpenRTX, Zephyr, Cortex-M33). Este documento
+cubre el registro de ajustes en flash: qué guarda, cómo se versiona y qué pasa
+al actualizar el firmware. El resto de los ajustes (qué hace cada campo) se
+describe en `docs/MESSAGING.md` (DMR/APRS), `docs/ZONES.md` y `docs/UI.md`.
+
+---
+
+## 1. Dónde viven
+
+`settings_t` (`include/core/settings.h`) se guarda en el primer sector de la
+partición `storage` del C62 (`platform/drivers/NVM/nvmem_C62.c`), en un registro
+de **cabecera + payload**:
+
+| offset | tamaño | campo |
+|---|---|---|
+| 0 | 4 | magic `"ORTX"` (`0x4F525458`) |
+| 4 | 2 | CRC-CCITT del payload |
+| 6 | 2 | **versión del payload** (`SETTINGS_VERSION`) |
+| 8 | n | `settings_t`, empaquetado |
+
+El formato lo define `core/settings_record.h` / `settings_record.c` y lo prueban
+`tests/unit/settings_record.cpp` y `tests/unit/channel_store.cpp`: el mismo
+código que corre en el radio.
+
+## 2. Por qué hay versión
+
+`settings_t` crece. Sin versión, un registro escrito por un firmware anterior se
+reinterpreta con los campos desplazados: un nivel de squelch leído de un
+indicativo, un DMRID leído de un texto. Eso es peor que un reset, porque el
+radio arranca con una configuración plausible y equivocada.
+
+La regla es: **si la versión no es la de este firmware, el registro se descarta
+entero y vuelven los valores por defecto**. El CRC se comprueba después de la
+versión, para poder distinguir «escrito por otra versión» de «corrupto».
+
+Hay **una sola excepción**, y es la versión 7: la 8 añadió
+`settings_t.pc_port` como **último byte** del payload, así que el registro que
+escribió la 7 *es* el de hoy un byte más corto, con su propio CRC sobre su propia
+longitud. `settings_recordRead()` lo detecta, comprueba ese CRC y carga el
+prefijo dejando el campo añadido a su valor por defecto (`Never`, el pulsador
+del accesorio). El operador
+conserva indicativo, potencias, scan y todo lo demás al actualizar, y el log dice
+`settings: record v7 migrated to v8`. Cualquier otra versión que no sea la de hoy
+se sigue descartando entera.
+
+| versión | contenido |
+|---|---|
+| 1 | registro original, sin campo de versión en la cabecera (el hueco era relleno a 0) |
+| 2 | destino DMR (`dmr_dest_type`, `dmr_dest_id`), DMRID propio (`dmr_id`) y formato de SMS (`sms_format`) |
+| 3 | timeslot de DMR (`dmr_timeslot`, 1 o 2) para el menú rápido |
+| 4 | controles de los modos de solo recepción: filtro RAN de NXDN (`nxdn_ran`) y AGC, raster y ajuste al raster de la banda aérea (`am_agc`, `am_step`, `am_snap`) |
+| 5 | configuración del scan (`scan_*`: regla de reanudación, tiempos, canal prioritario, rango y paso de VFO, ver `docs/SCAN.md`) y retardo de aire del TX de DMR (`dmr_tx_air_delay_us`) |
+| 6 | profundidad de modulación del TX AM de banda aérea (`am_depth`) y bloque del módem de paquetes KISS (`packet_*`, ver `docs/KISS.md`) |
+| 7 | potencia de TX por defecto del VFO (`tx_power`, mW, ver `docs/TX_SAFETY.md`) |
+| 8 | modo del puerto de accesorio (`pc_port`: `Auto`/`Always`/`Never`, ver `docs/ACCESSORY.md`) — **migra** desde la 7 |
+
+Los bloques se **añaden al final** de la estructura, cada uno en su offset, así
+que al fusionar ramas no hay ningún campo que se reinterprete: el que llega
+detrás apenda y sube la versión, y el registro de la otra rama se descarta y
+vuelve a valores por defecto, que es lo que ya pasa entre cualesquiera dos
+versiones. Lo que no puede hacerse es reordenar ni reutilizar un campo.
+
+La cuarta pasada encontró `am_depth` insertado en medio del bloque de AM (la
+rama lo añadió antes del scan, que en su árbol no existía) y lo movió detrás de
+`dmr_tx_air_delay_us`: la comprobación `sizeof(settings_t)` del test lo detecta.
+
+Un registro de la versión 1 tiene el campo de versión a 0, así que se descarta
+solo: no hace falta código de migración y no hay forma de leerlo mal.
+
+## 3. Qué ve el operador
+
+`nvm_readSettings()` devuelve `0` o `-(enum settingsReset)`:
+
+| valor | significado |
+|---|---|
+| `SETTINGS_RESET_BLANK` | partición vacía: primer encendido |
+| `SETTINGS_RESET_VERSION` | registro de otra versión del firmware: descartado |
+| `SETTINGS_RESET_CORRUPT` | CRC o magic mal: descartado |
+
+`state_init()` guarda el motivo en `state.settings_reset`;
+`state_settingsResetCause()` lo devuelve y `state_settingsResetAck()` lo borra
+después de que la pantalla lo haya enseñado una vez. La UI puede así avisar
+«ajustes reiniciados (actualización de firmware)» en vez de dejar al operador
+buscando su indicativo.
+
+## 4. Tamaño
+
+Con la imagen completa (APRS y el módem de paquetes KISS compilados),
+`sizeof(settings_t)` es **205 B** y `SETTINGS_RECORD_SIZE` = **213 B**, por debajo
+del límite de 256 B del registro del driver (`NVM_RECORD_MAX`). El test de host
+comprueba que el registro no pase de 192 B **en su propia configuración** (sin
+APRS ni KISS, 132 B), que es el margen que hay antes de tocar la estructura otra
+vez; el número de la imagen se lee del DWARF del ELF (`pc_port` cae en el offset
+204) o del propio registro que escribe la radio.
+
+## 5. Qué campos llevan validación
+
+| campo | regla | función |
+|---|---|---|
+| `dmr_id` | 1..16777215 (24 bits; 0 = sin configurar) | `settings_dmrIdValid()` |
+| `dmr_dest_type` | `NONE`, `GROUP` o `USER` | `settings_dmrDestValid()` |
+| `dmr_dest_id` | 1..16777215 si el tipo no es `NONE` | `settings_dmrDestValid()` |
+| `sms_format` | 0..7 (`enum dmrSmsFormat`) | `settings_smsFormatValid()` |
+| `dmr_timeslot` | 1 o 2 | `settings_dmrTimeslotValid()` |
+| `pc_port` | 0..2 (`enum portMode`) | `settings_portModeValid()` |
+
+Las funciones son `static inline` en `settings.h`: una pantalla puede validar
+sin llamar a nada. Los nombres cortos para los menús
+(`settings_dmrDestName()`, `settings_smsFormatName()`,
+`settings_dmrTimeslotName()`) sí viven en `settings.c`.
+
+## 6. Canales: migración sin perder nada
+
+El banco de canales (`core/channel_store.h`) tiene su propia versión
+(`CHSTORE_VERSION`, hoy **2**, con el destino DMR por canal) y **sí migra**: un
+banco de la versión 1 se lee registro a registro de 32 B y se convierte al de
+37 B en el sitio (32 B de pila, sin una segunda copia del banco), porque perder
+los canales del operador en una actualización no es aceptable. Un banco escrito
+por una versión **más nueva** se deja intacto y se presenta vacío, en vez de
+interpretarlo. Detalles en `docs/CHANNELS.md`.
+
+## 7. Después de tocar la estructura
+
+1. Sube `SETTINGS_VERSION` en `settings.h`.
+2. Si añades campos, añádelos también al final de `default_settings` (el orden
+   es posicional).
+3. Comprueba el tamaño: `tests/unit/settings_record.cpp` falla si el registro
+   pasa de 192 B.
+4. Si el campo nuevo va **detrás de `pc_port`**, la migración de la versión 7 ya
+   no aplica tal cual: `V7_PAYLOAD_LEN` deja de ser `sizeof - 1` y hay que
+   rehacer la cuenta (o dejar de migrar esa versión) en `settings_record.c`.
+5. Avisa en las notas de la versión. Desde la 8, actualizar desde la 7 **no**
+   pierde los ajustes; desde cualquier otra versión, **un reset de ajustes** es
+   lo esperado.
