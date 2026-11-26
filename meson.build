@@ -2339,6 +2339,15 @@ else
                                            tetra_chain_src,
                                  kwargs  : tetra_test_opts)
   test('TETRA Status Stand-in Test', tetra_status_test)
+
+  # The other direction: what the mode's own encoder produces, decoded by the
+  # real receiver. Nothing keys the radio (TETRA transmit is not viable on
+  # this hardware), the burst only ever goes back into the receiver.
+  tetra_sds_test = executable('tetra_sds_test',
+                              sources : ['tests/unit/tetra_sds.cpp'] +
+                                        tetra_chain_src,
+                              kwargs  : tetra_test_opts)
+  test('TETRA SDS Message Path Test', tetra_sds_test)
 endif
 
 
