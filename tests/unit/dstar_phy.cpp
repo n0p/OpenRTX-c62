@@ -186,15 +186,14 @@ TEST_CASE("a DV transmission publishes its header, its frames and its resyncs",
     REQUIRE(s.resyncs == expectedResyncs);
 
     /*
-     * The end pattern is on the air -- DStarTx sends the 48 bits of STD-7
-     * 4.1.2 h after dstarTx_end() -- but this demodulator never matches it: its
-     * bit history is 32 bits (DStarPhy.c, bitHist) and the pattern is 48, so
-     * the comparison against 0xAAAAAAAA cannot hold.  The call is closed by the
-     * two-superframe timeout instead, some 4 s later.  Measured, not pinned:
-     * this only says the callback is not called twice, so a demodulator that
-     * learns to recognise the pattern (a 64-bit history) also passes.
+     * The transmission ends where its end pattern is, not four seconds later on
+     * the timeout: DStarTx sends the 48 bits of STD-7 4.1.2 h after
+     * dstarTx_end(), and the demodulator's bit history holds 48 bits so it can
+     * match them.  Before that it held 32, the comparison could never be true,
+     * and every call ended by timeout with the tail of it read as all-zero
+     * voice.
      */
-    REQUIRE(s.eot <= 1);
+    REQUIRE(s.eot == 1);
 
     /* What the screen reads, published the way the mode publishes it */
     struct dstarStatus st;

@@ -79,7 +79,14 @@ static int32_t symPosQ8;     /* absolute Q8 position of the next symbol */
 
 /* --- bit and frame state ------------------------------------------------- */
 static enum rxState state;
-static uint32_t bitHist;     /* last bits, newest in bit 0 */
+/*
+ * The end pattern is 48 bits long, so the history has to hold at least that
+ * many: with a 32-bit accumulator the comparison in RX_DATA asked for 32 bits
+ * that were not there, was never true, and every D-STAR transmission ended by
+ * timeout -- with four seconds of all-zero voice frames going to the speaker --
+ * instead of by its own end pattern.
+ */
+static uint64_t bitHist;     /* last bits, newest in bit 0 */
 static uint16_t headerBit;
 static int8_t headerSoft[DSTAR_CODED_BITS] PSRAM_STATE;
 static uint16_t frameBit;
@@ -167,7 +174,7 @@ static void resetFrame(void)
 /* Feed one bit (hard decision + soft value, already polarity corrected). */
 static void bitIn(uint8_t bit, int8_t soft)
 {
-    bitHist = (bitHist << 1) | bit;
+    bitHist = ((bitHist << 1) | (uint64_t)bit) & 0xFFFFFFFFFFFFull;
     totalBits++;
 
     switch (state) {
@@ -176,8 +183,8 @@ static void bitIn(uint8_t bit, int8_t soft)
          * polarities are accepted: a discriminator can be inverted, and a false
          * lock on the wrong one is thrown away by the header CRC. */
         uint32_t want = (uint32_t)DSTAR_FRAME_SYNC & 0x7FFFu;
-        int errsN = popcount32((bitHist ^ want) & 0x7FFFu);
-        int errsI = popcount32((bitHist ^ (want ^ 0x7FFFu)) & 0x7FFFu);
+        int errsN = popcount32((uint32_t)(bitHist ^ want) & 0x7FFFu);
+        int errsI = popcount32((uint32_t)(bitHist ^ (want ^ 0x7FFFu)) & 0x7FFFu);
         if (errsN <= 2 || errsI <= 2) {
             state = RX_HEADER;
             headerBit = 0;
