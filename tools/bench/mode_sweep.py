@@ -23,7 +23,7 @@ MODE_NAMES = {0: "NONE", 1: "FM", 2: "DMR", 3: "M17", 4: "TETRA",
               10: "AIRBAND", 11: "WFM"}
 # The modes whose transmitter exists in this image (TETRA TX is not viable on
 # this hardware, WFM is receive only).
-MODES = [1]
+MODES = [1, 2]
 
 CAPTURE_S = 3.0
 KEY_AT = 1.0
@@ -47,31 +47,52 @@ def load_iq(path):
     return raw
 
 
-def occupied_bw(x, rate):
-    """99 % occupied bandwidth of the strongest stretch."""
-    n = 4096
-    if x.size < n:
-        return 0.0
-    seg = x[: (x.size // n) * n].reshape(-1, n)
-    power = np.abs(seg) ** 2
-    idx = int(np.argmax(power.sum(axis=1)))
-    spec = np.abs(np.fft.fftshift(np.fft.fft(seg[idx] * np.hanning(n)))) ** 2
-    total = spec.sum()
-    if total <= 0:
-        return 0.0
-    cum = np.cumsum(spec) / total
-    lo = int(np.searchsorted(cum, 0.005))
-    hi = int(np.searchsorted(cum, 0.995))
-    return (hi - lo) * rate / n
+def analyse(x, rate, keyed_span, idle_span):
+    """Carrier offset, level and 99 % bandwidth inside a narrow window."""
+    k0, k1 = int(keyed_span[0] * rate), int(keyed_span[1] * rate)
+    i0, i1 = int(idle_span[0] * rate), int(idle_span[1] * rate)
+    keyed = x[k0:k1]
+    idle = x[i0:i1]
+    n = 8192
+    if keyed.size < n:
+        return None
+    seg = keyed[:(keyed.size // n) * n].reshape(-1, n)
+    pw = (np.abs(seg) ** 2).sum(axis=1)
+    i = int(np.argmax(pw))
+    win = seg[i] * np.hanning(n)
+    spec = np.fft.fftshift(np.abs(np.fft.fft(win)) ** 2)
+    freq = np.fft.fftshift(np.fft.fftfreq(n, 1.0 / rate))
+    peak = int(np.argmax(spec))
+    # -20 dB bandwidth around the carrier: with noise inside the window a 99 %
+    # figure saturates at the window, and the shape of the emission is what the
+    # channel plan cares about.
+    near = np.abs(freq - freq[peak]) <= 25000
+    band = spec[near]
+    bfreq = freq[near]
+    thr = spec[peak] * 0.01
+    above = np.where(band >= thr)[0]
+    if above.size < 2:
+        return None
+    lo = bfreq[above[0]]
+    hi = bfreq[above[-1]]
+    level = 10 * np.log10(spec[peak] + 1e-20)
+    idle_level = (10 * np.log10(np.abs(idle).max() ** 2 + 1e-20)
+                  if idle.size else -200.0)
+    return freq[peak], level, hi - lo, level - idle_level
 
 
 def main():
     outdir = sys.argv[1] if len(sys.argv) > 1 else "/tmp/modesweep"
     os.makedirs(outdir, exist_ok=True)
-    link = B.open_link("/dev/ttyUSB0")
-    link.arm()
-    print("%-8s %10s %10s %10s" % ("mode", "carrier", "bw99", "idle_delta"))
+    print("%-8s %12s %9s %9s %9s" % ("mode", "offset", "level", "bw20", "on/off"))
     for mode in MODES:
+        link = B.open_link("/dev/ttyUSB0")
+        try:
+            link.arm()
+        except Exception as exc:
+            print("%-8s arm failed: %s" % (MODE_NAMES.get(mode, mode), exc))
+            link.close()
+            continue
         path = os.path.join(outdir, "mode%d.iq" % mode)
         cap = capture(path)
         time.sleep(0.2)
@@ -96,16 +117,19 @@ def main():
         if x.size == 0:
             print("%-8s no capture" % MODE_NAMES.get(mode, mode))
             continue
-        rate = RATE
-        n = x.size
-        keyed = x[int(KEY_AT * rate): int((UNKEY_AT - 0.1) * rate)]
-        idle = x[int((UNKEY_AT + 0.2) * rate):]
-        peak_k = 20 * np.log10(np.abs(keyed).max() + 1e-12)
-        peak_i = 20 * np.log10(np.abs(idle).max() + 1e-12) if idle.size else -200
-        bw = occupied_bw(keyed, rate)
-        print("%-8s %9.1f dB %9.1f kHz %9.1f dB" %
-              (MODE_NAMES.get(mode, mode), peak_k, bw / 1000.0, peak_k - peak_i))
-    link.close()
+        r = analyse(x, RATE, (KEY_AT + 0.3, UNKEY_AT - 0.1),
+                    (0.15, KEY_AT - 0.15))
+        if r is None:
+            print("%-8s no carrier found" % MODE_NAMES.get(mode, mode))
+            continue
+        off, level, bw, delta = r
+        print("%-8s %+7.1f kHz %7.1f dB %7.1f kHz %7.1f dB" %
+              (MODE_NAMES.get(mode, mode), off / 1000.0, level, bw / 1000.0,
+               delta))
+        try:
+            link.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
