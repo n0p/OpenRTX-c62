@@ -24,7 +24,10 @@
  *     dump [text|json]    what the screen shows and what the radio is set to
  *     sync                wait until the UI has drawn the queued keys
  *     sleep 250           milliseconds
- *     quit
+ *     quit                the shutdown sequence, then exit
+ *     powercut            exit at once, as the volume knob does: no shutdown
+ *                         sequence, so nothing is written on the way out and
+ *                         only what the settings debouncer saved survives
  *
  * Every command answers with zero or more payload lines and closes with
  *

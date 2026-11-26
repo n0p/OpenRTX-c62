@@ -274,7 +274,8 @@ static void cmd_help(void)
     say("inject tetra-call <0|1> <GROUP> <DST> <TALKER> <ID> <VOICE> [<ENC>]");
     say("inject identity <DMR_ID>     the station's own DMR ID");
     say("inject mode-state clear   every mode above, back to nothing decoded");
-    say("quit                 power the radio off");
+    say("quit                 power the radio off (the shutdown sequence runs)");
+    say("powercut             cut the power: no shutdown, no write on the way out");
 }
 
 /*
@@ -881,6 +882,19 @@ static enum cmd_result execute(char *line)
     } else if (strcmp(cmd, "quit") == 0 || strcmp(cmd, "poweroff") == 0) {
         emulator_state.powerOff = true;
         return CMD_QUIT;
+    } else if (strcmp(cmd, "powercut") == 0) {
+        /*
+         * The radio's own way off: the volume knob cuts the rail, so neither
+         * state_terminate() nor platform_terminate() runs and whatever the
+         * settings debouncer had not written yet is lost (core/state.c).  A
+         * test needs it to tell "the change survived the power cut" from "the
+         * shutdown wrote it on the way out".  _exit() and not exit(): no
+         * atexit handlers, no stdio flush beyond what the answers already
+         * flushed, nothing of ours can sneak a write in.
+         */
+        ctl("#end ok");
+        fflush(NULL);
+        _exit(0);
     } else {
         say("#error unknown command \"%s\" (try help)", cmd);
         return CMD_ERR;
