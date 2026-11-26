@@ -1417,6 +1417,120 @@ p25_phy_test = executable('p25_phy_test',
                                     ['tests/unit/p25_phy.cpp'],
                           kwargs  : unit_test_opts)
 
+# P25 channel codes at their limits (tests/unit/p25_fec.cpp): what each code
+# has to correct and what it has to refuse, which neither the end-to-end
+# transmitter nor the real-frame PHY test walks past.
+p25_fec_test = executable('p25_fec_test',
+                          sources : unit_test_src + p25_phy_src +
+                                    ['tests/unit/p25_fec.cpp'],
+                          kwargs  : unit_test_opts)
+
+# What the P25 mode publishes to the screen (tests/unit/p25_status.cpp).  The
+# host build compiles P25Status.c with CONFIG_P25 off, i.e. the simulator stub
+# the UI tests walk; this target compiles the translation unit the radio runs,
+# so the -1 identifiers and the bad-frame rules are the firmware's own.
+p25_status_test = executable('p25_status_test',
+                             sources : ['tests/unit/p25_status.cpp',
+                                        'openrtx/src/protocols/P25/P25Status.c',
+                                        'openrtx/src/protocols/P25/P25Defs.c',
+                                        'platform/mcu/x86_64/drivers/delays.c'],
+                             kwargs  : {'include_directories' : linux_inc,
+                                        'c_args' : linux_c_args + ['-DCONFIG_P25'],
+                                        'cpp_args' : linux_cpp_args,
+                                        'dependencies' : [catch2_dep,
+                                                          threads_dep],
+                                        'link_args' : linux_l_args})
+
+# D-STAR: the radio header and what the mode publishes (tests/unit/
+# dstar_header.cpp), and the whole DV transmission through the demodulator
+# (tests/unit/dstar_phy.cpp).  The header is the only part of a DV
+# transmission that carries an identity, so its P_FCS and the Viterbi behind it
+# are the refusals that matter.  These are portable C with no radio in them,
+# the same files tests/host/dstar runs.
+dstar_src = ['openrtx/src/protocols/DSTAR/DStarFec.c',
+             'openrtx/src/protocols/DSTAR/DStarPhy.c',
+             'openrtx/src/protocols/DSTAR/DStarSlowData.c',
+             'openrtx/src/protocols/DSTAR/DStarStatus.c',
+             'openrtx/src/protocols/DSTAR/DStarTx.c',
+             'openrtx/src/protocols/DSTAR/DStarVocoder.c',
+             'lib/dmr_vocoder/dmr_golay.c',
+             'lib/dmr_vocoder/dmr_golay_table.c']
+
+dstar_test_opts = {'include_directories' : linux_inc + ['lib/dmr_vocoder'],
+                   'c_args' : linux_c_args,
+                   'cpp_args' : linux_cpp_args,
+                   'dependencies' : [catch2_dep],
+                   'link_args' : linux_l_args + ['-lm']}
+
+dstar_header_test = executable('dstar_header_test',
+                               sources : dstar_src +
+                                         ['tests/unit/dstar_header.cpp'],
+                               kwargs  : dstar_test_opts)
+
+dstar_phy_test = executable('dstar_phy_test',
+                            sources : dstar_src +
+                                      ['tests/unit/dstar_phy.cpp'],
+                            kwargs  : dstar_test_opts)
+
+# The P25 transmitter closed through the mode's own demodulator
+# (tests/unit/p25_tx.cpp): what a call without a voice source is, and that the
+# NAC is masked to the twelve bits the NID has room for.
+p25_tx_src = ['openrtx/src/protocols/C4FM/C4fmMod.c',
+              'openrtx/src/protocols/P25/P25Tx.c',
+              'openrtx/src/protocols/P25/P25Phy.c',
+              'openrtx/src/protocols/P25/P25Fec.c',
+              'openrtx/src/protocols/P25/P25Defs.c',
+              'openrtx/src/protocols/P25/P25Tables.c']
+
+p25_tx_test = executable('p25_tx_test',
+                         sources : p25_tx_src + ['tests/unit/p25_tx.cpp'],
+                         kwargs  : {'include_directories' : linux_inc,
+                                    'c_args' : linux_c_args,
+                                    'cpp_args' : linux_cpp_args,
+                                    'dependencies' : [catch2_dep],
+                                    'link_args' : linux_l_args + ['-lm']})
+
+# System Fusion frame layer (tests/unit/ysf_frame.cpp): the FICH, the data
+# channel and the voice slots, fed straight to ysfFrame_decode() -- the
+# modulator stays out of the comparison, so a refusal here is a refusal of the
+# frame layer and not of the demodulator.  Compiled with CONFIG_YSF, the switch
+# the radio builds with; lib/dmr_vocoder is where the Golay(24,12) decoder and
+# the AMBE+2 types this layer links come from.
+ysf_frame_src = ['openrtx/src/protocols/YSF/YsfFrame.c',
+                 'openrtx/src/protocols/YSF/YsfTx.c',
+                 'openrtx/src/protocols/C4FM/C4fmMod.c',
+                 'lib/dmr_vocoder/dmr_decoder.c',
+                 'lib/dmr_vocoder/dmr_golay.c',
+                 'lib/dmr_vocoder/dmr_golay_table.c',
+                 'lib/dmr_vocoder/dmr_fft.c']
+
+# The System Fusion synchroniser (tests/unit/ysf_phy.cpp): a frame placed
+# anywhere in the sample stream must be found, a frame whose sync is wrong, cut
+# short or absent must not be, and a lost frame must not take the next one with
+# it.
+ysf_phy_test = executable('ysf_phy_test',
+                          sources : ysf_frame_src +
+                                    ['openrtx/src/protocols/YSF/YsfPhy.c',
+                                     'tests/unit/ysf_phy.cpp'],
+                          kwargs  : {'include_directories' : linux_inc +
+                                                            ['lib/dmr_vocoder'],
+                                     'c_args' : linux_c_args + ['-DCONFIG_YSF'],
+                                     'cpp_args' : linux_cpp_args +
+                                                  ['-DCONFIG_YSF'],
+                                     'dependencies' : [catch2_dep],
+                                     'link_args' : linux_l_args + ['-lm']})
+
+ysf_frame_test = executable('ysf_frame_test',
+                            sources : ysf_frame_src +
+                                      ['tests/unit/ysf_frame.cpp'],
+                            kwargs  : {'include_directories' : linux_inc +
+                                                              ['lib/dmr_vocoder'],
+                                       'c_args' : linux_c_args + ['-DCONFIG_YSF'],
+                                       'cpp_args' : linux_cpp_args +
+                                                    ['-DCONFIG_YSF'],
+                                       'dependencies' : [catch2_dep],
+                                       'link_args' : linux_l_args + ['-lm']})
+
 m17_viterbi_test = executable('m17_viterbi_test',
                                sources : unit_test_src + ['tests/unit/M17_viterbi.cpp'],
                                kwargs  : unit_test_opts)
@@ -2202,6 +2316,13 @@ m17_replay_test = executable('m17_replay_test',
 
 test('M17 Golay Unit Test',   m17_golay_test)
 test('P25 PHY Test',           p25_phy_test)
+test('P25 FEC Limits Test',    p25_fec_test)
+test('P25 Status Test',        p25_status_test, timeout : 60)
+test('P25 TX Test',            p25_tx_test, timeout : 60)
+test('YSF Frame Test',         ysf_frame_test)
+test('YSF PHY Test',           ysf_phy_test)
+test('D-STAR Header Test',     dstar_header_test)
+test('D-STAR PHY Test',        dstar_phy_test, timeout : 120)
 test('M17 Viterbi Unit Test', m17_viterbi_test)
 test('M17 Demodulator Test',  m17_demodulator_test)
 test('M17 RRC Test',          m17_rrc_test)

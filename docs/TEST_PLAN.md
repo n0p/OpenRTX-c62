@@ -38,6 +38,11 @@ Leyenda: ✅ cubierto por tests automáticos · ⚠️ cubierto a medias · ❌ 
 | **P25** | C4FM, sync por sub-fase, TSBK, HDU/TDU, IMBE 7200, NAC | ✅/⚠️ | `unit/p25_phy`, `host/p25_phy_host`, `host/p25_tx`, `unit/imbe_robust` |
 | **YSF** | 4FSK, FICH/DGID, modo V/D, IMBE, TX | ✅ | `host/ysf_host`, `host/ysf_tx` |
 | **D-STAR** | GMSK 4800, AMBE 3600x2400 propio, header, TX | ⚠️ | `host/dstar`, `unit/` (vocoder por `lib/dstar_vocoder`) |
+| **NXDN** | 4FSK 2400 Bd, FEC, RAN, SACCH (origen>destino), TX | ⚠️ | `unit/nxdn_rx`, `unit/nxdn_tx` |
+| **dPMR** | 4FSK 2400 Bd, CCH, permutación de voz, TX | ⚠️ | `unit/dpmr_rx`, `unit/dpmr_tx` |
+| **P25** | C4FM, sync por sub-fase, TSBK, HDU/TDU, IMBE 7200, NAC | ✅ | `unit/p25_phy` (y el rechazo: NID fuera de política, paridad del DUID, DUID desconocido, TSBK anunciado sobre un LDU, NAC de cada trama, trama cortada), `unit/p25_fec` (radio de cada código y su rechazo), `unit/p25_status` (estado publicado, buena trama y mala), `unit/imbe_robust` (recuento de bits y repetición), `host/p25_phy_host`, `host/p25_tx` |
+| **YSF** | 4FSK, FICH/DGID, modo V/D, voz AMBE+2, TX | ✅ | `unit/ysf_frame` (FICH roto, bloque DCH roto, voz FR no soportada, bit fijo de V/D 2, DG-ID), `unit/ysf_phy` (sync: encuentra y no inventa), `host/ysf_host`, `host/ysf_tx` |
+| **D-STAR** | GMSK 4800, AMBE 3600x2400 propio, header, TX | ✅/⚠️ | `unit/dstar_header` (P_FCS, cabecera codificada y su rechazo, MY/UR/RPT, oídos, texto), `unit/dstar_phy` (transmisión completa, cortada en cabecera o en tramas, ruido, recuentos de error por palabra AMBE), `host/dstar`, `unit/` (vocoder por `lib/dstar_vocoder`); sin decodificador AMBE 2400: el modo calla |
 | **M17** | Golay, Viterbi, RRC, demodulador, callsign, packet mode | ✅ | `unit/M17_*`, `unit/m17_replay` |
 | **TETRA** | demodulación, CRC de bloques, SDS (U-SDS/UDD), uplink y registro, celda/MCC-MNC | ✅/⚠️ | `unit/tetra_demod`, `unit/tetra_uplink`; sin doble para la capa MM |
 | **WFM (BK1080)** | init del chip, tune, mute del BK4819, conmutación de fuente de audio, coste | ✅/⚠️ | `unit/wfm`, `unit/wfm` + `tests/platform/c62_wfm_cost.c` |
