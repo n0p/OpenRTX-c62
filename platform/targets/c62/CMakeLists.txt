@@ -21,6 +21,9 @@ target_sources(app
 
     ${OPENRTX_ROOT}/platform/drivers/baseband/BK4819.c
     ${OPENRTX_ROOT}/platform/drivers/baseband/BK1080.c
+    # The BK4819 configuration of every mode as data, walked by radio_C62.cpp
+    # and checked on the host by tests/unit/regplan.cpp (docs/RADIO_CONFIG.md).
+    ${OPENRTX_ROOT}/platform/drivers/baseband/radioPlan.c
 
     ${OPENRTX_ROOT}/platform/drivers/NVM/nvmem_C62.c
     ${OPENRTX_ROOT}/platform/drivers/NVM/channel_store_c62.c

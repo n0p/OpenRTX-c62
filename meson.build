@@ -1935,6 +1935,21 @@ c62_calib_test = executable('c62_calib_test',
                                        'platform/targets/c62/calib_C62.c'],
                             kwargs  : unit_test_opts)
 
+# The BK4819 configuration of every C62 mode as data: the plan the driver walks
+# and the golden table it has to match (docs/RADIO_CONFIG.md).  BK4819.c is
+# compiled for the host here, against a recording fake bus, so the comparison is
+# against the driver's own setters and not against a copy of them.
+regplan_test = executable('regplan_test',
+                          sources : ['tests/unit/regplan.cpp',
+                                     'platform/drivers/baseband/radioPlan.c',
+                                     'platform/drivers/baseband/BK4819.c',
+                                     'platform/mcu/x86_64/drivers/delays.c'],
+                          kwargs : {'include_directories' : linux_inc,
+                                    'cpp_args' : linux_cpp_args,
+                                    'c_args' : linux_c_args,
+                                    'dependencies' : [catch2_dep],
+                                    'link_args' : linux_l_args})
+
 dsp_oversampling_test = executable('dsp_oversampling_test',
                                     sources : unit_test_src + ['tests/unit/dsp_oversampling.cpp'],
                                     kwargs  : unit_test_opts)
@@ -2126,6 +2141,7 @@ test('Zones Test',           zones_test)
 test('AGC Test',             agc_test)
 test('AM TX Test',           am_tx_test)
 test('Airband Test',         airband_test)
+test('Radio Plan Test',      regplan_test)
 test('Broadcast FM Test',    wfm_test)
 
 test('Spectrum Test',        spectrum_test)
