@@ -424,11 +424,20 @@ la UI recupera el CPU; en AM el `update()` de la banda aérea no se bloquea, as�
 que el RTX se queda el procesador para siempre. Lo que se veía como «la radio se
 cuelga en AM» era la pantalla y el teclado sin turno.
 
-El volcado con plazo y la caja negra no eran el arreglo de esto —el arreglo es
-`CONFIG_TIMESLICE_SIZE=5`: el kernel rota dos hilos de la misma prioridad, el RTX
-conserva su ritmo entre turnos y la UI recibe CPU cada 5 ms como mucho—, pero sin
-ellos no se habría sabido: el registro nombra al hilo parado y su estado, que es
-lo que descartó el panel como culpable.
+El volcado con plazo y la caja negra no eran el arreglo de esto, pero sin ellos
+no se habría sabido: el registro nombra al hilo parado y su estado, que es lo que
+descartó el panel como culpable.
+
+El arreglo son dos cosas, y la primera versión se quedó a medias por leer mal una
+opción. `CONFIG_TIMESLICE_PRIORITY` **es un techo, no un suelo**: los hilos con
+prioridad numéricamente *menor* quedan fuera del reparto, así que el 0 que traía
+la placa solo repartía el hilo de prioridad 0 y dejaba la UI (prioridad 14) sin
+turno —se activó el timeslicing y no le tocó a nadie—. Con
+`CONFIG_TIMESLICE_PRIORITY=14` y `CONFIG_TIMESLICE_SIZE=5` el kernel rota los dos
+hilos de prioridad 14, y además el bucle de RTX hace `k_yield()` al final de cada
+pasada: cede el turno en el acto si hay otro hilo de su prioridad listo, con o sin
+reparto por tiempo. Medido en la radio: de 6 frames dibujados y 1.952 ms el peor
+antes del reinicio, a 462 frames con 0 descartes y 22 ms el peor.
 
 ### La secuencia
 
