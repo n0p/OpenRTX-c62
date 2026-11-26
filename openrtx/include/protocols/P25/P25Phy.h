@@ -51,6 +51,15 @@ struct p25Frame
     bool inverted;            ///< Received with an inverted discriminator
     float evm;                ///< RMS error to the symbol levels, 0..1
 
+    /**
+     * The frame's span was not all on the air: the carrier dropped (or the
+     * capture ended) after the NID, so the ring held DC where the payload
+     * should have been.  The NAC and the DUID above are real - they were
+     * transmitted - and nothing is decoded from the missing part: no voice, no
+     * link control, no TSBK, no header.  Set by P25Phy.c; see frameEndOnAir().
+     */
+    bool truncated;
+
     bool lcValid;             ///< Link control of an LDU1 decoded
     int lcRsErrors;           ///< Symbols corrected by the RS(24,12), -1 if bad
     uint8_t lc[9];            ///< The 72-bit link control as nine bytes

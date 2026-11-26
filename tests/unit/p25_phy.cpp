@@ -106,16 +106,17 @@ double level(uint8_t d)
  * @param symPhase: sub-sample offset of the first symbol, in samples at 48 kHz.
  * @param invert: true to flip the discriminator polarity.
  * @param lead: silence before the frame, in samples.
+ * @param gain: amplitude of the outer level, as a fraction of OUTER.
  */
 std::vector<int16_t> modulate(const uint8_t *bits, int nsym, double symPhase,
-                              bool invert, int lead)
+                              bool invert, int lead, double gain = 1.0)
 {
     const std::vector<double> h = rrcTaps();
     const int n = lead + nsym * SPS + SPAN * SPS + 1;
 
     std::vector<double> base((size_t)n, 0.0);
     const double pol = invert ? -1.0 : 1.0;
-    const double amp = OUTER * pol;
+    const double amp = OUTER * gain * pol;
 
     for (int k = 0; k < nsym; k++)
     {
@@ -133,7 +134,7 @@ std::vector<int16_t> modulate(const uint8_t *bits, int nsym, double symPhase,
     std::vector<int16_t> pcm((size_t)n);
     for (int i = 0; i < n; i++)
     {
-        double v = base[(size_t)i] + DC * OUTER * pol;
+        double v = base[(size_t)i] + DC * OUTER * gain * pol;
         if (v > 32767.0)
             v = 32767.0;
         if (v < -32768.0)
@@ -149,6 +150,7 @@ struct Result {
     int nac = -1;
     int duid = -1;
     int span = 0;
+    bool truncated = false;
     bool lcValid = false;
     int talkgroup = -1;
     int source = -1;
@@ -158,6 +160,7 @@ struct Result {
     int voiceBad = 0;
     int imbeErrors = 0;
     uint8_t imbe[P25_IMBE_PER_LDU][P25_IMBE_BYTES] = {{0}};
+    bool voiceValid[P25_IMBE_PER_LDU] = {false};
     int syncErrors = 0;
     bool inverted = false;
     bool tsbkValid = false;
@@ -171,6 +174,7 @@ void count(const struct p25Frame *f, void *user)
     r->nac = f->nac;
     r->duid = (int)f->duid;
     r->span = f->spanSymbols;
+    r->truncated = f->truncated;
     r->lcValid = f->lcValid;
     r->talkgroup = f->talkgroup;
     r->source = (int)f->source;
@@ -183,6 +187,7 @@ void count(const struct p25Frame *f, void *user)
     r->tsbkValid = f->tsbkValid;
     memcpy(r->lc, f->lc, sizeof(r->lc));
     memcpy(r->imbe, f->voice, sizeof(r->imbe));
+    memcpy(r->voiceValid, f->voiceValid, sizeof(r->voiceValid));
     memcpy(r->tsbk, f->tsbk, sizeof(r->tsbk));
 }
 
@@ -696,14 +701,14 @@ TEST_CASE("P25 refuses the link control of a frame that was cut short",
      * The carrier drops after 400 of the 864 symbols: sync and NID arrived,
      * the low-speed data that carries the link control did not.  The NAC and
      * the DUID are real and may be shown, but no talkgroup and no source can
-     * come out of a field that never arrived -- the RS(24,12) has to refuse
-     * it, and the mode shows an empty call rather than a talkgroup of zeros.
+     * come out of a field that never arrived - the frame is truncated and
+     * nothing is decoded from its payload - and the mode shows an empty call
+     * rather than a talkgroup of zeros.
      *
-     * Known gap, not pinned here: the nine IMBE words of that frame are still
-     * counted as clean (an all-zero word is a valid codeword of both the Golay
-     * and the Hamming code used inside it), so voiceCount/voiceBad cannot be
-     * asserted until the demodulator refuses to slice a frame whose payload is
-     * not in the ring.  See docs/TEST_PLAN.md, section 1.
+     * The truncation flag is also what keeps the nine IMBE words of that missing
+     * payload out of the vocoder: an all-zero word is a valid codeword of both
+     * the Golay and the Hamming code used inside it, so the voice of this frame
+     * used to decode "clean".  See the sweep below.
      */
     Bits f = ldu1Bits();
     std::vector<int16_t> pcm = modulate(f.b, 400, 2.5, false, 1000);
@@ -712,10 +717,85 @@ TEST_CASE("P25 refuses the link control of a frame that was cut short",
     REQUIRE(r.frames == 1);
     REQUIRE(r.nac == 0x293);
     REQUIRE(r.duid == (int)P25_DUID_LDU1);
+    REQUIRE(r.voiceCount == 0);  /* the payload of this frame never arrived */
+    REQUIRE(r.truncated);
     REQUIRE_FALSE(r.lcValid);
     REQUIRE(r.lcRsErrors < 0);
     REQUIRE(r.talkgroup == 0);   /* never decoded, so never published */
     REQUIRE(r.source == 0);
+}
+
+TEST_CASE("P25 publishes no voice from a frame the carrier cut short",
+          "[p25][phy]")
+{
+    /*
+     * The carrier drops after the NID, at every point of the frame: 60 symbols
+     * (three past the NID), 200, 400, 700 and 800 of the 864.  What arrives is
+     * sync, NID and then the line the discriminator holds with no carrier
+     * behind it.
+     *
+     * That line is why this had to be found by a test and not by listening: it
+     * slices to one constant level, every IMBE header word comes out all-zero,
+     * and all-zero is a valid codeword of the Golay(23,12) and the Hamming(15,
+     * 11) inside it.  The demodulator therefore reported nine voice frames with
+     * no corrected bit - 180 ms of "clean" speech that was never transmitted -
+     * and OpMode_P25 pushes exactly that to the vocoder (voiceCount > 0).
+     *
+     * The contract: the NAC and the DUID were on the air and are published; the
+     * voice, the link control and the TSBK were not and are not.
+     */
+    const Bits frame;
+    for (int cut : {60, 200, 400, 700, 800})
+    {
+        std::vector<int16_t> pcm = modulate(frame.b, cut, 2.5, false, 1000);
+        Result r = demodulate(pcm);
+        INFO("carrier dropped after " << cut << " of " << P25_FRAME_SYMBOLS
+                                      << " symbols");
+
+        REQUIRE(r.frames == 1);          /* sync and NID were on the air */
+        REQUIRE(r.nac == 0x293);
+        REQUIRE(r.duid == (int)P25_DUID_LDU1);
+
+        /* Before the flag: this is the defect, and it comes first in the
+         * report so a reverted fix reads as what it was - nine words of voice
+         * that passed the FEC. */
+        REQUIRE(r.voiceCount == 0);
+        REQUIRE(r.voiceBad == 0);        /* nothing arrived, nothing failed */
+        REQUIRE(r.imbeErrors == 0);
+        for (int n = 0; n < P25_IMBE_PER_LDU; n++)
+            REQUIRE_FALSE(r.voiceValid[n]);
+
+        REQUIRE(r.truncated);
+        REQUIRE_FALSE(r.lcValid);
+        REQUIRE(r.lcRsErrors < 0);
+        REQUIRE(r.talkgroup == 0);
+        REQUIRE(r.source == 0);
+        REQUIRE_FALSE(r.tsbkValid);
+    }
+}
+
+TEST_CASE("P25 keeps the voice of a frame that was on the air, however weak",
+          "[p25][phy]")
+{
+    /*
+     * The gate above measures the shape of the frame's last 10 ms against the
+     * outer level the frame's own sync field measured, not the absolute size of
+     * the samples: a signal at a fifth of the fixture's amplitude - a weak but
+     * perfectly readable frame - still spans the four levels and still crosses
+     * its mean, so its nine IMBE words are published.  A gate that thresholded
+     * the sample level instead would mute a distant transmitter, which is the
+     * failure on the other side of this one.
+     *
+     * The same frame at the same phase as the first test case, so the only
+     * difference is the amplitude.
+     */
+    const Bits frame;
+    std::vector<int16_t> pcm = modulate(frame.b, P25_FRAME_SYMBOLS, 2.5, false,
+                                        1000, 0.2);
+    Result r = demodulate(pcm);
+    REQUIRE_FALSE(r.truncated);
+    requireFrame(r);
+    requireReferenceBits(r);
 }
 
 TEST_CASE("P25 recovers the frame grid after a refused frame", "[p25][phy]")
