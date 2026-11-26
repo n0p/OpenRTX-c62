@@ -346,6 +346,24 @@ radio falta:
    corto con portadoras muy fuertes, `gainAttackShift` en `core/agc.c` es el
    número que se toca (9 → 10 lo dobla en tiempo, y con él el riesgo de modular
    la ganancia al ritmo de la voz).
+7. **La pantalla con plazo** (sección 9). Con la radio en marcha, `diag` tiene
+   que enseñar `screen ... 0 dropped` y un `last` de ~16-20 ms; el `worst` no
+   debería acercarse a 100. Después de la conmutación a AM, otro `diag`: si
+   aparece un descarte, el descriptor dice qué transferencia se perdió (comando
+   o píxeles, y cuántos bytes) y la migaja `DISP_DROP` del registro siguiente
+   dirá cuándo. Ese número es el que falta: dice si el fallo es del arranque de
+   la DMA (una transferencia pequeña, un comando) o del completado de la grande
+   (los 40 960 B del frame).
+8. **La recuperación del panel.** Provocarla a mano es difícil sin tocar el
+   driver; la comprobación mínima es que después de un descarte la pantalla
+   vuelve sola en el frame siguiente (el `SPI_Control` forzado por la segunda
+   `spi_config`). Si no vuelve, la radio sigue usable y es lo que hay que
+   apuntar: la pantalla se quedó congelada, no la radio.
+9. **El teclado con hilo propio.** Que el PTT y el botón de encendido sigan
+   respondiendo con la pantalla congelada, y que la latencia del PTT no haya
+   empeorado de forma audible (el escaneo es de 20 ms; el filtro de la puerta
+   del PTT es de 25 ms). Se mide con el `tx` del protocolo de depuración.
+
 
 ## 8. La UI del modo
 
@@ -388,7 +406,8 @@ frecuencia de la banda en el banco desde el navegador de zonas sigue sin estar
 Entrar en AM desde FM, en un VFO cualquiera, dejó una vez la radio con el teclado
 muerto y la pantalla congelada —y con el receptor, el protocolo y el reloj de
 actividad funcionando, que fue lo que permitió localizarlo—. Esta sección es la
-ruta completa de la conmutación, lo que se arregló y el límite que queda.
+ruta completa de la conmutación, la traza que dio la caja negra, lo que se
+arregló y el límite que queda.
 
 ### La secuencia
 
@@ -421,77 +440,177 @@ modo (`SOURCE_MCU -> SINK_SPK`, `PRIO_PROMPT`) **son la misma tabla**
 el cambio de modo: el de RTX al abrir el receptor del modo nuevo y el de UI al
 sonar el anuncio.
 
-### La causa raíz del cuelgue
+### La traza del post-mortem
 
-La tabla de rutas de audio (`activePaths`, `routes`, `pathCounter`) no tenía
-**ningún candado**. Un `std::map` y un `std::set` se insertaban, borraban y
-recorrían desde dos hilos a la vez; una rotación del árbol rojo-negro bajo un
-lector concurrente no da una respuesta equivocada: deja un enlace en ciclo y la
-búsqueda **no termina nunca**, o lanza `std::out_of_range` desde `routes.at()`,
-que en este firmware se compila sin excepciones y aborta.
+La caja negra (docs/BLACKBOX.md) existe justo para esto, y esta vez fue ella la
+que puso el dedo en el sitio. Entrando en AM desde FM, con el registro ya
+escrito en flash, el arranque siguiente imprimió:
 
-Con el hilo de UI dentro de `audioPath_getStatus()` —lo llama `vp_tick()` en cada
-pasada mientras hay un aviso en curso— el síntoma es exactamente el medido:
+```
+=== C62 post-mortem from the previous boot ===
+reason: STALL detail 0x00000001 [ui]
+uptime: 17264 ms (0 min 17 s), reset cause 0x00000000
+radio: rtx=AM(10) ui=AM(10) flags 0x01
+  rx 118000000 Hz, tx 118000000 Hz
+threads:
+  ui      pr 14 st pended  free  544/2048 pc 0x18047d58 lr 0x18053e15
+  rtx     pr 14 st ready   free 8448/9216 pc 0x1804bc8a lr 0x1804bc69
+  pcproto pr  6 st ready   free 3000/4096 pc 0x00000000 lr 0x00000000
+```
 
-| qué | estado durante el cuelgue |
-|---|---|
-| hilo de UI | girando dentro de una búsqueda de la tabla, sin candado tomado |
-| teclado y pantalla | muertos: el bucle de UI no vuelve a escanear ni a dibujar |
-| hilo de RTX | vivo: no usa la tabla de estado de la UI; el receptor sigue |
-| protocolo PC | vivo: es otro hilo y `status`/`diag` no piden `state_mutex` |
-| perro guardián | no salta: el hilo principal sigue alimentándolo |
-| reloj de actividad | corriendo, sin reinicio |
+`arm-none-eabi-addr2line` sobre `build_c62/zephyr/zephyr.elf` da, para los dos
+valores del hilo de UI: **PC en `arch_swap`** (el marco de la conmutación, lo que
+un hilo *pended* deja apilado) y **LR en `z_impl_k_sem_take`
+(`kernel/sem.c:155`)**. Traducido: el hilo de UI no estaba girando en ningún
+sitio, estaba **esperando un semáforo**; el estado `pended` de la tabla lo dice
+igual, y su pila casi intacta (544 B libres de 2048) descarta que se hubiera
+hundido en una recursión.
 
-Por qué AM y no FM: AM es el único modo que (a) abre y cierra su camino de audio
-con un **squelch de portadora** de márgenes 1/2 dB, es decir con cambios de ruta
-frecuentes en cuanto hay una señal en el canal, y (b) hace que la UI anuncie el
-modo («A M») y suene el beep en el mismo instante en que el modo nuevo abre el
-receptor. El cambio a AM es el único momento en que los dos hilos están dentro de
-la tabla a la vez; en FM el anuncio también suena, pero el receptor ya estaba
-abierto y no hay una petición simultánea.
+`k_sem_take` desde el hilo de UI acota mucho el sitio:
 
-La prueba, en el host y sin radio: el mismo patrón de dos hilos contra
-`audio_path.cpp` **corrompía la tabla 6 de 6 veces** (SIGSEGV o
-`map::at` fuera de rango) antes del arreglo, y con el candado pasa las 200 000
-peticiones con `opens == closes`. Está en `tests/unit/audio_path.cpp`, y la
-secuencia FM → AM → FM con los dos hilos y con un driver que se niega a recibir
-está en `tests/unit/mode_switch_am.cpp`.
+* los candados del audio son `k_mutex` (`boardMutex` en `audio_c62.c`,
+  `audioMutex` en `csk6_codec.c`), y los dos se toman **con plazo** de 50 y
+  250 ms;
+* el único `k_sem` del códec (`workerWake`) lo toma su worker, no la UI;
+* queda el camino de dibujo: `display_write()` → driver ST7735R del SDK →
+  `spi_write_dt()` → `transceive()` → `spi_context_wait_for_completion()` →
+  `spi_context_wait()` → `k_sem_take(&ctx->sync, K_FOREVER)`, y también
+  `spi_context_lock()`, que es `k_sem_take(&ctx->lock, K_FOREVER)`.
+
+Es decir: el hilo de UI quedó parkado esperando que **terminara una transferencia
+del panel**, y nadie la iba a terminar.
+
+### La causa raíz: un volcado de pantalla sin plazo
+
+El semáforo que espera el hilo de UI lo da una sola cosa: el camino de
+completado del driver SPI del CSK6, que corre en la interrupción. Y ese camino
+puede no llegar nunca, por una razón que está escrita en el propio driver y en
+la configuración de la build:
+
+1. **El panel va por DMA.** `CONFIG_SPI_TX_DMA=y` y `CONFIG_SPI_RX_DMA=y`
+   (`csk/drivers/spi/Kconfig.csk6`, con `select DMA`) en el `.config` de la
+   build; el panel cuelga de `spi1` (`listenai,csk-spi`), y el driver arranca
+   cada transferencia con el HAL del vendedor.
+2. **El canal se elige en marcha.** `spi.c` del HAL pide un canal libre con
+   `dma_channel_select()` sobre el DMAC del AP (seis canales, `dma0` en el DTS),
+   lo configura con `dma_channel_configure()` y espera el evento de fin. Si no
+   hay canal o la configuración falla, el HAL devuelve `CSK_DRIVER_ERROR`.
+3. **El driver de Zephyr se come ese error.** En `spi_csk6.c`,
+   `transceive()` hace `csk_spi_hal_transceive(dev);` **sin mirar el valor de
+   retorno** (`spi_context_wait_for_completion()` viene justo después). El
+   comentario del propio driver lo admite en el otro sitio: `/* TODO: add
+   transfer error processing */`. Un arranque fallido deja
+   `spi->info->status.bit.busy = 1`, no hay ENDINT, no hay
+   `spi_context_complete()` y el que espera no se entera.
+4. **Y el que espera espera para siempre**, porque el camino de dibujo usa el
+   `K_FOREVER` de la API síncrona.
+
+El mecanismo está instrumentado en el host (`tests/unit/display_flush.cpp`):
+con un bus que submita y no completa, el camino viejo no podía volver nunca
+—esperaba con `K_FOREVER`—, y con el plazo que introduce este arreglo la función
+de volcado vuelve **exactamente** al vencerlo, deja el frame contado como
+descartado y el bucle que dibuja sigue con la pasada siguiente (50 frames
+descartados, 50 pasadas completas en el test).
+
+Lo que **no** es: no es una disputa por el motor de DMA con el códec. Los
+streams de audio del CSK6 no usan el DMAC del AP — son memoria compartida con el
+DSP (`ICStream`/`AudioTrack` a través de LSF), y el DSP tiene su propio DMAC. El
+otro SPI de la placa, el del BK4819, es *bit-bang* sobre GPIO (`zephyr,spi-bitbang`,
+PA13/PA07), y el PWM de la retroiluminación es PWM normal del GPT, no LEDC por
+DMA. El panel es el **único** usuario de ese DMAC, así que no hay canal que
+robar: lo que falla es un arranque (o un completado) dentro del driver del SDK,
+y el driver lo tapa.
+
+**Por qué AM y no FM.** Nada del camino del panel distingue un modo de otro: el
+volcado es el mismo en todos, y por eso el defecto no es de AM. Lo que AM aporta
+es el *momento*: es el cambio de modo en el que coinciden el redibujado de la
+pantalla del modo nuevo, la ráfaga de doce registros del BK4819 por el otro SPI
+y la instalación del procesador de audio por muestra en el worker del códec. Es
+la conmutación con más cosas pasando a la vez, y es la que el operador estaba
+usando. La conclusión honesta: **el defecto es independiente del modo; AM es
+donde se dio**. El contador de `diag` dirá si vuelve a darse en otro sitio.
 
 ### Lo que se arregló, pieza a pieza
 
 | pieza | qué se hizo |
 |---|---|
+| `core/display_flush.c` (nuevo) | el volcado tiene **plazo**: cada transferencia se envía en asíncrono y se espera con un tiempo máximo; la que no llega se abandona, el frame se descarta y se cuenta. Ni un `K_FOREVER` en el camino de dibujo |
+| `platform/drivers/display/display_c62.c` | el frame se envía desde aquí (CASET, RASET, RAMWR y los píxeles), no por `display_write()`; al vencer el plazo se suelta el bus (`spi_release()`), se marca `DISP_DROP` una vez por racha y el frame siguiente fuerza un `SPI_Control()` del driver (con la segunda `spi_config`) para que el periférico se reinicie y se le quite el `busy` al HAL |
+| `keyboard_c62.c` | el teclado pasa a tener **hilo propio** (`kbd_thread`, 20 ms): un solo hilo toca la matriz, los demás leen su última pasada, y su latido entra en la caja negra (`BB_BEAT_KBD`) |
+| `core/blackbox.c`, `blackbox_c62.c` | un atasco se informa **una vez**; el reinicio es PA fuera + DSP parado + reset + bucle sin dormir, y el supervisor deja de alimentar el perro guardián en cuanto hay atasco (docs/BLACKBOX.md §3.1) |
+| `platform.c` | el perro guardián ya no se pide con `WDT_OPT_PAUSE_IN_SLEEP`: el último recurso no puede ser ciego a un núcleo dormido |
 | `core/audio_path.cpp` | un mutex para toda la tabla; `open()`/`close()` **fuera** del candado (el driver puede tardar 250 ms); `routes.at()` sustituido por búsquedas con comprobación, porque sin excepciones un `at()` fallido aborta la radio |
 | `platform/drivers/audio/audio_c62.c` | `boardMutex` con plazo (`BOARD_LOCK_TIMEOUT_MS`, 50 ms) en vez de `K_FOREVER`; la ruta sólo se marca abierta si el códec la aplicó, así que un fallo se reintenta en el siguiente flanco de squelch |
 | `platform/drivers/audio/csk6_codec.c` | el candado del códec se toma con plazo (`CSK6_LOCK_TIMEOUT_MS`, 250 ms) en `setRoute`, `start`, `data`, `sync`, `halt` y `stop`: un DSP que no contesta cuesta esa ruta o ese stream, nunca el hilo que llama. `csk6codec_setRoute()` devuelve el resultado |
 | `rtx/rtx.cpp` | la conmutación tiene plazo y es reversible: si el modo nuevo no recibe en `RTX_MODE_START_MS`, se vuelve al anterior y se dice en el log |
 | `core/threads.c` | el perro guardián se alimenta **sólo mientras el hilo de UI avanza** (`UI_THREAD_STALL_MS`, 3 s): un hilo de UI parado deja de alimentarlo y la radio se reinicia en recepción en vez de quedarse tiesta |
 
+### Qué se ve en `diag` cuando se descarta un frame
+
+El camino de la pantalla publica sus contadores en `DBG_INFO`
+(docs/PC_PROTO.md, tags `DISP_*`), así que la pregunta «¿se congeló la pantalla
+o se colgó la radio?» se contesta por el cable:
+
+```
+$ tools/cps/cps.py -d /dev/ttyUSB0 diag
+...
+screen      4128 frames, 0 dropped, last 17 ms, worst 24 ms
+```
+
+Con la transferencia perdida, la misma línea dice cuántos frames se tiraron y
+cuál fue el primero que no llegó:
+
+```
+screen      97 frames, 1184 dropped, last 16 ms, worst 16 ms
+            last loss: chunk 5, 320 bytes of pixel data
+```
+
+`chunk` es la posición dentro del frame (0 CASET, 1 sus parámetros, 2 RASET,
+3 los suyos, 4 RAMWR, 5 los píxeles) y el tamaño dice si se perdió un comando o
+la transferencia grande. En el registro de la caja negra, la primera racha de
+descartes deja además una migaja `DISP_DROP`, de modo que el post-mortem de un
+cuelgue posterior enseña si la pantalla ya estaba fallando antes.
+
+Lo que **no** cambia con un frame descartado: el hilo de UI sigue su pasada
+(teclas, FSM, reloj), el receptor sigue, y el frame siguiente se intenta. La
+pantalla se queda con lo último que llegó; la radio no.
+
+### El primer diagnóstico, corregido
+
+La primera versión de esta sección culpaba a la tabla de rutas de audio, que
+efectivamente no tenía candado (`activePaths`, `routes`, `pathCounter` bajo dos
+hilos) y que en el host corrompía el `std::map` **6 de 6 veces**. Ese defecto era
+real y está arreglado, pero **no era este**: un hilo girando dentro de una
+búsqueda de libstdc++ no deja el marco de `arch_swap` ni un `pended` en la tabla
+de hilos, y su pila estaría llena de marcos de la búsqueda. La traza de la radio
+dice semáforo, y el semáforo es el del panel. Las dos cosas convivían en el mismo
+cambio de modo; la que produjo este registro es la segunda.
+
 ### Límites, dichos sin adornos
 
-- **El reinicio es el último recurso, no el arreglo.** Si el hilo de UI se para
-  por una causa que no sea esta (un DSP que no contesta dentro de un `vp_tick`,
-  por ejemplo), el perro guardián reinicia a los ~5 s. Se pierde la sesión, no la
-  radio; el PA está apagado hasta que alguien lo pida, así que el reinicio es
-  seguro.
-- **Un aviso que no se puede abrir se pierde.** Con el candado del códec tomado
-  por un DSP atascado, `audioPath_request(PRIO_PROMPT)` devuelve un id pero el
-  driver no aplica la ruta; el aviso suena mudo hasta el siguiente cambio de
-  ruta. Es el precio acordado: audio perdido antes que hilo perdido.
-- **La reversión no insiste sola.** Después de volver al modo anterior, la UI
-  sigue creyendo que el modo pedido es AM; la radio sólo lo volverá a intentar
-  cuando llegue una configuración nueva (un ajuste, un canal, un cambio de
-  frecuencia). Es a propósito: reintentar cada 30 ms sería un fallo cada 300 ms.
-- **El plazo de arranque son 300 ms.** Es holgado para este hardware (el peor
-  arranque medido es el del WFM, ~300 ms de calibración del BK1080, y ese se paga
-  en `radio_setOpmode()`, no aquí). Un modo que necesite más tiene que decirlo
-  subiendo `RTX_MODE_START_MS`, no esperando en silencio.
-- **El cuelgue se midió con una sola radio.** La corrupción de la tabla está
-  reproducida en el host; que *esta* sea la que disparó aquel cuelgue encaja con
-  todo lo observado (UI muerta, RTX y protocolo vivos, sin reinicio), pero la
-  traza del hilo de UI en la radio no se pudo tomar porque el teclado ya no
-  respondía y el protocolo no expone los hilos. La instrumentación que lo
-  cerraría es un volcado de las pilas de los hilos por el protocolo de depuración.
+- **El error del driver del SDK sigue ahí.** `csk_spi_hal_transceive()` devuelve
+  un código que `transceive()` tira, y el HAL no deja rastro de por qué no
+  arrancó la transferencia. No se ha parcheado a ciegas: se ha acotado. Lo que
+  se arregla aquí es la consecuencia (el hilo no espera), no la causa última;
+  los contadores de `diag` y la migaja son la instrumentación que la próxima vez
+  dirá cuál de los dos caminos del HAL falló y con qué transferencia.
+- **Una transferencia perdida puede costar el frame y algo más.** La
+  recuperación (segunda `spi_config` → `SPI_Control`) reinicia el periférico y le
+  quita el `busy` al HAL; si aun así el panel no vuelve, la pantalla se queda
+  congelada hasta el siguiente reinicio. La radio sigue usable y `diag` lo dice:
+  es el intercambio acordado, pantalla perdida antes que radio perdida.
+- **El plazo son 100 ms por transferencia** (`DISP_FLUSH_TIMEOUT_MS`). Un frame
+  completo a 20 MHz son ~16 ms, así que el plazo es seis veces el caso normal:
+  un bus lento no cuenta descartes. Con el bus atascado, cada frame cuesta el
+  plazo entero, y el bucle de UI baja de 40 a ~10 vueltas por segundo mientras
+  dure; las teclas siguen entrando porque el escaneo es de otro hilo.
+- **El arranque del panel sigue siendo síncrono.** `display_blanking_off()`
+  ejecuta la secuencia de init del driver del SDK con la API síncrona, en el
+  arranque, cuando no hay nada más en el bus. Si se atascara ahí la radio no
+  arrancaría; es el riesgo que ya existía y no lo cubre este arreglo.
+- **La prueba es de host y de una radio.** El mecanismo está demostrado en el
+  host y la traza es de la radio; lo que falta por medir en hardware está en la
+  sección 7.
 
 ### Cómo reproducirlo
 
@@ -499,7 +618,9 @@ En la radio: FM en un VFO con una señal presente (por ejemplo 145,500 MHz con u
 repetidor), tecla lateral y `5` para recorrer los modos hasta «AM», con el nivel
 de avisos de voz en beep o superior. Antes de este arreglo: la pantalla se queda
 como está, ninguna tecla responde, y `status`/`diag` por el cable siguen
-contestando con el modo en `airband` y el receptor funcionando.
+contestando con el modo en `airband` y el receptor funcionando. Después: o no
+pasa nada, o `diag` enseña descartes en la línea `screen` y el resto de la radio
+sigue respondiendo.
 
 En el host, sin radio:
 
@@ -507,6 +628,8 @@ En el host, sin radio:
 meson setup build_linux && meson compile -C build_linux
 ./build_linux/audio_path_test        # la tabla, con dos hilos
 ./build_linux/mode_switch_am_test    # FM -> AM -> FM, y el modo que no arranca
+./build_linux/display_flush_test     # un bus que no completa: frame fuera, hilo vivo
+./build_linux/blackbox_hang_test     # registro, reinicio y un solo aviso
 ```
 
 ## Referencias

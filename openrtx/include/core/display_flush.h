@@ -67,8 +67,9 @@ typedef struct
 
     /**
      * Wait for the transfer submitted last.  Returns 0 when it completed,
-     * anything else when the deadline expired first: the platform is expected
-     * to bound this call, not to wait for ever.
+     * anything else when it did not: the deadline expired first, or the
+     * driver reported the transfer as failed.  The platform is expected to
+     * bound this call, not to wait for ever.
      */
     int (*wait)(void *ctx, uint32_t timeoutMs);
 
@@ -85,9 +86,10 @@ typedef struct
 typedef struct
 {
     uint32_t frames;      /**< frames that reached the panel                 */
-    uint32_t dropped;     /**< frames abandoned on the deadline              */
+    uint32_t dropped;     /**< frames abandoned: a transfer did not complete  */
     uint32_t transfers;   /**< individual transfers started                  */
-    uint32_t timeouts;    /**< transfers that missed their deadline          */
+    uint32_t timeouts;    /**< transfers that did not complete (deadline or
+                           *   the driver's error)                           */
     uint32_t lastMs;      /**< duration of the last complete frame, ms       */
     uint32_t lastDropMs;  /**< duration of the last dropped frame, ms        */
     uint32_t maxMs;       /**< longest complete frame since boot, ms         */
