@@ -36,6 +36,7 @@
 #include "ui_walk.hpp"
 
 extern "C" {
+#include "protocols/DPMR/DpmrStatus.h"
 #include "protocols/DSTAR/DStarStatus.h"
 #include "protocols/NXDN/NxdnStatus.h"
 #include "protocols/P25/P25Status.h"
@@ -140,6 +141,7 @@ TEST_CASE("Nothing decoded reads as searching, never as a zero",
          */
         dmr_sim_clear();
         nxdnStatus_clear();
+        dpmrStatus_clear();
         p25Status_clear();
         dstarStatus_clear();
         tetra_sim_clearCell();
@@ -206,6 +208,23 @@ TEST_CASE("An identifier that has not been decoded reads '-', never 0",
     REQUIRE(st.sync);
     REQUIRE(std::string(st.id).find("RAN") == std::string::npos);
     REQUIRE_FALSE(hasIdentifierDigit(st.id));
+
+    /* dPMR: locked, the channel code has not been decoded yet: no "CC000" */
+    ui_walk::resetUi(OPMODE_DPMR, 446003125);
+    dpmrStatus_clear();
+    dpmrStatus_simSet(true, true, -1, 0, 2, false, 0, 0, 0, -1);
+    ui_mode_state_read(&st);
+    INFO("dPMR id=\"" << st.id << "\"");
+    REQUIRE(st.sync);
+    REQUIRE(std::string(st.id).find("CC") == std::string::npos);
+    REQUIRE_FALSE(hasIdentifierDigit(st.id));
+
+    /* And a channel code that really is 0 is a value, not "not decoded" */
+    dpmrStatus_simSet(true, false, 0, 0, 2, false, 0, 0, 0, -1);
+    ui_mode_state_read(&st);
+    INFO("dPMR id=\"" << st.id << "\"");
+    REQUIRE(std::string(st.id) == "CC000");
+    dpmrStatus_clear();
 
     /* D-STAR: locked, no header: no ">" between two empty callsigns */
     ui_walk::resetUi(OPMODE_DSTAR, 145500000);

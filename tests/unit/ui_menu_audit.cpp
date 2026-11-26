@@ -62,6 +62,7 @@ extern "C" {
 #include "interfaces/cps_io.h"
 #include "interfaces/nvmem.h"
 #include "protocols/DMR/DmrStatus.h"
+#include "protocols/DPMR/DpmrStatus.h"
 #include "protocols/DSTAR/DStarStatus.h"
 #include "protocols/NXDN/NxdnStatus.h"
 #include "protocols/P25/P25Status.h"
@@ -1361,7 +1362,7 @@ TEST_CASE("Every digital mode tells its state on the main screen",
     const Expect modes[] = {
         { OPMODE_DMR,   "DMR searching" },
         { OPMODE_NXDN,  "NXDN SRCH" },
-        { OPMODE_DPMR,  "SRCH" },
+        { OPMODE_DPMR,  "dPMR SRCH" },
         { OPMODE_P25,   "P25 SRCH" },
         { OPMODE_YSF,   "SRCH" },
         { OPMODE_DSTAR, "DSTAR SRCH" },
@@ -1375,6 +1376,7 @@ TEST_CASE("Every digital mode tells its state on the main screen",
         dmrStatus_clear();
         p25Status_clear();
         nxdnStatus_clear();
+        dpmrStatus_clear();
         dstarStatus_clear();
         tetra_sim_clearCell();
 
