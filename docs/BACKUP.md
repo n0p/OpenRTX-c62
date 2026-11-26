@@ -19,7 +19,7 @@ en flash (no se reinterpreta ningún campo):
 | banco de canales | `chstore_export()` (el slot en uso) |
 | libreta de contactos | `cstore_export()` |
 | mensajes | `messaging_serialise()` |
-| zonas | `zones_export()` |
+| zonas | el plan de este build: `zones_count()`, `zones_shiftInverted()` y la firma de `zones_signature()` |
 
 ## Dónde
 
@@ -60,13 +60,41 @@ Dos propiedades son el diseño entero:
 `Menú ▸ Backup` dice qué se va a guardar; verde guarda y contesta
 `BACKUP OK nnnn B`. `Menú ▸ Restore` enseña el registro disponible con su fecha
 y tamaño y pregunta `Restore it?` con Sí/No; restaurar es destructivo y por eso
-pide confirmación. El resultado dice cuántos de los seis almacenes se aplicaron.
+pide confirmación. El resultado dice cuántos de los seis almacenes se aplicaron
+(`RESTORE OK 6/6`).
+
+Rojo es «no» y vuelve al menú de dos filas **con el cursor en Restore**, que es
+la fila de la que se venía. Dejarlo en la primera fila (Backup) hacía que el
+siguiente verde entrase en la pantalla de guardar y el verde de después
+escribiese un registro nuevo: un «no» acababa escribiendo en flash. Por lo
+mismo, verde en `MENU_RESTORE` restaura y nunca guarda; el guardado vive sólo en
+`MENU_BACKUP`.
 
 El motor es C portable (`core/backup_image.c`), habla con la flash por un puerto
 (`platform/targets/c62/backup_c62.c`; en el PC,
 `platform/targets/linux/emulator/backup_host.c`, que usa un fichero del
 directorio de estado de la ejecución) y con los almacenes por sus APIs públicas,
 así que los tests lo ejercitan sin radio.
+
+### Los dos almacenes que se escriben enteros
+
+Ajustes y VFO van al NVM por `nvm_writeSettings()` y
+`nvm_writeSettingsAndVfo(NULL, &ch)`: la restauración los aplica de uno en uno,
+y `NULL` en el primero significa «no toques los ajustes», que es el contrato de
+`interfaces/nvmem.h` (el mismo que usa `core/state.c` para guardar sólo la mitad
+que cambió). Consecuencias que costaron un fallo:
+
+- Un driver **no puede** pasar ese `NULL` al medio: en el PC acababa en
+  `write(2)` con `EFAULT` y la restauración contestaba `WRITE FAILED` por el VFO
+  después de haber escrito los ajustes. `nvmem_linux.c` salta la mitad ausente,
+  como `nvmem_C62.c`.
+- Los puertos devuelven **errno negativo**. `posix_file.c` devolvía `errno` en
+  positivo, y cualquier llamante que prueba `< 0` —como
+  `nvm_writeSettingsAndVfo()`— tomaba un fallo por un éxito: la escritura que
+  había fallado desaparecía y la siguiente se daba por buena.
+- Cuando un almacén se rechaza, el log dice el resultado y el código:
+  `restore: vfo refused (WRITE FAILED, rc -14)`. El resultado solo no distingue
+  «el almacén no acepta el registro» de «la flash no acepta la escritura».
 
 ## Límites
 
