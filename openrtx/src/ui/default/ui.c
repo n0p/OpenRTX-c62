@@ -59,6 +59,7 @@
 #include "interfaces/display.h"
 #include "interfaces/cps_io.h"
 #include "ui/ui_channels.h"
+#include "ui/ui_backup.h"
 #include "ui/ui_spectrum.h"
 #include "ui/ui_contacts.h"
 #include "ui/ui_messages.h"
@@ -114,8 +115,6 @@ extern void _ui_drawSettingsGPS(ui_state_t* ui_state);
 extern void _ui_drawSettingsAccessibility(ui_state_t* ui_state);
 extern void _ui_drawMenuSettings(ui_state_t* ui_state);
 extern void _ui_drawMenuBackupRestore(ui_state_t* ui_state);
-extern void _ui_drawMenuBackup(ui_state_t* ui_state);
-extern void _ui_drawMenuRestore(ui_state_t* ui_state);
 extern void _ui_drawMenuInfo(ui_state_t* ui_state);
 extern void _ui_drawMenuAbout(ui_state_t* ui_state);
 #ifdef CONFIG_RTC
@@ -146,6 +145,13 @@ const char *menu_items[] =
     "GPS",
 #endif
     "Settings",
+    /*
+     * The internal backup of the stores (docs/BACKUP.md). Between Settings and
+     * Info because it is maintenance, not an operating mode: the two rows
+     * behind it are MENU_BACKUP and MENU_RESTORE, which the generic branch had
+     * since the MD-3x0 and no key ever reached.
+     */
+    "Backup",
     "Info",
     "About"
 };
@@ -2730,6 +2736,14 @@ void ui_updateFSM(bool *sync_rtx)
                         case M_SETTINGS:
                             state.ui_screen = MENU_SETTINGS;
                             break;
+                        case M_BACKUP_RESTORE:
+                            /*
+                             * The internal backup of the stores: two rows,
+                             * backup and restore (docs/BACKUP.md). The screens
+                             * behind them are this module's, ui_backup.c.
+                             */
+                            state.ui_screen = MENU_BACKUP_RESTORE;
+                            break;
                         case M_INFO:
                             state.ui_screen = MENU_INFO;
                             break;
@@ -2898,9 +2912,9 @@ void ui_updateFSM(bool *sync_rtx)
             // Flash backup and restore menu screen
             case MENU_BACKUP_RESTORE:
                 if(msg.keys & KEY_UP || msg.keys & KNOB_LEFT)
-                    _ui_menuUp(settings_num);
+                    _ui_menuUp(backup_restore_num);
                 else if(msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
-                    _ui_menuDown(settings_num);
+                    _ui_menuDown(backup_restore_num);
                 else if(msg.keys & KEY_ENTER)
                 {
 
@@ -2908,9 +2922,11 @@ void ui_updateFSM(bool *sync_rtx)
                     {
                         case BR_BACKUP:
                             state.ui_screen = MENU_BACKUP;
+                            ui_backup_open(MENU_BACKUP);
                             break;
                         case BR_RESTORE:
                             state.ui_screen = MENU_RESTORE;
+                            ui_backup_open(MENU_RESTORE);
                             break;
                         default:
                             state.ui_screen = MENU_BACKUP_RESTORE;
@@ -2921,10 +2937,14 @@ void ui_updateFSM(bool *sync_rtx)
                 else if(msg.keys & KEY_ESC)
                     _ui_menuBack(MENU_TOP);
                 break;
+            /*
+             * Taking a backup and restoring it (ui_backup.c, docs/BACKUP.md).
+             * The module owns both screens: it asks before a restore and keeps
+             * the result on the screen, so the dispatch only forwards the keys.
+             */
             case MENU_BACKUP:
             case MENU_RESTORE:
-                if(msg.keys & KEY_ESC)
-                    _ui_menuBack(MENU_TOP);
+                ui_backup_handleEvent(state.ui_screen, &msg, sync_rtx);
                 break;
             // Info menu screen
             case MENU_INFO:
@@ -3896,13 +3916,14 @@ bool ui_updateGUI()
         case MENU_BACKUP_RESTORE:
             _ui_drawMenuBackupRestore(&ui_state);
             break;
-        // Flash backup screen
+        /*
+         * The backup and the restore themselves are drawn by their own module:
+         * they carry a state (asked, done, failed) that a menu list has no room
+         * for (ui_backup.c, docs/BACKUP.md).
+         */
         case MENU_BACKUP:
-            _ui_drawMenuBackup(&ui_state);
-            break;
-        // Flash restore screen
         case MENU_RESTORE:
-            _ui_drawMenuRestore(&ui_state);
+            ui_backup_draw(last_state.ui_screen);
             break;
         // Info menu screen
         case MENU_INFO:

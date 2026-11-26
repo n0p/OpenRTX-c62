@@ -46,6 +46,7 @@
 #include <vector>
 
 extern "C" {
+#include "core/backup_image.h"
 #include "core/event.h"
 #include "core/graphics.h"
 #include "core/input.h"
@@ -155,6 +156,14 @@ void resetUi(uint8_t mode = OPMODE_FM, freq_t freq = FREQ)
 
     qm_close();
     qm_page_close();
+
+    /*
+     * No backup storage in this harness: the two backup screens then answer
+     * NO STORAGE, which is the honest answer for a binary with no port, and
+     * keeps a key walk from writing a file in the operator's state directory
+     * (the record and its round trip are tests/unit/backup_image.cpp's job).
+     */
+    bkp_bind(nullptr);
 
     /* Close the modules that draw over the main screen */
     while (ui_tools_isOpen())
@@ -385,6 +394,8 @@ TEST_CASE("Every row of the main menu opens a screen and red comes back",
         { "Contacts", { MENU_CONTACTS, 0xff, 0xff, 0xff } },
         { "Messages", { MENU_MESSAGES, 0xff, 0xff, 0xff } },
         { "Settings", { MENU_SETTINGS, 0xff, 0xff, 0xff } },
+        /* The internal backup of the stores (docs/BACKUP.md) */
+        { "Backup",   { MENU_BACKUP_RESTORE, 0xff, 0xff, 0xff } },
         { "Info",     { MENU_INFO, 0xff, 0xff, 0xff } },
         { "About",    { MENU_ABOUT, 0xff, 0xff, 0xff } },
     };
@@ -899,6 +910,11 @@ TEST_CASE("Every key on every screen is claimed by exactly one block",
         { "MENU_SETTINGS",   MENU_SETTINGS,   UI_CLAIM_SCREEN },
         { "MENU_INFO",       MENU_INFO,       UI_CLAIM_SCREEN },
         { "MENU_ABOUT",      MENU_ABOUT,      UI_CLAIM_SCREEN },
+        /* The backup screens: the big switch forwards their keys to
+           ui_backup.c, so the screen case is the owner (docs/BACKUP.md) */
+        { "MENU_BACKUP_REST", MENU_BACKUP_RESTORE, UI_CLAIM_SCREEN },
+        { "MENU_BACKUP",     MENU_BACKUP,     UI_CLAIM_SCREEN },
+        { "MENU_RESTORE",    MENU_RESTORE,    UI_CLAIM_SCREEN },
         { "MENU_CONTACTS",   MENU_CONTACTS,   UI_CLAIM_CONTACTS },
         { "MENU_ZONES",      MENU_ZONES,      UI_CLAIM_ZONES },
         { "MENU_MESSAGES",   MENU_MESSAGES,   UI_CLAIM_MSGS },
@@ -990,6 +1006,18 @@ TEST_CASE("Every key on every screen is claimed by exactly one block",
             }
             case SPECTRUM:
                 ui_open_screen(SPECTRUM, 0);
+                break;
+            case MENU_BACKUP_RESTORE:
+                openMainMenu();
+                openMenuRow((uint8_t)menuRowOf("Backup"));
+                break;
+            case MENU_BACKUP:
+            case MENU_RESTORE:
+                /* Menu -> Backup -> the first or the second row of the pair */
+                openMainMenu();
+                openMenuRow((uint8_t)menuRowOf("Backup"));
+                openMenuRow((uint8_t)(s.screen == MENU_RESTORE ? BR_RESTORE
+                                                              : BR_BACKUP));
                 break;
             default:
                 break;

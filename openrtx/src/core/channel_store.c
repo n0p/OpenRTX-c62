@@ -662,3 +662,75 @@ const char *chstore_modeName(uint8_t mode)
         default:             return "----";
     }
 }
+
+int chstore_export(void *buf, size_t cap)
+{
+    size_t len;
+
+    if (!ready)
+        chstore_init();
+
+    if (buf == NULL)
+        return -EINVAL;
+
+    len = 2U + (size_t)nbChannels * sizeof(chstore_channel_t);
+    if (len > cap)
+        return -ENOSPC;
+
+    uint8_t *out = (uint8_t *)buf;
+    out[0] = (uint8_t)(nbChannels & 0xFF);
+    out[1] = (uint8_t)(nbChannels >> 8);
+
+    if (nbChannels > 0)
+        memcpy(out + 2, bank, (size_t)nbChannels * sizeof(chstore_channel_t));
+
+    return (int)len;
+}
+
+int chstore_import(const void *buf, size_t len)
+{
+    if (!ready)
+        chstore_init();
+
+    if (buf == NULL || len < 2)
+        return -EINVAL;
+
+    const uint8_t *in = (const uint8_t *)buf;
+    uint16_t count = (uint16_t)(in[0] | ((uint16_t)in[1] << 8));
+    size_t want = 2U + (size_t)count * sizeof(chstore_channel_t);
+
+    if (count > CHSTORE_MAX_CHANNELS || len != want)
+        return -EINVAL;
+
+    /* The records are packed, so the cast is aligned by construction */
+    const chstore_channel_t *recs =
+        (const chstore_channel_t *)(const void *)(in + 2);
+
+    /* Validate every record before the bank in RAM is touched */
+    for (uint16_t i = 0; i < count; i++) {
+        if (!chstore_valid(&recs[i]))
+            return -EINVAL;
+    }
+
+    memset(bank, 0, sizeof(bank));
+    if (count > 0)
+        memcpy(bank, recs, (size_t)count * sizeof(chstore_channel_t));
+    nbChannels = count;
+    if (lastUsedIdx >= nbChannels)
+        lastUsedIdx = CHSTORE_NONE;
+    pending = true;
+
+    if (chstore_commit() != 0) {
+        /*
+         * The write failed, so the slot that held the previous bank is still
+         * the newest valid one: reload from it. Re-reading (instead of undoing
+         * the copy) also clears `pending`, so the retry of chstore_task() does
+         * not write the restored bank later and call it a success.
+         */
+        ready = false;
+        chstore_init();
+        return -EIO;
+    }
+
+    return 0;
+}

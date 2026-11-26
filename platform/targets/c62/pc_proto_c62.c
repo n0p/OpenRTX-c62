@@ -35,6 +35,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <zephyr/kernel.h>
+#include <zephyr/devicetree.h>
 #include <zephyr/sys/sys_io.h>
 #include <IOMuxManager.h>
 
@@ -373,6 +374,46 @@ extern char __rom_region_start[] __attribute__((weak));
 extern char __rom_region_end[] __attribute__((weak));
 extern char _image_ram_start[] __attribute__((weak));
 extern char _image_ram_end[] __attribute__((weak));
+/* The regions of the CSK6 linker script (MEMORY: RAM, ITCM, DTCM, PSRAMAP):
+ * the two fast memories and the two PSRAM sections, as the script names them. */
+extern char __itcm_start[] __attribute__((weak));
+extern char __itcm_end[] __attribute__((weak));
+extern char __dtcm_start[] __attribute__((weak));
+extern char __dtcm_end[] __attribute__((weak));
+extern char __psram_section_start[] __attribute__((weak));
+extern char __psram_section_end[] __attribute__((weak));
+extern char __psram_dmr_start[] __attribute__((weak));
+extern char __psram_dmr_end[] __attribute__((weak));
+
+/** Total bytes of a memory region, from the devicetree that defines it. */
+#define C62_SRAM_BYTES  DT_REG_SIZE(DT_CHOSEN(zephyr_sram))
+#define C62_ITCM_BYTES  DT_REG_SIZE(DT_CHOSEN(zephyr_itcm))
+#define C62_DTCM_BYTES  DT_REG_SIZE(DT_CHOSEN(zephyr_dtcm))
+#define C62_PSRAM_BYTES DT_REG_SIZE(DT_NODELABEL(psram_ap))
+
+/**
+ * Add one region to the diagnostic answer, if the linker bounded it.
+ *
+ * `start`/`end` are the symbols of the script; a NULL pair means this build has
+ * no such section and the region is left out of the answer rather than reported
+ * as empty (docs/PC_PROTO.md).
+ */
+static void addRegion(pcProtoDiag_t *out, const char *name, const char *start,
+                      const char *end, uint32_t total)
+{
+    if (out->regionCount >= PC_DIAG_REGIONS)
+        return;
+    if (start == NULL || end == NULL ||
+        (uintptr_t)end < (uintptr_t)start)
+        return;
+
+    pcProtoRegion_t *r = &out->regions[out->regionCount++];
+    memset(r, 0, sizeof(*r));
+    snprintf(r->name, sizeof(r->name), "%s", name);
+    r->used = (uint32_t)((uintptr_t)end - (uintptr_t)start);
+    r->total = total;
+    r->known = 1;
+}
 
 int pc_proto_platformDiag(pcProtoDiag_t *out)
 {
@@ -383,17 +424,27 @@ int pc_proto_platformDiag(pcProtoDiag_t *out)
      * client says so instead of inventing a reason. */
     out->resetCause = 0;
 
+    /*
+     * The heap.  The kernel can only answer "how much is free" when its
+     * allocator keeps the books (CONFIG_SYS_HEAP_RUNTIME_STATS); without that
+     * option there is no number to report, so the answer carries no heap figure
+     * at all instead of the "0 of 40960 bytes free" this used to say while the
+     * 40 KiB of `noinit` were mostly unused (docs/MEMORY.md).  Enabling the
+     * option is one line in platform/mcu/CSK6011B/zephyr.conf; until then the
+     * client prints "not measured" and the region table below is the figure a
+     * bench session reads.
+     */
 #ifdef CONFIG_SYS_HEAP_RUNTIME_STATS
     {
         extern struct sys_heap _system_heap;
         struct sys_heap_runtime_stats st;
+
         if (sys_heap_runtime_stats_get(&_system_heap, &st) == 0) {
             out->heapFree = (uint32_t)st.free_bytes;
             out->heapTotal = (uint32_t)(st.free_bytes + st.allocated_bytes);
+            out->heapKnown = 1;
         }
     }
-#else
-    out->heapTotal = CONFIG_HEAP_MEM_POOL_SIZE;
 #endif
 
     if (__rom_region_start != NULL && __rom_region_end != NULL) {
@@ -404,8 +455,43 @@ int pc_proto_platformDiag(pcProtoDiag_t *out)
     if (_image_ram_start != NULL && _image_ram_end != NULL) {
         out->ramUsed = (uint32_t)((uintptr_t)_image_ram_end -
                                   (uintptr_t)_image_ram_start);
-        out->ramTotal = CONFIG_SRAM_SIZE * 1024u;
+        out->ramTotal = C62_SRAM_BYTES;
     }
+
+    /*
+     * Static usage per region.  All of them are measured, not guessed: the
+     * linker script places every section and its own symbols bound each region,
+     * so the numbers move with the image (docs/MEMORY.md has the same figures
+     * read off its map file).
+     */
+    addRegion(out, "SRAM", _image_ram_start, _image_ram_end, C62_SRAM_BYTES);
+    addRegion(out, "ITCM", __itcm_start, __itcm_end, C62_ITCM_BYTES);
+    addRegion(out, "DTCM", __dtcm_start, __dtcm_end, C62_DTCM_BYTES);
+
+    /*
+     * The PSRAM holds two families of section: the modes' own state
+     * (.psram_section) and the DMR package's (.psram_dmr).  The usage of the
+     * region is the highest end the script placed and the lowest start; each
+     * symbol exists only if its section does.
+     */
+    {
+        const char *start = (__psram_section_start != NULL)
+                          ? __psram_section_start : __psram_dmr_start;
+        const char *end   = (__psram_section_end != NULL)
+                          ? __psram_section_end : __psram_dmr_end;
+
+        if (__psram_dmr_end != NULL && (end == NULL || __psram_dmr_end > end))
+            end = __psram_dmr_end;
+        if (__psram_dmr_start != NULL &&
+            (start == NULL || __psram_dmr_start < start))
+            start = __psram_dmr_start;
+
+        addRegion(out, "PSRAM", start, end, C62_PSRAM_BYTES);
+    }
+
+    addRegion(out, "FLASH", __rom_region_start, __rom_region_end,
+              CONFIG_FLASH_SIZE * 1024u);
+
 
     /* Stack high-water marks.  k_thread_stack_space_get() needs
      * CONFIG_INIT_STACKS to know what was never touched; without it the number

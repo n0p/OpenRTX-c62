@@ -126,6 +126,30 @@ void cstore_forget(void);
 /** Direct access to the in-RAM book, for tests and for enumeration. */
 cstore_bank_t *cstore_bank(void);
 
+/**
+ * Pack the whole book for the internal backup (docs/BACKUP.md). The bytes are
+ * the book as it is kept on flash, so a restore is byte exact.
+ *
+ * @param buf: destination, at least sizeof(cstore_bank_t).
+ * @param cap: its capacity.
+ * @return sizeof(cstore_bank_t) on success, -ENOSPC if it does not fit.
+ */
+int cstore_export(void *buf, size_t cap);
+
+/**
+ * Replace the whole book with one written by cstore_export() and write it to
+ * flash through the store's two-slots path.
+ *
+ * The count and every contact are validated first; a book that does not check
+ * out is refused and the current one is untouched.
+ *
+ * @param buf: the packed book.
+ * @param len: its length, exactly sizeof(cstore_bank_t).
+ * @return 0 on success, -EINVAL on a malformed or invalid book, -EIO if the
+ *         write failed (the previous book is reloaded and still valid).
+ */
+int cstore_import(const void *buf, size_t len);
+
 #ifdef __cplusplus
 }
 #endif

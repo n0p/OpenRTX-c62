@@ -577,6 +577,10 @@ const char *bb_markName(uint8_t mark)
             return "CHAN_LOAD";
         case BB_M_UI_MODE:
             return "UI_MODE";
+        case BB_M_BACKUP:
+            return "BACKUP";
+        case BB_M_RESTORE:
+            return "RESTORE";
         case BB_M_HANG:
             return "HANG";
         default:

@@ -352,6 +352,39 @@ int chstore_applySettings(uint16_t idx, settings_t *settings);
  */
 const char *chstore_modeName(uint8_t mode);
 
+/* ------------------------------------------------------- backup/restore --- */
+
+/**
+ * Size of the packed bank chstore_export() writes: two bytes of count plus one
+ * record per channel. Worst case (a full bank) is 2 + 128 * 37 = 4738 bytes.
+ */
+#define CHSTORE_EXPORT_MAX (2U + CHSTORE_MAX_CHANNELS * sizeof(chstore_channel_t))
+
+/**
+ * Pack the whole bank for the internal backup (docs/BACKUP.md): a little
+ * endian 16 bit count followed by that many records, exactly the payload the
+ * store keeps on flash.
+ *
+ * @param buf: destination.
+ * @param cap: capacity, at least CHSTORE_EXPORT_MAX for a full bank.
+ * @return the number of bytes written, -ENOSPC if it does not fit.
+ */
+int chstore_export(void *buf, size_t cap);
+
+/**
+ * Replace the whole bank with one written by chstore_export(), and write it to
+ * flash through the store's own two-slots path.
+ *
+ * Every record is validated first, and the bank on flash is left as it was
+ * when anything does not check out: a restore that is refused costs nothing.
+ *
+ * @param buf: the packed bank.
+ * @param len: its length, which has to match the count it carries.
+ * @return 0 on success, -EINVAL on a malformed or invalid bank, -EIO if the
+ *         flash write failed (the previous bank is reloaded and still valid).
+ */
+int chstore_import(const void *buf, size_t len);
+
 #ifdef __cplusplus
 }
 #endif

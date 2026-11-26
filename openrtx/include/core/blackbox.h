@@ -184,6 +184,8 @@ typedef enum bbMark {
     BB_M_SETTINGS,     /**< settings were written                        */
     BB_M_CHAN_LOAD,    /**< a stored channel was applied to the radio    */
     BB_M_UI_MODE,      /**< the operator selected another mode           */
+    BB_M_BACKUP,       /**< the internal backup of the stores was written */
+    BB_M_RESTORE,      /**< the internal backup was restored             */
     BB_M_HANG,         /**< dropped just before the record was written   */
     BB_M_COUNT
 } bbMark_t;

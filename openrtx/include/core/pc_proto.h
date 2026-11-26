@@ -418,6 +418,14 @@ enum pcProtoTag
      */
     PC_TAG_BLACKBOX     = 0x00F0, /**< bytes: one chunk of the record     */
     PC_TAG_BLACKBOX_LEN = 0x00F1, /**< u16 total length of the record     */
+    /*
+     * Memory per region (docs/PC_PROTO.md): one pcProtoRegion_t per tag, as
+     * many as the platform can measure.  A region that is not measurable is not
+     * sent at all, and so are HEAP_FREE/HEAP_TOTAL and PSRAM_FREE/PSRAM_TOTAL
+     * when the platform cannot ask its allocator: the client shows what the
+     * radio measured, never a zero standing for "unknown".
+     */
+    PC_TAG_MEM_REGION   = 0x00F2, /**< bytes: pcProtoRegion_t             */
 
     /*
      * Bench namespace, 0x0100-0x011F.  A separate block because these are not
@@ -481,14 +489,37 @@ typedef struct
 }
 __attribute__((packed)) pcProtoTaskStack_t;
 
+/**
+ * Debug: static usage of one memory region, PC_TAG_MEM_REGION.
+ *
+ * The regions of the CSK6011B are separate MEMORY areas of the linker script
+ * (RAM, ITCM, DTCM, PSRAMAP, FLASH) and a firmware can be far from full in one
+ * of them while another is the one that hurts. `used` is what the linker
+ * placed, measured from its own symbols; `known` says whether this platform can
+ * measure it at all, because a region whose usage is not measurable is left out
+ * of the answer instead of being reported as zero.
+ */
+typedef struct
+{
+    char     name[8];    /**< "SRAM", "ITCM", "DTCM", "PSRAM", "FLASH"      */
+    uint32_t used;       /**< bytes placed there, 0 when not measurable     */
+    uint32_t total;      /**< bytes the region has                          */
+    uint8_t  known;      /**< 1 when `used` was measured                    */
+    uint8_t  reserved[3];
+}
+__attribute__((packed)) pcProtoRegion_t;
+
+/** Regions a diagnostic answer can carry. */
+#define PC_DIAG_REGIONS 5
+
 /** Debug: the diagnostic state, PC_MSG_DBG_INFO. */
 typedef struct
 {
     uint32_t resetCause;   /**< raw reset cause register                     */
     uint32_t wdtResets;    /**< watchdog resets since the counters started   */
-    uint32_t heapFree;
+    uint32_t heapFree;     /**< only meaningful when heapKnown is 1          */
     uint32_t heapTotal;
-    uint32_t psramFree;
+    uint32_t psramFree;    /**< only meaningful when psramKnown is 1         */
     uint32_t psramTotal;
     uint32_t flashUsed;    /**< .text + .rodata + .data, if the linker knows */
     uint32_t flashTotal;
@@ -514,6 +545,20 @@ typedef struct
     uint8_t  portMode;   /**< enum portMode                                   */
     uint8_t  portPtt;    /**< 1 the accessory PTT is down right now          */
     uint32_t portLost;   /**< bytes and framing errors discarded             */
+    /**
+     * Memory, measured or absent (docs/PC_PROTO.md, "Las cifras de memoria").
+     *
+     * `heapKnown` is the whole point: a platform that cannot ask its own
+     * allocator how much it has free reports 0 here and the answer carries no
+     * heap figure at all, instead of a zero that a client would print as "0 of
+     * 40960 bytes free".  `psramKnown` is the same for the free PSRAM, which no
+     * backend of this tree can measure.  `regions[]` carries the static usage
+     * of each memory region, which a linker can always tell.
+     */
+    uint8_t  heapKnown;
+    uint8_t  psramKnown;
+    uint8_t  regionCount;
+    pcProtoRegion_t regions[PC_DIAG_REGIONS];
 }
 __attribute__((packed)) pcProtoDiag_t;
 

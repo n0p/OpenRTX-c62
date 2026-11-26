@@ -92,6 +92,9 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/protocols/DSTAR/DStarSlowData.c',
                'openrtx/src/core/slot_store.c',
                'openrtx/src/core/contact_store.c',
+               # The internal backup of the stores: header, directory, CRC and
+               # the two areas a save ping-pongs between (docs/BACKUP.md).
+               'openrtx/src/core/backup_image.c',
                'openrtx/src/core/msg_service.c',
                'openrtx/src/core/messaging.c',
                'openrtx/src/core/messaging_store_none.c',
@@ -140,7 +143,9 @@ ui_src_default = ['openrtx/src/ui/default/ui.c',
                   'openrtx/src/ui/default/ui_contacts.c',
                   'openrtx/src/ui/default/ui_messages.c',
                   'openrtx/src/ui/default/ui_tools.c',
-                  'openrtx/src/ui/default/ui_spectrum.c']
+                  'openrtx/src/ui/default/ui_spectrum.c',
+                  # The backup and restore screens behind MENU_BACKUP_RESTORE
+                  'openrtx/src/ui/default/ui_backup.c']
 
 ui_src_module17 = ['openrtx/src/ui/module17/ui.c',
                    'openrtx/src/ui/module17/ui_main.c',
@@ -922,6 +927,8 @@ sim_src = linux_default_src + [
   'platform/targets/linux/emulator/sim_png.c',
   # The channel bank and the contact book, in a file instead of a partition
   'platform/targets/linux/emulator/user_store_host.c',
+  # The internal backup of the stores, in a file of the run's state directory
+  'platform/targets/linux/emulator/backup_host.c',
 ]
 
 # The radio's own feature flags, as -D on top of linux_default_def, which
@@ -1566,6 +1573,13 @@ channel_store_test = executable('channel_store_test',
                                 sources : unit_test_src + ['tests/unit/channel_store.cpp'],
                                 kwargs  : unit_test_opts)
 
+# The internal backup: the record, the two areas, the CRC and the six stores
+# coming back from a restore (docs/BACKUP.md).
+backup_image_test = executable('backup_image_test',
+                               sources : unit_test_src + [
+                                 'tests/unit/backup_image.cpp'],
+                               kwargs  : unit_test_opts)
+
 # Protocolo binario con el PC. Se compila dos veces: la primera con el espacio
 # de nombres de depuracion, la segunda sin el, para que "una build de produccion
 # responde NOT_ALLOWED y no filtra nada" sea un test y no una promesa.
@@ -2015,6 +2029,7 @@ test('M17 Packet Frame Test', m17_packet_test)
 test('M17 Frame Decoder Test', m17_decoder_test)
 test('C62 Calibration Test', c62_calib_test)
 test('Channel Store Test',   channel_store_test)
+test('Backup Image Test',    backup_image_test)
 test('TX Power Test',        tx_power_test)
 test('PC Protocol Test',     pc_proto_test)
 test('PC Protocol Debug Test', pc_proto_dbg_test)
