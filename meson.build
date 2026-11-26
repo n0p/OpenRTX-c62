@@ -1472,6 +1472,24 @@ dstar_phy_test = executable('dstar_phy_test',
                                       ['tests/unit/dstar_phy.cpp'],
                             kwargs  : dstar_test_opts)
 
+# The P25 transmitter closed through the mode's own demodulator
+# (tests/unit/p25_tx.cpp): what a call without a voice source is, and that the
+# NAC is masked to the twelve bits the NID has room for.
+p25_tx_src = ['openrtx/src/protocols/C4FM/C4fmMod.c',
+              'openrtx/src/protocols/P25/P25Tx.c',
+              'openrtx/src/protocols/P25/P25Phy.c',
+              'openrtx/src/protocols/P25/P25Fec.c',
+              'openrtx/src/protocols/P25/P25Defs.c',
+              'openrtx/src/protocols/P25/P25Tables.c']
+
+p25_tx_test = executable('p25_tx_test',
+                         sources : p25_tx_src + ['tests/unit/p25_tx.cpp'],
+                         kwargs  : {'include_directories' : linux_inc,
+                                    'c_args' : linux_c_args,
+                                    'cpp_args' : linux_cpp_args,
+                                    'dependencies' : [catch2_dep],
+                                    'link_args' : linux_l_args + ['-lm']})
+
 # System Fusion frame layer (tests/unit/ysf_frame.cpp): the FICH, the data
 # channel and the voice slots, fed straight to ysfFrame_decode() -- the
 # modulator stays out of the comparison, so a refusal here is a refusal of the
@@ -2185,6 +2203,7 @@ test('M17 Golay Unit Test',   m17_golay_test)
 test('P25 PHY Test',           p25_phy_test)
 test('P25 FEC Limits Test',    p25_fec_test)
 test('P25 Status Test',        p25_status_test, timeout : 60)
+test('P25 TX Test',            p25_tx_test, timeout : 60)
 test('YSF Frame Test',         ysf_frame_test)
 test('YSF PHY Test',           ysf_phy_test)
 test('D-STAR Header Test',     dstar_header_test)
