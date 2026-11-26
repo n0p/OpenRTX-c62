@@ -2095,6 +2095,47 @@ dpmr_rx_test = executable('dpmr_rx_test',
                               'c_args' : linux_c_args + ['-O2', '-ffp-contract=off'],
                               'cpp_args' : linux_cpp_args + ['-O2']})
 
+# The dPMR status the main screen reads (tests/unit/dpmr_status.cpp): a call
+# built by the tree's own transmitter goes through the real demodulator
+# (DpmrPhy.c) into the real DpmrStatus.c, and the assertions are on both the
+# struct it publishes and the strings ui_mode_state.c gives the main screen.
+#
+# Only the dPMR screens of ui_mode_state.c are compiled here: linux_default_def
+# turns on the UI_TEST_* of every mode, which would pull in the status module
+# (and the dependencies) of each of them, none of which this test says anything
+# about. Same filtering as the TETRA status test.
+dpmr_status_def = ['-DUI_TEST_DPMR']
+dpmr_status_c_args = dpmr_status_def
+dpmr_status_cpp_args = dpmr_status_def
+
+foreach a : linux_c_args
+  if not a.startswith('-DUI_TEST_')
+    dpmr_status_c_args += a
+  endif
+endforeach
+
+foreach a : linux_cpp_args
+  if not a.startswith('-DUI_TEST_')
+    dpmr_status_cpp_args += a
+  endif
+endforeach
+
+dpmr_status_test = executable('dpmr_status_test',
+                              sources : ['tests/unit/dpmr_status.cpp',
+                                         'openrtx/src/protocols/Fsk4Tx.c',
+                                         'openrtx/src/protocols/DPMR/DpmrDefs.c',
+                                         'openrtx/src/protocols/DPMR/DpmrPhy.c',
+                                         'openrtx/src/protocols/DPMR/DpmrStatus.c',
+                                         'openrtx/src/protocols/DPMR/DpmrTx.c',
+                                         'openrtx/src/ui/default/ui_mode_state.c'],
+                              kwargs : {'include_directories' : linux_inc,
+                                        'c_args' : dpmr_status_c_args +
+                                                   ['-O2', '-ffp-contract=off'],
+                                        'cpp_args' : dpmr_status_cpp_args +
+                                                     ['-O2'],
+                                        'dependencies' : [catch2_dep],
+                                        'link_args' : linux_l_args})
+
 # The dPMR receive chain also has the two harnesses of tests/platform: the host
 # one runs the firmware's own demodulator over a capture and prints what it
 # decodes, and the bare-metal one measures its cost on a Cortex-M33 under QEMU.
@@ -2428,6 +2469,7 @@ test('NXDN RX Test',          nxdn_rx_test, timeout : 120)
 test('NXDN PHY Cost',         nxdn_phy_cost_run, args : [nxdn_capture])
 test('dPMR TX Test',          dpmr_tx_test)
 test('dPMR RX Test',          dpmr_rx_test)
+test('dPMR Status Test',      dpmr_status_test)
 test('dPMR Host Harness',     dpmr_host_exe, args : [dpmr_capture])
 test('dPMR PHY Cost',         dpmr_phy_cost_run, args : [dpmr_capture])
 test('DMR Glue Test',        dmr_glue_test)
