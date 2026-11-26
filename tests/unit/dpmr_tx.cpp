@@ -22,7 +22,9 @@
  *     read back from the symbols the transmitter wrote, at the offsets clause
  *     4.2.2 and 5.1 give them, so the layout is pinned without the
  *     demodulator agreeing with a transmitter that is wrong the same way.
- *  5. Symbol timing: the same call as one continuous stream through a
+ *  5. The state the mode publishes: the squelch of the main screen, opened by a
+ *     burst of this tree's transmitter and closed 400 ms after it.
+ *  6. Symbol timing: the same call as one continuous stream through a
  *     resampler -- an arbitrary start phase inside a symbol, +-100 ppm of
  *     clock drift bit for bit, and past that the framer still holding the CCH
  *     of every frame.  loopback() starts on a symbol boundary with the
@@ -789,4 +791,57 @@ TEST_CASE("dPMR bursts put every field at its symbol offset",
         REQUIRE(end.status == 0x15);
         REQUIRE(end.same);
     }
+}
+
+/* ------------------------------------------------------------------ status --- */
+
+TEST_CASE("dPMR publishes its squelch from the frame grid", "[dpmr][status]")
+{
+    /*
+     * What the mode shows on the main screen is one flag: "dPMR RX" while a
+     * transmission is being followed, "SRCH" when it is not (ui_mode_state.c
+     * reads it through rtx_rxSquelchOpen() -> dpmrPhy_synced()).  No radio is
+     * needed to prove it: a burst of the tree's own transmitter opens it, and
+     * the encoder's silence 400 ms later closes it again.
+     */
+    constexpr int FRAMES = 6;
+    AirStream stream = buildStream(timingCall, FRAMES);
+
+    dpmrPhy_init();
+    REQUIRE(!dpmrPhy_synced());
+
+    Decoded d;
+    size_t off = 0;
+
+    /* Half a frame in: nothing has been decoded yet */
+    dpmrPhy_push(stream.samples.data(), DPMR_TX_FRAME_SAMPLES / 2, onFrame, &d);
+    REQUIRE(!dpmrPhy_synced());
+
+    for (; off < stream.samples.size(); off += 960) {
+        size_t n = (stream.samples.size() - off > 960)
+                 ? 960 : (stream.samples.size() - off);
+
+        dpmrPhy_push(&stream.samples[off], n, onFrame, &d);
+    }
+
+    REQUIRE(dpmrPhy_synced());
+
+    struct dpmrPhyStats st;
+
+    dpmrPhy_stats(&st);
+    REQUIRE(st.cchOk >= (uint32_t)(FRAMES - 1));
+    REQUIRE(st.syncLost == 0);
+
+    /* 480 ms of silence: the squelch has to close on its own */
+    std::vector<int16_t> silence(960, 0);
+
+    for (int i = 0; i < 24; i++)
+        dpmrPhy_push(silence.data(), silence.size(), onFrame, &d);
+
+    REQUIRE(!dpmrPhy_synced());
+
+    /* And it stays closed while there is still nothing to decode */
+    for (int i = 0; i < 24; i++)
+        dpmrPhy_push(silence.data(), silence.size(), onFrame, &d);
+    REQUIRE(!dpmrPhy_synced());
 }
