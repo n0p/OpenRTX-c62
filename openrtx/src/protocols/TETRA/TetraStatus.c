@@ -135,6 +135,11 @@ void tetraStatus_onEvent(void *user, const struct tetra_event *ev)
                 status.sysinfo = true;
                 status.la = c->location_area;
                 status.dlFreq = c->dl_freq_hz;
+                /* Published uplink and the raw values it derives from */
+                status.ulFreq = c->ul_freq_hz;
+                status.band = c->band;
+                status.duplexSpacing = c->duplex_spacing;
+                status.reverseOp = c->reverse_operation;
                 status.airEncryption = c->air_encryption;
             }
             break;

@@ -15,8 +15,11 @@ set -eu
 
 here=$(dirname "$0")
 root=$(cd "$here/../../.." && pwd)
-out="$here/build"
-mkdir -p "$out"
+# A directory of its own per run: two of these (meson runs tests in parallel,
+# and a developer may have one going) used to share tests/host/pc_proto_host/
+# build and rebuild each other's binaries under the pty test's feet.
+out=$(mktemp -d "${TMPDIR:-/tmp}/pc-proto-host.XXXXXX")
+trap 'rm -rf "$out"' EXIT
 
 INC="-I$root/openrtx/include -I$root/platform -I$root/platform/targets/linux"
 CFLAGS="-std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter"

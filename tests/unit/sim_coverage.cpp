@@ -137,6 +137,10 @@ std::vector<std::string> splitCsv(const char *s)
             cur.clear();
             if (*p == '\0')
                 break;
+        } else if ((*p == '\\') && (p[1] == 's')) {
+            /* A space inside a label ("CELL UL"): see coverage_manifest() */
+            cur.push_back(' ');
+            p++;
         } else {
             cur.push_back(*p);
         }

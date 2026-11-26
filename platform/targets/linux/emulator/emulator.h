@@ -58,6 +58,28 @@ keyboard_t emulator_getKeys();
  */
 keyboard_t emulator_keyFromName(const char *name);
 
+/*
+ * The TETRA receiver state the host has no radio for (ui_mode_status.c).
+ *
+ * Nothing is injected by default: tetra_getStatus() answers "nothing decoded".
+ * The simulator's `inject tetra-cell` command and the tests fill it, so the
+ * "Cell uplink" row can be walked with a known uplink and with none.
+ */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void tetra_sim_clearCell(void);
+
+void tetra_sim_setCell(uint16_t mcc, uint16_t mnc, uint8_t colourCode,
+                       uint32_t dlHz, uint32_t ulHz);
+
+void tetra_sim_setUplink(bool uplink, uint32_t ssi);
+
+#ifdef __cplusplus
+}
+#endif
+
 /**
  * Queue one keyboard_t state for the firmware's key scan.
  *

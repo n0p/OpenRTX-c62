@@ -42,6 +42,7 @@ filas de menú superior, 18 páginas de Settings, 45 nombres en `enum uiScreen`*
 | Settings | 18 páginas (`SETTINGS_*`) | lista completa contra la declaración; dos filas en cada página; Brillo y Squelch cambian de valor; el reloj entra en su pantalla de dígitos (`SETTINGS_TIMEDATE_SET`) |
 | Settings → modo | `SETTINGS_MODE`, `SETTINGS_M17`, `SETTINGS_TETRA`, `SETTINGS_FM` | las 11 páginas, todas las filas, un valor cambiado en cada una |
 | modos | 11 pantallas principales + 11 popups | uno por uno en orden de registro: pantalla, popup (filas declaradas, todas seleccionables, valor editado), página, salida |
+| TETRA uplink | `MAIN_VFO` + popup de TETRA | `inject tetra-cell` (sin celda / con uplink / sin uplink), `CELL UL` en `NO UL` sin retunear, `ON` a 420.500 con la celda inyectada, `OFF` de vuelta a 430.500 |
 | herramientas (P1 mantenido) | `TOOLS_MENU` | cinco filas recorridas y comprobadas, cursor con wrap y P1/P2, submenú de modos con el TX/RX de los once, aplicar y volver |
 | banco de canales | (módulo `channels`, sin pantalla propia) | lista vacía, alta, editar frecuencia, guardar, sintonizar, reabrir |
 | APRS | `MENU_APRS`, `APRS_DETAIL`, `APRS_MSGS`, `APRS_MSG_VIEW`, `APRS_MSG_EDIT`, `APRS_CFG` | estación inyectada en la lista, detalle, P2 siguiente, bandeja APRS, mensaje, editor de respuesta, página de configuración con un campo cambiado |
@@ -115,6 +116,27 @@ registro:
 
 Y un ciclo completo de la tecla lateral tiene que devolver exactamente la
 secuencia del registro (`FM → M17 → … → WFM → FM`), no sólo volver a FM.
+
+## TETRA: la fila `CELL UL`
+
+El menú rápido de TETRA tiene una fila nueva, `CELL UL` (`OFF` / `ON` /
+`NO UL`), y una fase propia (`phase_tetra_uplink()`), porque su valor no cabe en
+el recorrido genérico de "un valor editado por tabla": depende de lo que el
+receptor tenga en la mano. El host no decodifica TETRA, así que el tour inyecta
+la célula con `inject tetra-cell` (el mismo estado que llenaría
+`TetraStatus.c`; `sim_control.c`), y comprueba lo que ve el operador:
+
+1. sin célula, `ON` deja la fila en `NO UL` y **la frecuencia no se mueve**;
+2. con una célula que no publica uplink (y duplex desconocido), lo mismo;
+3. con una célula que publica `430.500 → 420.500`, `ON` sintoniza 420.500
+   (rx y tx juntos, es un modo de sólo recepción) y la fila dice `ON`;
+4. `OFF` (P1: la fila cicla `ON → OFF`) vuelve a 430.500.
+
+La célula se limpia al salir para que el resto del tour siga viendo el receptor
+vacío, y el manifiesto de cobertura (`tour.py --coverage-manifest`) declara la
+fila: `sim_coverage_test` compara las filas del firmware con las declaradas, así
+que añadirla sin declararla rompe CI (la etiqueta con espacio viaja como
+`CELL\sUL` en el manifiesto, que va tokenizado por espacios).
 
 ## DMR transmite
 

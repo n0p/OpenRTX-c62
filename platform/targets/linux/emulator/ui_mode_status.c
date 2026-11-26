@@ -37,6 +37,7 @@
 #include "core/state.h"
 #include "protocols/DMR/DmrStatus.h"
 #include "protocols/TETRA/TetraStatus.h"
+#include "emulator.h"
 
 /* ------------------------------------------------------------------- DMR -- */
 
@@ -65,12 +66,54 @@ void dmrStatus_update(void)
 
 /* ----------------------------------------------------------------- TETRA -- */
 
+/*
+ * The host decodes nothing, but the UI reads what a receiver would hold, and
+ * the "Cell uplink" row of the TETRA quick menu has to be walked both with a
+ * cell whose uplink is known and with none.  Nothing is injected by default:
+ * this answers "nothing decoded", which is what the screens must render as
+ * "-" and "T searching".  The simulator's `inject tetra-cell` command
+ * (sim_control.c) and the tests fill it through tetra_sim_setCell().
+ */
+static struct tetraStatus simTetra;
+
+void tetra_sim_clearCell(void)
+{
+    memset(&simTetra, 0, sizeof(simTetra));
+}
+
+void tetra_sim_setCell(uint16_t mcc, uint16_t mnc, uint8_t colourCode,
+                       uint32_t dlHz, uint32_t ulHz)
+{
+    memset(&simTetra, 0, sizeof(simTetra));
+    simTetra.sync = true;
+    simTetra.cell = true;
+    simTetra.mcc = mcc;
+    simTetra.mnc = mnc;
+    simTetra.colourCode = colourCode;
+    simTetra.sysinfo = (dlHz != 0);
+    simTetra.la = 1;
+    simTetra.dlFreq = dlHz;
+    simTetra.ulFreq = ulHz;
+    /* band and duplex spacing are left 0: the injected uplink is explicit */
+}
+
+void tetra_sim_setUplink(bool uplink, uint32_t ssi)
+{
+    simTetra.uplink = uplink;
+    simTetra.uplinkSs = ssi;
+}
+
 void tetra_getStatus(struct tetraStatus *out)
 {
     if (out == NULL)
         return;
 
-    memset(out, 0, sizeof(*out));
+    *out = simTetra;
+}
+
+void tetraStatus_reset(void)
+{
+    tetra_sim_clearCell();
 }
 
 /* ---------------------------------------------------------------- packet -- */

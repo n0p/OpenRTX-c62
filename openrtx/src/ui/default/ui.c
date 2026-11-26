@@ -53,6 +53,9 @@
 #include <math.h>
 #include "ui/ui_default.h"
 #include "rtx/rtx.h"
+#ifdef UI_MODE_TETRA
+#include "protocols/TETRA/TetraUplink.h"
+#endif
 #include "core/airband.h"
 #include "core/channel_store.h"
 #include "interfaces/platform.h"
@@ -1924,6 +1927,26 @@ void ui_updateFSM(bool *sync_rtx)
 #ifdef CONFIG_VFO_SEARCH
     /* Carrier search: arm, follow and expire, with or without key events */
     _ui_vfoSearchTick(now);
+#endif
+
+#ifdef UI_MODE_TETRA
+    /*
+     * The "Cell uplink" session (protocols/TETRA/TetraUplink.h): while it
+     * lasts the TETRA mode is on another frequency, and it has to give the
+     * receiver back when the cell goes away, the operator changes mode or the
+     * frequency is taken away. Both sides move together: the uplink frequency
+     * of a cell must never be left as the transmit frequency of a mode that
+     * can key the PA.
+     */
+    uint32_t ulBackHz = 0;
+    if (tetraUplink_tick(state.channel.mode, state.channel.rx_frequency,
+                         &ulBackHz)) {
+        state.channel.rx_frequency = ulBackHz;
+        state.channel.tx_frequency = ulBackHz;
+        if (sync_rtx != NULL)
+            *sync_rtx = true;
+        redraw_needed = true;
+    }
 #endif
 
     // Check for events

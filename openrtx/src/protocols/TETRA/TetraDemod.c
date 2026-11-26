@@ -99,12 +99,28 @@ struct tetraDemodParams tetraDemodParams = {
 };
 #define P tetraDemodParams
 
+/*
+ * Wrap a phase to [-pi, pi).
+ *
+ * Non-finite values come from a degenerated fit (digital silence has no
+ * deviation, so the gain is infinite) or from a broken update: they have no
+ * phase and must not spin the receiver. Every loop here is bounded and the
+ * reduction is O(1) whatever the input, so no sequence of samples can keep
+ * this function from returning (a `while (phi >= PI) phi -= 2*PI` runs for
+ * ever on +inf, and for ~1e30 it runs for longer than the radio has).
+ */
 static float wrapf(float phi)
 {
-    while (phi >= PI_F)
-        phi -= 2 * PI_F;
-    while (phi < -PI_F)
-        phi += 2 * PI_F;
+    if (!isfinite(phi))
+        return 0.0f;
+    if (phi >= PI_F || phi < -PI_F) {
+        phi -= 2 * PI_F * floorf((phi + PI_F) / (2 * PI_F));
+        /* floorf() is exact here; the two steps below absorb rounding */
+        if (phi >= PI_F)
+            phi -= 2 * PI_F;
+        else if (phi < -PI_F)
+            phi += 2 * PI_F;
+    }
     return phi;
 }
 
@@ -210,9 +226,14 @@ static float sampleAt(const struct tetraDemod *dm, int offset)
 
 /**
  * Move the next symbol position.
+ *
+ * A non-finite step (a degenerated timing vertex) would leave the position at
+ * INT_MIN and the symbol loop would then try to catch up for ever: drop it.
  */
 static void advance(struct tetraDemod *dm, float delta)
 {
+    if (!isfinite(delta))
+        delta = 0.0f;
     float f = dm->nextFrac + delta;
     int whole = (int)floorf(f);
     dm->nextInt += whole;
@@ -324,7 +345,24 @@ static size_t symbol(struct tetraDemod *dm, float d, int8_t *soft)
         if (dm->symbols == WARMUP_SYMBOLS) {
             float v = dm->sxx;
             dm->offset = dm->sx;
-            dm->gain = (PI_F / 2) / dm->st;
+            /*
+             * Digital silence (a muted codec, a DMA underrun, the 0.5 s the
+             * mode drops after a retune) has no deviation: the gain would be
+             * infinite and every later decision NaN. Keep the unit gain until
+             * there is a signal to measure, and bound what a weak one gives.
+             */
+            if (isfinite(dm->st) && dm->st > 1e-9f) {
+                float g = (PI_F / 2) / dm->st;
+                if (isfinite(g) && g > 0) {
+                    /* Bounded only to keep it finite: a loud capture needs a
+                     * gain of 1e-5 and a quiet one 1e3, both are fine */
+                    if (g < 1e-12f)
+                        g = 1e-12f;
+                    else if (g > 1e12f)
+                        g = 1e12f;
+                    dm->gain = g;
+                }
+            }
             /* Seed the least-squares moments: t = gain * (d - offset) */
             dm->sxx = dm->sx * dm->sx + v;
             dm->st = 0;
@@ -343,6 +381,8 @@ static size_t symbol(struct tetraDemod *dm, float d, int8_t *soft)
 
     /* Least-squares fit of t = gain * (d - offset) to the decisions */
     float x = dm->gain * (d - dm->offset);
+    if (!isfinite(x))
+        x = 0.0f; /* a broken fit must not poison the decisions */
     float t = decide(x) * (PI_F / 4);
     t += 2 * PI_F * roundf((x - t) / (2 * PI_F)); /* Keep 2 pi clicks */
     if (adaptFit) {
@@ -354,9 +394,12 @@ static size_t symbol(struct tetraDemod *dm, float d, int8_t *soft)
     float var = dm->sxx - dm->sx * dm->sx;
     if (adaptFit && var > 0) {
         float g = (dm->sxt - dm->sx * dm->st) / var;
-        if (g > 0) {
-            dm->gain = g;
-            dm->offset = dm->sx - dm->st / g;
+        if (isfinite(g) && g > 0) {
+            float off = dm->sx - dm->st / g;
+            if (isfinite(off)) {
+                dm->gain = g;
+                dm->offset = off;
+            }
         }
     }
 
@@ -448,14 +491,29 @@ static float acquireByEnergy(struct tetraDemod *dm)
     float e0 = dm->energy[best];
     float ep = dm->energy[(best + 1) % SPS];
     float den = em - 2 * e0 + ep;
-    float vertex = best - SPS / 2 + (den < 0 ? 0.5f * (em - ep) / den : 0);
+    float vertex = best - SPS / 2 + (den < -1e-12f ? 0.5f * (em - ep) / den : 0);
+
+    /* Same bound as in timing(): a flat energy curve must not move the grid */
+    if (!isfinite(vertex))
+        vertex = best - SPS / 2;
+    if (vertex > SPS / 2)
+        vertex = SPS / 2;
+    else if (vertex < -SPS / 2)
+        vertex = -SPS / 2;
 
     if (e0 > 0) {
         float g = sqrtf(5.0f) * (PI_F / 4) / sqrtf(e0);
         float var = dm->sxx - dm->sx * dm->sx;
-        dm->gain = g;
-        dm->st = g * (dm->sx - dm->offset);
-        dm->sxt = dm->sx * dm->st + g * var;
+
+        if (isfinite(g) && g > 0) {
+            if (g < 1e-12f)
+                g = 1e-12f;
+            else if (g > 1e12f)
+                g = 1e12f;
+            dm->gain = g;
+            dm->st = g * (dm->sx - dm->offset);
+            dm->sxt = dm->sx * dm->st + g * var;
+        }
     }
     return vertex;
 }
@@ -488,7 +546,18 @@ static void timing(struct tetraDemod *dm)
     float c0 = dm->cost[best];
     float cp = dm->cost[(best + 1) % SPS];
     float den = cm - 2 * c0 + cp;
-    float vertex = best - SPS / 2 + (den > 0 ? 0.5f * (cm - cp) / den : 0);
+    float vertex = best - SPS / 2 + (den > 1e-12f ? 0.5f * (cm - cp) / den : 0);
+    /*
+     * The parabola is only meaningful near its vertex: with a flat or broken
+     * cost the correction would be huge (or infinite), and the next symbol
+     * position would jump seconds away from the signal.
+     */
+    if (!isfinite(vertex))
+        vertex = best - SPS / 2;
+    if (vertex > SPS / 2)
+        vertex = SPS / 2;
+    else if (vertex < -SPS / 2)
+        vertex = -SPS / 2;
 
     if (!dm->acquired) {
         if (dm->symbols < WARMUP_SYMBOLS + ACQUIRE_SYMBOLS)
@@ -531,6 +600,12 @@ static void timing(struct tetraDemod *dm)
     else if (dm->rate < -RATE_MAX)
         dm->rate = -RATE_MAX;
     float step = P.timingKp * vertex + dm->rate;
+    if (!isfinite(step))
+        step = 0.0f;
+    if (step > SPS / 2 + 1)
+        step = SPS / 2 + 1;
+    else if (step < -(SPS / 2 + 1))
+        step = -(SPS / 2 + 1);
     advance(dm, step);
     dm->drift += step;
 }
@@ -559,12 +634,33 @@ size_t tetraDemod_process(struct tetraDemod *dm, const int16_t *in, size_t n,
             dm->hist[dm->written & HIST_MASK] = d;
             dm->written++;
 
-            /* Symbols whose window (up to +SPS/2 + 1) is complete */
-            while ((int32_t)(dm->written - dm->nextInt) >= SPS / 2 + 2) {
+            /*
+             * One symbol per interpolated sample at most, and the next
+             * position never left more than one window behind: the timing
+             * loop moves it by less than half a symbol, so a single symbol of
+             * catch-up is all that can be due here. Making this a bounded
+             * step (instead of a `while` that trusts nextInt) is what keeps
+             * any input from turning into a spin that also runs off the
+             * caller's soft buffer.
+             */
+            for (int catchUp = 0; catchUp < 2; catchUp++) {
+                if ((int32_t)(dm->written - dm->nextInt) < SPS / 2 + 2)
+                    break;
                 timing(dm);
                 float v = sampleAt(dm, 0);
                 out += symbol(dm, v, soft + out);
                 dm->nextInt += SPS;
+            }
+            if ((int32_t)(dm->written - dm->nextInt) >= SPS / 2 + 2) {
+                /*
+                 * Still due after two symbols: the position was left behind by
+                 * a broken update. Put it ahead of the samples, where a normal
+                 * symbol emission leaves it (written + 2), so the catch-up
+                 * cannot emit a symbol per sample for ever nor run off the
+                 * caller's soft buffer.
+                 */
+                dm->nextInt = dm->written + 2;
+                dm->nextFrac = 0;
             }
         }
         dm->inPos = (dm->inPos + 1) % TETRA_DEMOD_INTERP;

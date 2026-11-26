@@ -73,8 +73,8 @@ MODES = {
         "CALL", "CAN", "CANRX", "SRC", "META", "PWR", "BKL", "KEYLIT",
         "LOCK", "MSGS", "MSG"]},
     "TETRA": {"tx": False, "page": "SETTINGS_TETRA", "rows": [
-        "AFC", "FINE", "CELL", "LA/CC", "REG", "NET", "UL", "CALL", "BKL",
-        "KEYLIT", "LOCK", "MSGS", "MSG"]},
+        "AFC", "FINE", "CELL UL", "CELL", "LA/CC", "REG", "NET", "UL", "CALL",
+        "BKL", "KEYLIT", "LOCK", "MSGS", "MSG"]},
     # DMR transmits in the C62 image and in the simulator (CONFIG_DMR_TX on the
     # simulator target only, see meson.build); its page is the generic one.
     "DMR": {"tx": True, "page": "SETTINGS_MODE", "rows": [
@@ -767,6 +767,93 @@ class Tour:
                    and d["radio"]["tx"] == 430500000,
                    "TETRA did not apply the typed frequency to both sides "
                    "(%d/%d)" % (d["radio"]["rx"], d["radio"]["tx"]))
+
+        self.goto_mode("FM")
+        self.home()
+
+    def phase_tetra_uplink(self):
+        """
+        The "Cell uplink" row of the TETRA quick menu (docs/TETRA_LIB.md).
+
+        On a downlink whose cell is known, On tunes the radio to that cell's
+        uplink and Off takes it back to the frequency it came from; with no
+        uplink frequency the row says NO UL and the radio is not moved. The
+        cell is injected because the host decodes nothing (sim_control.c,
+        `inject tetra-cell`); the frequency is typed, so what is checked is
+        the one the main screen and the dumps show.
+        """
+        self.step_name = "tetra uplink"
+        self.goto_mode("TETRA")
+        self.home()
+
+        # A downlink to come back to: 430.500 MHz (receive-only: one entry)
+        for k in "4305000":
+            self.key(k)
+        self.key("0")
+        d = self.capture("tetra-ul-downlink", screen="MAIN_VFO")
+        self.check(d["radio"]["rx"] == 430500000,
+                   "the TETRA downlink did not land on 430.500 MHz (%d Hz)"
+                   % d["radio"]["rx"])
+
+        # No cell at all: On has nothing to tune to and the row says so
+        self.inject("tetra-cell", "clear")
+        self.open_qm()
+        self.qm_to(self.qm_row("CELL UL"))
+        self.key("P2")
+        d = self.capture("tetra-ul-no-cell")
+        q = d["quickmenu"]
+        self.check(q["rows"][q["selected"]]["value"] == "NO UL",
+                   "with no cell, CELL UL shows %r instead of NO UL"
+                   % q["rows"][q["selected"]]["value"])
+        self.check(d["radio"]["rx"] == 430500000,
+                   "CELL UL retuned with no uplink known (%d Hz)"
+                   % d["radio"]["rx"])
+
+        # A cell that publishes no uplink and whose duplex is unknown: same
+        self.inject("tetra-cell", "228", "8889", "1", "430500000", "0")
+        self.key("P2")  # NO UL -> OFF
+        self.key("P2")  # OFF -> On, asked for again
+        d = self.capture("tetra-ul-unknown")
+        q = d["quickmenu"]
+        self.check(q["rows"][q["selected"]]["value"] == "NO UL",
+                   "a cell with no uplink frequency shows %r instead of NO UL"
+                   % q["rows"][q["selected"]]["value"])
+        self.check(d["radio"]["rx"] == 430500000,
+                   "CELL UL invented a frequency (%d Hz)" % d["radio"]["rx"])
+
+        # A cell with its uplink published: On goes there
+        self.inject("tetra-cell", "228", "8889", "1", "430500000", "420500000")
+        self.key("P2")  # NO UL -> OFF
+        self.key("P2")  # OFF -> On
+        d = self.capture("tetra-ul-on")
+        q = d["quickmenu"]
+        self.check(q["rows"][q["selected"]]["value"] == "ON",
+                   "CELL UL did not turn on with a known uplink (%r)"
+                   % q["rows"][q["selected"]]["value"])
+        self.check(d["radio"]["rx"] == 420500000,
+                   "On did not tune the uplink (rx %d Hz)" % d["radio"]["rx"])
+        self.check(d["radio"]["tx"] == 420500000,
+                   "the receive-only sides drifted apart (%d/%d)"
+                   % (d["radio"]["rx"], d["radio"]["tx"]))
+
+        # Off (P1: the row cycles On -> Off) takes the downlink back
+        self.key("P1")
+        d = self.capture("tetra-ul-off")
+        q = d["quickmenu"]
+        self.check(q["rows"][q["selected"]]["value"] == "OFF",
+                   "CELL UL did not turn off (%r)"
+                   % q["rows"][q["selected"]]["value"])
+        self.check(d["radio"]["rx"] == 430500000,
+                   "Off did not come back to the downlink (rx %d Hz)"
+                   % d["radio"]["rx"])
+
+        # The row is a session, not a setting: leaving the mode keeps the
+        # downlink (the uplink was already given back above)
+        self.key("RED")
+        self.inject("tetra-cell", "clear")
+        self.home()
+        self.check(self.dump()["radio"]["rx"] == 430500000,
+                   "the downlink was lost on the way out")
 
         self.goto_mode("FM")
         self.home()
@@ -1688,6 +1775,7 @@ class Tour:
         self.phase_modes()
         self.phase_quick_menu_fm()
         self.phase_dmr_tx()
+        self.phase_tetra_uplink()
         self.phase_tools()
         self.phase_channels()
         self.phase_contacts()
@@ -1764,9 +1852,12 @@ def coverage_manifest(path):
              "# the coverage the tour declares; see docs/SIMULATOR.md"]
     for mode in MODE_ORDER:
         spec = MODES[mode]
+        # The line is whitespace-tokenised, so a label with a space travels as
+        # "\s" (tests/unit/sim_coverage.cpp, splitCsv): "CELL UL".
+        rows = ",".join(r.replace(" ", "\\s") for r in spec["rows"])
         lines.append("mode %s %s %s %s"
                      % (mode, "tx" if spec["tx"] else "rx", spec["page"],
-                        ",".join(spec["rows"])))
+                        rows))
     for label in TOP_MENU:
         lines.append("top %s" % label)
     for label in SETTINGS_PAGES:

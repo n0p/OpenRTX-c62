@@ -7,6 +7,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <zephyr/sys/printk.h>
 #include <hwconfig.h>
 #include <tetra/tetra.h>
 #include "interfaces/audio.h"
@@ -17,6 +18,7 @@
 #include "core/psram_state.h"
 #include "protocols/TETRA/TetraSpeech.h"
 #include "protocols/TETRA/TetraStatus.h"
+#include "protocols/TETRA/TetraUplink.h"
 #include "core/mode_stats.h"
 #include "rtx/OpMode_TETRA.hpp"
 #ifdef CONFIG_TETRA_AFC
@@ -28,6 +30,16 @@
 
 /* Samples dropped after starting or retuning: 0.5 s */
 #define SETTLE_SAMPLES (TETRA_DEMOD_IN_RATE / 2)
+
+/*
+ * While the operator listens to a cell's uplink, the receiver is not on the
+ * downlink and there is nothing to stay locked to: what this end can see is
+ * that the radio is no longer where the session put it (a channel, a new
+ * frequency, a mode change). The UI already ends the session when it sees that;
+ * this is the same rule applied from the mode, with the time it takes the
+ * reconfigure the row asked for.
+ */
+#define UL_OFF_TOLERANCE_MS 2000
 
 /*
  * The baseband block, the demodulator and the MAC state are in the mode's own
@@ -250,6 +262,19 @@ void OpMode_TETRA::resync(bool overrun)
     cfg.cb = tetraStatus_onEvent;
     cfg.promiscuous = true;
     tetra_tmo_init(&st->tmo, &cfg);
+#if TETRA_UPLINK_DECODE
+    /*
+     * Listening to the uplink of a cell: the MS to BS bursts are scrambled
+     * with the colour code of the cell, and this context has just forgotten
+     * what the downlink taught it. The session (TetraUplink.h) still knows
+     * which cell the operator asked for; seed the decoder with it so bursts
+     * decode without a downlink to learn from (libtetra, clause 9.4.4).
+     */
+    uint16_t mcc, mnc;
+    uint8_t cc;
+    if (tetraUplink_cell(&mcc, &mnc, &cc))
+        tetra_tmo_set_uplink_cell(&st->tmo, mcc, mnc, cc);
+#endif
     tetraStatus_lostSync(overrun);
     modeStats_resync(MS_MODE_TETRA);
 }
@@ -308,6 +333,56 @@ void OpMode_TETRA::stopSampling()
     basebandPath = -1;
 }
 
+/*
+ * The "Cell uplink" session, seen from the receiving thread: libtetra was
+ * seeded with the cell when the context was created (resync), and what is left
+ * is ending the session when the receiver is no longer where it put it, or
+ * when what arrives is a downlink of a different cell. The UI ends it too, from
+ * the frequency it sees; both agree, and whichever runs first wins.
+ */
+static bool ulAway; /* The receiver is not on the session's uplink */
+static long long ulAwayTick;
+
+static void ulSessionCheck(const rtxStatus_t *rtx)
+{
+    uint32_t ulHz = tetraUplink_freq();
+
+    if ((ulHz == 0) || !tetraUplink_active()) {
+        ulAway = false;
+        return;
+    }
+
+    if (rtx->rxFrequency != ulHz) {
+        /* The reconfigure the row asked for takes a frame or two */
+        long long now = getTick();
+
+        if (!ulAway) {
+            ulAway = true;
+            ulAwayTick = now;
+        } else if ((now - ulAwayTick) > UL_OFF_TOLERANCE_MS) {
+            printk("[TETRA UL] the receiver moved away: uplink session off\n");
+            tetraUplink_stop();
+            ulAway = false;
+        }
+        return;
+    }
+    ulAway = false;
+
+    /* A downlink where the cell's uplink was expected belongs to someone else */
+    struct tetraStatus ts;
+    tetra_getStatus(&ts);
+    if (ts.sync && ts.cell) {
+        uint16_t mcc, mnc;
+        uint8_t cc;
+
+        if (tetraUplink_cell(&mcc, &mnc, &cc) &&
+            ((ts.mcc != mcc) || (ts.mnc != mnc) || (ts.colourCode != cc))) {
+            printk("[TETRA UL] another cell on the uplink frequency\n");
+            tetraUplink_cellLost();
+        }
+    }
+}
+
 void OpMode_TETRA::update(rtxStatus_t *const rtx, const bool newCfg)
 {
     switch (rtx->opStatus) {
@@ -341,6 +416,9 @@ void OpMode_TETRA::update(rtxStatus_t *const rtx, const bool newCfg)
         resetRequest = false;
         reset();
     }
+
+    /* The operator's "Cell uplink" session: the UI tunes, this keeps it honest */
+    ulSessionCheck(rtx);
 
     if (audioPath_getStatus(basebandPath) != PATH_OPEN) {
         sleepFor(0, 10);

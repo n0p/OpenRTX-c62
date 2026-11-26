@@ -46,6 +46,7 @@
 #include "ui/ui_quickmenu.h"
 #ifdef UI_MODE_TETRA
 #include "protocols/TETRA/TetraStatus.h"
+#include "protocols/TETRA/TetraUplink.h"
 #endif
 #ifdef UI_MODE_DMR
 #include "protocols/DMR/DmrStatus.h"
@@ -480,6 +481,53 @@ void qm_tetra_set_afc(int on)
     /* The mode reads the flag on every block: no resync needed */
     state.settings.tetraAfcOff = (on == 0) ? 1 : 0;
     vp_beep(BEEP_KEY_GENERIC, SHORT_BEEP);
+}
+
+static const char *const qm_names_cellul[] = { "OFF", "ON", "NO UL" };
+
+/*
+ * "Cell uplink": listen to the MS to BS direction of the cell the receiver is
+ * locked to (docs/TETRA_LIB.md).  On tunes the radio to the cell's uplink
+ * frequency; Off takes it back to the frequency it came from.  The frequency
+ * is the one the cell publishes or the duplex conversion of its downlink, and
+ * when neither is known the row says "NO UL" and the receiver is not moved.
+ *
+ * This is a tuning position, not a setting: it lives in the mode's session
+ * (protocols/TETRA/TetraUplink.h), not in settings_t, and it ends by itself
+ * when the operator changes frequency or mode.
+ */
+int qm_tetra_get_cellul(void)
+{
+    return (int)tetraUplink_display(state.channel.rx_frequency);
+}
+
+void qm_tetra_set_cellul(int value)
+{
+    if (value == TETRA_UL_OFF) {
+        bool was = tetraUplink_stop();
+        uint32_t back = tetraUplink_backHz();
+
+        if (was && back != 0) {
+            /* A receive-only mode: the two sides stay together, as when the
+             * frequency is typed on the keypad */
+            state.channel.rx_frequency = back;
+            state.channel.tx_frequency = back;
+            qm_requestSync();
+        }
+        return;
+    }
+
+    struct tetraStatus ts;
+    tetra_getStatus(&ts);
+    if (tetraUplink_start(&ts, state.channel.rx_frequency) == 0) {
+        state.channel.rx_frequency = tetraUplink_freq();
+        state.channel.tx_frequency = state.channel.rx_frequency;
+        qm_requestSync();
+        vp_beep(BEEP_KEY_GENERIC, SHORT_BEEP);
+    } else {
+        /* Nothing to tune to: the row shows NO UL, the radio stays put */
+        vp_beep(400, SHORT_BEEP);
+    }
 }
 
 void qm_tetra_fmt_cell(char *buf, int len)
@@ -1091,6 +1139,9 @@ static const qm_item_t qm_items_tetra[] =
     QM_ITEM_INT_FF("FINE", -500, 500, 10, 100, qm_get_rx_fine,
                    qm_set_rx_fine, qm_fmt_fine),
 #endif
+    /* Off / On / NO UL: listen to the cell's uplink (docs/TETRA_LIB.md) */
+    QM_ITEM_ENUM("CELL UL", 0, 2, qm_tetra_get_cellul, qm_tetra_set_cellul,
+                 qm_names_cellul, NULL),
     QM_ITEM_INFO("CELL", qm_tetra_fmt_cell),
     QM_ITEM_INFO("LA/CC", qm_tetra_fmt_lacc),
     QM_ITEM_INFO("REG", qm_tetra_fmt_reg),

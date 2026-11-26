@@ -55,6 +55,9 @@
 #include "drivers/baseband/BK1080.h"
 #include "drivers/audio/baseband_dump_c62.h"
 #include "drivers/audio/csk6_codec.h"
+#ifdef CONFIG_TETRA
+#include "protocols/TETRA/TetraStatus.h"
+#endif
 
 /* Raw DesignWare UART registers, as in the baseband dump and the remote. */
 #define UART_BASE DT_REG_ADDR(DT_CHOSEN(zephyr_console))
@@ -320,6 +323,18 @@ int pc_proto_platformStatus(pcProtoStatus_t *out)
      */
     out->portMode = c62_portMode();
     out->portLost = c62_portPttState()->lost;
+
+#ifdef CONFIG_TETRA
+    /*
+     * The MS side of the cell, when the operator is listening to it (the
+     * "Cell uplink" row of the TETRA quick menu, docs/TETRA_LIB.md).  Zero
+     * outside TETRA, and stale-free: tetra_getStatus() expires the flag.
+     */
+    struct tetraStatus ts;
+    tetra_getStatus(&ts);
+    out->tetraUplink = ts.uplink ? 1 : 0;
+    out->tetraUlSsi = ts.uplinkSs;
+#endif
     return 0;
 }
 

@@ -846,6 +846,17 @@ if(C62_TETRA)
                         "'west update --group-filter +csk6', or build with "
                         "-DC62_TETRA=OFF")
   endif()
+  # TMO uplink (MS to BS): recognise uplink bursts while not synchronised and
+  # decode them once the cell's colour code is known. The TETRA mode's "Cell
+  # uplink" row (openrtx/src/protocols/TETRA/TetraUplink.c) is what tunes the
+  # radio there, so both have to be compiled in: fixed here rather than left to
+  # the library's default, and the generated tetra_config.h rejects any
+  # downstream -D that disagrees. These options change the public receiver
+  # context, so they are set before add_subdirectory() (docs/TETRA_LIB.md).
+  set(TETRA_UPLINK_DETECT ON CACHE BOOL
+      "Recognise TMO uplink signals while not synchronised")
+  set(TETRA_UPLINK_DECODE ON CACHE BOOL
+      "Decode TMO uplink bursts while not synchronised to a downlink")
   add_subdirectory(${C62_LIBTETRA} ${CMAKE_BINARY_DIR}/libtetra)
   # Build it with the Zephyr compiler flags (CPU, FPU, ABI), without a link
   # dependency on zephyr_interface: libtetra may export its target
@@ -865,6 +876,7 @@ if(C62_TETRA)
     ${OPENRTX_ROOT}/openrtx/src/protocols/TETRA/SdsMsg.c
     ${OPENRTX_ROOT}/openrtx/src/protocols/TETRA/SdsHist.c
     ${OPENRTX_ROOT}/openrtx/src/protocols/TETRA/TetraStatus.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/TETRA/TetraUplink.c
     ${OPENRTX_ROOT}/openrtx/src/rtx/OpMode_TETRA.cpp)
   target_compile_definitions(app PRIVATE CONFIG_TETRA)
   if(C62_TETRA_IF_DC_FILTER)

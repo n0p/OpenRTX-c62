@@ -90,6 +90,10 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/protocols/P25/P25Status.c',
                'openrtx/src/protocols/DSTAR/DStarStatus.c',
                'openrtx/src/protocols/DSTAR/DStarSlowData.c',
+               # The TETRA "Cell uplink" session: the quick menu row, the mode
+               # and the host tests share its rules, and it is portable C with
+               # no radio and no libtetra in it (docs/TETRA_LIB.md).
+               'openrtx/src/protocols/TETRA/TetraUplink.c',
                'openrtx/src/core/slot_store.c',
                'openrtx/src/core/contact_store.c',
                # The internal backup of the stores: header, directory, CRC and
@@ -2169,6 +2173,34 @@ test('Mode Stats Off Test', mode_stats_off_script,
      args : [meson.project_source_root(), ''])
 
 test('Scanner Test',         scanner_test)
+
+# La sesión "Cell uplink" del modo TETRA (protocols/TETRA/TetraUplink.c): el
+# conversor de duplex y las reglas Off/On/sin uplink del menú rápido, sin radio
+# y sin libtetra. El módulo es C portátil y solo depende de su cabecera, así
+# que se enlaza solo, como mode_stats.
+tetra_uplink_test = executable('tetra_uplink_test',
+                               sources : ['tests/unit/tetra_uplink.cpp',
+                                          'openrtx/src/protocols/TETRA/TetraUplink.c'],
+                               kwargs  : {'c_args'             : linux_c_args,
+                                          'cpp_args'           : linux_cpp_args,
+                                          'include_directories': linux_inc,
+                                          'dependencies'       : [catch2_dep],
+                                          'link_args'          : linux_l_args})
+test('TETRA Uplink Session Test', tetra_uplink_test)
+
+# El demodulador TETRA, con las entradas que lo colgaban (silencio digital,
+# continua a fondo de escala, ruido) y los invariantes que acotan el lazo de
+# símbolos: protocols/TETRA/TetraDemod.c es C portátil y solo depende de su
+# cabecera.
+tetra_demod_test = executable('tetra_demod_test',
+                              sources : ['tests/unit/tetra_demod.cpp',
+                                         'openrtx/src/protocols/TETRA/TetraDemod.c'],
+                              kwargs  : {'c_args'             : linux_c_args,
+                                         'cpp_args'           : linux_cpp_args,
+                                         'include_directories': linux_inc,
+                                         'dependencies'       : [catch2_dep],
+                                         'link_args'          : linux_l_args})
+test('TETRA Demodulator Bounded Test', tetra_demod_test, timeout : 120)
 
 # VFO carrier search: the machine (core/vfo_search.c) is pure — the time and a
 # sample of the receiver are arguments — so this test sweeps a band with a

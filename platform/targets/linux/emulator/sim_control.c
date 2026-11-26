@@ -256,6 +256,10 @@ static void cmd_help(void)
     say("                     one APRS message addressed to this station");
     say("inject message <SRC> <TEXT>");
     say("                     one message in the shared inbox (MSG_VIEW)");
+    say("inject tetra-cell <MCC> <MNC> <CC> <DL_HZ> <UL_HZ>");
+    say("                     a TETRA cell the host never decoded; UL_HZ 0 = none");
+    say("inject tetra-cell clear");
+    say("                     back to \"nothing decoded\"");
     say("quit                 power the radio off");
 }
 
@@ -370,6 +374,34 @@ static bool cmd_inject(int argc, char **argv)
         }
         say("#inject message id=%d", id);
         return true;
+    }
+
+    /*
+     * A TETRA cell: what a receiver locked to a downlink would hold, so the
+     * "Cell uplink" row of the TETRA quick menu can be walked with a known
+     * uplink frequency (UL_HZ != 0), with a cell whose uplink is unknown
+     * (UL_HZ 0), and with no cell at all (clear).  Nothing is decoded here:
+     * this is the receiver's state, filled the way TetraStatus.c fills it.
+     */
+    if (strcmp(argv[1], "tetra-cell") == 0 && argc > 2) {
+        if (strcmp(argv[2], "clear") == 0) {
+            tetra_sim_clearCell();
+            say("#inject tetra-cell clear");
+            return true;
+        }
+        if (argc > 6) {
+            unsigned long mcc = strtoul(argv[2], NULL, 0);
+            unsigned long mnc = strtoul(argv[3], NULL, 0);
+            unsigned long cc = strtoul(argv[4], NULL, 0);
+            unsigned long dl = strtoul(argv[5], NULL, 0);
+            unsigned long ul = strtoul(argv[6], NULL, 0);
+
+            tetra_sim_setCell((uint16_t)mcc, (uint16_t)mnc, (uint8_t)cc,
+                              (uint32_t)dl, (uint32_t)ul);
+            say("#inject tetra-cell %lu-%lu CC%lu dl=%lu ul=%lu", mcc, mnc, cc,
+                dl, ul);
+            return true;
+        }
     }
 
     say("#error inject needs a station, a message and their arguments");
