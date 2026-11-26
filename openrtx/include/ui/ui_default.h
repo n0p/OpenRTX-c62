@@ -321,6 +321,7 @@ enum settingsAudioItems
 {
     AU_VOICE = 0,
     AU_PHONETIC,
+    AU_NOISE,
 };
 
 /*

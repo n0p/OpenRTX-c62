@@ -134,6 +134,7 @@ typedef struct
     char    M17_meta_text[53];    // M17 Meta Text to send
     int16_t tetraAfcOffset;       // TETRA frequency correction learned, Hz
     int16_t rxFineHz;             // Manual fine RX tuning, Hz (10 Hz steps)
+    bool    noiseSuppression;     // RNNoise on the analog receive path
 #ifdef CONFIG_APRS
     /*
      * APRS, on the analog FM path. Everything here is off by default: the
@@ -339,6 +340,7 @@ static const settings_t default_settings =
     "OpenRTX",                    // Default M17 meta text
     0,                            // No TETRA frequency correction learned
     0,                            // No manual fine RX tuning
+    false,                        // Noise suppression off (see docs/NOISE.md)
 #ifdef CONFIG_APRS
     false,                        // APRS decoding off
     false,                        // APRS beacon off

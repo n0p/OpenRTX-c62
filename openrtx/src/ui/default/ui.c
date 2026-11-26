@@ -52,6 +52,9 @@
 #include <stdlib.h>
 #include <math.h>
 #include "ui/ui_default.h"
+#ifdef CONFIG_C62_NOISE_SUPPRESS
+#include "core/noise_suppress.h"
+#endif
 #include "rtx/rtx.h"
 #ifdef UI_MODE_TETRA
 #include "protocols/TETRA/TetraUplink.h"
@@ -233,6 +236,9 @@ const char *settings_audio_items[] =
 {
     "Voice",
     "Phonetic",
+#ifdef CONFIG_C62_NOISE_SUPPRESS
+    "RX Noise",
+#endif
 };
 
 /*
@@ -1104,6 +1110,15 @@ static void _ui_changeVoiceLevel(int variation)
 
     vp_announceSettingsVoiceLevel(flags);
 }
+
+#ifdef CONFIG_C62_NOISE_SUPPRESS
+static void _ui_changeNoiseSuppression(bool newVal)
+{
+    /* The stage refuses to enable itself if RNNoise is not available: mirror
+     * the result back into the setting so the menu never lies. */
+    state.settings.noiseSuppression = noiseSuppress_setEnabled(newVal);
+}
+#endif
 
 static void _ui_changePhoneticSpell(bool newVal)
 {
@@ -3695,6 +3710,10 @@ void ui_updateFSM(bool *sync_rtx)
                     {
                         if(ui_state.menu_selected == AU_PHONETIC)
                             _ui_changePhoneticSpell(true);
+#ifdef CONFIG_C62_NOISE_SUPPRESS
+                        else if(ui_state.menu_selected == AU_NOISE)
+                            _ui_changeNoiseSuppression(true);
+#endif
                         else
                             _ui_changeVoiceLevel(1);
                     }
@@ -3702,6 +3721,10 @@ void ui_updateFSM(bool *sync_rtx)
                     {
                         if(ui_state.menu_selected == AU_PHONETIC)
                             _ui_changePhoneticSpell(false);
+#ifdef CONFIG_C62_NOISE_SUPPRESS
+                        else if(ui_state.menu_selected == AU_NOISE)
+                            _ui_changeNoiseSuppression(false);
+#endif
                         else
                             _ui_changeVoiceLevel(-1);
                     }

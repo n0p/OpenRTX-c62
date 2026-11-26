@@ -512,3 +512,18 @@ config LSF_SERVICE_CONTROLLER
 if LSF_SERVICE_CONTROLLER
 orsource "services/Kconfig"
 endif # LSF_SERVICE_CONTROLLER
+
+#
+# RNNoise noise suppression on the analog FM receive path.  Off by default; see
+# docs/NOISE.md and lib/rnnoise/.  The stage is switched at run time from the
+# Audio menu ("RX Noise") and costs one flag test per 10 ms frame while off.
+#
+config C62_NOISE_SUPPRESS
+	bool "RNNoise noise suppression on the analog RX path"
+	default n
+	help
+	  Builds lib/rnnoise (RNNoise v0.1.1, BSD-3-Clause) and its stage on
+	  the analog FM receive path, behind the "RX Noise" switch of the
+	  Audio menu. Off by default, and off at run time until the switch is
+	  set: while disabled the stage costs one flag test per 10 ms frame
+	  and allocates nothing.

@@ -137,6 +137,12 @@ lo contrario; con las siete de arriba, RAM al 86,5 % — ver
   captura de audio RX, traza de TX). **Apagada por defecto**: una build de
   producción no la lleva ni la anuncia.
 
+- `CONFIG_C62_NOISE_SUPPRESS` — supresión de ruido RNNoise (v0.1.1, BSD-3) en la
+  recepción de FM, tras el interruptor *Settings → Audio → RX Noise*. **Apagada
+  por defecto, y el interruptor también**: cuesta 1,9 M instrucciones por trama
+  de 10 ms (66-73 % del M33 a 300 MHz) y 103 KiB de flash, así que en el M33 es
+  una ruta de laboratorio; el informe con las cifras, la evaluación de calidad y
+  el diseño para el DSP está en `docs/NOISE.md`.
 ## Repositorio
 
 - `master` — lo que se flashea.
@@ -147,6 +153,7 @@ lo contrario; con las siete de arriba, RAM al 86,5 % — ver
   `DMR_VOCODER.md`, `DMR_RX.md`, `TX_P25.md`, `TX_YSF.md`, `TX_DSTAR.md`,
   `PC_PROTO.md`, `openrtx_integration.md`.
 
+  `DMR_VOCODER.md`, `DMR_RX.md`, `NOISE.md`, `openrtx_integration.md`.
 ## Qué falta
 
 - Encoder AMBE+2 para DMR TX (en curso) y calibración de desviación en banco

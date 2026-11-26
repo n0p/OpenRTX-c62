@@ -19,6 +19,9 @@
 #include "AudioSystem.h"
 #include "AudioTrack.h"
 #include "AudioRecord.h"
+#ifdef CONFIG_C62_NOISE_SUPPRESS
+#include "core/noise_suppress.h"
+#endif
 #ifdef C62_BASEBAND_DUMP
 #include "baseband_dump_c62.h"
 #endif
@@ -178,6 +181,11 @@ static uint16_t rxPeak;
 /* Buffer halves the callers were too late for: samples the demodulators lost */
 static volatile uint32_t streamMisses;
 static bool playbackRunning;
+#ifdef CONFIG_C62_NOISE_SUPPRESS
+/* One DSP frame of de-interleaved radio audio for the noise suppressor */
+static int16_t nsSamples[CAPTURE_FRAME_SAMPLES]
+    __attribute__((section(".psram_section")));
+#endif
 static int64_t playbackDeadline;
 static uint32_t playbackFraction;
 /* Last time the worker went round its loop: a stalled worker is a stalled radio */
@@ -767,15 +775,35 @@ static void captureFrame(AudioRecord *rec)
     const size_t stride = ic->share->channelCount;
     const size_t count = rec->mCblk->frameCount;
     for (size_t source = 0; source < CODEC_CHANNELS; source++) {
-        const int16_t *src = &samples[rec->mChannelOutIdx[source]];
-        captureToStream(&inputs[source], src, stride, count);
-        captureToFmQueues(source, src, stride, count);
+        const int16_t *raw = &samples[rec->mChannelOutIdx[source]];
+        const int16_t *played = raw;
+        size_t playedStride = stride;
+#ifdef CONFIG_C62_NOISE_SUPPRESS
+        /*
+         * Noise suppression, analog receive path only: it sits between the
+         * discriminator and the speaker, so it only feeds the FM queue. The
+         * streams the demodulators and the APRS tap read get the raw samples.
+         * With the switch off this costs one test of a cached flag per DSP
+         * frame: no copy, no conversion, nothing allocated.
+         */
+        if ((source == SOURCE_RTX) && (count <= CAPTURE_FRAME_SAMPLES)
+            && noiseSuppress_enabled() && (outputSource[SINK_SPK] == SOURCE_RTX)) {
+            for (size_t i = 0; i < count; i++)
+                nsSamples[i] = raw[i * stride];
+            if (noiseSuppress_process(nsSamples, count)) {
+                played = nsSamples;
+                playedStride = 1;
+            }
+        }
+#endif
+        captureToStream(&inputs[source], raw, stride, count);
+        captureToFmQueues(source, played, playedStride, count);
         if (source == SOURCE_MIC) {
-            micPeak = peakMagnitude(src, stride, count);
+            micPeak = peakMagnitude(raw, stride, count);
         } else {
             /* Peak hold, about 100 ms at the DSP's 10 ms frames: a single
              * frame says nothing about a signal that is mostly silence */
-            uint16_t p = peakMagnitude(src, stride, count);
+            uint16_t p = peakMagnitude(raw, stride, count);
             uint16_t held = rxPeak - (rxPeak >> 4);
             rxPeak = (p > held) ? p : held;
         }
