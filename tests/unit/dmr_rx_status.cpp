@@ -447,6 +447,9 @@ TEST_CASE("A DMR repeater call publishes CC, timeslot, call and quality",
     int voiceSlots = 0, idleSlots = 0;
 
     for (const Obs &o : st) {
+        /* Which 30 ms of the transmitted stream this block was, on a failure */
+        INFO("block " << o.block << ", " << g.s.whatOfSlot[o.block] << " slot "
+                      << g.s.tsOfSlot[o.block]);
         REQUIRE(o.locked);
 
         /* Something is on the air, and the colour code does not dance */
@@ -625,8 +628,6 @@ TEST_CASE("A DMR link control that fails its checksum announces no call",
 TEST_CASE("A miscorrected colour code does not overwrite the one on the air",
           "[dmr][rx]")
 {
-    int highest = -1;
-
     for (int corrupted = 1; corrupted >= 0; corrupted--) {
         resetReceiver();
 
@@ -652,9 +653,7 @@ TEST_CASE("A miscorrected colour code does not overwrite the one on the air",
             REQUIRE(top == kCc);          /* the dancing colour code */
         else
             REQUIRE(top == kCc + 4);      /* what the air said, cleanly */
-        highest = top;
     }
-    REQUIRE(highest == kCc + 4);
 }
 
 /*
