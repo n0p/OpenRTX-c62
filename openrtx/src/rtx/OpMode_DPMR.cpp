@@ -19,6 +19,7 @@
 #include "protocols/DPMR/DpmrPhy.h"
 #include "protocols/DPMR/DpmrPort.h"
 #include "protocols/DPMR/DpmrSpeech.h"
+#include "protocols/DPMR/DpmrStatus.h"
 #include "rtx/OpMode_DPMR.hpp"
 #include "core/utils.h"
 
@@ -74,6 +75,14 @@ void OpMode_DPMR::frameTrampoline(const struct dpmrFrame *frame, void *user)
 
 void OpMode_DPMR::onFrame(const struct dpmrFrame *frame)
 {
+    /*
+     * Everything the burst gives is published before anything else reads it:
+     * the UI's state block (ui_mode_state.c) and the operator's screen are
+     * written from DpmrStatus.c, not from the accessors this class keeps for
+     * the diagnostics (docs/RX_DPMR.md, "What the screen can show").
+     */
+    dpmrStatus_frame(frame);
+
     if (frame->cchOk)
         framesOk++;
 
@@ -180,6 +189,7 @@ void OpMode_DPMR::reset()
     lastWait = 0;
     dpmrSld_reset(&sldMsg);
     dpmrPhy_reset();
+    dpmrStatus_reset();
 }
 
 void OpMode_DPMR::enable()
@@ -200,6 +210,7 @@ void OpMode_DPMR::disable()
     dpmrSpeech_stop();
     radio_disableRtx();
     platform_ledOff(GREEN);
+    dpmrStatus_clear();
 }
 
 void OpMode_DPMR::startSampling()
@@ -218,6 +229,8 @@ void OpMode_DPMR::stopSampling()
         audioPath_release(basebandPath);
     basebandId = -1;
     basebandPath = -1;
+    /* No samples, no frame grid: the state block must not claim "RX" */
+    dpmrStatus_receiving(false);
 }
 
 bool OpMode_DPMR::rxSquelchOpen()
@@ -530,6 +543,9 @@ void OpMode_DPMR::update(rtxStatus_t *const rtx, const bool newCfg)
     bool synced = dpmrPhy_synced();
 
     dpmrPhy_push(block.data, HALF_SAMPLES, frameTrampoline, this);
+
+    /* What the main screen's "RX" marker follows: the grid, not the frames */
+    dpmrStatus_receiving(dpmrPhy_synced());
 
     /* A transmission that ended: the grid timed out, count the call as lost */
     if (synced && !dpmrPhy_synced()) {

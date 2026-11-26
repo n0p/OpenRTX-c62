@@ -89,6 +89,10 @@ openrtx_src = ['openrtx/src/core/state.c',
                # testable without the radio.
                'openrtx/src/protocols/NXDN/NxdnStatus.c',
                'openrtx/src/protocols/NXDN/NxdnFec.c',
+               # The dPMR status block, for the same reason: the mode's screen
+               # reads it and it is portable C. It has no dependency beyond
+               # DpmrDefs.h, so the UI tests get it without the demodulator.
+               'openrtx/src/protocols/DPMR/DpmrStatus.c',
                # The P25 and D-STAR status blocks, for the same reason: the mode
                # screens read them and they are portable C. See docs/UI.md.
                'openrtx/src/protocols/P25/P25Status.c',

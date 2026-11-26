@@ -449,6 +449,7 @@ if(CONFIG_C62_DPMR_RX)
     ${OPENRTX_ROOT}/openrtx/src/protocols/DPMR/DpmrData.c
     ${OPENRTX_ROOT}/openrtx/src/protocols/DPMR/DpmrPhy.c
     ${OPENRTX_ROOT}/openrtx/src/protocols/DPMR/DpmrSpeech.c
+    ${OPENRTX_ROOT}/openrtx/src/protocols/DPMR/DpmrStatus.c
     ${OPENRTX_ROOT}/openrtx/src/protocols/DPMR/DpmrTx.c
     ${OPENRTX_ROOT}/openrtx/src/protocols/Fsk4Tx.c
     ${OPENRTX_ROOT}/openrtx/src/rtx/OpMode_DPMR.cpp)
