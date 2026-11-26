@@ -131,30 +131,20 @@ microaltavoz: el pad es GPIO, el nivel se lee sin regla y no hay nada que
 interpretar. `Always` es la elección para un banco de pruebas o un CPS
 permanente, donde el pulsador del accesorio no se usa.
 
-### Lo que la placa dice de `Auto`, y no es lo que decía este documento
+### Lo que se sabe de `Auto`, y lo que falta por medir
 
-Medido con la imagen `final-20261126i`, puerto en `Auto`, un cliente conectado
-pidiendo `DBG_INFO` cada 250 ms y el operador pulsando el botón dos o tres veces
-por ventana, tres veces seguidas:
+En el banco, con el puerto en `Auto`, el pulsador **no clavea**; en `Never` sí,
+con la misma radio y el mismo cable. Eso es lo que sostiene el valor de fábrica
+en `Never` y lo que no ha cambiado con el arreglo del registro de estado del
+UART: sigue sin estar medido si el receptor entrega algún `FE`/`BI` durante la
+pulsación, porque la captura que lo iba a decidir se hizo sin que nadie pulsara
+y no vale como dato.
 
-- `portPtt` no se movió ni una vez;
-- `portLost` se quedó en los 6 bytes del arranque, así que **no llegó ni un
-  carácter** con `FE`/`BI`: el receptor no entrega nada mientras la línea está
-  sujeta a cero;
-- el log del firmware no emitió ni una línea `port: pad ...`, o sea que ninguno
-  de los tres testigos (nivel del pad, break, caracteres retenidos) cambió.
-
-La hipótesis de la sección 1 —que un pulsador sostenido produce caracteres con
-`FE`/`BI` durante toda la pulsación— **no se sostiene en esta placa**: el
-receptor necesita un flanco de subida para volver a entramar y, con la línea
-clavada a cero, se queda esperando. El `DATAIN` del GPIO, mientras el pad es del
-UART, tampoco sirve (medido antes: lee bajo siempre). En la práctica `Auto`
-ofrece el puerto serie y **no** ve el pulsador, igual que `Always`.
-
-Por eso `Never` es el valor de fábrica. Un `Auto` que funcione de verdad pide
-otra fuente de nivel: muestrear el pad como GPIO cambiando la función durante
-unos microsegundos, o separar el PTT del RX en el cableado. Las dos cosas están
-fuera de lo que este ajuste puede hacer sin banco encima.
+Medirlo cuesta una sesión de banco: cliente pidiendo `DBG_INFO` cada 250 ms,
+log del firmware suscrito, y el operador pulsando tres veces. Con eso se decide
+si `Auto` puede funcionar leyendo el receptor, o si hace falta otra fuente de
+nivel (muestrear el pad como GPIO durante unos microsegundos, o separar el PTT
+del RX en el cableado).
 
 ## 3. Qué cuesta `Auto`: las tramas que llegan durante la pulsación
 
