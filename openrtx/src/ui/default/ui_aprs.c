@@ -47,7 +47,32 @@ static struct
     char    editText[APRS_MSG_TEXT_MAX + 1];
     uint8_t editPos;
     uint8_t editChar;
+
+    /*
+     * One line of feedback for an action whose result is not a screen: asking
+     * for a beacon transmits nothing for a moment, so without this the key that
+     * the bar documents as BEACON does nothing the operator can see. Drawn for
+     * a couple of seconds over the top of the list, like the channel list does
+     * with its own message (ui_channels.c).
+     */
+    char    note[24];
+    uint32_t noteUntil;
 } uia;
+
+uint8_t ui_aprs_selectedStation(void)
+{
+    return uia.station;
+}
+
+uint8_t ui_aprs_selectedMessage(void)
+{
+    return uia.message;
+}
+
+uint8_t ui_aprs_editLength(void)
+{
+    return (uint8_t)strlen(uia.editText);
+}
 
 bool ui_aprs_isScreen(uint8_t screen)
 {
@@ -261,6 +286,11 @@ static void drawMessageList(void)
         gfx_print((point_t){SCR_W / 2, 46}, FONT_SIZE_8PT, TEXT_ALIGN_CENTER,
                   color_white, "No messages");
 
+    /* The beacon request is queued for the transmitter: say so */
+    if ((uia.note[0] != '\0') && ((int32_t)(uia.noteUntil - (uint32_t)getTick()) > 0))
+        gfx_print((point_t){SCR_W / 2, (int16_t)(SCR_H - 24)}, FONT_SIZE_5PT,
+                  TEXT_ALIGN_CENTER, yellow_fab413, "%s", uia.note);
+
     (void)idx;
     hints("OPEN", "REPLY", "BEACON", "EXIT");
 }
@@ -292,6 +322,7 @@ static void drawMessageView(void)
     gfx_print((point_t){2, SCR_H - 24}, FONT_SIZE_5PT, TEXT_ALIGN_LEFT,
               color_white, "%s", e->acked ? "acked" : "no ack sent");
 
+    /* P1 is the next message, bound to KEY_F1 in the dispatch below */
     hints("REPLY", "NEXT", NULL, "BACK");
 }
 
@@ -376,7 +407,18 @@ static void drawConfig(void)
                   configReadOnly(i) ? " (fixed)" : "");
     }
 
-    hints("NEXT", "+/-", "SAVE", "EXIT");
+    /*
+     * The bar says what the dispatch does (ui_aprs_fsm, APRS_CFG): green writes
+     * the settings to the flash, P1/P2 change the value of the selected row and
+     * UP/DOWN walk the rows. It used to read "NEXT / +/- / SAVE" and bind
+     * nothing that matched.
+     */
+    if ((uia.note[0] != '\0')
+        && ((int32_t)(uia.noteUntil - (uint32_t)getTick()) > 0))
+        gfx_print((point_t){ SCR_W / 2, (int16_t)(SCR_H - 24) }, FONT_SIZE_5PT,
+                  TEXT_ALIGN_CENTER, yellow_fab413, "%s", uia.note);
+
+    hints("SAVE", "-", "+", "EXIT");
 }
 
 void ui_aprs_draw(uint8_t screen)
@@ -583,6 +625,9 @@ bool ui_aprs_fsm(kbd_msg_t msg, bool *sync_rtx)
             if (msg.keys & KEY_F2)             /* send a beacon now */
             {
                 aprs_requestBeacon((uint32_t)getTick());
+                snprintf(uia.note, sizeof(uia.note), "%s",
+                         "BEACON QUEUED");
+                uia.noteUntil = (uint32_t)getTick() + 2000u;
                 return true;
             }
             if (msg.keys & KEY_ESC)
@@ -600,6 +645,25 @@ bool ui_aprs_fsm(kbd_msg_t msg, bool *sync_rtx)
             {
                 if (m->in[uia.message].inUse)
                     startReply(m->in[uia.message].from);
+                return true;
+            }
+            /*
+             * P1 is "NEXT" on this screen's bar (drawMessageView): the next
+             * message of the inbox, wrapping, so a whole inbox can be read
+             * without going back to the list between two messages. It used to
+             * be on the bar and bound to nothing.
+             */
+            if (msg.keys & KEY_F1)
+            {
+                for (uint8_t step = 1; step < APRS_INBOX_MAX; step++)
+                {
+                    uint8_t i = (uint8_t)((uia.message + step) % APRS_INBOX_MAX);
+                    if (m->in[i].inUse)
+                    {
+                        uia.message = i;
+                        break;
+                    }
+                }
                 return true;
             }
             if (msg.keys & KEY_ESC)
@@ -692,7 +756,10 @@ bool ui_aprs_fsm(kbd_msg_t msg, bool *sync_rtx)
             if (msg.keys & KEY_F1) { configAdjust(-1); return true; }
             if (msg.keys & KEY_ENTER)          /* save to NVM */
             {
-                nvm_writeSettings(&state.settings);
+                const int rc = nvm_writeSettings(&state.settings);
+                snprintf(uia.note, sizeof(uia.note), "%s",
+                         (rc == 0) ? "SAVED" : "WRITE FAILED");
+                uia.noteUntil = (uint32_t)getTick() + 2000u;
                 return true;
             }
             if (msg.keys & KEY_ESC)

@@ -19,7 +19,9 @@
  *
  *  - gfx_printBufferClipped(), in core/graphics.c, for the text;
  *  - ui_list_header() and ui_row_selection(), in ui/ui_layout.c, for the title
- *    band and the inverted row, which is the selection of every list screen.
+ *    band and the inverted row, which is the selection of every list screen;
+ *  - gfx_capture_caret(), called by the screens that edit inside a field, for
+ *    the caret the operator moves with P1/P2 on a keypad with no arrows.
  *
  * The recorder is not part of the firmware build: the call sites are compiled
  * only when UI_CAPTURE is defined, which the simulator target does and no other
@@ -66,6 +68,10 @@ typedef struct {
     bool header;      /**< The screen drew a header band    */
     char title[24];   /**< Header title, "" when there is none */
     char right[16];   /**< Header right-hand status, or ""  */
+    bool caret;       /**< The screen drew an edit caret    */
+    int16_t caret_x;  /**< Left of the caret rectangle      */
+    int16_t caret_y;  /**< Top of the caret rectangle       */
+    uint16_t caret_w; /**< Width of the caret rectangle     */
     bool selection;   /**< The screen drew a row selection  */
     int16_t sel_top;  /**< Top of the selection rectangle   */
     uint8_t sel_h;    /**< Height of the selection          */
@@ -94,6 +100,16 @@ void gfx_capture_header(const char *title, const char *right);
 
 /** Record the inverted (or hollow) selection rectangle of a list row. */
 void gfx_capture_selection(int16_t top, uint8_t row_h, bool filled);
+
+/**
+ * Record the caret of a screen that edits inside a field (the channel editor,
+ * the contact book, the APRS composer).
+ *
+ * The caret is a filled rectangle, not a string: without this the dump cannot
+ * tell "the cursor is on character 3" from "the cursor is on character 1", and
+ * a test of the keys that move it would call them dead (tests/unit/ui_keys.cpp).
+ */
+void gfx_capture_caret(int16_t x, int16_t y, uint16_t w);
 
 /**
  * Copy the last complete frame.

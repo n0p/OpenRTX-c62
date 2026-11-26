@@ -55,6 +55,19 @@ void ui_aprs_enter(void);
  */
 void ui_aprs_config(void);
 
+/*
+ * The screen-local state, for the walks that press keys on these screens.
+ *
+ * The selection and what has been typed live in this file, and a walk that
+ * cannot see them cannot tell "the editor with one character" from "the editor
+ * with none": it would test SEND with an empty draft for ever and call it a
+ * dead key (tests/unit/ui_keys.cpp). Same reason, same shape as
+ * ui_menu_selected() and ui_tools_selected().
+ */
+uint8_t ui_aprs_selectedStation(void);
+uint8_t ui_aprs_selectedMessage(void);
+uint8_t ui_aprs_editLength(void);
+
 #ifdef __cplusplus
 }
 #endif

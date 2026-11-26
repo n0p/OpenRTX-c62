@@ -21,6 +21,12 @@ static const ui_hints_t hints_vfo_in  = { "Set", NULL, NULL, "Cancel" };
 static const ui_hints_t hints_channel = { "Load", NULL, NULL, "Back" };
 static const ui_hints_t hints_reset   = { "Reset", NULL, NULL, "Back" };
 /*
+ * The date entry: green saves the date and the time once all six digits are
+ * in, so the bar says what the key does instead of borrowing the "Edit" of a
+ * settings page (where green enters a value instead of committing it).
+ */
+static const ui_hints_t hints_dateset = { "Save", NULL, NULL, "Back" };
+/*
  * The restore asks before it writes: green is yes and red is no, the same pair
  * the channel list uses to delete a channel (ui_channels.c).
  */
@@ -80,9 +86,11 @@ const ui_hints_t *ui_hints_for_screen(uint8_t screen)
         case SETTINGS_ACCESSIBILITY:
 #ifdef CONFIG_RTC
         case SETTINGS_TIMEDATE:
-        case SETTINGS_TIMEDATE_SET:
-#endif
             return &hints_edit;
+
+        case SETTINGS_TIMEDATE_SET:
+            return &hints_dateset;
+#endif
 
         /*
          * A mode's own page (Settings → NXDN, Settings → AM): its rows are the

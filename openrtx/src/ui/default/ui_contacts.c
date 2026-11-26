@@ -17,6 +17,9 @@
 #include "ui/ui_default.h"
 #include "ui/ui_contacts.h"
 #include "ui/ui_hints.h"
+#ifdef UI_CAPTURE
+#include "core/gfx_capture.h"
+#endif
 #include "ui/ui_layout.h"
 
 /*
@@ -466,9 +469,12 @@ static void drawEditor(void)
                                                           prefix));
             uint16_t x1 = (uint16_t)(48 + gfx_getTextWidth(FONT_SIZE_6PT,
                                                            value));
+            uint16_t caretW = (uint16_t)((x1 > x0 + 6) ? 6 : (x1 - x0));
             gfx_drawRect((point_t){ (int16_t)x0, (int16_t)(baseline + 3) },
-                         (uint16_t)((x1 > x0 + 6) ? 6 : (x1 - x0)), 1,
-                         yellow_fab413, true);
+                         caretW, 1, yellow_fab413, true);
+#ifdef UI_CAPTURE
+            gfx_capture_caret((int16_t)x0, (int16_t)(baseline + 3), caretW);
+#endif
         }
     }
 

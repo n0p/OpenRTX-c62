@@ -19,11 +19,16 @@
 #include <string.h>
 
 #define PKT_ROWS 8
+#define SCR_H    CONFIG_SCREEN_HEIGHT
 
 static struct
 {
     uint8_t field;      /**< selected row of the configuration page */
     uint8_t back;       /**< screen red returns to                 */
+    /* What green did, for a couple of seconds: a test frame goes to the audio
+       path and nothing on this screen would otherwise change (ui_packet.c) */
+    char     note[20];
+    uint32_t noteUntil;
 } uip;
 
 static const char *modemLabel(pkt_modem_t m)
@@ -118,7 +123,15 @@ static void drawConfig(void)
                     "%s", value);
     }
 
-    hints("EDIT", "-", "+", "BACK");
+    /* Green sends a test frame, it does not edit: the bar says so, and the
+       note says it went out */
+    if ((uip.note[0] != '\0')
+        && ((int32_t)(uip.noteUntil - (uint32_t)getTick()) > 0))
+        gfx_print((point_t){ CONFIG_SCREEN_WIDTH / 2, SCR_H - 24 },
+                  FONT_SIZE_5PT, TEXT_ALIGN_CENTER, yellow_fab413, "%s",
+                  uip.note);
+
+    hints("TEST", "-", "+", "BACK");
 }
 
 static void drawStatus(void)
@@ -273,10 +286,15 @@ static void sendTest(void)
 
     uint8_t frame[HDLC_MAX_LEN];
     size_t  len = ax25_build_ui(frame, sizeof(frame), &f);
-    if (len == 0)
+    if (len == 0) {
+        snprintf(uip.note, sizeof(uip.note), "%s", "NO FRAME");
+        uip.noteUntil = (uint32_t)getTick() + 2000u;
         return;
+    }
 
     packet_service_sendNow(frame, len - 2u);
+    snprintf(uip.note, sizeof(uip.note), "%s", "TEST FRAME SENT");
+    uip.noteUntil = (uint32_t)getTick() + 2000u;
 }
 
 bool ui_packet_fsm(kbd_msg_t msg, bool *sync_rtx)
