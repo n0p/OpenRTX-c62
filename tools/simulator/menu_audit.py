@@ -285,7 +285,8 @@ class Audit:
         d = self.d()
         rows = self.list_rows(d)
         screen = d["screen"]["name"]
-        result = {"screen": screen, "title": page_label, "rows": []}
+        result = {"screen": screen, "title": page_label, "rows": [],
+                  "probed": "rows"}
 
         for i, row in enumerate(rows):
             # Every row starts from the page, cursor on it, nothing open: a
@@ -394,7 +395,7 @@ class Audit:
         q = self.open_qm()
         rows = list(q["rows"])
         screen = {"screen": "POPUP", "title": "quick menu, mode %s" % mode,
-                  "rows": []}
+                  "rows": [], "probed": "rows"}
         for i, row in enumerate(rows):
             screen["rows"].append(self.probe_qm_row(mode, i, row["label"]))
         # values as the popup opens, before anything is touched
@@ -425,7 +426,7 @@ class Audit:
         q = d["quickmenu"]
         names = [r["label"] for r in q["rows"]]
         screen = {"screen": "MODE_PAGE", "title": "%s (Settings)" % label,
-                  "rows": []}
+                  "rows": [], "probed": "rows"}
         for i, name in enumerate(names):
             # Fresh page per row: probing LOCK turns the keypad off, and the
             # next row would be read through a deaf one.
@@ -493,7 +494,8 @@ class Audit:
         self.key_long("P1")
         d = self.d()
         rows = list(d["tools"]["rows"])
-        screen = {"screen": "TOOLS_MENU", "title": "tools (P1 long)", "rows": []}
+        screen = {"screen": "TOOLS_MENU", "title": "tools (P1 long)", "rows": [],
+                  "probed": "rows"}
         for i, row in enumerate(rows):
             self.tools_to(row["label"])
             item = {"label": row["label"], "value": row["value"]}
@@ -516,8 +518,14 @@ class Audit:
             ch = []
             if a["screen"]["name"] != b["screen"]["name"]:
                 ch.append("opens %s" % a["screen"]["name"])
-            if a["tools"].get("modes") != b["tools"].get("modes"):
+            if bool(a["tools"].get("modes")) != bool(b["tools"].get("modes")):
                 ch.append("mode submenu")
+            if a["tools"].get("open") and b["tools"].get("open"):
+                ra = [r["value"] for r in a["tools"]["rows"]]
+                rb = [r["value"] for r in b["tools"]["rows"]]
+                if ra != rb:
+                    ch.append("%s -> %s" % (rb[b["tools"]["selected"]],
+                                            ra[a["tools"]["selected"]]))
             if a["settings"] != b["settings"]:
                 ch.append("settings")
             if a["modules"] != b["modules"]:
@@ -532,7 +540,8 @@ class Audit:
         self.tools_to("Mode")
         self.key("GREEN")
         d = self.d()
-        sub = {"screen": "TOOLS_MODES", "title": "tools > Mode", "rows": []}
+        sub = {"screen": "TOOLS_MODES", "title": "tools > Mode", "rows": [],
+               "probed": "rows"}
         for row in d["tools"]["rows"]:
             item = {"label": row["label"], "value": row["value"]}
             self.tools_to(row["label"])
@@ -561,9 +570,12 @@ class Audit:
         """Home -> Menu -> the row with this label -> green."""
         self.home()
         self.open_menu()
-        for _ in range(12):
+        for _ in range(14):
             lab = self.page_cursor_label()
-            if lab == label:
+            # "Messages !2" carries the unread badge (ui_menu.c), so the row
+            # is matched by its name and not by the whole string.
+            if lab == label or (lab is not None and
+                                lab.startswith(label + " ")):
                 self.key("GREEN")
                 return
             self.key("DOWN")
@@ -615,7 +627,8 @@ class Audit:
             if (a["radio"]["channel_index"], a["radio"]["name"]) != \
                     (b["radio"]["channel_index"], b["radio"]["name"]):
                 ch.append("tunes %s" % a["radio"]["name"])
-            out[key.lower()] = ch or ["no change"]
+            out[{"GREEN": "enter", "P1": "p1", "P2": "p2"}[key]] = \
+                ch or ["no change"]
         self.home()
         self.screens.append(out)
 
@@ -703,7 +716,8 @@ class Audit:
         self.open_menu()
         d = self.d()
         rows = self.list_rows(d)
-        screen = {"screen": "MENU_TOP", "title": "top menu", "rows": []}
+        screen = {"screen": "MENU_TOP", "title": "top menu", "rows": [],
+                  "probed": "rows"}
         for i, row in enumerate(rows):
             self.open_menu()
             self.menu_to(i)
@@ -745,6 +759,10 @@ class Audit:
         self.dead = []
         self.status = []
         for s in self.screens:
+            if s.get("probed") != "rows":
+                for r in s["rows"]:
+                    r["actuated"] = True     # measured at screen level
+                continue
             for r in s["rows"]:
                 did = []
                 for k in ("enter", "p1", "p2", "down", "up"):
@@ -763,9 +781,18 @@ class Audit:
                 if not did:
                     self.dead.append("%s / %s (%s)" % (s["title"], r["label"],
                                                       r.get("value", "")))
+        # The accessory port is one row of the whole UI: the tools menu's
+        # (docs/ACCESSORY.md). Counted over every screen this walk opened.
+        ports = [(s["title"], r["label"]) for s in self.screens for r in s["rows"]
+                 if r["label"] == "Puerto"]
+        walked_tools = any(s["screen"] == "TOOLS_MENU" for s in self.screens)
+        if walked_tools and (len(ports) != 1):
+            self.findings.append("the accessory port row appears %d times: %s"
+                                 % (len(ports), ports))
+
         return {"when": now_iso(), "screens": self.screens,
                 "dead": self.dead, "status": self.status,
-                "findings": self.findings}
+                "port_rows": ports, "findings": self.findings}
 
     def save(self, out):
         data = self.report()
@@ -788,6 +815,22 @@ def to_markdown(data):
         out.append("")
         out.append("Screen `%s`." % s["screen"])
         out.append("")
+        if s.get("hints"):
+            out.append("Hint bar: `%s`." % s["hints"])
+            out.append("")
+        if s.get("probed") != "rows":
+            for k, name in (("enter", "ENTER"), ("p1", "P1"), ("p2", "P2")):
+                if k in s:
+                    v = [x for x in s[k] if x != "no change"]
+                    out.append("- **%s on the selected row:** %s"
+                               % (name, ", ".join(v) if v else "nothing"))
+            out.append("")
+            out.append("| Row | Value |")
+            out.append("|---|---|")
+            for r in s["rows"]:
+                out.append("| `%s` | %s |" % (r["label"], r.get("value", "")))
+            out.append("")
+            continue
         out.append("| Row | Kind | Value | ENTER | P1 | P2 |")
         out.append("|---|---|---|---|---|---|")
         for r in s["rows"]:
@@ -859,6 +902,7 @@ def main():
              len(data["dead"])))
     for d in data["dead"]:
         print("DEAD", d)
+    print("port rows:", data["port_rows"])
     for f in data["findings"]:
         print("NOTE", f)
 

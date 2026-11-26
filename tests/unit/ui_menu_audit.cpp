@@ -223,6 +223,16 @@ int menuRowOf(const char *name)
     return -1;
 }
 
+/** Index of a row of the Settings list by name. */
+int settingsRowOf(const char *name)
+{
+    for (uint8_t i = 0; i < settings_num; i++)
+        if (strcmp(settings_items[i], name) == 0)
+            return i;
+
+    return -1;
+}
+
 /** Green on a menu row, selected by index. */
 void openMenuRow(uint8_t index)
 {
@@ -1514,4 +1524,280 @@ TEST_CASE("Two laps over the modes leave every menu answering", "[ui][audit][mod
             settle();
         }
     }
+}
+
+/* ================================================ no dead row remains ===== */
+
+/*
+ * Every row a Settings page shows is a row the operator can change.
+ *
+ * A mode's page is built from the mode's quick menu rows, and the popup's
+ * read-only rows (CC, TS, SYNC, the callsigns a D-STAR header carried, the
+ * WFM meter) are the receiver's state, not settings: in a list of things to
+ * change they were rows whose two keys beeped and did nothing. The page drops
+ * them by kind (qm_page_open()), and this case is what keeps a future QM_INFO
+ * row from coming back through the popup's table.
+ */
+TEST_CASE("A mode's Settings page shows no read-only row", "[ui][audit][rows]")
+{
+    for (uint8_t i = 0; i < ui_mode_count(); i++) {
+        const ui_mode_t *m = ui_mode_at(i);
+
+        if (!ui_mode_hasPage(m->mode))
+            continue;
+
+        INFO("mode " << m->title);
+
+        uint8_t editable = 0;
+        for (uint8_t r = 0; r < m->count; r++) {
+            if (m->items[r].type != QM_INFO)
+                editable++;
+        }
+
+        qm_page_open(m->mode);
+        REQUIRE(qm_page_isOpen());
+        REQUIRE(qm_page_state.qm != NULL);
+        INFO("page rows " << (int)qm_page_state.qm->count
+             << ", editable rows of the table " << (int)editable);
+        REQUIRE(qm_page_state.qm->count == editable);
+
+        for (uint8_t r = 0; r < qm_page_state.qm->count; r++) {
+            INFO("page row " << qm_page_state.qm->items[r].label);
+            REQUIRE(qm_page_state.qm->items[r].type != QM_INFO);
+        }
+
+        /* Every row of the page can be reached by the cursor */
+        for (uint8_t n = 0; n < qm_page_state.qm->count; n++) {
+            qm_page_move(+1);
+            REQUIRE(qm_page_state.selected < qm_page_state.qm->count);
+        }
+        REQUIRE(qm_page_state.selected == 0);
+
+        qm_page_close();
+    }
+}
+
+/*
+ * The accessory port belongs to exactly one screen.
+ *
+ * It used to be a row of every mode's quick menu *and* a row of Settings ->
+ * Radio, which meant an operator could set it in one place and read the other
+ * say something else. It is now one row of the tools menu (P1 held down), the
+ * one menu every main screen opens. This case walks the tables the UI is built
+ * from -- the mode registry (popup and page), the fixed Settings pages and the
+ * tools menu -- and fails if a second row ever takes the setting back.
+ */
+TEST_CASE("The accessory port is one row, in the tools menu",
+          "[ui][audit][accessory]")
+{
+    /* ---- the tools menu: exactly one Puerto, and it is the last row ---- */
+    resetUi(OPMODE_FM);
+    REQUIRE(claimOf(KEY_F1, true) == UI_CLAIM_TOOLS_OPEN);
+    REQUIRE(ui_tools_isOpen());
+
+    int ports = 0;
+    int portRow = -1;
+    for (uint8_t r = 0; r < ui_tools_rowCount(); r++) {
+        const char *label = ui_tools_rowLabel(r);
+
+        INFO("tools row " << (int)r << ": " << (label ? label : "(null)"));
+        REQUIRE(label != NULL);
+        if (strcmp(label, "Puerto") == 0) {
+            ports++;
+            portRow = (int)r;
+        }
+    }
+    REQUIRE(ports == 1);
+    REQUIRE(portRow == (int)ui_tools_rowCount() - 1);
+
+    /* Green on it flips the setting and stays in the menu */
+    while (ui_tools_selected() != (uint8_t)portRow)
+        pressKey(KEY_DOWN);
+    const uint8_t before = state.settings.pc_port;
+    pressKey(KEY_ENTER);
+    REQUIRE(state.settings.pc_port != before);
+    REQUIRE(ui_tools_isOpen());
+    pressKey(KEY_ENTER);
+    REQUIRE(state.settings.pc_port == before);
+    pressKey(KEY_ESC);
+    REQUIRE(state.ui_screen == MAIN_VFO);
+
+    /* ---- no mode's popup, and no mode's page, has a port row ---- */
+    for (uint8_t i = 0; i < ui_mode_count(); i++) {
+        const ui_mode_t *m = ui_mode_at(i);
+
+        for (uint8_t r = 0; r < m->count; r++) {
+            const qm_item_t &row = m->items[r];
+
+            INFO("mode " << m->title << " row " << row.label);
+            REQUIRE(strstr(row.label, "PUERTO") == NULL);
+            REQUIRE(strcmp(row.label, "PORT") != 0);
+            REQUIRE(strcmp(row.label, "PC PORT") != 0);
+
+            /*
+             * And no row of any mode can change the port behind the tools
+             * menu's back, whatever it is called: the setter is what the
+             * firmware obeys, not the label.
+             */
+            if ((row.set != NULL) && (row.type != QM_INFO) &&
+                (row.type != QM_GOTO) && (row.type != QM_ACTION)) {
+                const uint8_t port = state.settings.pc_port;
+
+                row.set(row.min);
+                REQUIRE(state.settings.pc_port == port);
+                row.set(row.max);
+                REQUIRE(state.settings.pc_port == port);
+                state.settings.pc_port = port;
+            }
+        }
+    }
+
+    /* ---- and none of the fixed Settings pages has one ---- */
+    struct ItemList
+    {
+        const char *page;
+        const char *const *items;
+        uint8_t count;
+    };
+
+    const ItemList pages[] = {
+        { "Display",       display_items,                display_num },
+        { "Radio",         settings_radio_items,         settings_radio_num },
+        { "Audio",         settings_audio_items,         settings_audio_num },
+        { "Identity",      settings_identity_items,      settings_identity_num },
+        { "Accessibility", settings_accessibility_items, settings_accessibility_num },
+        { "FM",            settings_fm_items,            settings_fm_num },
+#ifdef UI_MODE_M17
+        { "M17",           settings_m17_items,           settings_m17_num },
+#endif
+    };
+
+    for (const ItemList &p : pages) {
+        for (uint8_t i = 0; i < p.count; i++) {
+            INFO(p.page << " row " << p.items[i]);
+            REQUIRE(strstr(p.items[i], "Puerto") == NULL);
+            REQUIRE(strstr(p.items[i], "Port") == NULL);
+        }
+    }
+
+    /*
+     * The Radio page is the one the row could come back to by accident, so it
+     * is also walked on the screen: five rows, none of them the port.
+     */
+    resetUi(OPMODE_FM);
+    openMainMenu();
+    openMenuRow((uint8_t)menuRowOf("Settings"));
+    openMenuRow((uint8_t)settingsRowOf("Radio"));
+    REQUIRE(state.ui_screen == SETTINGS_RADIO);
+    REQUIRE(settings_radio_num == 5);
+}
+
+/*
+ * In an edit, P1 and P2 are the value keys, as they are in the popup.
+ *
+ * The Settings pages were written for a keypad with LEFT/RIGHT and only ever
+ * answered UP/DOWN once the arrows were gone, so the same row read one way in
+ * the popup (P1/P2) and another in Settings (UP/DOWN). This walks every page
+ * that holds a value, enters the edit and requires one of the two keys to move
+ * it. The rows that are text or number entry (Offset, Callsign, DMR ID, Meta
+ * Txt) are typed, not stepped, and are the only ones skipped.
+ */
+TEST_CASE("P1 and P2 change the value in a Settings edit", "[ui][audit][keys]")
+{
+    struct Page
+    {
+        const char *menu;              /* row of Settings               */
+        const char *const *items;      /* rows of the page, in order    */
+        uint8_t count;
+    };
+
+    const Page pages[] = {
+        { "Display",       display_items,                display_num },
+        { "Radio",         settings_radio_items,         settings_radio_num },
+        { "Audio",         settings_audio_items,         settings_audio_num },
+        { "Accessibility", settings_accessibility_items, settings_accessibility_num },
+        { "FM",            settings_fm_items,            settings_fm_num },
+#ifdef UI_MODE_M17
+        { "M17",           settings_m17_items,           settings_m17_num },
+#endif
+#ifdef CONFIG_TETRA_AFC
+        { "TETRA",         settings_tetra_items,         settings_tetra_num },
+#endif
+    };
+
+    const char *typed[] = { "Offset", "Callsign", "DMR ID", "Meta Txt" };
+    auto isTyped = [&](const char *label) {
+        for (const char *t : typed)
+            if (strcmp(label, t) == 0)
+                return true;
+        return false;
+    };
+
+    for (const Page &p : pages) {
+        for (uint8_t row = 0; row < p.count; row++) {
+            resetUi(OPMODE_FM);
+            openMainMenu();
+            openMenuRow((uint8_t)menuRowOf("Settings"));
+            openMenuRow((uint8_t)settingsRowOf(p.menu));
+            REQUIRE(state.ui_screen != MENU_SETTINGS);
+
+            ui_menu_select(row);
+            pressKey(KEY_ENTER);        /* the edit */
+
+            const char *label = p.items[row];
+            INFO(p.menu << " row " << (int)row << ": "
+                 << (label ? label : "?"));
+            REQUIRE(label != NULL);
+            if (isTyped(label))
+                continue;
+
+            /*
+             * Direction is the sign of the offset: at zero offset there is no
+             * sign to flip and the key is right to change nothing. Give it an
+             * offset first, the way an operator would.
+             */
+            if (strcmp(label, "Direction") == 0)
+                state.channel.tx_frequency = state.channel.rx_frequency
+                                           + 600000;
+
+            auto changed = [&](const settings_t &s0, const channel_t &c0,
+                               int step0) {
+                return (memcmp(&s0, &state.settings, sizeof(settings_t)) != 0)
+                    || (memcmp(&c0, &state.channel, sizeof(channel_t)) != 0)
+                    || (step0 != state.step_index);
+            };
+
+            const settings_t beforeSettings = state.settings;
+            const channel_t  beforeChannel  = state.channel;
+            const int        beforeStep     = state.step_index;
+
+            pressKey(KEY_F2);           /* P2: plus  */
+            const bool plus = changed(beforeSettings, beforeChannel, beforeStep);
+            const settings_t afterPlusSettings = state.settings;
+            const channel_t  afterPlusChannel  = state.channel;
+            const int        afterPlusStep     = state.step_index;
+
+            pressKey(KEY_F1);           /* P1: minus */
+            const bool minus = changed(afterPlusSettings, afterPlusChannel,
+                                       afterPlusStep);
+
+            INFO(p.menu << " row " << label << ": P2 " << plus
+                 << ", P1 " << minus);
+            /* One of the two has to move the row (a row at a limit only has
+               the other direction), and if plus worked, minus has to bring it
+               back: a row that only answers one of the keys is the defect this
+               case exists for (the tuning step answered P2 and not P1). */
+            REQUIRE((plus || minus));
+            if (plus)
+                REQUIRE(minus);
+
+            /* Leave the edit, so the next case starts on a screen that
+               answers P2 with the popup again */
+            if (ui_edit_mode())
+                pressKey(KEY_ESC);
+        }
+    }
+
+    ui_open_screen(MAIN_VFO, 0);   /* clears a stale edit_mode */
+    resetUi();
 }

@@ -252,9 +252,15 @@ alineado a la derecha, y la pista de teclas en la última fila del panel:
 | `VFO scan` | `UP` | arranca la búsqueda de portadoras en VFO (`vfoSearchService_start(VFOS_UP)`), la misma que tres segundos de arriba o abajo |
 | `Spectrum` | — | abre el analizador en barrido, la pantalla `SPECTRUM`, centrada en la frecuencia del radio |
 | `Channels` | canales del banco | abre la lista de canales (`docs/CHANNELS.md`) |
+| `Puerto` | `SERIE` o `PTT` | cambia quién manda en el pad del accesorio y se queda en el menú (`docs/ACCESSORY.md`) |
 
 Reglas:
 
+- **El puerto del accesorio es esta fila y ninguna otra.** Antes fue una fila de
+  cada menú P2 y otra de Ajustes ▸ Radio; ahora vive aquí, en el único menú que
+  se abre desde las dos pantallas principales, y
+  `tests/unit/ui_menu_audit.cpp` falla si vuelve a aparecer en otro sitio
+  (ni en un menú de modo, ni en su página, ni en Ajustes ▸ Radio).
 - **Las filas son de compilación.** Sin `CONFIG_SCAN` no hay fila `Scan`; sin
   `CONFIG_VFO_SEARCH` no hay `VFO scan`. Ninguna fila es una tecla que no hace
   nada, y el valor de la derecha dice de antemano lo que hay (un banco vacío se
@@ -629,6 +635,15 @@ rows, their limits, their formatters and their setters are therefore the same
 objects, so a value cannot read one way in the popup and another in the menu, and
 the "walk every row of every table" test covers both screens.
 
+The page drops the rows of kind `QM_INFO` — the receiver's state: `CC`, `TS` and
+`SYNC` of DMR, the `CALL`/`TYPE` a NXDN or P25 frame carried, the five callsigns
+of a D-STAR header, the WFM meter. The popup still shows them (they are what an
+operator glances at); in a list of settings they were rows whose P1/P2 beeped and
+changed nothing, which is the dead row this audit was looking for. `qm_page_open()`
+builds the page from the table once, so the page cannot drift from the popup for
+the rows both show, and `tests/unit/ui_menu_audit.cpp` fails if a `QM_INFO` row
+reaches a page again.
+
 ## Specifying a new mode
 
 A new mode (dPMR, P25, YSF, D-STAR, WFM, DMR packet…) is wired in with **one
@@ -818,6 +833,10 @@ the walk exercises it and found nothing to change.
 | TETRA/DMR/M17 screens were only ever built for the radio | their tables were guarded by the engine's `CONFIG_*` | the guards follow the UI registry (`UI_MODE_*`), with `UI_TEST_*` for the host | the whole audit runs on the eleven modes |
 | FM settings page carried a duplicated green/red pair | merge residue | removed | settings walk |
 | Rows of a mode with no transmitter could move the power | nothing checked the rows against `UI_MODE_TX` | table check in the audit | `[tx]` test |
+| Every mode's Settings page listed the receiver's state as a row: 22 read-only rows that beeped and did nothing | the page was the whole quick menu table, `QM_INFO` rows included | the page is built without `QM_INFO` rows (`qm_page_open()`) | "A mode's Settings page shows no read-only row" |
+| Settings ▸ FM had four rows over two tone flags: `CTCSS En.`, `CTCSS TX`, `CTCSS RX`, `Cancel CT` | three copies of the same two bits, the popup had one | the page keeps `CTCSS En.` (None/TX/RX/Both) and `CTCSS Tone` | `[rows]` walk |
+| P1/P2 did nothing in a Settings edit: the pages only answered the arrows | the pages were written for LEFT/RIGHT and never got the C62's keys | P1/P2 change the value, as in the popup | "P1 and P2 change the value in a Settings edit" |
+| The accessory port could be set from three screens (each mode's popup, Settings ▸ Radio, the tools menu), and code for two of them stayed behind | the row was added per mode and only half removed | one row, in the tools menu; the dead setters and formatters are gone | "The accessory port is one row, in the tools menu" |
 | Every editable row writes `settings_t` and survives a save/read | — | correct | `[rows]` test (NVM round trip) |
 | Quick menu closes on PTT, search stops on any key, analyser gives the receiver back | — | correct | `[interaction]` test |
 | Two laps over the eleven modes leave the menus answering | — | correct (also under ASan/UBSan) | `[modes]` test |
