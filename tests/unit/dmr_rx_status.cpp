@@ -175,7 +175,8 @@ struct CallOpts
     int frames = 40;     /* 60 ms TDMA frames */
     bool terminator = false;
     bool voice = true;   /* voice superframes after the two headers */
-    /* The header's FEC fails: the link control in it never decodes */
+    /* The header's Reed-Solomon parity is wrong: the link control in it is
+     * not announced, though the rest of the burst (slot type, sync) is intact */
     bool headerBroken = false;
     /* Frame whose burst C carries a colour code that only decodes with one
      * bit of error correction (-1: none) */
@@ -183,13 +184,84 @@ struct CallOpts
     /* ... and the same with a clean field (a different colour code on the
      * air, correctly received) */
     int differentCcFrame = -1;
+    /* Break the embedded LC word of one voice burst every N frames, from the
+     * eighth on: the quality figure has to notice (0: none) */
+    int breakEmbEvery = 0;
 };
 
-/* The info field of a data burst, zeroed: FEC and RS(12,9) cannot survive it */
-void breakInfo(uint8_t burst[kBurstSyms])
+/*
+ * A 16-bit embedded LC word the code cannot correct, found by asking its own
+ * decoder: the test says "this word does not decode" without depending on how
+ * many bit errors that takes.
+ */
+uint16_t embPoison()
 {
-    memset(burst, 0, 54);                    /* info, before the slot type */
-    memset(&burst[78], 0, kBurstSyms - 78);  /* info, after the sync */
+    static uint16_t poison = 0;
+
+    if (poison == 0) {
+        for (uint32_t m = 1; m < 0x10000; m++) {
+            uint32_t cw = m;
+
+            if (dmr_qr_16_7_correct(&cw) < 0) {
+                poison = static_cast<uint16_t>(m);
+                break;
+            }
+        }
+    }
+    return poison;
+}
+
+/* Write a 16-bit word into the two halves of the burst's EMB field */
+void putEmb(uint8_t burst[kBurstSyms], uint16_t word)
+{
+    for (int i = 0; i < 16; i++) {
+        const int b = (i < 8) ? 108 + i : 148 + (i - 8);
+        const uint8_t mask = static_cast<uint8_t>((b & 1) ? 0x1u : 0x2u);
+        const int d = b / 2;
+
+        if ((word >> (15 - i)) & 1u)
+            burst[d] |= mask;
+        else
+            burst[d] = static_cast<uint8_t>(burst[d] & ~mask);
+    }
+}
+
+/*
+ * A voice LC header burst, built the way dmr_tx.c's dmr_tx_header() builds it:
+ * the link control with its RS(12,9) parity, BPTC(196,96), the slot type and
+ * the repeater's sync.  Built here because the transmitter has no way to emit
+ * a deliberately broken one, and this test needs the payload wrong after its
+ * checksum was made.
+ */
+void headerBurst(const dmr_tx_t &tx, bool breakLc, uint8_t burst[kBurstSyms])
+{
+    uint8_t bytes[12] = {};
+    uint8_t info[96], coded[196], bits[264] = {}, st[20];
+
+    for (int i = 0; i < 72; i++)
+        bytes[i / 8] |= static_cast<uint8_t>(tx.lc[i] << (7 - i % 8));
+    dmr_rs_12_9_parity(bytes, DMR_RS_MASK_VOICE_HEADER, &bytes[9]);
+
+    if (breakLc) {
+        /* Two octets of the link control wrong after its parity was made:
+         * one the RS would correct, two it detects and the LC is dropped */
+        bytes[3] ^= 0x01u; /* destination, low octet */
+        bytes[8] ^= 0x80u; /* source, low octet */
+    }
+    for (int i = 0; i < 96; i++)
+        info[i] = static_cast<uint8_t>((bytes[i / 8] >> (7 - i % 8)) & 1u);
+    dmr_bptc196_encode(info, coded);
+
+    memcpy(bits, coded, 98);
+    memcpy(&bits[166], &coded[98], 98);
+    dmr_u32_to_bits(dmr_golay_20_8_encode((static_cast<uint32_t>(tx.cc) << 4)
+                                         | DMR_DT_VOICE_LC),
+                    20, st);
+    memcpy(&bits[98], st, 10);
+    memcpy(&bits[156], &st[10], 10);
+    for (int i = 0; i < kBurstSyms; i++)
+        burst[i] = static_cast<uint8_t>((bits[2 * i] << 1) | bits[2 * i + 1]);
+    putSync(burst, kSyncBsData);
 }
 
 /*
@@ -213,11 +285,10 @@ void buildCall(Gen &g, const CallOpts &o)
                 continue;
             }
             if (f < 2) {
-                dmr_tx_header(&g.tx, burst);
-                if (o.headerBroken)
-                    breakInfo(burst);
-                putSync(burst, kSyncBsData);
-                appendSlot(g, burst, true, ts, "header");
+                headerBurst(g.tx, o.headerBroken, burst);
+                appendSlot(g, burst, true, ts,
+                           o.headerBroken ? "header, checksum broken"
+                                          : "header");
                 continue;
             }
             if (o.terminator && f == o.frames - 1) {
@@ -260,6 +331,11 @@ void buildCall(Gen &g, const CallOpts &o)
              * burst that carries an EMB: burst A has the sync there. */
             if (f == o.miscorrectFrame && !burstA)
                 burst[kSyncAt] ^= 1u;
+            /* The embedded LC word replaced by one its code cannot correct:
+             * the word does not decode at all */
+            if (!burstA && o.breakEmbEvery > 0 && f >= 8
+                && (f % o.breakEmbEvery) == 0)
+                putEmb(burst, embPoison());
             appendSlot(g, burst, true, ts, "voice");
         }
     }
@@ -632,4 +708,52 @@ TEST_CASE("A DMR packet whose CRC fails is not counted as a good one",
         else
             REQUIRE(st.crcOk == st.crcChecks);
     }
+}
+
+/*
+ * The quality figure is the share of the embedded link controls that decoded,
+ * per mille.  A clean call is 1000, and a call whose embedded words are broken
+ * has to be below it: a figure that always reads 1000 is not a measurement.
+ * What must not happen either is the broken words taking the call with them -
+ * the CC stays, the call stays, the audio stays.
+ */
+TEST_CASE("DMR link quality falls when the embedded link controls fail",
+          "[dmr][rx]")
+{
+    unsigned evmClean = 0, evmBroken = 0;
+
+    for (int broken = 0; broken <= 1; broken++) {
+        resetReceiver();
+
+        Gen g;
+        CallOpts o;
+
+        o.frames = 40;
+        if (broken)
+            o.breakEmbEvery = 5;
+        buildCall(g, o);
+
+        const std::vector<Obs> st = tail(feed(g.s), 36);
+        const unsigned evm = st.back().st.evm;
+
+        for (const Obs &obs : st) {
+            /* Neither the call nor its colour code goes with the bad words */
+            REQUIRE(obs.st.sync);
+            REQUIRE(obs.st.colourCode == kCc);
+            if (obs.st.timeslot != 1)
+                continue;
+            REQUIRE(obs.st.idsValid);
+            REQUIRE(obs.st.src == kSrc);
+            REQUIRE(obs.st.dst == kTg);
+        }
+        if (broken) {
+            evmBroken = evm;
+            REQUIRE(evm > 0);
+            REQUIRE(evm < 1000);
+        } else {
+            evmClean = evm;
+            REQUIRE(evm == 1000);
+        }
+    }
+    REQUIRE(evmClean > evmBroken);
 }
