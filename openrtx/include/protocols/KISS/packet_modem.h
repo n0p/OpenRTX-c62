@@ -18,7 +18,7 @@
  *             at 48 kHz, so the sample rate must be 48 kHz (or 96 kHz).
  *
  *   NXDN      Receive only. The payload is the 9 octets of the layer 3
- *             message the SACCH of a superframe carries (nxdnStatusSacchSegment
+ *             message the SACCH of a superframe carries (nxdnStatus_frame()
  *             hands it over). There is no NXDN transmitter in this firmware and
  *             the short data call lives in FACCH1, which the receiver does not
  *             decode: see docs/RX_NXDN.md and docs/KISS.md.

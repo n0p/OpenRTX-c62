@@ -23,7 +23,12 @@
  *     lost block and for the "any" setting -- is a table here, and the RAN the
  *     receiver reports from a synthetic stream is the one the transmitter put
  *     in the SACCH, which is what the filter reads.
- *  5. Symbol timing: the same call, built once as one continuous stream and
+ *  5. The state the mode publishes: a synthetic stream through the real
+ *     demodulator and the real NxdnStatus module, then the struct the main
+ *     screen reads -- sync, RAN, counters, "source>destination" and the
+ *     message type -- for a call, a release and a disconnect, and what
+ *     nxdnStatus_reset() and nxdnStatus_clear() leave behind.
+ *  6. Symbol timing: the same call, built once as one continuous stream and
  *     fed through a resampler, has to decode bit for bit from an arbitrary
  *     start phase, while the two clocks drift by up to 500 ppm, and again
  *     after a lost block resets the demodulator mid-call.  The loopback tests
@@ -42,6 +47,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 extern "C" {
@@ -49,6 +55,7 @@ extern "C" {
 #include "protocols/NXDN/NxdnDefs.h"
 #include "protocols/NXDN/NxdnFec.h"
 #include "protocols/NXDN/NxdnPhy.h"
+#include "protocols/NXDN/NxdnStatus.h"
 #include "protocols/NXDN/NxdnTx.h"
 }
 
@@ -758,4 +765,206 @@ TEST_CASE("NXDN RAN on the air is the one the filter reads", "[nxdn][ran]")
             rejected++;
     }
     REQUIRE(rejected == accepted);
+}
+
+/* ------------------------------------------------------------------ status --- */
+
+namespace {
+
+/** Handler that accounts each frame the way OpMode_NXDN does. */
+void onFrameAccounted(const struct nxdnFrame *f, void *user)
+{
+    static_cast<Decoded *>(user)->frames.push_back(*f);
+    nxdnStatus_frame(f);
+}
+
+/** Native stream, no resampler: the status chain is what is under test. */
+void pushStream(const std::vector<int16_t> &s, Decoded *out)
+{
+    nxdnPhy_init();
+
+    const size_t block = 960;
+
+    for (size_t off = 0; off < s.size(); off += block) {
+        size_t n = (s.size() - off > block) ? block : (s.size() - off);
+
+        nxdnPhy_push(&s[off], n, onFrameAccounted, out);
+    }
+}
+
+} /* namespace */
+
+TEST_CASE("NXDN publishes the call it decoded, and keeps it until told",
+          "[nxdn][status]")
+{
+    /*
+     * This is the receiver double the test plan says no digital mode had: a
+     * stream built by the transmitter of this tree goes through the real
+     * demodulator and the real status module, and what comes out is what the
+     * main screen draws -- sync, RAN, "source>destination" and the message
+     * type.  The mode's onFrame() is now two lines over these (the RAN filter
+     * and the vocoder), so this is the whole path the UI reads, minus the
+     * radio.
+     */
+    constexpr uint16_t SRC = 0x0123;
+    constexpr uint16_t DST = 0x4567;
+    constexpr uint8_t RAN = 42;
+
+    AirStream stream = buildStream(SRC, DST, RAN, 9);
+
+    nxdnStatus_clear();
+
+    struct nxdnStatus st;
+
+    nxdn_getStatus(&st);
+    REQUIRE(!st.sync);
+    REQUIRE(st.ran == -1);
+    REQUIRE(!st.message.valid);
+    REQUIRE(st.frames == 0);
+
+    Decoded d;
+
+    pushStream(stream.samples, &d);
+    nxdn_getStatus(&st);
+
+    REQUIRE(d.frames.size() >= 7);
+
+    /* Sync, the frame's channel type and the RAN of the call */
+    REQUIRE(st.sync);
+    REQUIRE(st.ran == RAN);
+    REQUIRE(st.rfType == NXDN_RF_RDCH);
+    REQUIRE(st.usc == NXDN_USC_SACCH_SF);
+    REQUIRE(st.steal == NXDN_STEAL_NONE);
+    REQUIRE(!st.inverted);
+    REQUIRE(st.evm > 0);
+
+    /* Counters: every frame, every SACCH block, every AMBE+2 frame */
+    REQUIRE(st.frames == d.frames.size());
+    REQUIRE(st.lichErrors == 0);
+    REQUIRE(st.sacchChecks == st.frames);
+    REQUIRE(st.sacchOk == st.frames);
+    REQUIRE(st.voice);
+    REQUIRE(st.voiceFrames == st.frames);
+    REQUIRE(st.ambeFrames == 4 * st.voiceFrames);
+
+    /* And the call itself: source and destination the way the UI writes them */
+    REQUIRE(st.message.valid);
+    REQUIRE(st.message.type == NXDN_MSG_VCALL);
+    REQUIRE(st.message.source == SRC);
+    REQUIRE(st.message.dest == DST);
+    REQUIRE(st.messages >= 1);
+
+    /* The UI's string, from the same numbers */
+    REQUIRE(std::string(nxdnFecMsgName(st.message.type)) == "VCALL");
+
+    /*
+     * A new frequency: the sync, the RAN and the half-assembled superframe go,
+     * the counters stay -- that is what nxdnStatus_reset() is for.
+     */
+    nxdnStatus_reset();
+    nxdn_getStatus(&st);
+
+    REQUIRE(!st.sync);
+    REQUIRE(st.ran == -1);
+    REQUIRE(!st.message.valid);
+    REQUIRE(st.frames == d.frames.size());
+
+    /* One frame more: sync and RAN are back, the call is not: one segment of
+     * a superframe is not a message */
+    pushStream(std::vector<int16_t>(stream.samples.begin(),
+                                    stream.samples.begin() + 4
+                                        * NXDN_TX_FRAME_SAMPLES), &d);
+    nxdn_getStatus(&st);
+
+    REQUIRE(st.sync);
+    REQUIRE(st.ran == RAN);
+    REQUIRE(!st.message.valid);
+
+    /* Leaving the mode: nothing is left of it, counters included */
+    nxdnStatus_clear();
+    nxdn_getStatus(&st);
+
+    REQUIRE(!st.sync);
+    REQUIRE(st.ran == -1);
+    REQUIRE(st.frames == 0);
+    REQUIRE(st.ambeFrames == 0);
+    REQUIRE(!st.message.valid);
+}
+
+TEST_CASE("NXDN publishes a release and a disconnect, not just a call",
+          "[nxdn][status]")
+{
+    /*
+     * The three message types the mode names -- VCALL, TX_REL and DISC -- come
+     * out of the same SACCH assembly, and the UI keys its note row off them.
+     * A message of any other type still reaches the status (its four blocks
+     * passed their CRCs) but carries no call fields, which is what keeps the
+     * screen from inventing a source and a destination.
+     */
+    struct msgType { uint8_t type; const char *name; };
+
+    const msgType types[] = {
+        { NXDN_MSG_VCALL, "VCALL" },
+        { NXDN_MSG_TX_REL, "TX_REL" },
+        { NXDN_MSG_DISC, "DISC" },
+    };
+
+    for (const msgType &t : types) {
+        INFO(t.name);
+
+        AirStream stream = buildStream(0x0BEE, 0x0117, 9, 9);
+        Decoded d;
+
+        nxdnStatus_clear();
+        pushStream(stream.samples, &d);
+
+        /* Replace the VCALL of the stream with this message and replay it */
+        nxdn_tx_t tx;
+        uint8_t octets[9];
+
+        nxdnTx_setup(&tx, 0x0BEE, 0x0117, 9, true);
+        std::memset(octets, 0, sizeof(octets));
+        octets[0] = t.type;
+        octets[2] = 0x00;
+        octets[3] = 0x0B;           /* source 0x0BEE */
+        octets[4] = 0xEE;
+        octets[5] = 0x01;           /* destination 0x0117 */
+        octets[6] = 0x17;
+        nxdnTx_setMessage(&tx, octets);
+
+        fsk4_mod_t mod;
+        fsk4Mod_init(&mod, NXDN_TX_SPS, LEVEL_12K5, false, true);
+
+        Decoded d2;
+        std::vector<int16_t> audio(NXDN_TX_FRAME_SAMPLES);
+        int8_t levels[NXDN_FRAME_SYMBOLS];
+
+        nxdnStatus_clear();
+        nxdnPhy_init();
+
+        nxdnTx_preamble(levels);
+        fsk4Mod_levels(&mod, levels, NXDN_FRAME_SYMBOLS, audio.data());
+        nxdnPhy_push(audio.data(), NXDN_TX_FRAME_SAMPLES, onFrameAccounted,
+                     &d2);
+
+        for (int n = 0; n < 9; n++) {
+            uint8_t ambe[NXDN_VCH_PER_FRAME][NXDN_AMBE_BYTES];
+
+            for (int v = 0; v < NXDN_VCH_PER_FRAME; v++)
+                payloadFrame(n, v, ambe[v]);
+            nxdnTx_frame(&tx, ambe, levels);
+            fsk4Mod_levels(&mod, levels, NXDN_FRAME_SYMBOLS, audio.data());
+            nxdnPhy_push(audio.data(), NXDN_TX_FRAME_SAMPLES,
+                         onFrameAccounted, &d2);
+        }
+
+        struct nxdnStatus st;
+
+        nxdn_getStatus(&st);
+        REQUIRE(st.message.valid);
+        REQUIRE(st.message.type == t.type);
+        REQUIRE(st.message.source == 0x0BEE);
+        REQUIRE(st.message.dest == 0x0117);
+        REQUIRE(std::string(nxdnFecMsgName(st.message.type)) == t.name);
+    }
 }

@@ -91,10 +91,6 @@ private:
     int16_t micPcm[2 * 160];
 #endif
 
-    /* The 72 bits of a superframe's SACCH, 18 per frame */
-    uint8_t sacchBits[72];
-    bool sacchHave[NXDN_SUPERFRAME];
-
     int basebandPath;
     int basebandId;
     int16_t settle;

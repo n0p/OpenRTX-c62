@@ -80,29 +80,6 @@ void OpMode_NXDN::onFrame(const struct nxdnFrame *frame)
     if (!nxdnRanFrame(state.settings.nxdn_ran, &lastRan, frame))
         return;
 
-    /* The SACCH of a superframe: 18 bits of layer 3 per frame, in the position
-     * the SR field announces */
-    if (frame->sacchOk) {
-        int part = 3 - ((frame->sacchSr >> 6) & 0x03);
-
-        memcpy(&sacchBits[part * 18], frame->sacchBits, 18);
-        sacchHave[part] = true;
-
-        if (part == 3) {
-            bool complete = sacchHave[0] && sacchHave[1] && sacchHave[2]
-                         && sacchHave[3];
-
-            if (complete) {
-                struct nxdnSacchMessage msg;
-
-                nxdnFecSacchParse(sacchBits, &msg);
-                msg.valid = true;
-                nxdnStatusSacchSegment(part, true, &msg);
-            }
-            memset(sacchHave, 0, sizeof(sacchHave));
-        }
-    }
-
     if (frame->frameCount > 0)
         nxdnSpeech_push(frame->frame, frame->frameCount);
 }
@@ -138,8 +115,6 @@ OpMode_NXDN::OpMode_NXDN()
       txPath(-1), txId(-1), micPath(-1), micId(-1)
 #endif
 {
-    memset(sacchBits, 0, sizeof(sacchBits));
-    memset(sacchHave, 0, sizeof(sacchHave));
 }
 
 void OpMode_NXDN::enable()
@@ -147,7 +122,6 @@ void OpMode_NXDN::enable()
     nxdnPhy_init();
     nxdnStatus_reset();
     nxdnSpeech_start();
-    memset(sacchHave, 0, sizeof(sacchHave));
     settle = SETTLE_SAMPLES;
     dataErrors = 0;
     lastRan = -1;
@@ -439,7 +413,6 @@ void OpMode_NXDN::update(rtxStatus_t *const rtx, const bool newCfg)
     if (newCfg) {
         nxdnPhy_reset();
         nxdnStatus_reset();
-        memset(sacchHave, 0, sizeof(sacchHave));
         settle = SETTLE_SAMPLES;
     }
 
