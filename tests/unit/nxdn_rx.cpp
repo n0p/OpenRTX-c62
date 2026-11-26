@@ -8,7 +8,7 @@
  * @file nxdn_rx.cpp
  * @brief NXDN receive sensitivity, on the real air capture and on noise.
  *
- * Three properties, each one something the receiver did not have before the
+ * Four properties, each one something the receiver did not have before the
  * matched filter of TS 1-A 3.4/3.5 and the soft SACCH decisions landed:
  *
  *  1. **The clean capture is unchanged.**  18 frames, no LICH error, every
@@ -19,7 +19,12 @@
  *     LICH decoding every frame down to 8 dB, where the flat-RRC front end
  *     lost half of them.  Asserted as a rate, over several noise seeds, so the
  *     test says something about the receiver and not about one lucky run.
- *  3. **Soft decisions are worth more than hard ones.**  For every frame the
+ *  3. **The codes refuse what they cannot rescue.**  The LICH parity, the
+ *     SACCH CRC-6 and the VCH (which carries no coding at all) each get the
+ *     errors they are meant to catch: a flipped data bit fails the parity, a
+ *     handful of scattered SACCH errors are corrected while half a block of
+ *     noise is refused, and a random block is not taken for a block at all.
+ *  4. **Soft decisions are worth more than hard ones.**  For every frame the
  *     test decodes it also runs the hard SACCH decoder on the dibits the
  *     frame carries, and requires the reliability-driven path to recover
  *     substantially more blocks at the floor of the mode.  That is the
@@ -290,4 +295,158 @@ TEST_CASE("NXDN soft SACCH decisions beat hard ones", "[nxdn][rx]")
      * against the plain decisions taken from the very same dibits. */
     REQUIRE(r.sacchOk >= (3 * r.hardOk) / 2);
     REQUIRE(r.softWins >= 8);
+}
+
+/* ------------------------------------------------------------- rejection --- */
+
+namespace {
+
+/** Deterministic bits for the "must not pass by accident" blocks. */
+struct Bits {
+    uint32_t s = 0x1234567u;
+
+    unsigned next()
+    {
+        s ^= s << 13;
+        s ^= s >> 17;
+        s ^= s << 5;
+        return (s >> 16) & 1u;
+    }
+};
+
+} /* namespace */
+
+TEST_CASE("NXDN LICH parity rejects a flipped data bit", "[nxdn][rx][fec]")
+{
+    /*
+     * The LICH is 8 coding bits: 7 of control, one even parity over the four
+     * MSBs (4.5.3).  A single error among those four has to fail, which is what
+     * keeps a mis-sliced frame from being taken as a voice frame of another
+     * channel type.
+     */
+    for (uint8_t control = 0; control < 128; control += 7) {
+        uint8_t dibits[NXDN_LICH_DIBITS];
+        struct nxdnLich lich;
+
+        nxdnFecLichEncode(control, dibits);
+
+        for (int bit = 0; bit < 4; bit++) {
+            uint8_t bad[NXDN_LICH_DIBITS];
+
+            std::memcpy(bad, dibits, sizeof(bad));
+            bad[bit] ^= 0x02;               /* the data bit is the sign */
+
+            INFO("control " << (unsigned)control << ", data bit " << bit);
+            REQUIRE(!nxdnFecLich(bad, &lich));
+            REQUIRE(!lich.parityOk);
+        }
+
+        /* The parity bit itself, flipped, has to fail too */
+        uint8_t bad[NXDN_LICH_DIBITS];
+
+        std::memcpy(bad, dibits, sizeof(bad));
+        bad[NXDN_LICH_DIBITS - 1] ^= 0x02;
+        REQUIRE(!nxdnFecLich(bad, &lich));
+    }
+}
+
+TEST_CASE("NXDN SACCH rejects what its code cannot rescue", "[nxdn][rx][fec]")
+{
+    /*
+     * The SACCH block is 26 information bits, a CRC-6 and a punctured
+     * convolutional code: it is the one place in the mode where errors are
+     * corrected, and the CRC is what says when they were not.  Two properties,
+     * one for each side of that:
+     *
+     *  - a handful of scattered errors are corrected, and the block still says
+     *    the same thing -- the mode must not lose a call to a noisy frame it
+     *    could have read;
+     *  - a block that is plainly noise is refused, which only a CRC that is
+     *    actually checked can do: half of the bits flipped, and random blocks,
+     *    have to be rejected far more often than accepted.
+     */
+    uint8_t info[26];
+    uint8_t bits[NXDN_SACCH_BITS];
+    uint8_t back[26];
+
+    for (int i = 0; i < 26; i++)
+        info[i] = (uint8_t)((i * 7 + 3) & 1u);
+    nxdnFecSacchEncode(info, bits);
+
+    /* Up to three scattered errors: decoded, and the same 26 bits */
+    for (int errors = 1; errors <= 3; errors++) {
+        uint8_t bad[NXDN_SACCH_BITS];
+
+        std::memcpy(bad, bits, sizeof(bad));
+        for (int e = 0; e < errors; e++)
+            bad[(e * 17 + errors) % NXDN_SACCH_BITS] ^= 1;
+
+        INFO(errors << " errors");
+        REQUIRE(nxdnFecSacch(bad, back));
+        REQUIRE(std::memcmp(back, info, 26) == 0);
+    }
+
+    /* Half the block flipped: refused */
+    {
+        uint8_t bad[NXDN_SACCH_BITS];
+
+        std::memcpy(bad, bits, sizeof(bad));
+        for (int i = 0; i < NXDN_SACCH_BITS; i += 2)
+            bad[i] ^= 1;
+        REQUIRE(!nxdnFecSacch(bad, back));
+    }
+
+    /* Random blocks: a CRC-6 lets one in 64 through, nothing more */
+    Bits rnd;
+    int accepted = 0;
+    constexpr int BLOCKS = 500;
+
+    for (int b = 0; b < BLOCKS; b++) {
+        uint8_t r[NXDN_SACCH_BITS];
+
+        for (int i = 0; i < NXDN_SACCH_BITS; i++)
+            r[i] = (uint8_t)rnd.next();
+        if (nxdnFecSacch(r, back))
+            accepted++;
+    }
+
+    INFO("random blocks accepted: " << accepted << "/" << BLOCKS);
+    REQUIRE(accepted <= BLOCKS / 16);
+}
+
+TEST_CASE("NXDN VCH carries no coding of its own", "[nxdn][rx][fec]")
+{
+    /*
+     * The four VCHs of a frame carry AMBE+2 with no block code: a single error
+     * in the 72 bits reaches the vocoder as it is (the vocoder's own repair is
+     * all there is).  That is the mode as the standard defines it, and the
+     * test says so, so that nobody "fixes" the packing into something the air
+     * interface does not carry.
+     */
+    uint8_t frame[NXDN_AMBE_BYTES];
+    uint8_t dibits[NXDN_VCH_DIBITS];
+    uint8_t back[NXDN_AMBE_BYTES];
+
+    for (int b = 0; b < NXDN_AMBE_BYTES; b++)
+        frame[b] = (uint8_t)(0x40 + b);
+
+    nxdnFecVchFromAmbe(frame, dibits);
+
+    /* Any single dibit sign flipped shows up in the frame, one bit changed */
+    for (int i = 0; i < NXDN_VCH_DIBITS; i++) {
+        uint8_t bad[NXDN_VCH_DIBITS];
+
+        std::memcpy(bad, dibits, sizeof(bad));
+        bad[i] ^= 0x02;
+        nxdnFecVchToAmbe(bad, back);
+
+        int differences = 0;
+        for (int b = 0; b < NXDN_AMBE_BYTES; b++) {
+            uint8_t d = (uint8_t)(back[b] ^ frame[b]);
+
+            for (int k = 0; k < 8; k++)
+                differences += (d >> k) & 1u;
+        }
+        REQUIRE(differences == 1);
+    }
 }
