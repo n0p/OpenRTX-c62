@@ -203,9 +203,8 @@ class BenchLink(P.Link):
             p += P.tlv_u16(T_TONE, int(tone))
         if level is not None:
             p += P.tlv_u8(T_LEVEL, int(level))
-        # The answer comes first and the TX/RX edge event right behind it; the
-        # link queues the event as it reads, so it lands in self.events for
-        # bench_edges() without any extra work here.
+        # The answer comes first and the TX/RX edge event right behind it, in
+        # a frame of its own: bench_edges() collects it from the link's queue.
         f = self._request(MSG_BENCH_PTT, p + self.token_tlv())
         return {
             "tx_state": f.u8(T_TX_STATE),
@@ -344,7 +343,14 @@ class BenchLink(P.Link):
     # -- events ------------------------------------------------------------
 
     def bench_edges(self):
-        """The TX/RX edge events received so far, as (tx_state, tick)."""
+        """The TX/RX edge events received so far, as (tx_state, tick).
+
+        The edge rides behind the answer to BENCH_PTT, in a frame of its own,
+        so it can still be on the cable when the caller asks: poll the queue
+        first, or the first edge of a session is missed whenever the two
+        frames land in different reads (9 of 25 host-suite runs before this).
+        """
+        self.poll(0.02)
         out = []
         for ev in self.events:
             if ev.msg_id == EVT_BENCH_EDGE:

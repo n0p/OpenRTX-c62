@@ -615,6 +615,23 @@ class Link:
             raise ProtoError(resp.u8(T_ERROR), resp.u16(T_MSG_ID))
         return resp
 
+    def poll(self, timeout=0.0):
+        """Read what the cable has now and queue the events it carries.
+
+        This is the poll that does not consume: the events stay in the queue
+        for `pump()`, and a consumer that looks at the queue directly -- the
+        bench's `bench_edges()` -- sees them as well.  A frame that is not an
+        event is dropped, as `read_frame()` drops every answer that is not the
+        one it is waiting for; requests are synchronous, so a response found
+        here or there is one nobody asked for.
+        """
+        out = []
+        for f in self._feed(self.port.read(timeout)):
+            if f.type == TYPE_EVENT:
+                self.events.append(f)
+                out.append(f)
+        return out
+
     def pump(self, seconds):
         """Collect events for a while and return them in order.
 
