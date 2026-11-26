@@ -399,6 +399,52 @@ como mínimo) rompía justo esta captura, que necesita ~1e-5 por lo fuerte que
 llega; las cotas quedan en 1e-12..1e12, que solo descartan lo que no es un
 número.
 
+### 5.3 La capa MM y el SDS en `meson test`
+
+El arnés de §5.1 necesita una captura y el de §5.2 un directorio de compilación
+de la librería; los dos viven fuera de la suite. Lo que sí entra en
+`meson test` es el estado que publica el modo y el camino del SDS, con la
+librería compilada por meson desde su árbol de fuentes:
+
+```bash
+meson setup build_linux -Dcpp_args=-fpermissive -Dtetra_lib_dir=<libtetra>
+meson test -C build_linux "TETRA Status Stand-in Test" "TETRA SDS Message Path Test"
+```
+
+Dentro de un workspace de west no hace falta la opción: el módulo está en
+`modules/lib/libtetra`. Sin árbol de la librería los dos tests no se registran
+y `meson setup` lo avisa.
+
+**`tests/unit/tetra_status.cpp`** es el doble que le faltaba a `TetraStatus.c`.
+Un `tetra_tmo_rx` real recibe PDUs reales y lo que se comprueba es el estado
+publicado y el texto que `ui_mode_state_read()` le da a la pantalla principal:
+
+| escenario | qué entra | qué se afirma |
+| --- | --- | --- |
+| nada decodificado | — | `T searching`, sin nota de registro (nunca un `ACC G0` de relleno) |
+| celda | `tests/vectors/tmo_call.dibits` por `tetra_tmo_push_dibits()` | `235-78`, `LA1`, CC 1, 392,5125 MHz, uplink 382,5125 MHz del SYSINFO |
+| registro aceptado | D-LOCATION-UPDATE-ACCEPT capturado (MorganBTS) | `registered`, causa 0, un grupo adjunto, `LA1 ACC G1` / `ACC G1` |
+| registro rechazado | D-LOCATION-UPDATE-REJECT (causa 3) | `!registered`, causa 3, `LA1 REJ 3` / `REJ 3`, y un accept posterior lo borra |
+| vecinas y reloj | D-NWRK-BROADCAST (carga 2, 2026, UTC, −1 h, 2 vecinas) | `haveNet`, `netLoad`, `neighbours`, `netYear/Utc/OffsetMin`; la línea del operador **no** crece |
+| llamada | la misma grabación (D-SETUP 320026→9001, id 8, tráfico) | `call`, `callDst`, `callGroup`, `talker`, `voice`; se apaga sola a los 10 s sin PDU |
+| uplink | U-SDS del encoder del firmware, en una ráfaga SCH/F | `uplink`, `uplinkSs` = la MS que transmite; se apaga a los 3 s |
+| pérdida de sincronismo | `TETRA_EV_SYNC(locked=false)` y `tetraStatus_lostSync()` | `!sync`, fin de llamada, la celda se conserva, contadores |
+
+**`tests/unit/tetra_sds.cpp`** es el mismo camino al revés y en los dos
+sentidos del aire: un D-SDS-DATA y un D-STATUS entregados a la capa 3 de la
+librería, y un U-SDS-DATA y un U-STATUS de `TetraSdsEnc.c` envueltos en LLC y
+MAC-DATA por el mismo fichero y decodificados por el receptor de uplink real.
+Se afirma el modelo de `SdsMsg.c` (tipo, PID, SDS-TL, coding, texto), la línea
+de `sds_msg_format()`, el anillo de `SdsHist.c` y su registro empaquetado, lo
+que publica `TetraStatus.c` (`sds`, `sdsSrc`, `sdsTime`) y que otra celda (otro
+colour code) no decodifica nada. El texto vuelve idéntico, `ü`/`ß` van en GSM
+7-bit y se pliegan a `u`/`s`, y lo que no está en el alfabeto va en UCS-2.
+
+Lo que estos dos tests **no** cubren: la voz (OpenACELP), los píxeles y el
+layout de la pantalla de llamada (`ui_main.c` la formatea de los mismos campos
+que se afirman arriba), el paginado de 4 s y los sectores de flash de
+`TetraSds.c`, y el demodulador de audio completo (§5.2).
+
 ## 6. Coste
 
 ### Por bloque de 30 ms (QEMU, mps2-an505, Cortex-M33, `-O2`)
