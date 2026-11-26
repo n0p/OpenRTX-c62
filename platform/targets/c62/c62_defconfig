@@ -1,0 +1,79 @@
+# SPDX-FileCopyrightText: Copyright 2020-2026 OpenRTX Contributors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+#
+# Retevis C62 board-specific configuration.
+#
+# Only options strictly related to the C62 hardware belong here.
+# SoC-level options for the ListenAI CSK6011B chip live in
+# platform/mcu/CSK6011B/zephyr.conf.
+#
+
+CONFIG_BOARD_C62=y
+
+# C62 LCD (Sitronix ST7735R over SPI)
+CONFIG_DISPLAY=y
+CONFIG_ST7735R=y
+
+# The panel's frames are sent with a deadline (core/display_flush.h): each
+# transfer is submitted asynchronously and the thread that draws waits for it
+# with a timeout, so a DMA transfer that never completes costs a frame and not
+# the user interface thread (docs/RX_AIRBAND.md §9).
+CONFIG_SPI_ASYNC=y
+
+CONFIG_SPI_BITBANG=y
+
+
+# C62 LSF service controller, see Kconfig.board
+CONFIG_LSF_SERVICE_CONTROLLER=y
+
+# The application is linked at flash offset 0 and must end before the
+# DSP image at 0x100000 (slot0_partition).
+CONFIG_FLASH_LOAD_SIZE=0x100000
+
+# platform_terminate() reboots through the SoC reset, which also resets
+# the peripherals.
+CONFIG_REBOOT=y
+
+# Post-mortem recorder (docs/BLACKBOX.md).  The three options below are what
+# makes a crash record readable rather than a list of numbers:
+#
+#   THREAD_MONITOR  the kernel keeps the list of live threads, which is what
+#                   k_thread_foreach() walks: name, priority, state, stack.
+#   THREAD_NAME     threads carry the name their creator gave them.
+#   INIT_STACKS     every stack is filled with a pattern when the thread is
+#                   created, which is what turns "free bytes" into a high-water
+#                   mark (k_thread_stack_space_get()) instead of an estimate.
+#
+# Cost: about 20 bytes of RAM per thread for the name and the list link, and a
+# memset of each stack at creation (40 KiB in total, ~0.2 ms at boot).  Flash:
+# a few hundred bytes.  All of it is only read when a record is written.
+CONFIG_THREAD_MONITOR=y
+CONFIG_THREAD_NAME=y
+CONFIG_INIT_STACKS=y
+
+# ---------------------------------------------------------------------------
+# Time slicing
+#
+# The RTX thread is a loop without a sleep: it yields only when something
+# inside it blocks. The UI thread runs at the same priority, so with a zero
+# slice -- the default -- whichever of the two is running keeps the CPU, and a
+# mode whose update never blocks (AM's squelch path is one) freezes the screen
+# while the radio keeps receiving and keeps answering the cable. That is the
+# freeze the post-mortem recorded as STALL [ui] on an RTX thread spinning in
+# the clock: the UI was never scheduled, not stuck.
+#
+# A slice of 5 ms is the kernel rotating two threads of equal priority, not a
+# change in how either of them is written: the RTX loop keeps its tight
+# timing between slices, and the UI gets the CPU at least every 5 ms.
+# ---------------------------------------------------------------------------
+CONFIG_TIMESLICING=y
+CONFIG_TIMESLICE_SIZE=5
+#
+# The ceiling is the *lowest* priority that still gets sliced: threads with a
+# numerically smaller priority are excluded.  Zero therefore slices nobody
+# but the highest-priority thread, which is what left the UI starved while the
+# RTX loop ran.  14 is the priority the UI and the RTX thread share.
+#
+CONFIG_TIMESLICE_PRIORITY=14

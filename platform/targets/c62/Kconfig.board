@@ -1,0 +1,529 @@
+# SPDX-FileCopyrightText: Copyright 2020-2026 OpenRTX Contributors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+config BOARD_C62
+	bool "Retevis C62"
+	depends on SOC_CSK6
+
+menu "DSP Manipulation"
+
+config LSF_DSP
+	bool "DSP Manipulation"
+	default y
+	select FLASH
+	select FLASH_MAP
+
+if LSF_DSP
+
+DT_CHOSEN_LSF_DSP_FIRMWARE := lsf,dsp-firmware
+
+config LSF_DSP_LOAD_ON_BOOT
+	bool "Load DSP firmware on boot"
+	default y
+	depends on $(dt_chosen_enabled,$(DT_CHOSEN_LSF_DSP_FIRMWARE))
+
+endif # LSF_DSP
+
+endmenu
+
+menu "Packet"
+
+config C62_VOICE_STATS
+	bool "DMR voice timing and per-thread CPU on the console"
+	default n
+	select THREAD_MONITOR
+	select THREAD_RUNTIME_STATS
+	help
+	  Every ten seconds, print the vocoder's per-frame timing, the bit error
+	  rate and the CPU share of every thread.  Bring-up instrumentation: the
+	  per-thread pass walks all threads with the scheduler held, which on this
+	  SoC parks the receiver and the PC protocol for about 1.7 s every time it
+	  runs.  Off in every image that is not being measured.
+
+config C62_KISS
+	bool "Packet modem (KISS TNC)"
+	default y
+	help
+	  The radio as a KISS TNC: AX.25 frames in and out of the serial port,
+	  AFSK 1200 (Bell 202) and AFSK 9600 (G3RUH) modems, and the receive
+	  payload of the NXDN and DMR data channels exposed as frames.  Off at
+	  run time until the operator enables it on its page or the host sends
+	  0xFF; see docs/KISS.md.
+
+config C62_KISS_UART
+	bool "KISS over the programming cable (log muted, no PTT)"
+	depends on C62_KISS
+	default n
+	help
+	  Carries the KISS stream over the cable's UART, on the PTT pad, and
+	  mutes the firmware log because the stream is binary.  Not compatible
+	  with the remote control (C62_REMOTE), which uses the same pad.
+
+endmenu
+
+#
+# Tuning range.
+#
+# The Retevis firmware only allows the two bands its PA is calibrated for;
+# the BK4819 itself tunes much wider. See platform/targets/c62/platform.c.
+#
+menu "Tuning"
+
+config C62_UNLOCKED_TUNING
+	bool "Unlocked tuning range (18-660 MHz and 840-1300 MHz)"
+	default y
+	help
+	  Open the whole BK4819 tuning range instead of the two bands Retevis
+	  declares for the C62 (VHF 137-174 MHz, UHF 400-480 MHz): 18-660 MHz
+	  and 840-1300 MHz, without the 660-840 MHz gap the chip cannot reach.
+
+	  The receiver works over the whole range. Transmission outside the
+	  calibrated bands is the user's responsibility: the radio is not type
+	  approved there and the PA calibration is extrapolated from the
+	  nearest measured point. Disable this option to restrict the radio,
+	  menus included, to the two calibrated bands.
+
+	  Disable it with: -- -DCONFIG_C62_UNLOCKED_TUNING=n
+
+endmenu
+
+#
+# This file is sourced inside the "Board Selection" choice, so the options
+# below live in a menu of their own (same shape as "DSP Manipulation" above).
+#
+#
+# DMR receive vocoder: the AMBE+2 3600x2450 decoder shared by DMR, NXDN, YSF
+# and dPMR (lib/dmr_vocoder).  platform/targets/c62/CMakeLists.txt builds the
+# library and links it into the application when this is set.  The DMR mode of
+# the package builds it by itself (and the DMR transmitter adds lib/dmr_encoder
+# under DMR_TX), so this symbol only has to be selected by the modes that
+# borrow the decoder.  Enable it with
+#   west build -b c62 ... -- -DCONFIG_C62_DMR_VOCODER=y
+#
+menu "NXDN"
+
+config C62_NXDN_RX
+	bool "NXDN receive mode (PHY, SACCH, AMBE+2 voice)"
+	select C62_DMR_VOCODER
+	default n
+	help
+	  NXDN receive: 4FSK at 2400 symbols/s (NXDN48, 4800 bit/s) in a
+	  6.25 or 12.5 kHz channel, frame sync, LICH, the SACCH superframe
+	  with its layer 3 messages (source and destination IDs) and voice
+	  through the AMBE+2 decoder. A NXDN voice channel carries one
+	  AMBE+2 3600x2450 frame, the same 72 bits DMR transmits, so the
+	  DMR vocoder is reused unchanged.
+
+	  Receive only, and the UI has to add OPMODE_NXDN to its mode
+	  list. See docs/RX_NXDN.md.
+
+	  Enable it with west build -b c62 ... -- -DCONFIG_C62_NXDN_RX=y
+
+config NXDN_TX
+	bool "NXDN transmit (frames, 4FSK modulator, PTT)"
+	depends on C62_NXDN_RX && DMR_TX
+	default n
+	help
+	  NXDN transmit (docs/TX_NXDN.md): the frame builders of NxdnTx.c,
+	  the shared 4FSK modulator of Fsk4Tx.c and the PTT state machine of
+	  OpMode_NXDN (preamble, voice, release, tail).  It needs the AMBE+2
+	  encoder and the deviation/PA chain of CONFIG_DMR_TX, which is why
+	  the option depends on it.  Receive-only without it.
+
+	  The fourth pass had to add this symbol: the branch's CMake read
+	  CONFIG_NXDN_TX, and Kconfig.board had no such config, so west
+	  build refused the assignment as an undefined symbol.
+
+endmenu
+
+#
+# DMR, on the protocol package of protocols/DMR/ (docs/DMR_PKG.md): demodulator
+# with soft values, BPTC/Golay/QR/RS/trellis FEC, protocol, voice, TX, data,
+# SMS, LRRP, encryption and Tier III.
+#
+menu "DMR"
+
+config C62_DMR_VOCODER
+	bool "AMBE+2 voice decoder (shared with NXDN, YSF and dPMR)"
+	default n
+	help
+	  Build lib/dmr_vocoder, the AMBE+2 3600x2450 decoder (113 402
+	  instructions per 20 ms frame, 2.3-3.0 % of the M33).  The DMR mode
+	  builds it too when it is on; select this from a build that has NXDN,
+	  YSF or dPMR and no DMR.
+
+config C62_DMR_RX
+	bool "DMR mode (protocol package: demod, FEC, voice, TX, trunk)"
+	default n
+	help
+	  DMR mode built on the protocol package: 4FSK demodulation of the
+	  discriminator output with soft values, BPTC/Golay/RS/trellis FEC, the
+	  burst and slot state machine, voice playback, the transmitter, data,
+	  short messages, LRRP positions, encryption and Tier III.  See
+	  docs/DMR_PKG.md for the file map, what it replaced and its licences.
+
+	  Voice comes from lib/dmr_vocoder and the transmitter's encoder from
+	  lib/dmr_encoder, both built in (C).  The package's own pair (mbelib
+	  for the decoder, OpenDMR for the encoder) stays selectable with
+	  -DC62_DMR_VOICE=ON and -DDMR_ENC=ON, but is off by default: neither
+	  fits the M33 in real time (mbelib 9.36 M instructions per 20 ms
+	  frame, OpenDMR 4.10 M; ours are 113 k and 1.43 M).  See
+	  docs/DMR_PKG.md, "The vocoders".
+
+	  Enable it with west build -b c62 ... -- -DCONFIG_C62_DMR_RX=y
+
+config DMR_TX
+	bool "DMR transmitter (framing, FEC, 4FSK modulator, PTT)"
+	depends on C62_DMR_RX
+	default n
+	help
+	  Transmit chain: voice LC headers, voice superframes, terminator,
+	  4FSK with the package's root raised cosine, the repeater alignment
+	  with the measured air delay of the audio path (Ajustes > DMR, see
+	  docs/DMR_PKG.md "Transmit air delay").  The AMBE+2 encoder is
+	  lib/dmr_encoder (ours); PTT refuses to key when none is built.
+
+config DMR_TRUNK
+	bool "DMR Tier III (RadioFoundry engine)"
+	depends on C62_DMR_RX
+	default y
+	help
+	  Tier III trunking: the control channel hunt, camping, call following
+	  and, with a radio ID, registration.  The engine is RadioFoundry's
+	  (MIT, trunk/LICENSE.radiofoundry).  It listens only unless a radio ID
+	  is set; without a system to listen to it stays in the hunt state and
+	  transmits nothing.
+
+config DMR_SMS
+	bool "DMR short messages into the shared message store"
+	depends on C62_DMR_RX
+	default y
+	help
+	  Texts received in DMR data calls are mirrored into core/messaging
+	  (the inbox the screen reads) and queued messages leave as data calls
+	  with the package's three formats (TMS, ETSI IP, ETSI short data).
+
+endmenu
+
+#
+# System Fusion (C4FM) receive.  The frame layer reuses the Golay decoder and
+# the AMBE+2 vocoder of lib/dmr_vocoder, so the option selects
+# C62_DMR_VOCODER.  See docs/RX_FUSION.md.
+#
+menu "System Fusion"
+
+config C62_YSF
+	bool "Yaesu System Fusion mode (C4FM receive)"
+	select C62_DMR_VOCODER
+	default n
+	help
+	  System Fusion receive mode: C4FM at 4800 symbols/s, the 100 ms frame
+	  (sync, FICH, data channel, five voice slots), the callsigns, the DG-ID
+	  and the text message reassembler, and voice through the shared AMBE+2
+	  decoder. Selects the vocoder; there is no transmitter.
+
+	  Voice is decoded in V/D mode 1 and V/D mode 2, which carry AMBE+2 at
+	  2450 bit/s. Voice FR (the full-rate "wide" mode) is counted and skipped:
+	  it carries a 7200 bit/s IMBE frame this build has no decoder for.
+
+	  Enable it with west build -b c62 ... -- -DCONFIG_C62_YSF=y
+
+config YSF_TX
+	bool "System Fusion transmitter (FICH, V/D mode 1, C4FM)"
+	depends on C62_YSF
+	default y
+	help
+	  The transmit chain of protocols/YSF/YsfTx.c and the shared C4FM
+	  shaper: header, V/D mode 1 voice frames and terminator, keyed on PTT.
+	  Costs about 4 KB of flash and 2.5 KB of PSRAM for the frame buffer.
+	  Turning it off leaves PTT inert in this mode.
+
+endmenu
+
+#
+# D-STAR DV: GMSK 4800 bit/s, the radio header, the voice frames and the
+# slow-data channel.  Its own AMBE 3600x2400 decoder, in PSRAM.
+#
+menu "D-STAR"
+
+config C62_DSTAR
+	bool "D-STAR DV mode (receive, slow data, transmitter)"
+	select C62_DSTAR_VOCODER
+	default n
+	help
+	  D-STAR DV: GMSK 4800 bit/s in a 6.25 kHz channel -- the radio header
+	  (callsigns, flags, CRC), the voice frames and the slow-data channel
+	  (20-character message, NMEA and D-PRS positions).  See docs/RX_DSTAR.md.
+
+	  Voice goes through the AMBE 3600x2400 decoder (C62_DSTAR_VOCODER).
+
+	  CONFIG_DSTAR_TX (default y with this option) builds the transmit
+	  chain and keys the PA on PTT.  The transmit voice payload is the
+	  D-STAR null frame unless a 3600x2400 encoder is linked in, which is
+	  what an Icom radio transmits with no microphone input.
+
+	  Enable it with west build -b c62 ... -- -DCONFIG_C62_DSTAR=y
+
+config C62_DSTAR_VOCODER
+	bool "D-STAR voice decoder (AMBE 3600x2400, decode only)"
+	default y
+	help
+	  Build the AMBE 3600x2400 voice decoder used by the D-STAR receive
+	  mode: the 72 voice bits of a DV frame in, 160 samples of 8 kHz PCM
+	  out.  A port of mbelib-neo v2.6.2's D-STAR path, 121 000
+	  instructions per 20 ms frame (2.4-3.2 % of the M33 at 300 MHz), with
+	  its 14 KiB of state in PSRAM.  See docs/RX_DSTAR.md.
+
+	  Turn it off to build the mode without voice: callsigns, messages,
+	  positions and the whole receive chain keep working, and the frames
+	  play as silence.
+
+config DSTAR_TX
+	bool "D-STAR transmitter"
+	depends on C62_DSTAR
+	default y
+	help
+	  The DV transmit chain (bit stream and GMSK shaper).  Turning it off
+	  keeps PTT inert in D-STAR mode and saves the baseband buffer.
+
+endmenu
+
+#
+# dPMR (ETSI TS 102 490): 6,25 kHz FDMA, 4FSK at 2400 symbols/s, receive only.
+# platform/targets/c62/CMakeLists.txt builds the mode and links lib/dmr_vocoder
+# for its voice. Enable it with
+#   west build -b c62 ... -- -DCONFIG_C62_DPMR_RX=y
+# See docs/RX_DPMR.md.
+#
+menu "dPMR"
+
+config C62_DPMR_RX
+	bool "dPMR receive mode (6,25 kHz, TS 102 490)"
+	select C62_DMR_VOCODER if !C62_DMR_RX
+	default n
+	help
+	  dPMR receive mode: 4FSK at 2400 symbols/s on a 6,25 kHz channel,
+	  80 ms frames of 384 bits, header and END frames, the CCH of every
+	  frame (frame number, communication mode, 12 bit address slices) and
+	  voice through the AMBE+2 3600x2450 decoder, which is the same
+	  lib/dmr_vocoder the DMR mode uses: dPMR carries the frame with a
+	  4-way interleave, not a different vocoder.
+
+	  Receive, and transmit with CONFIG_DPMR_TX. ALSA-like flat
+	  discriminator input, one carrier per channel: dPMR is FDMA, there
+	  are no timeslots.
+
+	  Enable it with west build -b c62 ... -- -DCONFIG_C62_DPMR_RX=y
+
+config DPMR_TX
+	bool "dPMR transmit (header, CCH, TCH, END frame, PTT)"
+	depends on C62_DPMR_RX && DMR_TX
+	default n
+	help
+	  dPMR transmit (ETSI TS 102 490): the preamble, the header frame
+	  with its two header information fields and the channel code of the
+	  frequency, superframes of four payload frames (CCH with the frame
+	  number and the address slices, four AMBE+2 3600x2450 frames in the
+	  TCH) and the END frame. Same 4FSK modulator and PA chain as DMR,
+	  and its AMBE+2 encoder, which is why the option depends on
+	  CONFIG_DMR_TX.
+
+	  There is no listen-before-talk: the mode keys when the operator
+	  does. The channel code comes from clause 6.1.5 for the frequency
+	  (group A), so this receiver and a reference decoder read the call
+	  back.
+
+endmenu
+
+#
+# APRS on the analog FM path: AX.25 frames, Bell 202 AFSK at 1200 baud,
+# messaging with acknowledgements, an optional beacon and the received station
+# list. It is not an operating mode: the decoder rides on FM and both the
+# decoding and the beacon are off until the operator enables them.
+# platform/targets/c62/CMakeLists.txt builds the sources and defines
+# CONFIG_APRS when this is set. See docs/APRS.md.
+#
+menu "APRS"
+
+config C62_APRS
+	bool "APRS on FM (AX.25, AFSK 1200, messaging)"
+	default y
+	help
+	  APRS decoding and messaging on the analog FM receive path. The
+	  discriminator is tapped with a second audio path, so audio is never
+	  interrupted; the tap only runs while the menu option "Decode" is on.
+	  Messages are sent from the APRS screens, never with the PTT, and a
+	  beacon is a separate option that is also off by default.
+
+endmenu
+
+#
+# P25 Phase 1 receive: C4FM demodulation of the discriminator output, NID, link
+# control, TSBK, and the IMBE frames handed to a vocoder hook. Receive only.
+# platform/targets/c62/CMakeLists.txt builds the sources and defines CONFIG_P25
+# when this is set. See docs/RX_P25.md.
+#
+menu "P25"
+
+config C62_P25
+	bool "P25 Phase 1 receive (C4FM)"
+	default n
+	help
+	  P25 Phase 1 receive mode: 4800 symbol/s C4FM on a 12.5 kHz channel,
+	  root-raised-cosine matched filter, frame sync, BCH(63,16) NID with the
+	  NAC and the DUID, IMBE channel decoding, link control (RS(24,12)) and
+	  trunking blocks (trellis, CRC-16).
+
+	  Voice needs an IMBE decoder linked in (C62_P25_VOCODER below); without
+	  one the mode decodes and counts the frames but plays nothing.  There is
+	  no trunking follow.
+
+	  CONFIG_P25_TX (default y with this option) builds the transmitter: the
+	  HDU, the LDU1/LDU2 voice frames with their FEC, the TSBK blocks, the
+	  terminator and the C4FM shaper.  No voice source is installed by
+	  default: p25Tx_setVoiceSource() is the hook an IMBE encoder plugs
+	  into, and until one is ported the call is a header, null-information
+	  TSBK frames and a terminator -- a valid transmission with no voice in
+	  it.  Free IMBE encoders do exist (mbelib-neo 2.6's imbe7200x4400_enc
+	  and Pavel Yazev's, already in this tree under lib/opendmr/encoder/),
+	  which is why silence is a missing work package and not a limit of the
+	  format: docs/TX_P25.md, "Voice, and why there is none".
+
+	  Enable it with west build -b c62 ... -- -DCONFIG_C62_P25=y
+
+config P25_TX
+	bool "P25 Phase 1 transmitter (HDU, LDU, TSBK, TDU, C4FM)"
+	depends on C62_P25
+	default y
+	help
+	  The transmit chain of protocols/P25/P25Tx.c: the frame builder (BCH
+	  NID, (18,6) Golay header words, RS(24,12) and RS(36,20) over GF(64),
+	  the trellis of the TSBK) and the C4FM shaper shared with System Fusion.
+	  Turning it off leaves PTT inert in this mode.
+
+config C62_P25_VOCODER
+	bool "P25 IMBE voice decoder (our lib/imbe_vocoder)"
+	depends on C62_P25
+	default y
+	help
+	  Decode the 88 IMBE parameters of each P25 voice frame into 8 kHz PCM
+	  with lib/imbe_vocoder, this tree's own C port of mbelib-neo's IMBE
+	  decoder: one static instance, no allocation, no libm, every table in
+	  flash.  195 k instructions per 20 ms frame, 3.9-5.2 % of the M33,
+	  against 9.36 M for mbelib.  docs/IMBE.md has the bit allocation, the
+	  verification against the reference, the cost and the licence.
+
+	  Without it the mode decodes and counts frames but plays nothing.
+
+config C62_P25_MBELIB
+	bool "P25 IMBE voice decoder: mbelib-neo instead of ours"
+	depends on C62_P25
+	select C62_P25_VOCODER
+	default n
+	help
+	  Link mbelib-neo's mbe_processImbe4400Data() as the IMBE backend
+	  instead of lib/imbe_vocoder.  It renders the frame in DVSI's 10 ms
+	  subframes rather than TIA-102.BABA 7.5's spec rendering, which is
+	  what a radio hears, but it costs 9.36 M instructions per frame: more
+	  than the 6 M a 20 ms frame has, so the receiver cannot keep up.  Kept
+	  as a reference build for comparing the two on the radio.  Needs the
+	  mbelib sources with their IMBE path (scripts/c62/fetch_mbelib.sh
+	  fetches the DMR-only mbelib, which has no IMBE).
+
+endmenu
+
+menu "Spectrum analyser"
+
+config C62_SPECTRUM_SPI_HZ
+	int "SPI clock while sweeping, Hz"
+	default 1000000
+	range 200000 4000000
+	help
+	  The BK4819 talks over a bit-banged SPI at 200 kHz for everything the
+	  radio does, which is 96 us for the three bytes of one register access.
+	  A sweep of the spectrum analyser is three accesses per bin, so the bus
+	  alone costs more than the synthesizer's settling time, and the analyser
+	  uses a second configuration of the same bus at this clock. The chip's
+	  interface takes up to 8 MHz (datasheet V1.0 §2.6); above 1 MHz the
+	  driver's per-bit delay truncates to zero and the rate is set by the GPIO
+	  toggling, around 2 MHz on this core. Lower this to 200000 to sweep over
+	  the same clock as the rest of the radio; nothing but the analyser
+	  changes either way. See docs/SPECTRUM.md §3.
+
+config C62_SPECTRUM_SETTLE_US
+	int "Settling time after a retune, us (0 = trust the chip)"
+	default 0
+	range 0 600
+	help
+	  Time the receiver is given after each PLL write before the RSSI is
+	  believed. The datasheet gives 0.3 ms for "power up or channel
+	  reselection" (V1.0 §1.2.3) and that is the worst case, not the case of
+	  a sweep, where the synthesizer stays locked and only the fractional
+	  divider moves by one bin.
+
+	  At 0 the analyser waits for the chip itself: it polls the glitch
+	  indicator, REG_63, which saturates while the IF recovers from a retune,
+	  and reads the RSSI as soon as the counter comes down -- the method of
+	  the UV-K5 spectrum firmware, with a bounded number of polls so a register
+	  that never comes down cannot stall the sweep (the analyser turns the
+	  gate off by itself if that happens, and the screen says so). A fixed
+	  value disables the gate and sleeps instead, which is what to use to
+	  compare the two on the bench.
+
+config C62_SPECTRUM_AGC_FIX
+	bool "Fix the AGC while sweeping"
+	default n
+	help
+	  Hold the receiver's AGC at one gain for the whole sweep (REG_7E<15>,
+	  with the index of <14:12>, which the chip resets to 011 = maximum).
+	  The automatic loop cannot follow one bin every 50 us, so without this
+	  each reading carries whatever gain the previous bins and the parked
+	  receiver left behind: the trace is a fixed-gain measurement anyway,
+	  but not the same one from sweep to sweep.
+
+	  Off by default because the fixed index is not the live gain: turning
+	  it on moves the absolute level of the trace, and a local carrier
+	  strong enough to overload a 0 dbm front end would flatten the span.
+	  Turn it on if the trace flickers between sweeps; check the levels
+	  against a known signal on the radio first. docs/SPECTRUM.md §3.2.
+
+config C62_SPECTRUM_GATE_POLLS
+	int "Glitch-gate polls before giving up"
+	default 20
+	range 1 40
+	depends on C62_SPECTRUM_SETTLE_US = 0
+	help
+	  How many times the analyser reads REG_63, 20 us apart, before it
+	  stops waiting for the IF to recover and reads the RSSI anyway. Twenty
+	  polls cover 400 us, the datasheet's worst case; a chip that settles
+	  faster costs a few. Each poll is a register read, so the step is a
+	  compromise between the resolution of the wait and the traffic it
+	  costs.
+
+endmenu
+
+DT_COMPAT_LSF_SERVICE_CONTROLLER := lsf,service-controller
+
+config LSF_SERVICE_CONTROLLER
+	bool "LSF Service Controller"
+	select REQUIRES_FULL_LIBC
+
+if LSF_SERVICE_CONTROLLER
+orsource "services/Kconfig"
+endif # LSF_SERVICE_CONTROLLER
+
+#
+# RNNoise noise suppression on the analog FM receive path.  Off by default; see
+# docs/NOISE.md and lib/rnnoise/.  The stage is switched at run time from the
+# Audio menu ("RX Noise") and costs one flag test per 10 ms frame while off.
+#
+config C62_NOISE_SUPPRESS
+	bool "RNNoise noise suppression on the analog RX path"
+	default n
+	help
+	  Builds lib/rnnoise (RNNoise v0.1.1, BSD-3-Clause) and its stage on
+	  the analog FM receive path, behind the "RX Noise" switch of the
+	  Audio menu. Off by default, and off at run time until the switch is
+	  set: while disabled the stage costs one flag test per 10 ms frame
+	  and allocates nothing.

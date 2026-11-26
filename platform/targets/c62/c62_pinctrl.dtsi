@@ -1,0 +1,59 @@
+/*
+ * SPDX-FileCopyrightText: Copyright 2020-2026 OpenRTX Contributors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+#include <csk/csk6_pinctrl.dtsi>
+
+&pinctrl {
+	/* Configure console TX without relying on DSP pin setup. */
+	pinctrl_uart2_tx_default: uart2_tx_default {
+		pinctrls = <UART2_TXD_GPIOA_18>;
+	};
+
+	/*
+	 * Console RX is GPIOA_15, the same pad as the accessory jack's PTT switch
+	 * (docs/ACCESSORY.md).  Declaring it here is the truth about the wiring;
+	 * the CSK6 pinctrl binding carries only the function selector, so the
+	 * pull-up that keeps an unplugged line high is asserted in code, after the
+	 * function switch (c62_portPadToUart(), platform.c): the pad's mode bits
+	 * 16..18 share the register with the selector and IOMuxManager_PinConfigure
+	 * rewrites only bits 0..4, but the rest level is asserted last on purpose.
+	 */
+	pinctrl_uart2_rx_default: uart2_rx_default {
+		pinctrls = <UART2_RXD_GPIOA_15>;
+	};
+
+	/* SPI1, the display bus */
+	pinctrl_spi1_cs_default: spi1_cs_default {
+		pinctrls = <SPI1_CS_N_GPIOA_09>;
+	};
+
+	pinctrl_spi1_miso_default: spi1_miso_default {
+		pinctrls = <SPI1_MISO_GPIOA_10>;
+	};
+
+	pinctrl_spi1_mosi_default: spi1_mosi_default {
+		pinctrls = <SPI1_MOSI_GPIOA_11>;
+	};
+
+	pinctrl_spi1_sclk_default: spi1_sclk_default {
+		pinctrls = <SPI1_CLK_GPIOA_12>;
+	};
+
+	pinctrl_adc0_ch1_default: adc0_ch1_default {
+		pinctrls = <GPADC_1_GPIOB_07>;
+	};
+
+	pinctrl_adc0_ch2_default: adc0_ch2_default {
+		pinctrls = <GPADC_2_GPIOB_08>;
+	};
+
+	pinctrl_pwm2_default: pwm2_default {
+		pinctrls = <GPT_PWM_2_GPIOA_02>;
+	};
+
+	pinctrl_pwm3_default: pwm3_default {
+		pinctrls = <GPT_PWM_3_GPIOA_03>;
+	};
+};
