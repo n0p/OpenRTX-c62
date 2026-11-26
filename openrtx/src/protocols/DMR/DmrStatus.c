@@ -1,0 +1,171 @@
+/*
+ * SPDX-FileCopyrightText: Copyright 2020-2026 OpenRTX Contributors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/**
+ * @file DmrStatus.c
+ * @brief Translation of the package's decoder snapshot into the struct the
+ *        UI reads (DmrStatus.h).  Ours: the package's own snapshots
+ *        (dmr_proto_get_slot/_get_stats, dmr_demod_get_status) stay as they
+ *        are.
+ */
+
+#include <string.h>
+#include "protocols/DMR/DmrStatus.h"
+#include "protocols/DMR/dmr_demod.h"
+#include "protocols/DMR/dmr_proto.h"
+#include "protocols/DMR/dmr_voice.h"
+
+/** A burst this recent means "sync" */
+#define SYNC_WINDOW_MS 300
+/** A voice burst this recent means "voice" */
+#define VOICE_WINDOW_MS 1000
+/**
+ * The call on the screen outlives its last burst by this much.  Five seconds is
+ * the same hang the AUTO timeslot uses, and it is what keeps the screen steady:
+ * the identifiers used to be taken from the last *burst*, so on a repeater with
+ * the other slot busy they appeared and disappeared with whichever slot spoke
+ * last -- the rows blinked while the audio was perfectly fine.
+ */
+#define CALL_HOLD_MS 5000
+
+static struct dmrStatus s_status;
+
+/*
+ * Link quality, per mille, from the embedded link controls of the voice
+ * bursts: the package does not compute an EVM (its slicer carries no
+ * per-bit decisions to compare), but the EMB QR word either decodes or it
+ * does not, and their ratio is what the screen prints as "e%".
+ */
+static uint16_t linkQuality(const dmr_proto_stats_t *st)
+{
+    const uint32_t n = st->emb_lc_ok + st->emb_bad;
+
+    if (n == 0)
+        return 0;
+    return (uint16_t)((st->emb_lc_ok * 1000u) / n);
+}
+
+void dmrStatus_clear(void)
+{
+    memset(&s_status, 0, sizeof(s_status));
+    s_status.colourCode = -1;
+    s_status.lastType = -1;
+}
+
+void dmrStatus_reset(void)
+{
+    dmrStatus_clear();
+}
+
+void dmrStatus_update(void)
+{
+    dmr_slot_info_t s0, s1;
+    dmr_proto_stats_t st;
+    dmr_demod_status_t ds;
+    int bsSlot = 0;
+
+    memset(&s0, 0, sizeof(s0));
+    memset(&s1, 0, sizeof(s1));
+    dmr_proto_get_slot(0, &s0);
+    dmr_proto_get_slot(1, &s1);
+    dmr_proto_get_stats(&st);
+    dmr_demod_get_status(&ds);
+
+    const dmr_slot_info_t *last = (s1.last_ms > s0.last_ms) ? &s1 : &s0;
+    const uint32_t now = ds.now_ms;
+    const dmr_slot_info_t *si[2] = { &s0, &s1 };
+
+    /* The voice layer's own clock: a call that stops without a terminator
+     * would otherwise hold the speaker for ever (dmr_voice_tick) */
+    dmr_voice_tick(now);
+
+    /*
+     * Which slot's call is the one on the screen.  The audio latch answers it
+     * while a call plays (and in AUTO it is exactly the slot being followed);
+     * before the first voice burst, the slot whose link control announced a
+     * call and is still inside the hold window.  Only when neither says
+     * anything does the last burst decide, which is the old behaviour.
+     *
+     * Everything the screen says about the *call* -- colour code, timeslot,
+     * identifiers, whether voice is flowing -- is read from that slot.  Taking
+     * it from whichever burst came last is what made the rows blink on a
+     * repeater with the other slot busy, while the audio was perfectly fine.
+     */
+    int callSlot = dmr_voice_get_playing();
+
+    if ((callSlot < 0) || (callSlot > 1)) {
+        callSlot = -1;
+        uint32_t best = 0;
+        for (int i = 0; i < 2; i++) {
+            if (si[i]->ids_valid
+                && ((uint32_t)(now - si[i]->last_ms) < CALL_HOLD_MS)
+                && ((callSlot < 0) || (si[i]->last_ms >= best))) {
+                callSlot = i;
+                best = si[i]->last_ms;
+            }
+        }
+    }
+
+    const dmr_slot_info_t *call = (callSlot >= 0) ? si[callSlot] : last;
+
+    /* Something is on the air at all: any burst, either slot */
+    s_status.sync = (last->activity != DMR_ACT_NONE)
+                 && ((uint32_t)(now - last->last_ms) < SYNC_WINDOW_MS);
+
+    /* Voice is the call's voice, not whatever spoke last */
+    s_status.voice = (call->activity == DMR_ACT_VOICE)
+                  && ((uint32_t)(now - call->last_ms) < VOICE_WINDOW_MS);
+
+    /* And the colour code of the call it belongs to */
+    s_status.colourCode = (int8_t)((call->cc >= 0) ? call->cc : -1);
+
+    /* The slot the call is on, so the screen stops following the bursts */
+    if (callSlot >= 0)
+        s_status.timeslot = (int8_t)(callSlot + 1);
+    else if (dmr_proto_bs_slot(&bsSlot))
+        s_status.timeslot = (int8_t)(bsSlot + 1);
+    else if (dmr_proto_is_ms_mode())
+        s_status.timeslot = 0;
+
+    if (s_status.voice)
+        s_status.lastType = -1;
+    else if (last->activity == DMR_ACT_CSBK)
+        s_status.lastType = 3; /* DMR_DT_CSBK, DmrDefs.h */
+    else if (last->activity == DMR_ACT_DATA)
+        s_status.lastType = 7; /* DMR_DT_RATE_12 */
+    else if (last->activity == DMR_ACT_IDLE)
+        s_status.lastType = 9; /* DMR_DT_IDLE */
+
+    s_status.evm = linkQuality(&st);
+
+    s_status.idsValid = call->ids_valid;
+    s_status.group = call->group;
+    if (call->ids_valid) {
+        s_status.src = call->src;
+        s_status.dst = call->dst;
+    }
+
+    uint32_t fecBits, fecFrames;
+    dmr_voice_get_fec(&fecBits, &fecFrames);
+    (void)fecBits;
+    s_status.bursts = st.frames;
+    s_status.voiceBursts = st.voice_bf;
+    s_status.frames = fecFrames;
+    s_status.crcChecks = st.data_packets + st.data_crc_bad;
+    s_status.crcOk = st.data_packets;
+}
+
+void dmr_getStatus(struct dmrStatus *out)
+{
+    if (out == NULL)
+        return;
+    /*
+     * One struct copy: the fields are written by the rtx thread and read by
+     * the UI.  The copy may be one burst behind, never wrong on anything the
+     * screen shows (a colour code one burst old is the same colour code).
+     */
+    *out = s_status;
+}
