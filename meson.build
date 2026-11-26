@@ -2184,6 +2184,20 @@ tetra_uplink_test = executable('tetra_uplink_test',
                                           'link_args'          : linux_l_args})
 test('TETRA Uplink Session Test', tetra_uplink_test)
 
+# El demodulador TETRA, con las entradas que lo colgaban (silencio digital,
+# continua a fondo de escala, ruido) y los invariantes que acotan el lazo de
+# símbolos: protocols/TETRA/TetraDemod.c es C portátil y solo depende de su
+# cabecera.
+tetra_demod_test = executable('tetra_demod_test',
+                              sources : ['tests/unit/tetra_demod.cpp',
+                                         'openrtx/src/protocols/TETRA/TetraDemod.c'],
+                              kwargs  : {'c_args'             : linux_c_args,
+                                         'cpp_args'           : linux_cpp_args,
+                                         'include_directories': linux_inc,
+                                         'dependencies'       : [catch2_dep],
+                                         'link_args'          : linux_l_args})
+test('TETRA Demodulator Bounded Test', tetra_demod_test, timeout : 120)
+
 # VFO carrier search: the machine (core/vfo_search.c) is pure — the time and a
 # sample of the receiver are arguments — so this test sweeps a band with a
 # synthetic squelch, frames and a published frequency, and measures its cost.

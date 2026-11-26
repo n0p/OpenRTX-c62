@@ -226,13 +226,33 @@ std::vector<uint8_t> uplinkStream(void)
     return out;
 }
 
+/* Three slots of the burst alone, 510 bits each: the audio needs the slots
+ * aligned to their symbol grid, not the noisy stream the bit-level check
+ * uses. */
+std::vector<uint8_t> uplinkSlots(unsigned slots)
+{
+    std::vector<uint8_t> out;
+    uint32_t rng = 0x1234567u;
+    uint8_t t5[168];
+    uint8_t burst[TETRA_CB_BITS];
+    std::vector<uint8_t> t1 = mac_access(UL_SSI, u_setup(UL_GSSI));
+
+    tetra_encode_sch(TETRA_SCH_HU, t1.data(), scramb(), t5);
+    tetra_tmo_build_cb(burst, t5);
+
+    for (unsigned i = 0; i < slots; i++)
+        slot(out, burst, TETRA_CB_BITS, rng);
+    return out;
+}
+
 /*
  * The same burst as FM discriminator audio at 48 kHz, which is what the radio
  * hands to TetraDemod.c: pi/4-DQPSK, RRC 0.35, the phase integrated per
  * symbol and the per-sample phase step written as instantaneous frequency.
  * The mapping is libtetra's (tools/tetra_gen.c: dibit 0..3 -> +1, +3, -1, -3
- * quarter turns) so what is generated here is the waveform of the burst that
- * checkBurst() decodes at bit level.
+ * quarter turns) and the amplitude window is the reference one (silence over
+ * the 34-bit guard and between slots), so what is generated here is the
+ * waveform of the burst checkBurst() decodes at bit level.
  */
 double rrc(double t)
 {
@@ -253,24 +273,25 @@ double rrc(double t)
 
 std::vector<int16_t> uplinkAudio(void)
 {
+    /*
+     * Modulated at 144 kHz (8 samples per symbol, the rate the demodulator
+     * interpolates to) and then averaged down to 48 kHz: the discriminator of
+     * a baseband generated at 2.67 samples per symbol is aliased, and the
+     * demodulator integrates over exactly one symbol.
+     */
+    const double fsHi = 144000.0;
     const double fs = TETRA_DEMOD_IN_RATE;
     const double symrate = 18000.0;
-    const double sps = fs / symrate;
+    const double sps = fsHi / symrate;
     const unsigned span = 4;
 
-    /* Symbols: a slot per repetition, the burst in symbols 17..252 */
-    std::vector<uint8_t> bits = uplinkStream();
+    /* Symbols: the three slots, the burst in symbols 16..251 of each 255 */
+    std::vector<uint8_t> bits = uplinkSlots(24);
     std::vector<double> amp;
     std::vector<std::complex<double>> sym;
     std::complex<double> phase(1.0, 0.0);
     static const int dphi[4] = { 1, 3, -1, -3 };
 
-    /* 0.3 s of silence before, so the demodulator settles */
-    for (unsigned n = 0; n < (unsigned)(0.3 * symrate); n++) {
-        sym.push_back(phase);
-        amp.push_back(0.0);
-        phase *= std::exp(std::complex<double>(0.0, M_PI / 4.0));
-    }
     for (unsigned i = 0; i + 1 < bits.size(); i += 2) {
         unsigned k = (i / 2) % 255;
         double a = (k >= 16 && k <= 251) ? 1.0 : 0.0;
@@ -280,14 +301,8 @@ std::vector<int16_t> uplinkAudio(void)
         sym.push_back(phase);
         amp.push_back(a);
     }
-    /* 0.3 s of silence after, for the last filter support */
-    for (unsigned n = 0; n < (unsigned)(0.3 * symrate); n++) {
-        sym.push_back(phase);
-        amp.push_back(0.0);
-        phase *= std::exp(std::complex<double>(0.0, M_PI / 4.0));
-    }
 
-    /* RRC at 48 kHz, then the per-sample phase step as a frequency */
+    /* RRC at 144 kHz, then the per-sample phase step as a frequency */
     std::vector<std::complex<double>> base;
     for (size_t n = 0; ; n++) {
         double t = n / sps;
@@ -305,21 +320,91 @@ std::vector<int16_t> uplinkAudio(void)
         base.push_back(acc);
     }
 
+    /*
+     * Matched filter: a real receiver's channel filter is the same RRC the
+     * transmitter used, and only the two together are Nyquist (a single RRC
+     * leaves ISI at the symbol instants, which is what the demodulator's
+     * equalizer then has to undo on a real radio).
+     */
+    std::vector<std::complex<double>> mf(base.size(), std::complex<double>(0, 0));
+    for (size_t n = 0; n < base.size(); n++) {
+        std::complex<double> acc(0.0, 0.0);
+
+        for (int j = -4 * (int)sps; j <= 4 * (int)sps; j++) {
+            long idx = (long)n + j;
+            if (idx < 0 || (size_t)idx >= base.size())
+                continue;
+            acc += base[idx] * rrc((double)j / sps);
+        }
+        mf[n] = acc / sps;
+    }
+
+    std::vector<double> hz;
+    for (size_t n = 0; n + 1 < mf.size(); n++) {
+        std::complex<double> z = mf[n + 1] * std::conj(mf[n]);
+
+        hz.push_back(std::arg(z) * fsHi / (2.0 * M_PI));
+    }
+
+    /*
+     * Down to 48 kHz through a low-pass, not a box average: the
+     * instantaneous frequency of an RRC-shaped pi/4-DQPSK signal has energy
+     * well above 24 kHz (the phase steps are sharp), and decimating it
+     * without a filter folds that back over the symbol.
+     */
+    const unsigned taps = 33;
+    const double fc = 16000.0;
+    std::vector<double> lpf(taps), hzF(hz.size(), 0.0);
+    double sum = 0.0;
+    for (unsigned i = 0; i < taps; i++) {
+        double t = (double)i - (taps - 1) / 2.0;
+        double s = (t == 0) ? 2 * fc / fsHi
+                            : sin(2 * M_PI * fc / fsHi * t) / (M_PI * t);
+        double w = 0.54 - 0.46 * cos(2 * M_PI * i / (taps - 1));
+        lpf[i] = s * w;
+        sum += lpf[i];
+    }
+    for (auto &c : lpf)
+        c /= sum;
+    for (size_t n = 0; n < hz.size(); n++) {
+        double acc = 0.0;
+        for (unsigned i = 0; i < taps; i++) {
+            long idx = (long)n + (long)i - (long)((taps - 1) / 2);
+            if (idx < 0 || (size_t)idx >= hz.size())
+                continue;
+            acc += hz[idx] * lpf[i];
+        }
+        hzF[n] = acc;
+    }
+
     std::vector<int16_t> audio;
-    /* 6.75 kHz (a 3pi/4 symbol step) maps to half scale */
+    /* 6.75 kHz (a 3pi/4 symbol step) maps to half scale, then the whole
+     * stream is normalised to 90% so the RRC overshoot never clips (a clipped
+     * discriminator destroys the phase differences the demodulator needs) */
     const double scale = 16384.0 / 6750.0;
+    double peak = 0.0;
 
-    for (size_t n = 0; n + 1 < base.size(); n++) {
-        std::complex<double> z = base[n + 1] * std::conj(base[n]);
-        double d = std::arg(z); /* radians per sample */
-        double hz = d * fs / (2.0 * M_PI);
-        double v = hz * scale;
+    for (size_t n = 0; n < hzF.size(); n += 3) {
+        double v = hzF[n] * scale;
 
-        if (v > 32767.0)
-            v = 32767.0;
-        if (v < -32768.0)
-            v = -32768.0;
         audio.push_back((int16_t)std::lrint(v));
+        if (std::fabs(v) > peak)
+            peak = std::fabs(v);
+    }
+    /* A real channel is never digitally silent: a small floor keeps the
+     * equalizer from training on exact zeros between bursts */
+    if (peak > 29000.0) {
+        double g = 29000.0 / peak;
+        for (auto &v : audio)
+            v = (int16_t)std::lrint(v * g);
+        peak = 29000.0;
+    }
+    uint32_t rng = 0x5bd1e995u;
+    for (auto &v : audio) {
+        rng ^= rng << 13;
+        rng ^= rng >> 17;
+        rng ^= rng << 5;
+        v = (int16_t)(v + (int)(rng % 61) - 30);
     }
     return audio;
 }
@@ -648,6 +733,15 @@ int main(int argc, char **argv)
 {
     if (argc >= 4 && strcmp(argv[1], "-u") == 0)
         return checkCapture(argv[3], argv[2]);
+    if (argc >= 3 && strcmp(argv[1], "--bits") == 0) {
+        std::vector<uint8_t> b = uplinkStream();
+        FILE *f = fopen(argv[2], "wb");
+        if (f == NULL) { perror(argv[2]); return 1; }
+        fwrite(b.data(), 1, b.size(), f);
+        fclose(f);
+        printf("bits: %s, %zu\n", argv[2], b.size());
+        return 0;
+    }
     if (argc >= 3 && strcmp(argv[1], "--audio") == 0) {
         /* Write the synthesised discriminator audio and decode it */
         int rc = checkAudio(argv[2]);

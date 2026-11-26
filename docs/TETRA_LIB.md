@@ -150,7 +150,9 @@ RMS del demodulador (10,8 % de π/4, media de la segunda mitad de la captura).
 | `tetra_tmo_locked()` | `update()`, AFC, LED | hay rejilla TDMA |
 | `tetra_tmo_crc_ok()` | `update()`, `tetra_getDiag()` | bloques buenos (mantiene el lock del demodulador) |
 | `tetra_tmo_realigned()` | `tetra_getDiag()` | saltos de rejilla de la librería |
-| `tetra_tmo_resync()` | banco de host (`-r`) | re-sync conservando la célula |
+| `tetra_tmo_resync()` | `OpMode_TETRA::resync()` | re-sync conservando la célula |
+| `tetra_tmo_set_uplink_cell()` | `OpMode_TETRA::resync()` | CC de la célula cuando se escucha su uplink (`TETRA_UPLINK_DECODE`) |
+| `tetra_uplink_hz()` / `tetra_cell.ul_freq_hz` | `TetraStatus.c`, `TetraUplink.c` | frecuencia de uplink de la célula |
 | `struct tetra_rx_config` | `resync()` | `promiscuous = true`: un monitor no tiene ISSI ni grupos |
 
 No se usan (y por qué): `tetra_tmo_set_key_provider()`,
@@ -180,6 +182,76 @@ usa `tetra_sds_parse_text()` en el camino del host).
 resto se copia al estado. La UI lee con `tetra_getStatus()`; el menú rápido
 tiene ahora `REG` (registro/attach), `NET` (vecinas + reloj de red) y `UL`
 (SSI oído en el uplink) además de `CELL`, `LA/CC` y `CALL`.
+
+### Escuchar el uplink de la celda (MS → BS)
+
+El uplink viene implementado en la librería y **compilado en el firmware**:
+`platform/targets/c62/CMakeLists.txt` fija `TETRA_UPLINK_DETECT=ON` y
+`TETRA_UPLINK_DECODE=ON` antes de `add_subdirectory(libtetra)` (no se deja al
+valor por defecto de la librería), y `cmake/tetra_config.h.in` hace que
+`tetra_config.h` y el código compilado no puedan discrepar: un `-D` de fuera
+con otro valor es un `#error`.
+
+Qué reconoce, sin sincronismo con la bajada (cláusula 9.4.4 de EN 300 392-2):
+
+| señal | cómo | qué se decodifica |
+| --- | --- | --- |
+| ráfaga de control de uplink (SCH/HU) | secuencia de entrenamiento **extendida x** (30 bits) | MAC-ACCESS, U-SETUP, U-TX DEMAND, SDS y estado |
+| ráfaga normal de uplink (SCH/F, STCH) | secuencias **n** o **p** (22 bits) sin la **q** de un downlink continuo | señalización y tráfico (bloques de 216 bits) |
+| cualquier ráfaga, sin código de color | `TETRA_UPLINK_DETECT` | solo `TETRA_EV_SIGNAL` (`uplink`, sin PDUs) |
+
+La celda hace falta para *descodificar*: las ráfagas van aleatorizadas con el
+código de color (CC) de la célula. libtetra lo aprende de una bajada recibida
+antes o se le da con `tetra_tmo_set_uplink_cell()`; el modo lo siembra en cada
+`resync()` con la celda de la sesión, porque al retunear a la frecuencia de
+uplink se pierde el downlink del que se aprendió.
+
+#### La sesión: fila `CELL UL` del menú rápido
+
+`protocols/TETRA/TetraUplink.c` (C portátil, sin radio ni libtetra) guarda la
+sesión, y el menú rápido del modo TETRA la maneja:
+
+| valor | qué hace |
+| --- | --- |
+| `OFF` | recepción normal de la bajada; no se toca la frecuencia |
+| `ON` | la radio se sintoniza en la frecuencia de uplink de la célula, la sesión queda sembrada con su MCC/MNC/CC y el receptor busca ráfagas de MS |
+| `NO UL` | se pidió `ON` y no hay frecuencia de uplink conocida: **no se retunea** y la fila lo dice |
+
+La frecuencia de uplink es la que publica la célula (`tetra_cell.ul_freq_hz`,
+de SYSINFO) o, si no la publica, la conversión de duplex de su bajada
+(`tetraUl_hzFromDownlink()`, tabla 2 de TS 100 392-15, la misma que aplica la
+librería; el arnés de host comprueba que las dos tablas coinciden en las 768
+combinaciones de banda, duplex y sentido). Nunca se inventa una: sin dato, la
+fila dice `NO UL`.
+
+`OFF` devuelve la radio a la frecuencia de la que vino. La sesión es del modo,
+no un ajuste: no está en `settings_t`, no sobrevive al cambio de modo y termina
+sola cuando el operador cambia de frecuencia, cuando cambia de modo (el tick
+periódico de `ui.c` devuelve entonces rx **y** tx a la bajada, para que el
+uplink de una célula no quede como frecuencia de transmisión de un modo que
+puede keyar) y cuando el modo ve que la radio ya no está donde la sesión la
+puso.
+
+Límites, dichos:
+
+- **Sin downlink no hay rejilla temporal.** Escuchando el uplink no se está
+  sincronizado con la célula, así que no hay número de trama ni slot: los
+  eventos de uplink llevan `time` a cero (lo pone la librería) y la UI no
+  muestra tiempo de red para ellos. Tampoco hay forma de *comprobar* que la
+  célula sigue ahí mientras se la escucha: la radio tiene un solo receptor, y
+  "perder la celda" solo se detecta al volver a la bajada (Off, cambio de
+  frecuencia o de modo) o si aparece un downlink de otra celda en la frecuencia
+  de uplink.
+- **La frecuencia hay que conocerla.** El uplink de una celda no se busca: o lo
+  publica su SYSINFO, o se deduce de la bajada con la tabla de duplex. Las
+  frecuencias de uplink de otras celdas no se exploran.
+- **Si se apaga la radio con la sesión activa**, el VFO queda en la frecuencia
+  de uplink (la sesión no se guarda). Al encender, `CELL UL` está en `OFF` y
+  hay que volver a la bajada a mano o poner `ON` otra vez.
+- **La voz del uplink** se decodifica igual que la de bajada (los slots de
+  tráfico van con `uplink = true` y `talker_ssi` es el MS que transmite), pero
+  no se ha probado con una captura real de uplink (ver §5).
+
 
 ### Voz
 
@@ -246,6 +318,73 @@ call 1 id 113 dst 100601 talker 100701 group 1 enc 0 voice 1
 sds 0 traffic 455 speechFrames 910
 ```
 
+### 5.2 Uplink sin radio, y el demodulador acotado
+
+```bash
+scripts/tetra_host_build.sh <libtetra-src> /tmp/lt-host
+scripts/tetra_host_build.sh <libtetra-src> /tmp/lt-host captura.wav   # si hay
+```
+
+Construye libtetra **con las dos opciones de uplink fijadas** y comprueba en el
+`tetra_config.h` generado que están a 1 (si no, falla: un arnés con otro
+`layout` que el firmware es peor que ninguno). Después corre
+`tests/platform/c62_tetra_uplink_host.cpp`, que usa las unidades del firmware,
+no copias:
+
+1. **Tabla de duplex**: `tetraUl_hzFromDownlink()` contra `tetra_uplink_hz()` de
+   la librería, 16 bandas × 8 códigos × 2 sentidos × 3 bajadas = **768
+   combinaciones, 0 discrepancias**.
+2. **Evento de celda → estado → sesión**: una célula con SYSINFO y sin uplink
+   publicado se convierte (430,5 MHz → 420,5 MHz con duplex 0), una con duplex
+   reservado o sin separación dice `NO UL`, y lo que publica la célula manda
+   sobre la conversión.
+3. **Ráfaga real de MS**: una SCH/HU de control (MAC-ACCESS + U-SETUP, con la
+   secuencia extendida x) construida con `tetra_encode_sch()` +
+   `tetra_tmo_build_cb()` de la librería, aleatorizada con el CC de la célula y
+   empujada por el mismo receptor que usa el modo. El callback **del firmware**
+   (`tetraStatus_onEvent`) acaba con `uplink = 1` y `uplinkSs = 1234567`.
+
+Lo que **no** está verificado: una captura de uplink por el demodulador
+completo. El arnés tiene el modo `-u <mcc>:<mnc>:<cc> fichero.wav|.s16` listo
+para cuando haya una (48 kHz de audio de discriminador, como
+`tests/platform/c62_tetra_status_host.c`), y `--audio salida.s16` sintetiza el
+mismo burst como forma de onda (π/4-DQPSK con RRC 0.35, filtro de canal y
+discriminador). Con esa señal sintética el demodulador de referencia en Python
+(`scripts/c62_tetra_demod.py`) encuentra las secuencias de entrenamiento
+(24/24) pero no baja del 17 % de error de fase, y `TetraDemod.c` no engancha:
+la forma de onda sintética todavía no es equivalente a una captura de la C62
+(falta el filtro de FI real y el ruido del canal), así que el test de audio
+completo **queda pendiente de una captura real**. El camino de bits (§5.2.3) sí
+prueba la decodificación de un burst de MS de punta a punta.
+
+#### El lazo del demodulador, acotado
+
+`TetraDemod.c` tenía una entrada que lo colgaba: con **silencio digital** al
+principio de un bloque (códec muteado, un `underrun` de DMA, los 0,5 s que el
+modo tira tras un retune) el ajuste de ganancia dividía por una desviación cero,
+la ganancia salía infinita, y `wrapf()` giraba en `while (phi >= PI) phi -=
+2π` para siempre — dentro de la hebra de RTX, con la radio sorda y sin que
+ningún watchdog pudiera reiniciarla. Demostrado con el código anterior: 0,5 s de
+ceros y después una sinusoide dejan el binario girando (`timeout` lo mata) y el
+arreglado vuelve.
+
+El arreglo es de dentro afuera, y ninguna secuencia de entrada puede ya no
+terminar:
+
+| dónde | qué |
+| --- | --- |
+| `wrapf()` | no finito → 0; reducción con `floorf` en O(1), sin `while` |
+| `advance()` | un paso no finito se descarta (dejaba `nextInt` en `INT_MIN`) |
+| ajuste de ganancia | sin desviación no se toca la ganancia (silencio), y la ganancia y el offset quedan acotados y finitos |
+| vértice parabólico | acotado a ±medio símbolo y descartado si no es finito (una `den` casi cero daba correcciones de segundos) |
+| lazo de símbolos | **un** símbolo por muestra interpolada y la posición nunca queda más de una ventana atrás: ni giro ni escritura fuera del buffer de soft bits |
+
+`tests/unit/tetra_demod.cpp` (meson, `TETRA Demodulator Bounded Test`) mete
+silencio, continua a fondo de escala, cuadrada, alternante, rampa, ruido y
+silencio+burst, y comprueba en cada bloque que el estado sigue finito, que la
+posición no se queda atrás y que no se escribe más de `3/4·n + 8` bits. Antes
+del arreglo ese test no termina (meson lo mata por timeout).
+
 ## 6. Coste
 
 ### Por bloque de 30 ms (QEMU, mps2-an505, Cortex-M33, `-O2`)
@@ -303,6 +442,24 @@ De paso: hasta esta rama `-DC62_TETRA=OFF` **no enlazaba**
 (`undefined reference to _ui_printFit`, porque los ayudantes de dibujo de la UI
 estaban dentro del bloque `CONFIG_TETRA` y los usan también DMR y APRS). Ahora
 sí, que es lo que permite medir el coste del motor apagándolo.
+
+#### Lo que cuesta el uplink
+
+Medido sobre la librería sola, compilada para Cortex-M33 (`cmake
+-DCMAKE_TOOLCHAIN_FILE=cmake/arm-cortex-m33.cmake`, `MinSizeRel` = `-Os`), que
+es lo único que cambia con las dos opciones:
+
+| configuración | `.text` de `libtetra.a` | `sizeof(struct tetra_tmo_rx)` |
+| --- | --- | --- |
+| `TETRA_UPLINK_DETECT=OFF DECODE=OFF` | 26 560 B | 6 912 B |
+| `TETRA_UPLINK_DETECT=ON DECODE=ON` | 30 024 B | 6 944 B |
+| **diferencia** | **+3 464 B** | **+32 B** |
+
+Es el orden de magnitud que anuncia el README del fork («más con el decodificador
+de uplink»), y va con `--gc-sections` en la imagen final, así que es una cota
+superior. La pila no se ha medido aquí: el README acota «menos de 1 KB más el
+callback» y el callback del firmware (`tetraStatus_onEvent`) es el mismo que ya
+estaba en el camino de bajada.
 
 ## 7. Lo que se gana, lo que no se usa
 

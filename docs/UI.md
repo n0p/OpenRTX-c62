@@ -472,11 +472,24 @@ broke.
 (read only), `META` (opens the meta text editor), `PWR`, `BKL`, `KEYLIT`,
 `LOCK`, `MSGS`, `MSG`.
 
-### TETRA, receive only (10 rows)
+### TETRA, receive only (14 rows)
 
 `AFC` toggle, `FINE` −500..+500 Hz in 10 Hz steps (long press: ±100 Hz),
-`CELL` (MCC-MNC, read only), `LA/CC`, `CALL` (talker > destination, group and
-encryption flags, read only), `BKL`, `KEYLIT`, `LOCK`, `MSGS`, `MSG`.
+`CELL UL` (`OFF` / `ON` / `NO UL`: listens to the uplink of the cell — the MS
+to BS direction — see docs/TETRA_LIB.md, "Escuchar el uplink de la celda"), then
+`CELL` (MCC-MNC, read only), `LA/CC`, `REG` (registration/attach), `NET`
+(neighbours + network clock), `UL` (SSI heard on the uplink, read only), `CALL`
+(talker > destination, group and encryption flags, read only), `BKL`, `KEYLIT`,
+`LOCK`, `MSGS`, `MSG`.
+
+`CELL UL` is a **session of the mode**, not a setting: `ON` tunes the receiver to
+the cell's uplink frequency (published by its SYSINFO, or the duplex conversion
+of its downlink) and seeds the receiver with the cell's colour code; `OFF` puts
+it back on the frequency it came from, moving rx **and** tx together because
+the mode is receive-only. With no known uplink frequency the row says `NO UL`
+and nothing is retuned — it never invents one. Leaving the mode or tuning
+elsewhere ends the session (the periodic part of `ui_updateFSM()` does it, so a
+mode that can transmit never inherits an uplink frequency as its TX).
 
 ### DMR (12–13 rows)
 
