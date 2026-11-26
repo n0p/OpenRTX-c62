@@ -36,6 +36,7 @@
 #include <zephyr/devicetree.h>
 
 #include "core/blackbox.h"
+#include "core/stack_budget.h"
 #include "core/state.h"
 #include "interfaces/platform.h"
 #include "interfaces/radio.h"
@@ -59,9 +60,9 @@
 /**
  * Supervisor stack.  It holds the record being built (516 B) plus whatever the
  * flash write path uses, so 2 KiB is not enough margin; 3 KiB is ~1.5 times the
- * measured worst case.
+ * measured worst case.  The size and its floor live in core/stack_budget.h.
  */
-#define BB_SUP_STACK 3072
+#define BB_SUP_STACK STACK_BUDGET_BB_SUPERVISOR
 
 /**
  * Higher than the transport thread (6) so the supervisor still runs when the

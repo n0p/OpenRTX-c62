@@ -2002,6 +2002,19 @@ rtx_stack_test = executable('rtx_stack_budget_test',
                                        'link_args'          : linux_l_args})
 test('RTX Stack Budget Test', rtx_stack_test)
 
+# The stacks of every thread that is not the rtx one (core/stack_budget.h):
+# keypad, codec worker, PC protocol, black box supervisor and the speech
+# playback threads, each with a floor the build enforces.
+thread_stacks_test = executable('thread_stacks_test',
+                                sources : ['tests/unit/thread_stacks.cpp'],
+                                kwargs  : {'c_args'             : linux_c_args,
+                                           'cpp_args'           : linux_cpp_args,
+                                           'include_directories': linux_inc +
+                                                ['openrtx/include'],
+                                           'dependencies'       : [catch2_dep],
+                                           'link_args'          : linux_l_args})
+test('Thread Stack Budget Test', thread_stacks_test)
+
 key_gate_test = executable('key_gate_test',
                            sources : ['tests/unit/key_gate.cpp'],
                            kwargs  : {'c_args'             : linux_c_args,

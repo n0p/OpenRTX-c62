@@ -10,6 +10,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/sys/util.h>
 #include <core/blackbox.h>
+#include <core/stack_budget.h>
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(keyboard, LOG_LEVEL_DBG);
@@ -99,7 +100,9 @@ static const uint32_t keyMap[] = { KEY_ENTER, KEY_F1, KEY_3,   KEY_7, KEY_0,
  */
 #define KBD_SCAN_PERIOD_MS 20
 #define KBD_PRIO           10
-#define KBD_STACK          1024
+/* The size, and the floor under it, live in core/stack_budget.h so that
+ * lowering it is a build error here and in the host test. */
+#define KBD_STACK          STACK_BUDGET_KBD
 
 static volatile keyboard_t kbdCache;
 static volatile bool kbdLive; /* the scanner has produced its first pass */

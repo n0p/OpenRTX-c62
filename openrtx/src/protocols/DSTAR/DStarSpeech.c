@@ -19,6 +19,7 @@
 
 #include "core/audio_path.h"
 #include "core/audio_stream.h"
+#include "core/stack_budget.h"
 #include "interfaces/delays.h"
 #include "protocols/DSTAR/DStarVocoder.h"
 
@@ -26,7 +27,9 @@
 #define PREBUFFER 3
 /** Frames of silence before the speaker is released: about a second. */
 #define SILENCE_FRAMES 50
-#define THREAD_STACK 4096
+/* The size and its floor live in core/stack_budget.h: parms_repeat_model alone
+ * puts 2 456 B of frames on this thread at Cortex-M33 -Os. */
+#define THREAD_STACK STACK_BUDGET_DSTAR_SPEECH
 
 static pthread_mutex_t queueMutex = PTHREAD_MUTEX_INITIALIZER;
 static uint8_t queue[DSTAR_SPEECH_QUEUE][DSTAR_VOICE_BYTES];

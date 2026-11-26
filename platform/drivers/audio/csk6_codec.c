@@ -25,6 +25,7 @@
 #ifdef C62_PC_PROTO
 #include "core/pc_proto.h"
 #endif
+#include "core/stack_budget.h"
 
 /* One worker services the DSP's 48 kHz stereo transport:
  *   capture: microphone left, radio right -> application buffers or FM queues
@@ -84,8 +85,9 @@ BUILD_ASSERT(((int)SOURCE_MIC == (int)SINK_SPK)
  * main, so the DSP streams are paced on time */
 #define WORKER_PRIORITY 5
 /* Static worst case about 0.9 KiB, with immediate-mode logging and an FPU
- * exception frame, from -fcallgraph-info=su */
-#define WORKER_STACK_SIZE 2048
+ * exception frame, from -fcallgraph-info=su.  The size and its floor live in
+ * core/stack_budget.h. */
+#define WORKER_STACK_SIZE STACK_BUDGET_CODEC_WORKER
 
 /*
  * CSK6 audio codec ADC01, the AON codec, not the CP's ADC23. Not in
