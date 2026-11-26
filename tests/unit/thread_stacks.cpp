@@ -90,6 +90,20 @@ const threadStack kStacks[] = {
       STACK_BUDGET_DMR_SPEECH_OWN_MIN, 7168, kNeed },    /* dmr_rfft256 chain  */
     { "DMR speech (mbelib)", STACK_BUDGET_DMR_SPEECH_MBELIB,
       STACK_BUDGET_DMR_SPEECH_MBELIB_MIN, 8192, kNeed },
+    { "P25 speech",          STACK_BUDGET_IMBE_SPEECH,
+      STACK_BUDGET_IMBE_SPEECH_MIN,   5872, kHighWater }, /* imbe_irfft256    */
+    { "YSF speech",          STACK_BUDGET_IMBE_SPEECH,
+      STACK_BUDGET_IMBE_SPEECH_MIN,   5872, kHighWater },
+    { "NXDN speech",         STACK_BUDGET_AMBE_SPEECH,
+      STACK_BUDGET_AMBE_SPEECH_MIN,   2664, kHighWater }, /* dmr_rfft256     */
+    { "dPMR speech",         STACK_BUDGET_AMBE_SPEECH,
+      STACK_BUDGET_AMBE_SPEECH_MIN,   2664, kHighWater },
+    { "packet modem",        STACK_BUDGET_PACKET,
+      STACK_BUDGET_PACKET_MIN,        0,    kNone },
+    { "c62 remote",          STACK_BUDGET_REMOTE,
+      STACK_BUDGET_REMOTE_MIN,        0,    kNone },
+    { "baseband dump",       STACK_BUDGET_DUMP_SENDER,
+      STACK_BUDGET_DUMP_SENDER_MIN,   0,    kNone },
 };
 
 constexpr size_t kCount = sizeof(kStacks) / sizeof(kStacks[0]);
@@ -169,9 +183,9 @@ TEST_CASE("the unmeasured threads cannot be lowered at all", "[stacks]")
         unmeasured++;
     }
 
-    /* If this stops being two, a thread gained or lost a measurement: the
-     * table has to say which, not just the count. */
-    REQUIRE(unmeasured == 2);
+    /* If this changes, a thread gained or lost a measurement: the table has
+     * to say which, not just the count. */
+    REQUIRE(unmeasured == 5);
 }
 
 TEST_CASE("no speech thread gives its vocoder the stack that already overflowed",

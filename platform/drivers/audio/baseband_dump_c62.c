@@ -12,6 +12,7 @@
 #include <zephyr/logging/log_ctrl.h>
 #include <zephyr/sys/sys_io.h>
 #include <rtx/rtx.h>
+#include "core/stack_budget.h"
 #include "baseband_dump_c62.h"
 
 /* Build options, see platform/targets/c62/CMakeLists.txt */
@@ -57,7 +58,8 @@
 #define UART_FIFO_DEPTH 32
 
 #define SENDER_PRIORITY 4 /* Above the codec worker, but it never spins */
-#define SENDER_STACK_SIZE 1024
+/* The size and its floor live in core/stack_budget.h. */
+#define SENDER_STACK_SIZE STACK_BUDGET_DUMP_SENDER
 
 /* REG_43 in use for RX, kept by radio_C62.cpp */
 extern volatile uint16_t c62_rx_reg43;

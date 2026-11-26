@@ -54,6 +54,7 @@
 #include <zephyr/sys/sys_io.h>
 #include <IOMuxManager.h>
 #include "core/event.h"
+#include "core/stack_budget.h"
 #include "core/input.h"
 #include "core/mode_stats.h"
 #include "core/state.h"
@@ -80,7 +81,8 @@
 #define CMD_LINE_MAX 64
 #define POLL_US 500 /* One character takes 87 us at 115200 baud */
 #define THREAD_PRIORITY 6
-#define THREAD_STACK_SIZE 2048
+/* The size and its floor live in core/stack_budget.h. */
+#define THREAD_STACK_SIZE STACK_BUDGET_REMOTE
 
 /* ui_rtxSyncRequest is defined by the UI (ui.c), see core/ui.h */
 

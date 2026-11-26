@@ -174,6 +174,71 @@
 #define STACK_BUDGET_DMR_SPEECH_MBELIB      8192
 #define STACK_BUDGET_DMR_SPEECH_MBELIB_MIN  8192
 
+/*
+ * ---------------------------------------------------------------------------
+ * P25 and YSF speech playback (P25Speech.c, YsfSpeech.c)
+ * ---------------------------------------------------------------------------
+ *
+ * Both decode IMBE with lib/imbe_vocoder, measured here on Cortex-M33 -Os:
+ *
+ *   imbe_decoder_decode_ex 3 792 + render_spec_frame 1 008 +
+ *   imbe_irfft256 1 072                                  = 5 872 B
+ *
+ * of the 8 KiB that ship (72 %).  The deepest frame is the decoder's own
+ * fbuf[170]; a 7 KiB floor is the measurement plus a fifth and refuses the
+ * "tidy it to 4 KiB" that reads harmless in a diff.
+ */
+#define STACK_BUDGET_IMBE_SPEECH      8192
+#define STACK_BUDGET_IMBE_SPEECH_MIN  7168
+
+/*
+ * ---------------------------------------------------------------------------
+ * NXDN and dPMR speech playback (NxdnSpeech.c, DpmrSpeech.c)
+ * ---------------------------------------------------------------------------
+ *
+ * AMBE with lib/dmr_vocoder: dmr_vocoder_decode_frame 80 + decode_params
+ * 1 536 + dmr_rfft256 1 048 = 2 664 B measured the same way.  8 KiB ships, so
+ * the floor stays at half of it: these two are the threads with the most air
+ * under them, not the ones to shave.
+ */
+#define STACK_BUDGET_AMBE_SPEECH      8192
+#define STACK_BUDGET_AMBE_SPEECH_MIN  4096
+
+/*
+ * ---------------------------------------------------------------------------
+ * Packet modem (openrtx/src/core/packet_service.c, "pkt")
+ * ---------------------------------------------------------------------------
+ *
+ * The KISS TNC: a Zephyr thread with the frame assembler and the modem calls
+ * on its stack.  Not measured off the radio, so the floor is what ships.
+ */
+#define STACK_BUDGET_PACKET      3072
+#define STACK_BUDGET_PACKET_MIN  3072
+
+/*
+ * ---------------------------------------------------------------------------
+ * Remote-control transport (platform/drivers/audio/c62_remote.c)
+ * ---------------------------------------------------------------------------
+ *
+ * The CSK6 remote service: a Zephyr thread parsing frames from the other core.
+ * Not measured off the radio, so the floor is what ships.
+ */
+#define STACK_BUDGET_REMOTE      2048
+#define STACK_BUDGET_REMOTE_MIN  2048
+
+/*
+ * ---------------------------------------------------------------------------
+ * Baseband dump sender (platform/drivers/audio/baseband_dump_c62.c)
+ * ---------------------------------------------------------------------------
+ *
+ * Streams captured I/Q out of the UART.  A bring-up tool, but its thread has a
+ * stack like any other: dropping it to a size that overflows turns a capture
+ * session into a reset, and the capture is exactly what one is doing when the
+ * radio goes away.
+ */
+#define STACK_BUDGET_DUMP_SENDER      1024
+#define STACK_BUDGET_DUMP_SENDER_MIN  1024
+
 /* ------------------------------------------------------------------------- */
 
 STACK_BUDGET_ASSERT(STACK_BUDGET_KBD >= STACK_BUDGET_KBD_MIN,
@@ -193,5 +258,15 @@ STACK_BUDGET_ASSERT(STACK_BUDGET_DMR_SPEECH_OWN >= STACK_BUDGET_DMR_SPEECH_OWN_M
 STACK_BUDGET_ASSERT(STACK_BUDGET_DMR_SPEECH_MBELIB >=
                         STACK_BUDGET_DMR_SPEECH_MBELIB_MIN,
                     "DMR speech (mbelib): its synthesis is not flat");
+STACK_BUDGET_ASSERT(STACK_BUDGET_IMBE_SPEECH >= STACK_BUDGET_IMBE_SPEECH_MIN,
+                    "P25/YSF speech: 5 872 B measured through imbe_irfft256");
+STACK_BUDGET_ASSERT(STACK_BUDGET_AMBE_SPEECH >= STACK_BUDGET_AMBE_SPEECH_MIN,
+                    "NXDN/dPMR speech: 2 664 B measured through dmr_rfft256");
+STACK_BUDGET_ASSERT(STACK_BUDGET_PACKET >= STACK_BUDGET_PACKET_MIN,
+                    "packet modem: the KISS thread may not go down");
+STACK_BUDGET_ASSERT(STACK_BUDGET_REMOTE >= STACK_BUDGET_REMOTE_MIN,
+                    "the remote transport thread may not go down");
+STACK_BUDGET_ASSERT(STACK_BUDGET_DUMP_SENDER >= STACK_BUDGET_DUMP_SENDER_MIN,
+                    "the baseband dump sender may not go down");
 
 #endif /* STACK_BUDGET_H */

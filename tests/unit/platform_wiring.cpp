@@ -166,6 +166,13 @@ TEST_CASE("every thread takes its stack size from the budget header",
         { "openrtx/src/protocols/TETRA/TetraSpeech.c", "THREAD_STACK" },
         { "openrtx/src/protocols/DSTAR/DStarSpeech.c", "THREAD_STACK" },
         { "openrtx/src/protocols/DMR/DmrSpeech.c", "THREAD_STACK" },
+        { "openrtx/src/protocols/P25/P25Speech.c", "THREAD_STACK" },
+        { "openrtx/src/protocols/YSF/YsfSpeech.c", "THREAD_STACK" },
+        { "openrtx/src/protocols/NXDN/NxdnSpeech.c", "THREAD_STACK" },
+        { "openrtx/src/protocols/DPMR/DpmrSpeech.c", "THREAD_STACK" },
+        { "openrtx/src/core/packet_service.c", "PKT_THREAD_STACK" },
+        { "platform/drivers/audio/c62_remote.c", "THREAD_STACK_SIZE" },
+        { "platform/drivers/audio/baseband_dump_c62.c", "SENDER_STACK_SIZE" },
     };
 
     for (const threadSource &t : sources)
