@@ -107,6 +107,28 @@ static const qm_menu_t *qm_active(void)
 /* Items shared by all modes                                                  */
 /* ------------------------------------------------------------------------- */
 
+const char *const qm_names_port[] = { "AUTO", "ALWAYS", "NEVER" };
+
+/*
+ * The accessory pad: protocol and PTT on the same line (docs/ACCESSORY.md).
+ * Auto hands the pad to the serial port and asks the detector for the switch,
+ * Always leaves it to the port, Never makes it a plain GPIO so the radio's own
+ * PTT reads. Nothing to sync with the RTX: the transport rereads the setting on
+ * its next pass, a millisecond later.
+ */
+static int qm_port_get(void)
+{
+    uint8_t mode = state.settings.pc_port;
+    return (mode > (uint8_t)PORT_MODE_NEVER) ? (int)PORT_MODE_AUTO : (int)mode;
+}
+
+static void qm_port_set(int mode)
+{
+    if ((mode < (int)PORT_MODE_AUTO) || (mode > (int)PORT_MODE_NEVER))
+        return;
+    state.settings.pc_port = (uint8_t)mode;
+}
+
 const char *const qm_names_onoff[] = { "OFF", "ON" };
 const char *const qm_names_bw[] = { "12.5", "25", "6.25" };
 const char *const qm_names_ctcss[] = { "OFF", "TX", "RX", "BOTH" };
@@ -968,6 +990,16 @@ void qm_am_applyRaster(void)
     { "MSG", QM_GOTO, 0, 0, 1, 0, NULL, NULL, NULL, NULL, MSG_COMPOSE, 0, NULL }
 
 /*
+ * The last row of every mode's menu, and always the same row: the setting that
+ * makes the PTT work or the cable talk. It carries its own comma so the tables
+ * can end with a bare QM_ITEM_MSG().
+ */
+#define QM_ITEM_PORT() \
+    QM_ITEM_ENUM("PUERTO", PORT_MODE_AUTO, PORT_MODE_NEVER, qm_port_get, \
+                 qm_port_set, qm_names_port, NULL),
+
+
+/*
  * The two optional entries at the end of the FM list carry their own comma, and
  * the list has no separators between them: with "QM_ITEM_APRS(), QM_ITEM_PKT()"
  * a build of APRS or KISS whose macro expands to nothing leaves a bare comma and
@@ -1109,6 +1141,7 @@ static const qm_item_t qm_items_fm[] =
     QM_ITEM_MSG(),
     QM_ITEM_APRS()
     QM_ITEM_PKT()
+    QM_ITEM_PORT()
 };
 
 static const qm_item_t qm_items_m17[] =
@@ -1128,7 +1161,8 @@ static const qm_item_t qm_items_m17[] =
 #endif
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
-    QM_ITEM_MSG()
+    QM_ITEM_MSG(),
+    QM_ITEM_PORT()
 };
 
 #ifdef UI_MODE_TETRA
@@ -1154,7 +1188,8 @@ static const qm_item_t qm_items_tetra[] =
 #endif
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
-    QM_ITEM_MSG()
+    QM_ITEM_MSG(),
+    QM_ITEM_PORT()
 };
 #endif /* UI_MODE_TETRA */
 
@@ -1175,7 +1210,8 @@ static const qm_item_t qm_items_dmr[] =
 #endif
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
-    QM_ITEM_MSG()
+    QM_ITEM_MSG(),
+    QM_ITEM_PORT()
 };
 #endif /* UI_MODE_DMR */
 
@@ -1206,7 +1242,8 @@ static const qm_item_t qm_items_nxdn[] =
 #endif
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
-    QM_ITEM_MSG()
+    QM_ITEM_MSG(),
+    QM_ITEM_PORT()
 };
 #endif /* UI_MODE_NXDN */
 
@@ -1243,7 +1280,8 @@ static const qm_item_t qm_items_airband[] =
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
     QM_ITEM_GOTO("ESPECTRO", SPECTRUM, 0),
-    QM_ITEM_MSG()
+    QM_ITEM_MSG(),
+    QM_ITEM_PORT()
 };
 #endif /* UI_MODE_AIRBAND */
 
@@ -1272,7 +1310,8 @@ static const qm_item_t qm_items_dpmr[] =
 #endif
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
-    QM_ITEM_MSG()
+    QM_ITEM_MSG(),
+    QM_ITEM_PORT()
 };
 #endif /* UI_MODE_DPMR */
 
@@ -1340,7 +1379,8 @@ static const qm_item_t qm_items_p25[] =
 #endif
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
-    QM_ITEM_MSG()
+    QM_ITEM_MSG(),
+    QM_ITEM_PORT()
 };
 #endif /* UI_MODE_P25 */
 
@@ -1368,7 +1408,8 @@ static const qm_item_t qm_items_ysf[] =
 #endif
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
-    QM_ITEM_MSG()
+    QM_ITEM_MSG(),
+    QM_ITEM_PORT()
 };
 #endif /* UI_MODE_YSF */
 
@@ -1450,7 +1491,8 @@ static const qm_item_t qm_items_dstar[] =
 #endif
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
-    QM_ITEM_MSG()
+    QM_ITEM_MSG(),
+    QM_ITEM_PORT()
 };
 #endif /* UI_MODE_DSTAR */
 
@@ -1504,7 +1546,8 @@ static const qm_item_t qm_items_wfm[] =
 #endif
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
-    QM_ITEM_MSG()
+    QM_ITEM_MSG(),
+    QM_ITEM_PORT()
 };
 #endif /* UI_MODE_WFM */
 

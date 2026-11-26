@@ -984,8 +984,26 @@ static void pcProtoMain(void *a, void *b, void *c)
              * press that lasts as long as the operator holds the button.
              */
             const uint32_t lsrNow = sys_read32(UART_BASE + UART_LSR);
-            const bool lineLow = (held > 0)
-                              || ((lsrNow & (LSR_BI | LSR_FE)) != 0);
+            const bool breakSeen = (lsrNow & (LSR_BI | LSR_FE)) != 0;
+            const int  rawLevel  = c62_portPadLevel();
+            const bool lineLow = (held > 0) || breakSeen;
+
+            /*
+             * The witnesses, on change only: which of them fires on a press
+             * with the pad owned by the UART decides how the switch can be
+             * read at all in this mode (docs/ACCESSORY.md).
+             */
+            static int  priorRaw = -1;
+            static bool priorLow = false;
+            static bool priorBreak = false;
+            if ((rawLevel != priorRaw) || (lineLow != priorLow)
+                || (breakSeen != priorBreak)) {
+                printk("port: pad %d low %d break %d held %lu\n", rawLevel,
+                       (int)lineLow, (int)breakSeen, (unsigned long)held);
+                priorRaw = rawLevel;
+                priorLow = lineLow;
+                priorBreak = breakSeen;
+            }
 
             const bool changed = port_ptt_update(ptt, lineLow,
                                                  k_uptime_get_32());
