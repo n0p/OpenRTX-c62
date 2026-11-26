@@ -727,8 +727,14 @@ int bkp_restore(void)
         int r = entryApply(e->id, scratch, e->length);
 
         if (r != BKP_OK) {
-            logLine("restore: %s refused (%s)", entryName(e->id),
-                    bkp_resultText(r));
+            /*
+             * The result and the store's own error code: "WRITE FAILED" alone
+             * does not say whether the store refused the record or the flash
+             * refused the write, and on the host the code is the driver's
+             * errno (see platform/drivers/NVM/nvmem_linux.c).
+             */
+            logLine("restore: %s refused (%s, rc %d)", entryName(e->id),
+                    bkp_resultText(r), r);
             failed++;
             rc = r;
             continue;
