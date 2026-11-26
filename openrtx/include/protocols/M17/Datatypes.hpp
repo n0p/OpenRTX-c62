@@ -21,6 +21,7 @@ using call_t    = std::array< uint8_t, 6 >;    // Data type for encoded callsign
 using payload_t = std::array< uint8_t, 16 >;   // Data type for frame payload field
 using lich_t    = std::array< uint8_t, 12 >;   // Data type for Golay(24,12) encoded LICH data
 using frame_t   = std::array< uint8_t, 48 >;   // Data type for a full M17 data frame, including sync word
+using softFrame_t = std::array< uint16_t, 384 >; // Soft bits of a full M17 data frame, one per coded bit
 using syncw_t   = std::array< uint8_t, 2  >;   // Data type for a sync word
 
 enum DataMode
@@ -39,8 +40,8 @@ enum DataType
 enum EncryptionType
 {
     ENCRYPTION_NONE      = 0,
-    ENCRYPTION_AES       = 1,
-    ENCRYPTION_SCRAMBLER = 2,
+    ENCRYPTION_SCRAMBLER = 1,
+    ENCRYPTION_AES       = 2,
     ENCRYPTION_OTHER     = 3,
 };
 
