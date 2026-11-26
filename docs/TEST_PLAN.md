@@ -30,6 +30,11 @@ Leyenda: ✅ cubierto por tests automáticos · ⚠️ cubierto a medias · ❌ 
 | **DMR** | sincronismo, CC/TS, CACH, BPTC, LC con origen>destino, calidad; vocoder AMBE+2 (decodifica y sintetiza); SMS (formato, cola, ACK); TX (ráfaga, terminador, gate) | ✅/⚠️ | `unit/dmr_rx_status` (**doble del receptor**: basebanda de repetidor del modulador propio → `dmr_getStatus()`: CC/TS/CACH/LC/calidad, y las negativas —silencio, LC con checksum roto, CC mal corregido, CRC-32 roto—), `host/dmr_tx_host` (modulador→demod, bit-exacto), `host/dmr_pkg_host`, `unit/dmr_glue`, `unit/dmr_lc_dest`, `unit/dmr_sms_format`, `unit/imbe_*`; quedan fuera el camino BK4819 (REG_7E/REG_43), la pila de 7 KiB y el flujo MS/simplex: `reports/dmr_rx_standin.md` |
 | **NXDN** | 4FSK 2400 Bd, FEC, RAN, SACCH (origen>destino), TX | ⚠️ | `unit/nxdn_rx`, `unit/nxdn_tx` |
 | **dPMR** | 4FSK 2400 Bd, CCH, permutación de voz, TX | ⚠️ | `unit/dpmr_rx`, `unit/dpmr_tx` |
+| **FM** | squelch y su histéresis; tonos CTCSS TX/RX y su anuncio; paso de frecuencia y límites; TX/RX de voz; APRS sobre FM | ⚠️ | `unit/spectrum`, `unit/slevel`, `unit/audio_path`, `host/pc_proto_host` (pty), APRS sólo por `unit/aprs_config` |
+| **AM / Airband** | canal, raster, profundidad de modulación, TX de AM, cambio de modo sin clavear | ✅/⚠️ | `unit/am_tx`, `unit/airband`, `unit/mode_switch_am`, `unit/agc` |
+| **DMR** | sincronismo, CC/TS, CACH, BPTC, LC con origen>destino, calidad; vocoder AMBE+2 (decodifica y sintetiza); SMS (formato, cola, ACK); TX (ráfaga, terminador, gate) | ⚠️ | `host/dmr_tx_host` (modulador→demod, bit-exacto), `host/dmr_pkg_host`, `unit/dmr_glue`, `unit/dmr_lc_dest`, `unit/dmr_sms_format`, `unit/imbe_*`; **la cadena RX en la radio no tiene doble** |
+| **NXDN** | 4FSK 2400 Bd, FEC, RAN, SACCH (origen>destino), TX | ✅/⚠️ | `unit/nxdn_rx` (captura, ruido, rechazo de la FEC), `unit/nxdn_tx` (TX bit a bit, sincronismo sobre stream sintético con fase y deriva, RAN aceptado/rechazado, SACCH VCALL/TX_REL/DISC, estado que lee la UI); la voz hasta el altavoz, no |
+| **dPMR** | 4FSK 2400 Bd, CCH, permutación de voz, TX | ✅/⚠️ | `unit/dpmr_rx` (vectores, permutación exhaustiva, rechazo de la FEC), `unit/dpmr_tx` (TX bit a bit, layout de la ráfaga, sincronismo con fase y deriva, squelch publicado); la voz hasta el altavoz, no |
 | **P25** | C4FM, sync por sub-fase, TSBK, HDU/TDU, IMBE 7200, NAC | ✅/⚠️ | `unit/p25_phy`, `host/p25_phy_host`, `host/p25_tx`, `unit/imbe_robust` |
 | **YSF** | 4FSK, FICH/DGID, modo V/D, IMBE, TX | ✅ | `host/ysf_host`, `host/ysf_tx` |
 | **D-STAR** | GMSK 4800, AMBE 3600x2400 propio, header, TX | ⚠️ | `host/dstar`, `unit/` (vocoder por `lib/dstar_vocoder`) |
@@ -78,6 +83,14 @@ Se prueba, por modo: campo de canal y filtros de `REG_43`; modo de audio; bits
 de DC/AGC de `REG_7E` (DMR y M17 con el paso-alto **apagado**, TETRA encendido);
 ganancias; desviación de TX; y el camino de AM. `docs/RADIO_CONFIG.md` lleva la
 tabla con el porqué de cada valor.
+NXDN y dPMR ya tienen la mitad que importa de ese doble, sin radio: una llamada
+construida con el transmisor del árbol pasa por el demodulador de verdad y llega
+al módulo de estado que lee la UI (`nxdn_tx.cpp`, grupos `[status]`, `[ran]`,
+`[layout]`, `[timing]`). Lo que queda fuera del alcance del host es lo que
+`OpMode_*::update()` toca del resto del firmware — flujos de audio, PTT,
+`nxdnSpeech_push()`/`dpmrSpeech_push()` — porque el build de host no instancia
+los modos (`CONFIG_NXDN`, `CONFIG_DPMR`); su pegamento está compilado a mano
+contra los mismos fuentes, no ejecutado.
 
 ## 2. Menús y ajustes
 

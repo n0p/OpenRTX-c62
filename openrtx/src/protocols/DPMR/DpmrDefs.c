@@ -328,19 +328,33 @@ static void deinterleave(const uint8_t *dibits, size_t nsymbols,
     }
 }
 
-/** Hamming-decode nblocks of 12 bits into nblocks bytes; returns fixes or -1. */
+/**
+ * Hamming-decode nblocks of 12 bits into nblocks bytes.
+ *
+ * A block the code cannot correct leaves the field it belongs to unknown: the
+ * decoder does not write it, so its bytes are zeroed here and the failure is
+ * passed back -- the CRC must not be the only thing standing between an
+ * uncorrectable block and the mode, because the bytes of such a block would
+ * otherwise be whatever the stack held (and could close the CRC by luck).
+ *
+ * @param uncorrectable set when a block could not be decoded (never cleared).
+ * @return the number of corrected bits, two per uncorrectable block.
+ */
 static int hammingDecodeBlocks(const uint8_t *bits, size_t nblocks,
-                               uint8_t *data)
+                               uint8_t *data, bool *uncorrectable)
 {
     int fixes = 0;
 
     for (size_t b = 0; b < nblocks; b++) {
         int r = dpmrFec_hammingDecode(bits + 12 * b, data + 8 * b);
 
-        if (r < 0)
-            fixes += 2;         /* uncorrectable: reported, CRC will fail */
-        else
+        if (r < 0) {
+            fixes += 2;
+            memset(data + 8 * b, 0, 8);
+            *uncorrectable = true;
+        } else {
             fixes += r;
+        }
     }
 
     return fixes;
@@ -362,16 +376,17 @@ bool dpmrFec_cchDecode(const uint8_t dibits[DPMR_CCH_SYMBOLS],
 {
     uint8_t bits[72];
     uint8_t data[48];
+    bool uncorrectable = false;
 
     memset(out, 0, sizeof(*out));
     deinterleave(dibits, DPMR_CCH_SYMBOLS, dI72, bits);
-    out->fixes = (uint8_t)hammingDecodeBlocks(bits, 6, data);
+    out->fixes = (uint8_t)hammingDecodeBlocks(bits, 6, data, &uncorrectable);
 
     /* Clause 7.6: 41 information bits, then the 7 bit CRC */
     uint8_t crc = dpmrFec_crc7(data, 41);
     uint8_t rx = (uint8_t)packBits(data, 41, 7);
 
-    out->crcOk = (crc == rx);
+    out->crcOk = !uncorrectable && (crc == rx);
     out->fn = (uint8_t)packBits(data, 0, 2);
     out->id12 = (uint16_t)packBits(data, 2, 12);
     out->mode = (uint8_t)packBits(data, 14, 3);
@@ -387,15 +402,16 @@ bool dpmrFec_hiDecode(const uint8_t dibits[DPMR_HI_SYMBOLS],
 {
     uint8_t bits[120];
     uint8_t data[80];
+    bool uncorrectable = false;
 
     memset(out, 0, sizeof(*out));
     deinterleave(dibits, DPMR_HI_SYMBOLS, dI120, bits);
-    out->fixes = (uint8_t)hammingDecodeBlocks(bits, 10, data);
+    out->fixes = (uint8_t)hammingDecodeBlocks(bits, 10, data, &uncorrectable);
 
     uint8_t crc = dpmrFec_crc8(data, 72);
     uint8_t rx = (uint8_t)packBits(data, 72, 8);
 
-    out->crcOk = (crc == rx);
+    out->crcOk = !uncorrectable && (crc == rx);
     out->ht = (uint8_t)packBits(data, 0, 4);
     out->calledId = packBits(data, 4, 24);
     out->ownId = packBits(data, 28, 24);
@@ -433,8 +449,13 @@ bool dpmrFec_endDecode(const uint8_t dibits[DPMR_END_FIELD_SYMBOLS],
             bits[2 * s + 1] = (uint8_t)((d[s] & 1u) ^ dpmrFec_scramblerNext(&scr));
         }
 
-        out->fixes[h] = (uint8_t)hammingDecodeBlocks(bits, 3, data);
-        out->crcOk[h] = dpmrFec_crc7(data, 17) == (uint8_t)packBits(data, 17, 7);
+        bool uncorrectable = false;
+
+        out->fixes[h] = (uint8_t)hammingDecodeBlocks(bits, 3, data,
+                                                     &uncorrectable);
+        out->crcOk[h] = !uncorrectable
+                     && (dpmrFec_crc7(data, 17)
+                         == (uint8_t)packBits(data, 17, 7));
         memcpy(half[h], data, sizeof(data));
     }
 

@@ -61,19 +61,14 @@ void nxdnStatus_reset(void);
 /** Clear everything, counters included. */
 void nxdnStatus_clear(void);
 
-/** Account one decoded frame, call from the rtx thread. */
-void nxdnStatus_frame(const struct nxdnFrame *frame);
-
 /**
- * @brief Account one CRC-verified SACCH segment of a superframe.
+ * @brief Account one decoded frame, call from the rtx thread.
  *
- * @param part     0..3, position in the superframe.
- * @param complete true when this was the fourth and all four passed, in which
- *                 case @p msg is the assembled layer 3 message.
- * @param msg      the parsed message.
+ * Counters, sync, RAN and EVM, plus the layer 3 message: the SACCH segments of
+ * a superframe are assembled here, so a message is published (and, with KISS,
+ * handed to the packet modem) the moment its fourth block closes.
  */
-void nxdnStatusSacchSegment(int part, bool complete,
-                            const struct nxdnSacchMessage *msg);
+void nxdnStatus_frame(const struct nxdnFrame *frame);
 
 /** Copy the current status. */
 void nxdn_getStatus(struct nxdnStatus *out);

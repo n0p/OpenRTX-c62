@@ -8,6 +8,7 @@
 #include <stddef.h>
 
 #include "protocols/NXDN/NxdnDefs.h"
+#include "protocols/NXDN/NxdnPhy.h"
 
 /**
  * Frame sync word: 10 symbols, hex CDF59 (TS 1-A Table 4.4-2).  Read two bits
@@ -68,4 +69,31 @@ void nxdnLichVoice(const struct nxdnLich *lich, int *first, int *count)
     default:
         break;
     }
+}
+
+bool nxdnRanFollows(uint8_t setting, int lastRan)
+{
+    /* "Any" is every value the 6 bit field cannot hold */
+    if (setting > 63)
+        return true;
+
+    /* Before the first SACCH there is no RAN to compare with: pass, or the
+     * receiver would never get the frame that tells it the RAN */
+    if (lastRan < 0)
+        return true;
+
+    return lastRan == (int)setting;
+}
+
+bool nxdnRanFrame(uint8_t setting, int *lastRan, const struct nxdnFrame *frame)
+{
+    if (frame->sacchOk)
+        *lastRan = (int)(frame->sacchSr & 0x3Fu);
+
+    return nxdnRanFollows(setting, *lastRan);
+}
+
+uint8_t nxdnRanTransmit(uint8_t setting)
+{
+    return (setting > 63) ? 63 : setting;
 }

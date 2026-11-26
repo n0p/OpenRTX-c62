@@ -23,8 +23,22 @@
 
 static struct nxdnStatus status;
 
+/* The four 18-bit SACCH segments of the superframe being assembled */
+static uint8_t sacchBits[NXDN_SUPERFRAME * 18];
+static bool sacchHave[NXDN_SUPERFRAME];
+
+static void sacchPublish(int part, bool complete,
+                         const struct nxdnSacchMessage *msg);
+
+static void sacchClear(void)
+{
+    memset(sacchBits, 0, sizeof(sacchBits));
+    memset(sacchHave, 0, sizeof(sacchHave));
+}
+
 void nxdnStatus_reset(void)
 {
+    sacchClear();
     memset(&status.message, 0, sizeof(status.message));
     status.sync = false;
     status.voice = false;
@@ -38,8 +52,48 @@ void nxdnStatus_reset(void)
 
 void nxdnStatus_clear(void)
 {
+    sacchClear();
     memset(&status, 0, sizeof(status));
     status.ran = -1;
+}
+
+/**
+ * Account one CRC-verified SACCH segment of a superframe (4.1.1).
+ *
+ * The four segments are 18 bits each and the SR field of the block says which
+ * one it is, so the same code assembles the superframe whatever order the
+ * frames arrive in -- a receiver that lost one and picked the call up again
+ * must not put the segments in the wrong place.  A segment that is not the
+ * last one only fills its slot: the message is published when the fourth
+ * closes, and until then the UI keeps the previous one.
+ */
+static void sacchBlock(const struct nxdnFrame *frame)
+{
+    int part;
+
+    if (!frame->sacchOk)
+        return;
+
+    part = 3 - ((frame->sacchSr >> 6) & 0x03);
+    memcpy(&sacchBits[part * 18], frame->sacchBits, 18);
+    sacchHave[part] = true;
+
+    if (part == 3) {
+        bool complete = sacchHave[0] && sacchHave[1] && sacchHave[2]
+                     && sacchHave[3];
+
+        if (complete) {
+            struct nxdnSacchMessage msg;
+
+            nxdnFecSacchParse(sacchBits, &msg);
+
+            /* All four blocks passed their CRCs: what is in them is what the
+             * call carries, whatever its type, and the UI shows the type. */
+            msg.valid = true;
+            sacchPublish(3, true, &msg);
+        }
+        memset(sacchHave, 0, sizeof(sacchHave));
+    }
 }
 
 void nxdnStatus_frame(const struct nxdnFrame *frame)
@@ -72,10 +126,12 @@ void nxdnStatus_frame(const struct nxdnFrame *frame)
         status.voiceFrames++;
         status.ambeFrames += frame->frameCount;
     }
+
+    sacchBlock(frame);
 }
 
-void nxdnStatusSacchSegment(int part, bool complete,
-                            const struct nxdnSacchMessage *msg)
+static void sacchPublish(int part, bool complete,
+                         const struct nxdnSacchMessage *msg)
 {
     (void)part;
 

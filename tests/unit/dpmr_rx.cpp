@@ -8,7 +8,7 @@
  * @file dpmr_rx.cpp
  * @brief dPMR receive path: coding-layer vectors and a real capture.
  *
- * Three groups of checks:
+ * Five groups of checks:
  *
  *  1. The coding layer against vectors derived from ETSI TS 102 490 clauses 7
  *     and 9 (Hamming, CRC, scrambler, CCH/HI/END layout), including vectors
@@ -16,7 +16,12 @@
  *  2. The AMBE+2 frame mapping: dpmrFec_voiceFrame() must produce the same 9
  *     bytes as the DMR voice path's de-interleaver on the same payload,
  *     which is what lets lib/dmr_vocoder be reused unchanged.
- *  3. A real over-the-air capture: samples/dpmr.dis from the DSDcc project
+ *  3. The channel permutation, exhaustively: canonical bit (18j + k) leaves as
+ *     transmitted bit (4k + j), one bit at a time through both directions.
+ *  4. Rejection: the CCH, the header and the END field must refuse what their
+ *     Hamming blocks and CRCs cannot rescue, instead of handing the mode a
+ *     frame number, an address slice or a status that nobody sent.
+ *  5. A real over-the-air capture: samples/dpmr.dis from the DSDcc project
  *     (S16LE 48 kS/s discriminator output of a French professional dPMR
  *     system), decoded end to end.  The assertions are the numbers the
  *     prototype measured: frames decoded, CCH CRC rate, and the station
@@ -32,6 +37,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -563,25 +569,67 @@ TEST_CASE("dPMR ambe frame de-interleave is a 4-way stride", "[dpmr]")
 {
     /*
      * The 72 bits of a 20 ms voice frame travel as four interleaved streams of
-     * 18 bits: canonical bit (18j + k) leaves as transmitted bit (4k + j), so
-     * the first four transmitted bits are canonical bits 0, 18, 36 and 54.
+     * 18: canonical bit (18j + k) leaves as transmitted bit (4k + j), so the
+     * first four transmitted bits are canonical bits 0, 18, 36 and 54.
+     *
+     * This is the whole permutation, not a sample of it: one canonical bit at a
+     * time through the transmitter's packer, and the air has to carry it at
+     * exactly 4k+j; then one air bit at a time through the receiver's, and it
+     * has to come back at 18j+k.  A transposition of any two bits in the map
+     * shows up here, and the two directions are checked against the same
+     * arithmetic rather than against each other.
      */
-    uint8_t dibits[36] = { 0 };
-    uint8_t frame[9];
+    uint8_t frame[DPMR_AMBE_BYTES];
+    uint8_t dibits[36];
+    uint8_t back[DPMR_AMBE_BYTES];
 
-    dibits[0] = 0b10;           /* transmitted bit 0 = canonical bit 0 */
-    dpmrFec_voiceFrame(dibits, frame);
-    REQUIRE((frame[0] & 0x80u) != 0);
+    for (int c = 0; c < 72; c++) {
+        std::memset(frame, 0, sizeof(frame));
+        frame[c >> 3] = (uint8_t)(0x80u >> (c & 7));
 
-    memset(dibits, 0, sizeof(dibits));
-    dibits[0] = 0b01;           /* transmitted bit 1 = canonical bit 18 */
-    dpmrFec_voiceFrame(dibits, frame);
-    REQUIRE((frame[2] & 0x20u) != 0);   /* bit 18: byte 2, mask 0x20 */
+        dpmrFec_voiceFrameEncode(frame, dibits);
 
-    memset(dibits, 0, sizeof(dibits));
-    dibits[9] = 0b10;           /* transmitted bit 18 = canonical bit 40 */
-    dpmrFec_voiceFrame(dibits, frame);
-    REQUIRE((frame[5] & 0x80u) != 0);   /* bit 40: byte 5, mask 0x80 */
+        const int want = 4 * (c % 18) + c / 18;
+        int set = 0;
+        int where = -1;
+
+        for (int m = 0; m < 72; m++) {
+            int bit = (m & 1) ? (dibits[m / 2] & 1u) : ((dibits[m / 2] >> 1) & 1u);
+
+            if (bit != 0) {
+                set++;
+                where = m;
+            }
+        }
+
+        INFO("canonical bit " << c << " leaves at " << where
+                              << ", expected " << want);
+        REQUIRE(set == 1);
+        REQUIRE(where == want);
+    }
+
+    for (int m = 0; m < 72; m++) {
+        std::memset(dibits, 0, sizeof(dibits));
+        dibits[m / 2] = (uint8_t)((m & 1) ? 0x1 : 0x2);
+
+        dpmrFec_voiceFrame(dibits, back);
+
+        const int want = 18 * (m % 4) + m / 4;
+        int set = 0;
+        int where = -1;
+
+        for (int c = 0; c < 72; c++) {
+            if (((back[c >> 3] >> (7 - (c & 7))) & 1u) != 0u) {
+                set++;
+                where = c;
+            }
+        }
+
+        INFO("air bit " << m << " comes back at " << where
+                        << ", expected " << want);
+        REQUIRE(set == 1);
+        REQUIRE(where == want);
+    }
 }
 
 /* ------------------------------------------------------- real capture --- */
@@ -765,4 +813,164 @@ TEST_CASE("dPMR real capture decodes frames, identity and voice", "[dpmr][captur
     REQUIRE(st.silentPcm <= 5);
 
     printf("dpmr capture: end statuses %u\n", st.endsWithStatus);
+}
+
+/* ------------------------------------------------------------- rejection --- */
+
+namespace {
+
+/** Deterministic bits for the "must not pass by accident" blocks. */
+struct Bits {
+    uint32_t s = 0x5EED1234u;
+
+    unsigned next()
+    {
+        s ^= s << 13;
+        s ^= s >> 17;
+        s ^= s << 5;
+        return (s >> 16) & 1u;
+    }
+};
+
+} /* namespace */
+
+TEST_CASE("dPMR CCH rejects what Hamming and CRC-7 cannot rescue",
+          "[dpmr][rx][fec]")
+{
+    /*
+     * The CCH is the frame's identity and the only field the mode filters on:
+     * 41 information bits, a CRC-7, six shortened Hamming (12,8) blocks and the
+     * interleaver.  One error per block is corrected (the Hamming test above
+     * covers that); two inside the same block are not, and the CRC has to say
+     * so instead of handing the mode a frame number and an address slice that
+     * belong to a frame nobody sent.
+     */
+    std::vector<uint8_t> info(41, 0);
+
+    for (int b = 0; b < 12; b++)
+        info[2 + b] = (uint8_t)((0x393 >> (11 - b)) & 1u);
+    info[20] = 1;
+
+    std::vector<uint8_t> dibits = cchEncode(info);
+    struct dpmrCch cch;
+
+    REQUIRE(dpmrFec_cchDecode(dibits.data(), &cch));
+    REQUIRE(cch.id12 == 0x393);
+
+    /*
+     * Two bits of the same transmitted Hamming block: refused, not
+     * "corrected".  The transmit interleaver of clause 7.5 is the inverse of
+     * dI72, so air bits i and i+6 are two bits of block 0 (ham[0] and ham[1])
+     * while bits i and i+1 land in two different blocks and are each a single
+     * correctable error.
+     */
+    {
+        std::vector<uint8_t> one = dibits;
+
+        one[0] ^= 0x2;                  /* ham[0] only: correctable */
+        REQUIRE(dpmrFec_cchDecode(one.data(), &cch));
+        REQUIRE(cch.id12 == 0x393);
+        REQUIRE(cch.fixes == 1);
+
+        std::vector<uint8_t> two = dibits;
+
+        two[0] ^= 0x2;                  /* ham[0] */
+        two[3] ^= 0x2;                  /* air bit 6: ham[1] */
+        REQUIRE(!dpmrFec_cchDecode(two.data(), &cch));
+        REQUIRE(!cch.crcOk);
+    }
+
+    /* A block that is noise: a CRC-7 lets one in 128 through, nothing more */
+    Bits rnd;
+    int accepted = 0;
+    constexpr int BLOCKS = 500;
+
+    for (int b = 0; b < BLOCKS; b++) {
+        uint8_t r[DPMR_CCH_SYMBOLS];
+
+        for (int i = 0; i < DPMR_CCH_SYMBOLS; i++)
+            r[i] = (uint8_t)(rnd.next() << 1 | rnd.next());
+        if (dpmrFec_cchDecode(r, &cch))
+            accepted++;
+    }
+
+    INFO("random CCH accepted: " << accepted << "/" << BLOCKS);
+    REQUIRE(accepted <= BLOCKS / 16);
+}
+
+TEST_CASE("dPMR header and END reject what their CRCs cannot rescue",
+          "[dpmr][rx][fec]")
+{
+    /*
+     * The header is what names the call, and the END frame is what says it is
+     * over: both carry a CRC (8 and 7 bits) over Hamming-coded blocks, and both
+     * have to refuse a field the receiver could only guess at.
+     */
+    std::vector<uint8_t> info(72, 0);
+
+    putBits(info, 0, 4, DPMR_HT_START);
+    putBits(info, 4, 24, 0x123456);
+    putBits(info, 28, 24, 0x0ABCDE);
+    putBits(info, 52, 3, DPMR_MODE_VOICE);
+    putBits(info, 57, 2, DPMR_FMT_PEER);
+    putBits(info, 61, 11, 0x155);
+
+    std::vector<uint8_t> hi = hiEncode(info);
+    struct dpmrHeader hdr;
+
+    REQUIRE(dpmrFec_hiDecode(hi.data(), &hdr));
+    REQUIRE(hdr.ownId == 0x0ABCDE);
+
+    /* Two bits in one block (air bits 0 and 10 are ham[0] and ham[1] of
+     * block 0, the inverse of dI120): the CRC must refuse it */
+    {
+        std::vector<uint8_t> bad = hi;
+
+        bad[0] ^= 0x2;                  /* air bit 0,  maps to ham[0] */
+        bad[5] ^= 0x2;                  /* air bit 10, maps to ham[1] */
+        REQUIRE(!dpmrFec_hiDecode(bad.data(), &hdr));
+        REQUIRE(!hdr.crcOk);
+    }
+
+    /* Random header fields: a CRC-8 is one in 256 */
+    Bits rnd;
+    int accepted = 0;
+    constexpr int BLOCKS = 500;
+
+    for (int b = 0; b < BLOCKS; b++) {
+        uint8_t r[DPMR_HI_SYMBOLS];
+
+        for (int i = 0; i < DPMR_HI_SYMBOLS; i++)
+            r[i] = (uint8_t)(rnd.next() << 1 | rnd.next());
+        if (dpmrFec_hiDecode(r, &hdr))
+            accepted++;
+    }
+
+    INFO("random header accepted: " << accepted << "/" << BLOCKS);
+    REQUIRE(accepted <= BLOCKS / 16);
+
+    /* END: both copies destroyed is a refusal; one copy is enough to keep it */
+    std::vector<uint8_t> endInfo(17, 0);
+
+    putBits(endInfo, 0, 2, 1);
+    putBits(endInfo, 8, 5, 0x15);
+
+    std::vector<uint8_t> end = endEncode(endInfo);
+    struct dpmrEnd e;
+
+    REQUIRE(dpmrFec_endDecode(end.data(), &e));
+
+    std::vector<uint8_t> both = end;
+
+    for (int i = 0; i < DPMR_END_FIELD_SYMBOLS; i++)
+        both[i] ^= 0x3;
+    REQUIRE(!dpmrFec_endDecode(both.data(), &e));
+
+    std::vector<uint8_t> half = end;
+
+    for (int i = 0; i < 18; i++)
+        half[i] ^= 0x3;
+    REQUIRE(dpmrFec_endDecode(half.data(), &e));
+    REQUIRE(e.crcOk[1]);
+    REQUIRE(e.status == 0x15);
 }
