@@ -574,22 +574,6 @@ int _ui_getFMValueName(char* buf, uint8_t max_len, uint8_t index)
                                              false));
             break;
 
-        case CTCSS_Tx_En:
-            sniprintf(buf, max_len, "%s", last_state.channel.fm.txToneEn ?
-                                          currentLanguage->on :
-                                          currentLanguage->off);
-            break;
-
-        case CTCSS_Rx_En:
-            sniprintf(buf, max_len, "%s", last_state.channel.fm.rxToneEn ?
-                                          currentLanguage->on :
-                                          currentLanguage->off);
-            break;
-
-        case CTCSS_Cancel:
-            sniprintf(buf, max_len, "%s", "-");
-            break;
-
         case FM_BANDWIDTH:
             switch(last_state.channel.bandwidth)
             {

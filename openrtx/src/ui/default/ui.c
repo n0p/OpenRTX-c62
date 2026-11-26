@@ -260,13 +260,18 @@ const char *settings_tetra_items[] =
 };
 #endif
 
+/*
+ * Settings -> FM. The four rows that used to sit here after "CTCSS En." --
+ * "CTCSS TX", "CTCSS RX" and "Cancel CT" -- were the same two flags a second
+ * and a third time: "CTCSS En." walks all four combinations (None, TX, RX,
+ * Both) and clearing both is None. The popup has always had the one row, and
+ * two screens that can set one flag disagreeing is how an operator ends up
+ * not knowing which one the radio obeys, so the page keeps the popup's row.
+ */
 const char * settings_fm_items[] =
 {
     "CTCSS Tone",
     "CTCSS En.",
-    "CTCSS TX",
-    "CTCSS RX",
-    "Cancel CT",
     "Bandwidth",
 };
 
@@ -3720,39 +3725,9 @@ void ui_updateFSM(bool *sync_rtx)
 
                             *sync_rtx = true;
                             break;
-                        case CTCSS_Tx_En:
-                            if (msg.keys & (KEY_UP | KEY_DOWN | KEY_LEFT |
-                                            KEY_RIGHT | KNOB_LEFT | KNOB_RIGHT))
-                                state.channel.fm.txToneEn =
-                                    !state.channel.fm.txToneEn;
-                            else if (msg.keys & (KEY_ENTER | KEY_ESC))
-                                ui_state.edit_mode = false;
-                            *sync_rtx = true;
-                            break;
-                        case CTCSS_Rx_En:
-                            if (msg.keys & (KEY_UP | KEY_DOWN | KEY_LEFT |
-                                            KEY_RIGHT | KNOB_LEFT | KNOB_RIGHT))
-                                state.channel.fm.rxToneEn =
-                                    !state.channel.fm.rxToneEn;
-                            else if (msg.keys & (KEY_ENTER | KEY_ESC))
-                                ui_state.edit_mode = false;
-                            *sync_rtx = true;
-                            break;
-                        case CTCSS_Cancel:
-                            /* Cancel all CT/DT: both tones off, as the stock
-                               firmware's CANCEL ALL CT/DT does */
-                            if (msg.keys & (KEY_ENTER | KEY_UP | KEY_DOWN))
-                            {
-                                state.channel.fm.txToneEn = 0;
-                                state.channel.fm.rxToneEn = 0;
-                                *sync_rtx = true;
-                                ui_state.edit_mode = false;
-                            }
-                            else if (msg.keys & KEY_ESC)
-                                ui_state.edit_mode = false;
-                            break;
                         case FM_BANDWIDTH:
-                            if (msg.keys & (KEY_UP | KEY_RIGHT | KNOB_RIGHT))
+                            if (msg.keys & (KEY_UP | KEY_RIGHT | KEY_F2 |
+                                            KNOB_RIGHT))
                             {
                                 if (state.channel.bandwidth < BW_6_25)
                                     state.channel.bandwidth++;
@@ -3777,10 +3752,6 @@ void ui_updateFSM(bool *sync_rtx)
                     _ui_menuUp(settings_fm_num);
                 else if (msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
                     _ui_menuDown(settings_fm_num);
-                else if (msg.keys & KEY_ENTER)
-                    ui_state.edit_mode = !ui_state.edit_mode;
-                else if (msg.keys & KEY_ESC)
-                    _ui_menuBack(MENU_SETTINGS);
                 else if (msg.keys & KEY_ENTER)
                     ui_state.edit_mode = !ui_state.edit_mode;
                 else if (msg.keys & KEY_ESC)

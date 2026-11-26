@@ -346,9 +346,6 @@ enum settingsFMItems
 {
     CTCSS_Tone,
     CTCSS_Enabled,
-    CTCSS_Tx_En,
-    CTCSS_Rx_En,
-    CTCSS_Cancel,
     FM_BANDWIDTH,
 };
 
