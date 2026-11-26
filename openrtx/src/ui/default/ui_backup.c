@@ -219,9 +219,15 @@ bool ui_backup_handleEvent(uint8_t screen, kbd_msg_t *msg, bool *sync_rtx)
     backupScreen_t *s = stateOf(screen);
 
     if (msg->keys & KEY_ESC) {
-        /* Red is "no", and goes back to the two-row menu */
+        /*
+         * Red is "no" and goes back to the two-row menu, with the cursor on the
+         * row this screen belongs to. Leaving it on row 0 (Backup) made the
+         * next green open the *backup* screen instead of the restore the
+         * operator had just declined, and the green after that wrote a new
+         * record: a "no" ended in a write to flash.
+         */
         state.ui_screen = MENU_BACKUP_RESTORE;
-        ui_menu_select(0);
+        ui_menu_select(screen == MENU_RESTORE ? BR_RESTORE : BR_BACKUP);
         return true;
     }
 
