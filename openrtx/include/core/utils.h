@@ -114,19 +114,6 @@ uint8_t rssiToSlevel(const rssi_t rssi);
 rssi_t sLevelToRssi(const uint8_t slevel);
 
 /**
- * Retrieve the CTCSS tone frequency of an index, safe for any index.
- *
- * The index is stored in a 7 bit field, so a channel can carry a value the tone
- * table does not have. This wraps it instead of reading past the table, which
- * is the difference between the first tone and whatever follows the table in
- * flash.
- *
- * @param index: CTCSS tone index, wrapped into the table.
- * @return tone frequency in tenths of Hz.
- */
-uint16_t ctcssFreqFromIndex(const uint8_t index);
-
-/**
  * Retrieve the CTCSS tone index given its frequency in tenths of Hz.
  *
  * @param freq: CTCSS frequency

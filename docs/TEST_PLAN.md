@@ -25,8 +25,8 @@ Leyenda: ✅ cubierto por tests automáticos · ⚠️ cubierto a medias · ❌ 
 
 | modo | lo que hay que poder afirmar | hoy | dónde |
 |---|---|---|---|
-| **FM** | squelch y su histéresis; tonos CTCSS TX/RX y su anuncio; paso de frecuencia y límites; TX/RX de voz; APRS sobre FM | ⚠️ | `unit/spectrum`, `unit/slevel`, `unit/audio_path`, `host/pc_proto_host` (pty), APRS sólo por `unit/aprs_config` |
-| **AM / Airband** | canal, raster, profundidad de modulación, TX de AM, cambio de modo sin clavear | ✅/⚠️ | `unit/am_tx`, `unit/airband`, `unit/mode_switch_am`, `unit/agc` |
+| **FM** | squelch y su histéresis; tonos CTCSS TX/RX y su anuncio; paso de frecuencia y límites; TX/RX de voz; APRS sobre FM | ⚠️ | `unit/fm_squelch` (histéresis de 1 dB, nivel vivo, tono que decide, rutas RX/TX sin ruta colgada), `unit/fm_ctcss` (tabla EIA, selección canal→rtx, anuncio leído de la cola de voz), `unit/fm_step` (tabla de pasos, raster del airband, snap, límites de banda), `unit/spectrum`, `unit/slevel`, `unit/audio_path`, `host/pc_proto_host` (pty), APRS sólo por `unit/aprs_config`; **niveles de audio y desviación: banco** |
+| **AM / Airband** | canal, raster, profundidad de modulación, TX de AM, cambio de modo sin clavear | ✅ | `unit/airband` (plan de banda, designadores, snap, compuerta TX), `unit/airband_mode` (squelch con margen 1/2 dB y colgante de 400 ms, diálogo de claveado con `CONFIG_C62_AIR_TX`, cambio de modo que no clavea), `unit/fm_step` (raster 25k/8.33k), `unit/am_tx` (profundidad, ventana, rampas), `unit/agc`, `unit/mode_switch_am`; **profundidad y potencia reales: banco** |
 | **DMR** | sincronismo, CC/TS, CACH, BPTC, LC con origen>destino, calidad; vocoder AMBE+2 (decodifica y sintetiza); SMS (formato, cola, ACK); TX (ráfaga, terminador, gate) | ⚠️ | `host/dmr_tx_host` (modulador→demod, bit-exacto), `host/dmr_pkg_host`, `unit/dmr_glue`, `unit/dmr_lc_dest`, `unit/dmr_sms_format`, `unit/imbe_*`; **la cadena RX en la radio no tiene doble** |
 | **NXDN** | 4FSK 2400 Bd, FEC, RAN, SACCH (origen>destino), TX | ⚠️ | `unit/nxdn_rx`, `unit/nxdn_tx` |
 | **dPMR** | 4FSK 2400 Bd, CCH, permutación de voz, TX | ⚠️ | `unit/dpmr_rx`, `unit/dpmr_tx` |
@@ -36,6 +36,13 @@ Leyenda: ✅ cubierto por tests automáticos · ⚠️ cubierto a medias · ❌ 
 | **M17** | Golay, Viterbi, RRC, demodulador, callsign, packet mode | ✅ | `unit/M17_*`, `unit/m17_replay` |
 | **TETRA** | demodulación, CRC de bloques, SDS (U-SDS/UDD), uplink y registro, celda/MCC-MNC | ✅/⚠️ | `unit/tetra_demod`, `unit/tetra_uplink`; sin doble para la capa MM |
 | **WFM (BK1080)** | init del chip, tune, mute del BK4819, conmutación de fuente de audio, coste | ✅/⚠️ | `unit/wfm`, `unit/wfm` + `tests/platform/c62_wfm_cost.c` |
+
+**Lo que queda del analógico para el banco:** el host demuestra la lógica (histéresis,
+selección, rutas, raster, claveado), no el aire. Siguen siendo del banco los
+niveles de audio y la desviación de FM, la escala real de RSSI del chip (el
+emulador da los dBm que se le piden, sin ruido ni filtros), la decodificación del
+tono CTCSS —en el host `radio_linux_setDigitalSquelch()` dice si el chip lo ha
+oído— y la profundidad de AM realmente radiada.
 
 **El hueco común a los digitales:** ningún modo tiene un *doble del receptor*
 que alimente `OpMode_*::update()` con muestras sintéticas y compruebe el estado

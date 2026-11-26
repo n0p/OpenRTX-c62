@@ -90,6 +90,25 @@ enum CTCSSfreq
 extern const uint16_t ctcss_tone[];
 
 /**
+ * CTCSS tone frequency of an index, safe for any index.
+ *
+ * The index is stored in a 7 bit field of the channel while the table has
+ * CTCSS_FREQ_NUM entries, so a channel can carry a value the table does not
+ * have -- a codeplug written by another tool, a damaged record, or the digital
+ * modes' fields read through the same union. Reading past the table is not a
+ * wrong tone but whatever follows it in flash, which the driver would then
+ * program into the chip and the voice prompt would read aloud. Wrapping is what
+ * channel_store.c has always done.
+ *
+ * @param index: CTCSS tone index.
+ * @return tone frequency in tenths of Hz, always one of the table's tones.
+ */
+static inline uint16_t ctcssFreqFromIndex(const uint8_t index)
+{
+    return ctcss_tone[index % CTCSS_FREQ_NUM];
+}
+
+/**
  * Data structure defining an analog-specific channel information such as tones.
  */
 typedef struct
