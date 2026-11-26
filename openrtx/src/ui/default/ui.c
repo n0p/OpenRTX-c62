@@ -3064,7 +3064,7 @@ void ui_updateFSM(bool *sync_rtx)
 #endif
             case SETTINGS_DISPLAY:
                 if(msg.keys & KEY_LEFT || (ui_state.edit_mode &&
-                   (msg.keys & KEY_DOWN || msg.keys & KNOB_LEFT)))
+                   (msg.keys & (KEY_DOWN | KEY_F1 | KNOB_LEFT))))
                 {
                     switch(ui_state.menu_selected)
                     {
@@ -3104,7 +3104,7 @@ void ui_updateFSM(bool *sync_rtx)
                     }
                 }
                 else if(msg.keys & KEY_RIGHT || (ui_state.edit_mode &&
-                        (msg.keys & KEY_UP || msg.keys & KNOB_RIGHT)))
+                        (msg.keys & (KEY_UP | KEY_F2 | KNOB_RIGHT))))
                 {
                     switch(ui_state.menu_selected)
                     {
@@ -3153,8 +3153,8 @@ void ui_updateFSM(bool *sync_rtx)
             case SETTINGS_GPS:
                 if(msg.keys & KEY_LEFT || msg.keys & KEY_RIGHT ||
                    (ui_state.edit_mode &&
-                   (msg.keys & KEY_DOWN || msg.keys & KNOB_LEFT ||
-                    msg.keys & KEY_UP || msg.keys & KNOB_RIGHT)))
+                   (msg.keys & (KEY_DOWN | KEY_UP | KEY_F1 | KEY_F2 |
+                                KNOB_LEFT | KNOB_RIGHT))))
                 {
                     switch(ui_state.menu_selected)
                     {
@@ -3255,9 +3255,9 @@ void ui_updateFSM(bool *sync_rtx)
                             }
                             break;
                         case R_DIRECTION:
-                            if(msg.keys & KEY_UP || msg.keys & KEY_DOWN ||
-                               msg.keys & KEY_LEFT || msg.keys & KEY_RIGHT ||
-                               msg.keys & KNOB_LEFT || msg.keys & KNOB_RIGHT)
+                            if(msg.keys & (KEY_UP | KEY_DOWN | KEY_LEFT |
+                                           KEY_RIGHT | KEY_F1 | KEY_F2 |
+                                           KNOB_LEFT | KNOB_RIGHT))
                             {
                                 // Invert frequency offset direction
                                 if (state.channel.tx_frequency >= state.channel.rx_frequency)
@@ -3267,7 +3267,8 @@ void ui_updateFSM(bool *sync_rtx)
                             }
                             break;
                         case R_STEP:
-                            if (msg.keys & KEY_UP || msg.keys & KEY_RIGHT || msg.keys & KNOB_RIGHT)
+                            if (msg.keys & (KEY_UP | KEY_RIGHT | KEY_F2 |
+                                            KNOB_RIGHT))
                             {
                                 // Cycle over the available frequency steps
                                 state.step_index++;
@@ -3283,7 +3284,8 @@ void ui_updateFSM(bool *sync_rtx)
                         case R_SQUELCH:
                             // Global squelch, the same setting the quick menu
                             // changes and OpMode_FM compares the RSSI with
-                            if(msg.keys & (KEY_UP | KEY_RIGHT | KNOB_RIGHT))
+                            if(msg.keys & (KEY_UP | KEY_RIGHT | KEY_F2 |
+                                           KNOB_RIGHT))
                             {
                                 if(state.settings.sqlLevel < 15)
                                     state.settings.sqlLevel++;
@@ -3291,7 +3293,8 @@ void ui_updateFSM(bool *sync_rtx)
                                 vp_announceSquelch(state.settings.sqlLevel,
                                                    queueFlags);
                             }
-                            else if(msg.keys & (KEY_DOWN | KEY_LEFT | KNOB_LEFT))
+                            else if(msg.keys & (KEY_DOWN | KEY_LEFT | KEY_F1 |
+                                                KNOB_LEFT))
                             {
                                 if(state.settings.sqlLevel > 0)
                                     state.settings.sqlLevel--;
@@ -3303,14 +3306,16 @@ void ui_updateFSM(bool *sync_rtx)
                         case R_POWER:
                             // TX power, in the same 1 / 2.5 / 5 W steps as the
                             // quick menu and the macro grid
-                            if(msg.keys & (KEY_UP | KEY_RIGHT | KNOB_RIGHT))
+                            if(msg.keys & (KEY_UP | KEY_RIGHT | KEY_F2 |
+                                           KNOB_RIGHT))
                             {
                                 if(state.channel.power < 5000)
                                     state.channel.power += 500;
                                 *sync_rtx = true;
                                 vp_announcePower(state.channel.power, queueFlags);
                             }
-                            else if(msg.keys & (KEY_DOWN | KEY_LEFT | KNOB_LEFT))
+                            else if(msg.keys & (KEY_DOWN | KEY_LEFT | KEY_F1 |
+                                                KNOB_LEFT))
                             {
                                 if(state.channel.power > 1000)
                                     state.channel.power -= 500;
@@ -3547,9 +3552,9 @@ void ui_updateFSM(bool *sync_rtx)
                             }
                             break;
                         case M17_CAN:
-                            if(msg.keys & KEY_DOWN || msg.keys & KNOB_LEFT)
+                            if(msg.keys & (KEY_DOWN | KEY_F1 | KNOB_LEFT))
                                 _ui_changeM17Can(-1);
-                            else if(msg.keys & KEY_UP || msg.keys & KNOB_RIGHT)
+                            else if(msg.keys & (KEY_UP | KEY_F2 | KNOB_RIGHT))
                                 _ui_changeM17Can(+1);
                             else if(msg.keys & KEY_ENTER)
                                 ui_state.edit_mode = !ui_state.edit_mode;
@@ -3559,8 +3564,9 @@ void ui_updateFSM(bool *sync_rtx)
                         case M17_CAN_RX:
                             if(msg.keys & KEY_LEFT || msg.keys & KEY_RIGHT ||
                                 (ui_state.edit_mode &&
-                                 (msg.keys & KEY_DOWN || msg.keys & KNOB_LEFT ||
-                                  msg.keys & KEY_UP || msg.keys & KNOB_RIGHT)))
+                                 (msg.keys & (KEY_DOWN | KEY_UP | KEY_F1 |
+                                              KEY_F2 | KNOB_LEFT |
+                                              KNOB_RIGHT))))
                             {
                                 state.settings.m17_can_rx =
                                     !state.settings.m17_can_rx;
@@ -3612,9 +3618,9 @@ void ui_updateFSM(bool *sync_rtx)
                     switch (ui_state.menu_selected)
                     {
                         case T_AFC:
-                            if (msg.keys & KEY_LEFT || msg.keys & KEY_RIGHT ||
-                                msg.keys & KEY_DOWN || msg.keys & KNOB_LEFT ||
-                                msg.keys & KEY_UP || msg.keys & KNOB_RIGHT)
+                            if (msg.keys & (KEY_LEFT | KEY_RIGHT | KEY_DOWN |
+                                            KEY_UP | KEY_F1 | KEY_F2 |
+                                            KNOB_LEFT | KNOB_RIGHT))
                             {
                                 state.settings.tetraAfcOff =
                                     !state.settings.tetraAfcOff;
@@ -3625,9 +3631,11 @@ void ui_updateFSM(bool *sync_rtx)
                             break;
 #ifdef CONFIG_RX_FINE_OFFSET
                         case T_FINE:
-                            if (msg.keys & (KEY_UP | KEY_RIGHT | KNOB_RIGHT))
+                            if (msg.keys & (KEY_UP | KEY_RIGHT | KEY_F2 |
+                                            KNOB_RIGHT))
                                 qm_set_rx_fine(state.settings.rxFineHz + 10);
-                            else if (msg.keys & (KEY_DOWN | KEY_LEFT | KNOB_LEFT))
+                            else if (msg.keys & (KEY_DOWN | KEY_LEFT | KEY_F1 |
+                                                 KNOB_LEFT))
                                 qm_set_rx_fine(state.settings.rxFineHz - 10);
                             else if (msg.keys & (KEY_ENTER | KEY_ESC))
                                 ui_state.edit_mode = false;
@@ -3655,14 +3663,14 @@ void ui_updateFSM(bool *sync_rtx)
             case SETTINGS_AUDIO:
                 if(ui_state.edit_mode)
                 {
-                    if(msg.keys & (KEY_UP | KEY_RIGHT | KNOB_RIGHT))
+                    if(msg.keys & (KEY_UP | KEY_RIGHT | KEY_F2 | KNOB_RIGHT))
                     {
                         if(ui_state.menu_selected == AU_PHONETIC)
                             _ui_changePhoneticSpell(true);
                         else
                             _ui_changeVoiceLevel(1);
                     }
-                    else if(msg.keys & (KEY_DOWN | KEY_LEFT | KNOB_LEFT))
+                    else if(msg.keys & (KEY_DOWN | KEY_LEFT | KEY_F1 | KNOB_LEFT))
                     {
                         if(ui_state.menu_selected == AU_PHONETIC)
                             _ui_changePhoneticSpell(false);
@@ -3690,7 +3698,7 @@ void ui_updateFSM(bool *sync_rtx)
                     switch (ui_state.menu_selected)
                     {
                         case CTCSS_Tone:
-                            if (msg.keys & KEY_DOWN || msg.keys & KNOB_LEFT)
+                            if (msg.keys & (KEY_DOWN | KEY_F1 | KNOB_LEFT))
                             {
                                 if (state.channel.fm.txTone == 0)
                                 {
@@ -3702,7 +3710,7 @@ void ui_updateFSM(bool *sync_rtx)
                                     state.channel.fm.txTone--;
                                 }
                             }
-                            else if (msg.keys & KEY_UP || msg.keys & KNOB_RIGHT)
+                            else if (msg.keys & (KEY_UP | KEY_F2 | KNOB_RIGHT))
                             {
                                 state.channel.fm.txTone++;
                             } else if (msg.keys & KEY_ENTER) {
@@ -3713,10 +3721,10 @@ void ui_updateFSM(bool *sync_rtx)
                             *sync_rtx = true;
                             break;
                         case CTCSS_Enabled:
-                            if (msg.keys & KEY_DOWN || msg.keys & KNOB_LEFT)
+                            if (msg.keys & (KEY_DOWN | KEY_F1 | KNOB_LEFT))
                             {
                                 _ui_handleToneSelectScroll(true);
-                            } else if (msg.keys & KEY_UP || msg.keys & KNOB_RIGHT)
+                            } else if (msg.keys & (KEY_UP | KEY_F2 | KNOB_RIGHT))
                             {
                                 _ui_handleToneSelectScroll(false);
                             } else if (msg.keys & KEY_ENTER) {
@@ -3735,7 +3743,8 @@ void ui_updateFSM(bool *sync_rtx)
                                 vp_announceBandwidth(state.channel.bandwidth,
                                                      queueFlags);
                             }
-                            else if (msg.keys & (KEY_DOWN | KEY_LEFT | KNOB_LEFT))
+                            else if (msg.keys & (KEY_DOWN | KEY_LEFT | KEY_F1 |
+                                                KNOB_LEFT))
                             {
                                 if (state.channel.bandwidth > BW_12_5)
                                     state.channel.bandwidth--;
@@ -3783,7 +3792,7 @@ void ui_updateFSM(bool *sync_rtx)
 
             case SETTINGS_ACCESSIBILITY:
                 if(msg.keys & KEY_LEFT || (ui_state.edit_mode &&
-                   (msg.keys & KEY_DOWN || msg.keys & KNOB_LEFT)))
+                   (msg.keys & (KEY_DOWN | KEY_F1 | KNOB_LEFT))))
                 {
                     switch(ui_state.menu_selected)
                     {
@@ -3795,7 +3804,7 @@ void ui_updateFSM(bool *sync_rtx)
                     }
                 }
                 else if(msg.keys & KEY_RIGHT || (ui_state.edit_mode &&
-                        (msg.keys & KEY_UP || msg.keys & KNOB_RIGHT)))
+                        (msg.keys & (KEY_UP | KEY_F2 | KNOB_RIGHT))))
                 {
                     switch(ui_state.menu_selected)
                     {
