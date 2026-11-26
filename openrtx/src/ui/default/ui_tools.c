@@ -86,7 +86,8 @@ enum tRow
     TR_SCAN_MEM,
     TR_SCAN_VFO,
     TR_SPECTRUM,
-    TR_CHANNELS
+    TR_CHANNELS,
+    TR_PORT
 };
 
 /* The list, in the order the operator walks it. One entry per action. */
@@ -106,7 +107,15 @@ static const tRow_t rows[] =
     { TR_SCAN_VFO, "VFO scan" },
 #endif
     { TR_SPECTRUM, "Spectrum" },
-    { TR_CHANNELS, "Channels" }
+    { TR_CHANNELS, "Channels" },
+    /*
+     * The accessory pad (docs/ACCESSORY.md).  One row for the whole radio, in
+     * the one menu reachable from every main screen: as a row of each mode's
+     * table it appeared inside every mode's settings page as well, and a
+     * setting that decides whether the radio transmits does not belong in a
+     * per-mode list.
+     */
+    { TR_PORT,     "Puerto"   }
 };
 
 #define T_COUNT ((uint8_t)(sizeof(rows) / sizeof(rows[0])))
@@ -272,6 +281,12 @@ static const char *listValue(uint8_t id, char *buf, size_t len)
             /* The hold of UP starts it upward, and so does this row */
             return "UP";
 
+        case TR_PORT:
+            /* Two states, because those are the two the firmware has: the pad
+             * is the serial port, or it is the switch. */
+            return (state.settings.pc_port == (uint8_t)PORT_MODE_ALWAYS)
+                       ? "SERIE" : "PTT";
+
         default:
             break;
     }
@@ -300,6 +315,14 @@ static void activate(uint8_t index, bool *sync_rtx)
         return;
 
     switch (rows[index].id) {
+        case TR_PORT:
+            /* Green flips it and stays here: the row says what it did. */
+            state.settings.pc_port =
+                (state.settings.pc_port == (uint8_t)PORT_MODE_ALWAYS)
+                    ? (uint8_t)PORT_MODE_NEVER : (uint8_t)PORT_MODE_ALWAYS;
+            beepOk();
+            return;
+
         case TR_MODE:
             /* A submenu, not a screen of its own: the list stays open below */
             ts.screen = TS_MODES;

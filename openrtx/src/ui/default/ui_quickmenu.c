@@ -1149,7 +1149,6 @@ static const qm_item_t qm_items_fm[] =
     QM_ITEM_MSG(),
     QM_ITEM_APRS()
     QM_ITEM_PKT()
-    QM_ITEM_PORT()
 };
 
 static const qm_item_t qm_items_m17[] =
@@ -1170,7 +1169,6 @@ static const qm_item_t qm_items_m17[] =
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
     QM_ITEM_MSG(),
-    QM_ITEM_PORT()
 };
 
 #ifdef UI_MODE_TETRA
@@ -1197,7 +1195,6 @@ static const qm_item_t qm_items_tetra[] =
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
     QM_ITEM_MSG(),
-    QM_ITEM_PORT()
 };
 #endif /* UI_MODE_TETRA */
 
@@ -1219,7 +1216,6 @@ static const qm_item_t qm_items_dmr[] =
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
     QM_ITEM_MSG(),
-    QM_ITEM_PORT()
 };
 #endif /* UI_MODE_DMR */
 
@@ -1251,7 +1247,6 @@ static const qm_item_t qm_items_nxdn[] =
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
     QM_ITEM_MSG(),
-    QM_ITEM_PORT()
 };
 #endif /* UI_MODE_NXDN */
 
@@ -1289,7 +1284,6 @@ static const qm_item_t qm_items_airband[] =
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
     QM_ITEM_GOTO("ESPECTRO", SPECTRUM, 0),
     QM_ITEM_MSG(),
-    QM_ITEM_PORT()
 };
 #endif /* UI_MODE_AIRBAND */
 
@@ -1319,7 +1313,6 @@ static const qm_item_t qm_items_dpmr[] =
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
     QM_ITEM_MSG(),
-    QM_ITEM_PORT()
 };
 #endif /* UI_MODE_DPMR */
 
@@ -1388,7 +1381,6 @@ static const qm_item_t qm_items_p25[] =
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
     QM_ITEM_MSG(),
-    QM_ITEM_PORT()
 };
 #endif /* UI_MODE_P25 */
 
@@ -1417,7 +1409,6 @@ static const qm_item_t qm_items_ysf[] =
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
     QM_ITEM_MSG(),
-    QM_ITEM_PORT()
 };
 #endif /* UI_MODE_YSF */
 
@@ -1500,7 +1491,6 @@ static const qm_item_t qm_items_dstar[] =
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
     QM_ITEM_MSG(),
-    QM_ITEM_PORT()
 };
 #endif /* UI_MODE_DSTAR */
 
@@ -1555,7 +1545,6 @@ static const qm_item_t qm_items_wfm[] =
     QM_ITEM_TOGGLE("LOCK", qm_get_lock, qm_set_lock),
     QM_ITEM_GOTO_F("MSGS", MENU_MESSAGES, qm_fmt_unread),
     QM_ITEM_MSG(),
-    QM_ITEM_PORT()
 };
 #endif /* UI_MODE_WFM */
 
