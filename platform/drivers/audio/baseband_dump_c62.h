@@ -1,0 +1,116 @@
+/*
+ * SPDX-FileCopyrightText: Copyright 2020-2026 OpenRTX Contributors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+#ifndef BASEBAND_DUMP_C62_H
+#define BASEBAND_DUMP_C62_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/*
+ * Raw RX baseband dump over the console UART (Kenwood connector, TX line).
+ *
+ * The 48 kHz samples the CSK6 ADC takes from the BK4819 AF output are framed
+ * into packets and sent over UART2 at C62_BASEBAND_DUMP_BAUD. While the dump
+ * is active, logging and printk are muted so they cannot corrupt the stream.
+ * The DSP firmware and the boot log can still put stray bytes on the line:
+ * the receiver resynchronises on the packet magic and checks a CRC.
+ *
+ * Packet layout, little endian:
+ *   0  u8[4] magic A5 5A C3 3C
+ *   4  u8    version (1)
+ *   5  u8    format: 1 = s16, 2 = 12-bit packed (2 samples in 3 bytes)
+ *   6  u16   packet sequence number
+ *   8  u32   index of the first sample, counted at 48 kHz from dump start
+ *   12 u16   number of samples
+ *   14 u16   flags: bit 0 = capture (re)started before this packet
+ *   16 u16   BK4819 REG_43 value in use for RX
+ *   18 i16   RSSI in dBm, as filtered by the rtx thread
+ *   20 u16   payload length in bytes
+ *   22       payload
+ *   ...      u16 CRC-16/CCITT-FALSE over bytes 4 to the end of the payload
+ *
+ * Dropped packets show as gaps in the sequence number and sample index.
+ */
+
+#define BBDUMP_SAMPLE_RATE 48000
+
+/**
+ * Switch the console UART to the dump baud rate, mute logging and start the
+ * sender thread. Call after the audio codec is initialized, as the DSP
+ * reconfigures the console UART while it starts. Safe to call again.
+ */
+void baseband_dump_init(void);
+
+/**
+ * Mark a capture discontinuity: the next packet carries the restart flag.
+ * Called by the codec worker when capture starts.
+ */
+void baseband_dump_restart(void);
+
+/**
+ * Add received samples to the dump. Called by the codec worker only.
+ *
+ * @param samples: 48 kHz radio samples.
+ * @param count: number of samples.
+ */
+void baseband_dump_push(const int16_t *samples, size_t count);
+
+/**
+ * Add every stride-th sample of an interleaved frame to the dump: the radio
+ * channel of the DSP's 48 kHz stereo capture, without a gather buffer.
+ *
+ * @param samples: first sample of the first channel of the frame.
+ * @param stride: channels in the frame.
+ * @param count: samples per channel.
+ */
+void baseband_dump_pushChannel(const int16_t *samples, size_t stride,
+                               size_t count);
+
+/**
+ * @return true when the dump was started (boot key combination) and nothing
+ * has paused it.
+ */
+bool baseband_dump_active(void);
+
+/**
+ * Check whether samples are being recorded, rather than dropped while a
+ * burst is being sent.
+ */
+bool baseband_dump_recording(void);
+
+/**
+ * Queue a control packet carrying text (remote control replies). It is sent
+ * between sample packets, ahead of queued samples. Packet layout:
+ *   0  u8[4] magic A5 5A C3 3D
+ *   4  u8    text length n (at most 250)
+ *   5  n     ASCII text
+ *   5+n u16  CRC-16/CCITT-FALSE over bytes 4 to 4+n
+ *
+ * @return false if the dump is not active or the queue is full.
+ */
+bool baseband_dump_send_text(const char *text, size_t len);
+
+/**
+ * Stop or resume recording samples. Queued samples are still sent.
+ */
+void baseband_dump_pause(bool pause);
+
+/**
+ * @return true while recording is stopped by baseband_dump_pause().
+ */
+bool baseband_dump_paused(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* BASEBAND_DUMP_C62_H */

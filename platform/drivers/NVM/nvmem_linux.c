@@ -187,11 +187,28 @@ int nvm_writeSettings(const settings_t *settings)
     return nvm_write(0, 2, 0, settings, sizeof(settings_t));
 }
 
+/**
+ * Write the settings and the VFO record, either of them or both.
+ *
+ * A NULL pointer means "leave that record as it is": that is the contract of
+ * interfaces/nvmem.h, and the two callers of this port need it -- the settings
+ * task persists only the half that changed (core/state.c) and the backup engine
+ * restores the VFO on its own, since applySettings() has already written the
+ * settings through nvm_writeSettings(). Passing the NULL down to write(2) ends
+ * in EFAULT, which is what made a restore answer WRITE FAILED for the VFO while
+ * the settings record had been written twice. The radio's own driver
+ * (platform/drivers/NVM/nvmem_C62.c) has always skipped the missing half.
+ */
 int nvm_writeSettingsAndVfo(const settings_t *settings, const channel_t *vfo)
 {
-    int ret = nvm_write(0, 2, 0, settings, sizeof(settings_t));
-    if(ret < 0)
-        return ret;
+    if (settings != NULL) {
+        int ret = nvm_write(0, 2, 0, settings, sizeof(settings_t));
+        if (ret < 0)
+            return ret;
+    }
 
-    return nvm_write(0, 1, 0, vfo, sizeof(channel_t));
+    if (vfo != NULL)
+        return nvm_write(0, 1, 0, vfo, sizeof(channel_t));
+
+    return 0;
 }

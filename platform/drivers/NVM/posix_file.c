@@ -48,36 +48,60 @@ int posixFile_terminate(struct nvmFileDevice *dev)
     return 0;
 }
 
+/**
+ * Read from the file.
+ *
+ * The result is a negative errno: the NVM API is written against "< 0 is a
+ * failure" (see nvmem_access.c and every driver of this port), and returning a
+ * bare `errno` here -- which is positive -- made a failed access look like a
+ * successful one to every caller that tests the sign. A short read is an error
+ * too: the file is truncated to the size of the part at init, so a partial
+ * read means the medium is not the one the partition table describes.
+ */
 static int nvm_api_read(const struct nvmDevice *dev, uint32_t offset,
                         void *data, size_t len)
 {
     struct nvmFileDevice *pDev = (struct nvmFileDevice *)(dev);
-    int ret;
 
     if (pDev->fd < 0)
         return -EBADF;
 
-    lseek(pDev->fd, offset, SEEK_SET);
-    ret = read(pDev->fd, data, len);
+    if (lseek(pDev->fd, (off_t)offset, SEEK_SET) != (off_t)offset)
+        return -errno;
+
+    ssize_t ret = read(pDev->fd, data, len);
     if (ret < 0)
-        return errno;
+        return -errno;
+    if ((size_t)ret != len)
+        return -EIO;
 
     return 0;
 }
 
+/**
+ * Write to the file. Same sign convention as the read above, and the same
+ * check for a short write: a write that did not take every byte is a failure,
+ * not a partial success.
+ */
 static int nvm_api_write(const struct nvmDevice *dev, uint32_t offset,
                          const void *data, size_t len)
 {
     struct nvmFileDevice *pDev = (struct nvmFileDevice *)(dev);
-    int ret;
 
     if (pDev->fd < 0)
         return -EBADF;
 
-    lseek(pDev->fd, offset, SEEK_SET);
-    ret = write(pDev->fd, data, len);
+    if (data == NULL)
+        return -EINVAL;
+
+    if (lseek(pDev->fd, (off_t)offset, SEEK_SET) != (off_t)offset)
+        return -errno;
+
+    ssize_t ret = write(pDev->fd, data, len);
     if (ret < 0)
-        return errno;
+        return -errno;
+    if ((size_t)ret != len)
+        return -EIO;
 
     return 0;
 }

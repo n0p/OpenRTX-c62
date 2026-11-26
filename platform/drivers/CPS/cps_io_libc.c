@@ -23,6 +23,17 @@ const char *default_descr = "Codeplug description.";
  */
 int _readHeader(cps_header_t *header)
 {
+    /*
+     * No codeplug: cps_init() was never called, or the file it names does not
+     * exist. Every caller of a read goes through here first, so one check is
+     * enough -- and it has to be here: fseek() on a NULL stream is a crash, and
+     * the UI reaches it from the red key on the main screen
+     * (_ui_fsm_loadChannel), which is not a place where an operator pressing
+     * red should reboot the radio.
+     */
+    if (cps_file == NULL)
+        return -1;
+
     fseek(cps_file, 0L, SEEK_SET);
     fread(header, sizeof(cps_header_t), 1, cps_file);
     // Validate magic number
