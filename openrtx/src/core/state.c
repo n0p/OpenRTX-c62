@@ -127,6 +127,21 @@ void state_init()
     }
 
     /*
+     * Seed the two debouncers with what came out of the flash, before the
+     * repairs below: a field the firmware has to rewrite at load (a brightness
+     * above 100, a power above the PA's ceiling, a VFO with no transmit
+     * frequency) has to reach the record once, or every boot repairs RAM and
+     * the flash keeps a value this firmware never accepts.  hasChanged() sees
+     * the difference on the first pass of state_task() and writes it after the
+     * debounce window, like any other change.  Nothing is written when there
+     * was nothing to repair, which is the common case.
+     */
+#ifdef NVMEM_DEBOUNCED_WRITE
+    settingsDebouncer.crc = crc_ccitt(&state.settings, sizeof(settings_t));
+    vfoDebouncer.crc = crc_ccitt(&state.channel, sizeof(channel_t));
+#endif
+
+    /*
      * A VFO record written before settings_t.tx_power existed carries neither
      * a transmit frequency nor a power: the operator who boots on it gets a
      * radio that keys nothing and says nothing (docs/TX_SAFETY.md).  Fill the
@@ -164,11 +179,6 @@ void state_init()
      * to maximum, so a corrupt record does not become a 5 W setting. */
     if (!settings_txPowerValid(state.settings.tx_power))
         state.settings.tx_power = default_settings.tx_power;
-
-#ifdef NVMEM_DEBOUNCED_WRITE
-    settingsDebouncer.crc = crc_ccitt(&state.settings, sizeof(settings_t));
-    vfoDebouncer.crc = crc_ccitt(&state.channel, sizeof(channel_t));
-#endif
 
 #ifdef CONFIG_TETRA
     /* Received SDS messages, kept across power cycles */

@@ -50,6 +50,17 @@ enum Mod17Flags {
 #define CONFIG_RX_FINE_OFFSET
 
 /**
+ * The radio's own way of saving: one debounced write of the settings and the
+ * VFO, 3 s after the last change (core/state.c), because the C62 cuts power
+ * with the volume knob and never runs state_terminate().  The simulator has to
+ * save the same way or a test cannot tell a change that survived a power cut
+ * from one the graceful shutdown wrote on the way out
+ * (tools/simulator/settings_persist.py).  Its flash is
+ * `$XDG_STATE_HOME/OpenRTX/state.bin`, see drivers/NVM/nvmem_linux.c.
+ */
+#define NVMEM_DEBOUNCED_WRITE
+
+/**
  * Keypad backlight of the C62 simulator: one LED, on or off, implemented by
  * platform/targets/linux/platform.c. The radio's declaration is
  * platform/targets/c62/hwconfig.h.
