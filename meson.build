@@ -1441,6 +1441,37 @@ p25_status_test = executable('p25_status_test',
                                                           threads_dep],
                                         'link_args' : linux_l_args})
 
+# D-STAR: the radio header and what the mode publishes (tests/unit/
+# dstar_header.cpp), and the whole DV transmission through the demodulator
+# (tests/unit/dstar_phy.cpp).  The header is the only part of a DV
+# transmission that carries an identity, so its P_FCS and the Viterbi behind it
+# are the refusals that matter.  These are portable C with no radio in them,
+# the same files tests/host/dstar runs.
+dstar_src = ['openrtx/src/protocols/DSTAR/DStarFec.c',
+             'openrtx/src/protocols/DSTAR/DStarPhy.c',
+             'openrtx/src/protocols/DSTAR/DStarSlowData.c',
+             'openrtx/src/protocols/DSTAR/DStarStatus.c',
+             'openrtx/src/protocols/DSTAR/DStarTx.c',
+             'openrtx/src/protocols/DSTAR/DStarVocoder.c',
+             'lib/dmr_vocoder/dmr_golay.c',
+             'lib/dmr_vocoder/dmr_golay_table.c']
+
+dstar_test_opts = {'include_directories' : linux_inc + ['lib/dmr_vocoder'],
+                   'c_args' : linux_c_args,
+                   'cpp_args' : linux_cpp_args,
+                   'dependencies' : [catch2_dep],
+                   'link_args' : linux_l_args + ['-lm']}
+
+dstar_header_test = executable('dstar_header_test',
+                               sources : dstar_src +
+                                         ['tests/unit/dstar_header.cpp'],
+                               kwargs  : dstar_test_opts)
+
+dstar_phy_test = executable('dstar_phy_test',
+                            sources : dstar_src +
+                                      ['tests/unit/dstar_phy.cpp'],
+                            kwargs  : dstar_test_opts)
+
 # System Fusion frame layer (tests/unit/ysf_frame.cpp): the FICH, the data
 # channel and the voice slots, fed straight to ysfFrame_decode() -- the
 # modulator stays out of the comparison, so a refusal here is a refusal of the
@@ -2156,6 +2187,8 @@ test('P25 FEC Limits Test',    p25_fec_test)
 test('P25 Status Test',        p25_status_test, timeout : 60)
 test('YSF Frame Test',         ysf_frame_test)
 test('YSF PHY Test',           ysf_phy_test)
+test('D-STAR Header Test',     dstar_header_test)
+test('D-STAR PHY Test',        dstar_phy_test, timeout : 120)
 test('M17 Viterbi Unit Test', m17_viterbi_test)
 test('M17 Demodulator Test',  m17_demodulator_test)
 test('M17 RRC Test',          m17_rrc_test)
