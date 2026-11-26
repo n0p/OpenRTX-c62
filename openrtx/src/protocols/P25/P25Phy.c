@@ -510,9 +510,12 @@ static bool decodeNid(const uint8_t *bits, uint16_t *nac, uint8_t *duid,
  *
  * @param nSym: symbols the frame occupies on the air, sync included, as
  *              announced by its DUID (p25_frame_symbols()).
+ * @param body: true when the whole span was on the air (frameEndOnAir()); when
+ *              it was not, the NID is still published and nothing is decoded
+ *              from a payload that never arrived.
  */
 static bool decodeFrame(struct p25Frame *f, p25FrameHandler handler, void *user,
-                        int nSym)
+                        int nSym, bool body)
 {
     uint16_t nac = 0;
     uint8_t duid = 0;
@@ -529,15 +532,19 @@ static bool decodeFrame(struct p25Frame *f, p25FrameHandler handler, void *user,
     {
         case P25_DUID_LDU1:
         case P25_DUID_LDU2:
-            decodeLdu(bits, f);
+            if (body)
+                decodeLdu(bits, f);
             break;
 
         case P25_DUID_TSBK:
-            decodeTsbk(bits, f, nSym);
+            if (body)
+                decodeTsbk(bits, f, nSym);
             break;
 
         case P25_DUID_HDU:
         {
+            if (!body)
+                break;
             /* 36 words of the (18,6) Golay code carry the RS(36,20) symbols
              * of the header: MI, algorithm, key and talkgroup. */
             uint8_t hb[36];
@@ -646,6 +653,96 @@ static int sliceSymbol(float y, struct p25Levels L, int pol)
     if (v > -2.0f)
         return 2;   /* -600 Hz, dibit 10 */
     return 3;       /* -1800 Hz, dibit 11 */
+}
+
+/**
+ * Symbols at the end of a frame that the truncation gate measures: 48 symbols,
+ * 10 ms at 4800 baud.
+ *
+ * A frame can only be cut at its *end* - the stream stops, a frame never loses
+ * its middle - so that is the only place the gate has to look, and looking only
+ * there is what keeps it from ever refusing a frame that was on the air: a
+ * window that is merely flatish in the middle of a payload is a run of one
+ * symbol or a slow swing, both of which real data does and the end of a frame
+ * does not.
+ */
+#define P25_TAIL_WINDOW 48
+
+/**
+ * What makes the end of a frame a *line* rather than modulation, both measured
+ * in units of the frame's outer level on its last 48 symbols: it spans less
+ * than a quarter of the outer level, and it crosses its own mean fewer than
+ * four times.
+ *
+ * Neither test can refuse a frame that was on the air, because both are
+ * properties of a constant, and a payload is never constant: four levels a third
+ * of an outer level apart keep a 48-symbol window spanning at least 0.67 and
+ * crossing its mean a dozen times, however repetitive the data is (a repeated
+ * two-level pattern crosses 47 times, a repeated four-level one 24).  A
+ * truncated frame gives 0.00 and 0 for both, in any mix: 48 flat symbols, 47 and
+ * one spike, or a slow drift that never crosses its mean.
+ *
+ * Measured on the captures the fixtures come from (513 frames: 483 of a data
+ * channel, 30 of a voice channel), the flattest real tail spans 0.69 and the
+ * quietest crosses its mean 13 times - three times each threshold.  The
+ * synthetic frame whose carrier drops after the NID measures 0.00 and 0.
+ */
+#define P25_TAIL_SPREAD_MIN 0.25f
+#define P25_TAIL_CROSSINGS_MIN 4
+
+/**
+ * Did the end of this frame arrive?
+ *
+ * A frame is complete once every symbol its NID announced has arrived, and the
+ * demodulator waits (TRY_WAIT) until the ring holds that many samples.  But a
+ * carrier that drops after the NID still fills the ring: what lands there is
+ * the discriminator's DC, not the frame's symbols, and every one of those
+ * samples slices to the same level.  That is why the defect was invisible - an
+ * all-zero word is a valid codeword of both the Golay(23,12) and the
+ * Hamming(15,11) codes inside an IMBE header, so the nine voice frames of an
+ * LDU that only ever carried its sync and NID decoded "clean", with no
+ * corrected bit anywhere, and went to the screen and to the vocoder as 180 ms
+ * of speech nobody transmitted.
+ *
+ * So the last 10 ms of the span are measured before anything is decoded.  When
+ * they are a line, the frame is published as what it is - the NAC and the DUID,
+ * which were on the air - and nothing is read from a payload that was not, what
+ * a caller sees as p25Frame::truncated.
+ *
+ * What this cannot see, and does not have to: a carrier that drops inside the
+ * last 10 ms of the frame (the FEC then reports the corrupted words instead of
+ * clean silence), a frame whose body is shorter than one window (a TDU, which
+ * carries no voice and whose LCW the RS refuses anyway), a carrier that drops
+ * into *noise* rather than into DC (noise moves, so that case arrives in the
+ * FEC as errors too), and a line held at a symbol level instead of at the DC,
+ * which would be indistinguishable from a run of that symbol.
+ */
+static bool frameEndOnAir(const float *sym, int nSym, struct p25Levels L)
+{
+    int from = nSym - P25_TAIL_WINDOW;
+    if (from < P25_SYNC_NID_SYMBOLS)
+        from = P25_SYNC_NID_SYMBOLS;
+    if (nSym - from < 24)       /* too short to tell: nothing to protect */
+        return true;
+
+    float sum = sym[from], lo = sym[from], hi = sym[from];
+    for (int k = from + 1; k < nSym; k++)
+    {
+        sum += sym[k];
+        if (sym[k] < lo)
+            lo = sym[k];
+        if (sym[k] > hi)
+            hi = sym[k];
+    }
+
+    const float mean = sum / (float)(nSym - from);
+    int crossings = 0;
+    for (int k = from + 1; k < nSym; k++)
+        if ((sym[k] - mean) * (sym[k - 1] - mean) < 0.0f)
+            crossings++;
+
+    return (hi - lo) / L.outer >= P25_TAIL_SPREAD_MIN &&
+           crossings >= P25_TAIL_CROSSINGS_MIN;
 }
 
 /**
@@ -823,6 +920,19 @@ static enum tryResult tryFrame(long start, struct p25Frame *f)
     f->symbol = start / 5;
     f->spanSymbols = (uint16_t)nSym;
     /*
+     * A carrier that dropped after the NID still leaves the ring full of
+     * samples for the rest of the frame - the discriminator's DC, not its
+     * symbols - and an all-zero word decodes as a valid one, so the end of the
+     * frame has to show the modulation the sync promised before the payload is
+     * read.
+     */
+    const bool body = frameEndOnAir(symBuf, nSym, L);
+    f->truncated = !body;
+#if defined(P25_PHY_TRACE)
+    fprintf(stderr, "[body] duid %X span %d onair %d\n", (unsigned)duid, nSym,
+            (int)body);
+#endif
+    /*
      * The sign errors of the sync at the phase the frame was actually cut at,
      * on the frame's own levels: the ones the coarse pass counted belong to a
      * candidate up to one sample away and describe the search, not the frame.
@@ -835,7 +945,7 @@ static enum tryResult tryFrame(long start, struct p25Frame *f)
     f->inverted = (bestPol < 0);
     f->bchErrors = -1;
     f->lcRsErrors = -1;
-    if (!decodeFrame(f, phy.handler, phy.user, nSym))
+    if (!decodeFrame(f, phy.handler, phy.user, nSym, body))
         return TRY_NONE;
 
     /* The levels this frame settled on are the best estimate the next one has

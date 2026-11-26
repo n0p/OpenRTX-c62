@@ -40,7 +40,7 @@ Leyenda: ✅ cubierto por tests automáticos · ⚠️ cubierto a medias · ❌ 
 | **D-STAR** | GMSK 4800, AMBE 3600x2400 propio, header, TX | ⚠️ | `host/dstar`, `unit/` (vocoder por `lib/dstar_vocoder`) |
 | **NXDN** | 4FSK 2400 Bd, FEC, RAN, SACCH (origen>destino), TX | ⚠️ | `unit/nxdn_rx`, `unit/nxdn_tx` |
 | **dPMR** | 4FSK 2400 Bd, CCH, permutación de voz, TX | ⚠️ | `unit/dpmr_rx`, `unit/dpmr_tx` |
-| **P25** | C4FM, sync por sub-fase, TSBK, HDU/TDU, IMBE 7200, NAC | ✅ | `unit/p25_phy` (y el rechazo: NID fuera de política, paridad del DUID, DUID desconocido, TSBK anunciado sobre un LDU, NAC de cada trama, trama cortada), `unit/p25_fec` (radio de cada código y su rechazo), `unit/p25_status` (estado publicado, buena trama y mala), `unit/imbe_robust` (recuento de bits y repetición), `host/p25_phy_host`, `host/p25_tx` |
+| **P25** | C4FM, sync por sub-fase, TSBK, HDU/TDU, IMBE 7200, NAC | ✅ | `unit/p25_phy` (y el rechazo: NID fuera de política, paridad del DUID, DUID desconocido, TSBK anunciado sobre un LDU, NAC de cada trama, trama cortada —una trama cuyo final no llegó no publica voz ni LC, sea cual sea el punto del corte, y una trama débil sí la publica—), `unit/p25_fec` (radio de cada código y su rechazo), `unit/p25_status` (estado publicado, buena trama y mala), `unit/imbe_robust` (recuento de bits y repetición), `host/p25_phy_host` (cuenta y marca las tramas truncadas), `host/p25_tx` |
 | **YSF** | 4FSK, FICH/DGID, modo V/D, voz AMBE+2, TX | ✅ | `unit/ysf_frame` (FICH roto, bloque DCH roto, voz FR no soportada, bit fijo de V/D 2, DG-ID), `unit/ysf_phy` (sync: encuentra y no inventa), `host/ysf_host`, `host/ysf_tx` |
 | **D-STAR** | GMSK 4800, AMBE 3600x2400 propio, header, TX | ✅/⚠️ | `unit/dstar_header` (P_FCS, cabecera codificada y su rechazo, MY/UR/RPT, oídos, texto), `unit/dstar_phy` (transmisión completa, cortada en cabecera o en tramas, ruido, recuentos de error por palabra AMBE), `host/dstar`, `unit/` (vocoder por `lib/dstar_vocoder`); sin decodificador AMBE 2400: el modo calla |
 | **M17** | Golay, Viterbi, RRC, demodulador, callsign, packet mode | ✅ | `unit/M17_*`, `unit/m17_replay` |
@@ -64,6 +64,19 @@ trae libtetra, sus PDUs de MM capturados, un D-NWRK-BROADCAST y una ráfaga de
 uplink del propio encoder) y lo que se comprueba es `TetraStatus.c` y el texto
 que `ui_mode_state.c` le da a la pantalla principal. Queda para los demás modos
 el mismo molde.
+
+**P25: el hueco de la trama cortada está cerrado, el del doble no.** Una trama
+cuyo final no llegó (la portadora cae después del NID) se publicaba como un LDU
+completo: los símbolos que faltaban eran la línea de continua del discriminador,
+cada palabra IMBE salía a cero y el cero es una palabra válida del Golay(23,12) y
+del Hamming(15,11), así que el vocoder recibía 180 ms de voz "limpia" que nadie
+transmitió. Ahora el PHY mide los últimos 10 ms de la trama antes de decodificar
+nada (`frameEndOnAir()`, `p25Frame::truncated`) y de una trama cortada sólo
+publica lo que sí estuvo en el aire: NAC y DUID. Lo fija `unit/p25_phy` en los
+dos sentidos —corte en cinco puntos de la trama, y una trama débil (20 % de
+amplitud) que sí publica sus nueve palabras—, y el arnés `host/p25_phy_host`
+cuenta las truncadas por fichero. Lo que sigue faltando es el doble del receptor
+para `OpMode_P25`, y la voz hasta el altavoz.
 
 **DMR ya lo tiene** (`unit/dmr_rx_status`, `reports/dmr_rx_standin.md`): genera
 las franjas de un repetidor con el modulador propio, las mete por

@@ -36,6 +36,9 @@
 #include "ui_walk.hpp"
 
 extern "C" {
+#include "protocols/DSTAR/DStarStatus.h"
+#include "protocols/NXDN/NxdnStatus.h"
+#include "protocols/P25/P25Status.h"
 #include "ui/ui_mode_state.h"
 }
 
@@ -131,6 +134,16 @@ TEST_CASE("Nothing decoded reads as searching, never as a zero",
         /* Every receiver double back to "nothing decoded" */
         dmr_sim_clear();
         tetra_sim_clearCell();
+        /*
+         * The other three are the same trap: a case further down this file
+         * locks an NXDN, a P25 and a D-STAR receiver to look at their state
+         * blocks, and those blocks are global state with no clock behind them.
+         * Clearing only DMR and TETRA made this case depend on whether it ran
+         * before or after them - it failed whenever Catch2 put it after.
+         */
+        nxdnStatus_clear();
+        p25Status_clear();
+        dstarStatus_clear();
 
         ui_mode_state_t st;
         ui_mode_state_read(&st);

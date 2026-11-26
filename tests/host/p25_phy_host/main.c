@@ -33,7 +33,7 @@
 #include "protocols/P25/P25Phy.h"
 
 static long frames, ldu, ldu1, ldu2, tsbk, tsbkOk, imbe, imbeBad, imbeErrs;
-static long lcValid, syncErrors;
+static long lcValid, syncErrors, truncated;
 static bool imbeHex;
 
 static void onFrame(const struct p25Frame *f, void *user)
@@ -41,6 +41,8 @@ static void onFrame(const struct p25Frame *f, void *user)
     (void)user;
     frames++;
     syncErrors += f->syncErrors;
+    if (f->truncated)
+        truncated++;
     if (f->duid == P25_DUID_LDU1)
     {
         ldu1++;
@@ -86,6 +88,8 @@ static void onFrame(const struct p25Frame *f, void *user)
     printf("%6ld %-6s NAC=%03X bch=%d sync=%d span=%u", f->symbol,
            p25_duid_name(f->duid), f->nac, f->bchErrors, f->syncErrors,
            f->spanSymbols);
+    if (f->truncated)
+        printf(" TRUNCATED(no payload)");
     if (f->lcValid)
         printf(" LC(tg=%u src=%u rs=%d)", f->talkgroup, f->source, f->lcRsErrors);
     if (f->duid == P25_DUID_LDU1 || f->duid == P25_DUID_LDU2)
@@ -196,9 +200,10 @@ done:
     FILE *sum = imbeHex ? stderr : stdout;
 
     fprintf(sum, "\n%ld frames: %ld LDU1 %ld LDU2 %ld TSBK | LC %ld | TSBK CRC %ld | "
-           "IMBE %ld bad %ld errs %ld | sync errors %ld | synced %d\n",
+           "IMBE %ld bad %ld errs %ld | %ld truncated | sync errors %ld | "
+           "synced %d\n",
            frames, ldu1, ldu2, tsbk, lcValid, tsbkOk, imbe, imbeBad, imbeErrs,
-           syncErrors, p25Phy_synced() ? 1 : 0);
+           truncated, syncErrors, p25Phy_synced() ? 1 : 0);
     fprintf(sum, "framing: sync tries %u (%.2f per frame), grid misses %u | "
            "cpu %.1f ms for %.2f s of audio, %.1f us per frame\n",
            p25Phy_syncTries(),
