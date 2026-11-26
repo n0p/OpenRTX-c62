@@ -103,3 +103,24 @@ void nxdn_getStatus(struct nxdnStatus *out)
 {
     memcpy(out, &status, sizeof(*out));
 }
+
+#ifdef SIM_INJECT
+/*
+ * The simulator's `inject nxdn` command: what a receiver locked to a NXDN
+ * carrier would hold, so the main screen's state block (RAN, sync, the SACCH
+ * call, the EVM) can be looked at without a radio. Host only.
+ */
+void nxdnStatus_simSet(bool sync, int ran, bool voice, unsigned evm,
+                       bool msgValid, unsigned source, unsigned dest,
+                       unsigned type)
+{
+    status.sync = sync;
+    status.voice = voice;
+    status.ran = (int8_t)ran;
+    status.evm = (uint16_t)evm;
+    status.message.valid = msgValid;
+    status.message.source = (uint16_t)source;
+    status.message.dest = (uint16_t)dest;
+    status.message.type = (uint8_t)type;
+}
+#endif /* SIM_INJECT */

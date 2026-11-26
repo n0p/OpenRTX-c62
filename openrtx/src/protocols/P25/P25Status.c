@@ -137,12 +137,29 @@ bool p25Status_sync(void)
 
 #else /* CONFIG_P25 */
 
+/*
+ * A build without the P25 engine decodes nothing. The simulator still has to
+ * show what the mode's screen looks like when it does decode something, so
+ * under SIM_INJECT the block can be filled by `inject p25` (emulator.h).
+ */
+#ifdef SIM_INJECT
+static struct p25Status simStatus;
+#endif
+
 void p25Status_clear(void)
 {
+#ifdef SIM_INJECT
+    memset(&simStatus, 0, sizeof(simStatus));
+    simStatus.nac = -1;
+    simStatus.duid = -1;
+    simStatus.talkgroup = -1;
+    simStatus.source = -1;
+#endif
 }
 
 void p25Status_reset(void)
 {
+    p25Status_clear();
 }
 
 void p25Status_frame(const struct p25Frame *frame)
@@ -152,16 +169,42 @@ void p25Status_frame(const struct p25Frame *frame)
 
 void p25Status_get(struct p25Status *out)
 {
+#ifdef SIM_INJECT
+    *out = simStatus;
+#else
     memset(out, 0, sizeof(*out));
     out->nac = -1;
     out->duid = -1;
     out->talkgroup = -1;
     out->source = -1;
+#endif
 }
 
 bool p25Status_sync(void)
 {
+#ifdef SIM_INJECT
+    return simStatus.sync;
+#else
     return false;
+#endif
 }
+
+#ifdef SIM_INJECT
+void p25Status_simSet(bool sync, bool voice, int nac, int duid, long source,
+                      int talkgroup, unsigned imbe, unsigned imbeBad,
+                      unsigned frames)
+{
+    p25Status_clear();
+    simStatus.sync = sync;
+    simStatus.voice = voice;
+    simStatus.nac = (int16_t)nac;
+    simStatus.duid = (int8_t)duid;
+    simStatus.source = (int32_t)source;
+    simStatus.talkgroup = (int16_t)talkgroup;
+    simStatus.imbe = imbe;
+    simStatus.imbeBad = imbeBad;
+    simStatus.frames = frames;
+}
+#endif /* SIM_INJECT */
 
 #endif /* CONFIG_P25 */

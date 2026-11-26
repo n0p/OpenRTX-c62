@@ -103,6 +103,16 @@ client reads until `#begin`, then until `#end`, and ignores everything else.
 | `inject aprs-station <CALL> <LAT> <LON> <COMMENT>` | one APRS position heard on the air |
 | `inject aprs-message <FROM> <TEXT>` | one APRS message addressed to this station |
 | `inject message <SRC> <TEXT>` | one message in the shared inbox |
+| `inject dmr <CC> <TS> [evm <N>] [voice\|data <TYPE>] [call <SRC> <DST> [P]]` | a DMR burst decoded |
+| `inject nxdn <RAN> [evm <N>] [frames <N>] [call <SRC> <DST> <TYPE>]` | a NXDN frame decoded |
+| `inject p25 <NAC> [duid <N>] [frames <N>] [bad <N>] [talkgroup <SRC> <TG>]` | a P25 frame decoded |
+| `inject dstar <MY> <UR> <RPT> [viterbi <N>] [text <WORDS>]` | a D-STAR header decoded |
+| `inject tetra-cell <MCC> <MNC> <CC> <DL_HZ> <UL_HZ>` | a TETRA cell (UL_HZ 0 = no uplink) |
+| `inject tetra-registration <0\|1> <GROUPS> <CAUSE>` | location update accepted/rejected |
+| `inject tetra-call <0\|1> <GROUP> <DST> <TALKER> <ID> <VOICE> [<ENC>]` | a call in progress |
+| `inject identity <DMR_ID>` | the station's own DMR ID (no more `NO TX` warning) |
+| `inject mode-state clear` | every mode above back to "nothing decoded" |
+| … `clear` after each of the four first ones | the same, for one mode |
 | `screenshot [file]` | PNG of the screen; auto-numbered without a name |
 | `dump [text\|json]` | the screen and the radio |
 | `sync` | wait until the UI has consumed every key and drawn |
@@ -167,7 +177,8 @@ with Simulator(shots="/tmp/shots") as sim:
 object. Both come from the firmware's structures, never from the bitmap:
 
 - **`lines`** are the strings the screen drew, in drawing order, with their
-  position, font and colour. A line drawn in black is inside the inverted
+  position (`x`, the anchor `gfx_print()` was given), baseline, font, colour and
+  **`w`**, the width in pixels measured in that font. A line drawn in black is inside the inverted
   selection rectangle, i.e. it is the row under the cursor (`selected: true`).
   The APRS setup page marks its row with a hollow rectangle and yellow text
   instead, so look at `selection` there.
@@ -212,7 +223,18 @@ python3 tools/simulator/tour.py --out /tmp/tour
 
 or, from a configured build, `meson test -C build_sim "Simulator Menu Tour"`.
 
-It walks 282 screens and writes a PNG plus a text dump per screen: the main
+`tools/simulator/mode_state_shots.py` is the narrower one, and the check behind
+docs/UI.md, "El estado del modo": it injects the state a locked receiver holds
+into every digital mode, captures the main screen of all eleven, and fails when
+the state the mode publishes is not on that screen, when a line runs past the
+160 px panel (`x` + `w`) or when two strings on one baseline overlap. It needs a
+built simulator and writes the PNGs and the dumps of the run:
+
+```sh
+python3 tools/simulator/mode_state_shots.py --out /tmp/modestate
+```
+
+The menu tour walks 282 screens and writes a PNG plus a text dump per screen: the main
 screen, the frequency entry, the top menu and every row of it, the eighteen
 Settings pages (and the clock's digit entry), **each of the eleven modes one by
 one** -- its main screen, its P2 popup with every row selectable and a value

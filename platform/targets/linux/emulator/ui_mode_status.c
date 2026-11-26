@@ -41,15 +41,52 @@
 
 /* ------------------------------------------------------------------- DMR -- */
 
+/*
+ * The host decodes nothing, so dmr_getStatus() answers "nothing decoded" until
+ * a script fills this in. The simulator's `inject dmr` command and the audit
+ * test do that, which is the only way to check the main screen's state block
+ * (colour code, timeslot, call, link quality) without a radio.
+ */
+static struct dmrStatus simDmr;
+
+void dmr_sim_clear(void)
+{
+    memset(&simDmr, 0, sizeof(simDmr));
+    simDmr.colourCode = -1;
+    simDmr.timeslot   = 0;
+    simDmr.lastType   = -1;
+}
+
+void dmr_sim_setStatus(bool sync, int cc, int ts, bool voice, unsigned evm,
+                       bool idsValid, bool group, uint32_t src, uint32_t dst,
+                       int lastType)
+{
+    dmr_sim_clear();
+    simDmr.sync       = sync;
+    simDmr.voice      = voice;
+    simDmr.colourCode = (cc >= 0) ? (int8_t)cc : -1;
+    simDmr.timeslot   = (int8_t)ts;
+    simDmr.evm        = (uint16_t)evm;
+    simDmr.idsValid   = idsValid;
+    simDmr.group      = group;
+    simDmr.src        = src;
+    simDmr.dst        = dst;
+    simDmr.lastType   = (int8_t)lastType;
+}
+
+void dmr_sim_setLan(bool sync, int cc, int ts)
+{
+    simDmr.sync       = sync;
+    simDmr.colourCode = (cc >= 0) ? (int8_t)cc : -1;
+    simDmr.timeslot   = (int8_t)ts;
+}
+
 void dmr_getStatus(struct dmrStatus *out)
 {
     if (out == NULL)
         return;
 
-    memset(out, 0, sizeof(*out));
-    out->colourCode = -1;
-    out->timeslot   = 0;     /* 0 is the struct's own "unknown" */
-    out->lastType   = -1;
+    *out = simDmr;
 }
 
 void dmrStatus_reset(void)
@@ -58,6 +95,7 @@ void dmrStatus_reset(void)
 
 void dmrStatus_clear(void)
 {
+    dmr_sim_clear();
 }
 
 void dmrStatus_update(void)
@@ -95,6 +133,31 @@ void tetra_sim_setCell(uint16_t mcc, uint16_t mnc, uint8_t colourCode,
     simTetra.dlFreq = dlHz;
     simTetra.ulFreq = ulHz;
     /* band and duplex spacing are left 0: the injected uplink is explicit */
+}
+
+/*
+ * Mobility management and the network broadcast, which the main screen's state
+ * block draws on line 4 (registration and the neighbour list). A real receiver
+ * fills these from D-LOCATION-UPDATE-ACCEPT and D-NWRK-BROADCAST; the host has
+ * no receiver, so a script says what it heard.
+ */
+void tetra_sim_setRegistration(bool accepted, uint8_t groups, uint8_t mmCause)
+{
+    simTetra.registered = accepted;
+    simTetra.groups = groups;
+    simTetra.mmCause = mmCause;
+}
+
+void tetra_sim_setCall(bool call, bool group, uint32_t dst, uint32_t talker,
+                       uint16_t callId, bool voice, bool encrypted)
+{
+    simTetra.call = call;
+    simTetra.callGroup = group;
+    simTetra.callDst = dst;
+    simTetra.talker = talker;
+    simTetra.callId = callId;
+    simTetra.voice = voice;
+    simTetra.callEncrypted = encrypted;
 }
 
 void tetra_sim_setUplink(bool uplink, uint32_t ssi)

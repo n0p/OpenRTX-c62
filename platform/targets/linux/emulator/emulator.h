@@ -76,6 +76,48 @@ void tetra_sim_setCell(uint16_t mcc, uint16_t mnc, uint8_t colourCode,
 
 void tetra_sim_setUplink(bool uplink, uint32_t ssi);
 
+/*
+ * Mobility management and a call in progress: two pieces of TETRA state that
+ * used to be rows of the mode's page (REG, CALL) and are now on the main
+ * screen. A receiver fills them from D-LOCATION-UPDATE-ACCEPT and the call
+ * events; the host has no receiver, so a script says what it heard.
+ */
+void tetra_sim_setRegistration(bool accepted, uint8_t groups, uint8_t mmCause);
+
+void tetra_sim_setCall(bool call, bool group, uint32_t dst, uint32_t talker,
+                       uint16_t callId, bool voice, bool encrypted);
+
+/*
+ * The DMR receiver state the host has no radio for: sync, colour code,
+ * timeslot, link quality and the call the last link control announced.
+ * dmr_sim_clear() is what dmrStatus_clear() calls, so a test that wants
+ * "nothing decoded" just clears the block.
+ */
+void dmr_sim_clear(void);
+
+void dmr_sim_setStatus(bool sync, int cc, int ts, bool voice, unsigned evm,
+                       bool idsValid, bool group, uint32_t src, uint32_t dst,
+                       int lastType);
+
+/* Sync, colour code and timeslot only: the state a locked receiver reports. */
+void dmr_sim_setLan(bool sync, int cc, int ts);
+
+/*
+ * NXDN, P25 and D-STAR: defined by their own status modules under SIM_INJECT,
+ * which the simulator build defines and the test builds do not (there the
+ * modules are either the real engine or the honest "decodes nothing").
+ */
+void nxdnStatus_simSet(bool sync, int ran, bool voice, unsigned evm,
+                       bool msgValid, unsigned source, unsigned dest,
+                       unsigned type);
+
+void p25Status_simSet(bool sync, bool voice, int nac, int duid, long source,
+                      int talkgroup, unsigned imbe, unsigned imbeBad,
+                      unsigned frames);
+
+void dstarStatus_simSet(bool sync, bool voice, const char *my, const char *ur,
+                        const char *rpt, int viterbi, const char *text);
+
 #ifdef __cplusplus
 }
 #endif

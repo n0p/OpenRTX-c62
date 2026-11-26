@@ -223,3 +223,23 @@ void dstarStatus_setStation(const char *my, const char *sfx)
     (void)my;
     (void)sfx;
 }
+
+#ifdef SIM_INJECT
+/*
+ * The simulator's `inject dstar` command: the header variables of a reception
+ * (callsigns, repeater, corrected bits) and the slow-data text, so the main
+ * screen's state block can be looked at without a radio. Host only.
+ */
+void dstarStatus_simSet(bool sync, bool voice, const char *my, const char *ur,
+                        const char *rpt, int viterbi, const char *text)
+{
+    status.sync = sync;
+    status.voice = voice;
+    snprintf(status.my, sizeof(status.my), "%s", my);
+    snprintf(status.ur, sizeof(status.ur), "%s", ur);
+    snprintf(status.rpt1, sizeof(status.rpt1), "%s", rpt);
+    snprintf(status.text, sizeof(status.text), "%s", text);
+    status.sfx[0] = '\0';
+    status.viterbi = (int8_t)viterbi;
+}
+#endif /* SIM_INJECT */
