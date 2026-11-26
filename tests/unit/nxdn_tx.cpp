@@ -18,6 +18,12 @@
  *  3. The scrambler: with it off, the symbols on the air are the same payload
  *     without the mask and the receiver's LICH has to fail, which is what
  *     makes the mask visible in the test at all.
+ *  4. Symbol timing: the same call, built once as one continuous stream and
+ *     fed through a resampler, has to decode bit for bit from an arbitrary
+ *     start phase, while the two clocks drift by up to 500 ppm, and again
+ *     after a lost block resets the demodulator mid-call.  The loopback tests
+ *     start on a symbol boundary with the modulator's own clock, so none of
+ *     them can see the fractional timing search or the tracker.
  *
  * The levels are the two the C62 can be set to: 3189 is the modulator gain
  * for +-1050 Hz of outer deviation (a 12.5 kHz channel, what the NXDN mode
@@ -29,6 +35,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <vector>
 
@@ -133,6 +140,196 @@ int frameIndex(const nxdnFrame &f)
     int idx = (int)(inSample / NXDN_TX_FRAME_SAMPLES);
 
     return (idx < 0) ? -1 : idx;
+}
+
+/* --------------------------------------------------------- timing tested --- */
+
+/**
+ * A call built as one continuous baseband stream.
+ *
+ * loopback() feeds the receiver the samples the modulator wrote, frame after
+ * frame, starting on a symbol boundary: the receiver's timing is right for
+ * free.  This one keeps the stream so a test can resample it, which is what a
+ * real capture is: the transmitter's clock is not the receiver's, the audio
+ * path does not start on the first sample of a burst, and neither end of a
+ * link is a whole symbol out of step.
+ */
+struct AirStream {
+    std::vector<int16_t> samples; ///< 20 samples per symbol, preamble first
+    int frames = 0;               ///< Voice frames it carries
+    uint8_t ran = 63;             ///< RAN of the call
+};
+
+AirStream buildStream(uint16_t src, uint16_t dst, uint8_t ran, int frames)
+{
+    nxdn_tx_t tx;
+
+    nxdnTx_setup(&tx, src, dst, ran, true);
+
+    fsk4_mod_t mod;
+    fsk4Mod_init(&mod, NXDN_TX_SPS, LEVEL_12K5, false, true);
+
+    AirStream out;
+
+    out.ran = ran;
+    std::vector<int16_t> block(NXDN_TX_FRAME_SAMPLES);
+    int8_t levels[NXDN_FRAME_SYMBOLS];
+
+    nxdnTx_preamble(levels);
+    fsk4Mod_levels(&mod, levels, NXDN_FRAME_SYMBOLS, block.data());
+    out.samples.insert(out.samples.end(), block.begin(), block.end());
+
+    for (int n = 0; n < frames; n++) {
+        uint8_t ambe[NXDN_VCH_PER_FRAME][NXDN_AMBE_BYTES];
+
+        for (int v = 0; v < NXDN_VCH_PER_FRAME; v++)
+            payloadFrame(n, v, ambe[v]);
+
+        nxdnTx_frame(&tx, ambe, levels);
+        fsk4Mod_levels(&mod, levels, NXDN_FRAME_SYMBOLS, block.data());
+        out.samples.insert(out.samples.end(), block.begin(), block.end());
+        out.frames++;
+    }
+
+    return out;
+}
+
+/** Linear interpolation of the stream at a fractional sample position. */
+int16_t sampleAt(const std::vector<int16_t> &s, double pos)
+{
+    if (pos <= 0.0)
+        return s.front();
+
+    const size_t i = (size_t)pos;
+
+    if (i + 1 >= s.size())
+        return s.back();
+
+    const double f = pos - (double)i;
+
+    return (int16_t)std::lround((1.0 - f) * (double)s[i] + f * (double)s[i + 1]);
+}
+
+/**
+ * Feed a stream to the receiver through a resampler.
+ *
+ * @param s    the samples the modulator wrote.
+ * @param start position of the first sample read, in samples: a fractional
+ *             value is a receiver that starts between two of them.
+ * @param step  stream samples consumed per sample fed to the receiver: 1.0 is
+ *             the transmitter's clock, 1.0002 is a receiver 200 ppm slow.
+ * @param dropAt  when >= 0, @p dropCount samples are cut out of the stream at
+ *             this position and the demodulator is reset there, which is what
+ *             the mode does when the audio stream loses a block.
+ * @param resetOnDrop reset the demodulator at the cut, as OpMode_NXDN does.
+ * @return what the receiver decoded.
+ */
+Decoded runStream(const std::vector<int16_t> &s, double start, double step,
+                  long dropAt, long dropCount, bool resetOnDrop,
+                  double *evmOut)
+{
+    nxdnPhy_init();
+
+    Decoded out;
+    std::vector<int16_t> block(960);
+    double pos = start;
+    size_t cut = (dropAt >= 0) ? (size_t)dropAt : 0;
+    bool dropped = (dropAt < 0);
+
+    while (true) {
+        size_t k = 0;
+
+        for (; k < block.size(); k++) {
+            size_t at = (size_t)pos;
+
+            if (!dropped && (at >= cut)) {
+                /* The stream jumps here: continue after the lost samples */
+                dropped = true;
+                pos += (double)dropCount;
+                if (resetOnDrop)
+                    nxdnPhy_reset();
+                at = (size_t)pos;
+            }
+            if (at + 1 >= s.size())
+                break;
+            block[k] = sampleAt(s, pos);
+            pos += step;
+        }
+        if (k == 0)
+            break;
+
+        nxdnPhy_push(block.data(), k, onFrame, &out);
+    }
+
+    if (evmOut != nullptr) {
+        double sum = 0.0;
+
+        for (const nxdnFrame &f : out.frames)
+            sum += f.evm;
+        *evmOut = out.frames.empty() ? 0.0 : sum / (double)out.frames.size();
+    }
+
+    return out;
+}
+
+/**
+ * Check that the frames a run produced are the frames the stream carried, in
+ * order, bit for bit, and that the SACCH of the superframes still spells the
+ * call.
+ */
+void checkStream(const AirStream &stream, const Decoded &d, uint16_t src,
+                 uint16_t dst, int minFrames)
+{
+    uint8_t l3[72] = { 0xFF };
+    int idx = -1;
+    int checked = 0;
+
+    REQUIRE((int)d.frames.size() >= minFrames);
+
+    for (const nxdnFrame &f : d.frames) {
+        int n = -1;
+
+        /* Which frame of the call is it? The AMBE payload says */
+        for (int c = idx + 1; c < stream.frames; c++) {
+            uint8_t want[NXDN_AMBE_BYTES];
+
+            payloadFrame(c, 0, want);
+            if (std::memcmp(f.frame[0], want, NXDN_AMBE_BYTES) == 0) {
+                n = c;
+                break;
+            }
+        }
+
+        REQUIRE(f.lichOk);
+        REQUIRE(f.sacchOk);
+        REQUIRE(f.frameCount == NXDN_VCH_PER_FRAME);
+        REQUIRE((f.sacchSr & 0x3Fu) == (uint8_t)(stream.ran & 0x3Fu));
+        REQUIRE(n >= 0);
+        idx = n;
+
+        /* The AMBE frames of the ones the payload matched, bit for bit */
+        for (int v = 0; v < NXDN_VCH_PER_FRAME; v++) {
+            uint8_t want[NXDN_AMBE_BYTES];
+
+            payloadFrame(n, v, want);
+            REQUIRE(std::memcmp(f.frame[v], want, NXDN_AMBE_BYTES) == 0);
+        }
+
+        /* The SACCH segments reassemble the VCALL of the call */
+        int part = 3 - ((f.sacchSr >> 6) & 3);
+
+        std::memcpy(&l3[part * 18], f.sacchBits, 18);
+        checked++;
+    }
+
+    REQUIRE(checked >= NXDN_SUPERFRAME);
+
+    struct nxdnSacchMessage msg;
+
+    nxdnFecSacchParse(l3, &msg);
+    REQUIRE(msg.type == NXDN_MSG_VCALL);
+    REQUIRE(msg.source == src);
+    REQUIRE(msg.dest == dst);
 }
 
 /* --------------------------------------------------------- coding halves --- */
@@ -353,4 +550,94 @@ TEST_CASE("NXDN frame layout: FSW, LICH and the SACCH segment order",
         REQUIRE(nxdnFecLich(dibits, &lich));
         REQUIRE(lich.raw == control);
     }
+}
+
+/* ------------------------------------------------------------------ timing --- */
+
+TEST_CASE("NXDN symbol timing is recovered from an arbitrary phase",
+          "[nxdn][rx][timing]")
+{
+    /*
+     * The receiver never sees a burst start on one of its own samples: the
+     * audio path hands it a stream that began somewhere inside a symbol.  The
+     * fractional timing search of NxdnPhy.c is what turns that into frames, and
+     * the loopback tests cannot see it because they start on a symbol
+     * boundary with the modulator's own clock.
+     *
+     * These positions are fractions of a symbol either side of the boundary:
+     * the first sample the receiver gets is not the first sample of the
+     * preamble, and the frame grid still has to come out bit for bit.
+     */
+    constexpr int FRAMES = 10;
+    AirStream stream = buildStream(0x0123, 0x4567, 21, FRAMES);
+
+    const double starts[] = { 0.0, 2.7, 7.35, 13.9, 19.5 };
+
+    for (double start : starts) {
+        INFO("first sample at " << start << " of a symbol");
+        Decoded d = runStream(stream.samples, start, 1.0, -1, 0, false, nullptr);
+
+        checkStream(stream, d, 0x0123, 0x4567, FRAMES - 1);
+    }
+}
+
+TEST_CASE("NXDN symbol timing follows a drifting clock", "[nxdn][rx][timing]")
+{
+    /*
+     * The transmitter's 48 kHz and the receiver's are two crystals: a few tens
+     * of ppm apart is normal, and the frame is 192 symbols long, so the
+     * receiver has to slide its sampling instant as the drift accumulates or
+     * the eye closes by the end of the call.  200 ppm over ten frames is two
+     * thirds of a symbol by the last one.
+     */
+    constexpr int FRAMES = 10;
+    AirStream stream = buildStream(0x0BEE, 0x0117, 5, FRAMES);
+
+    struct Point { const char *name; double start; double step; };
+
+    const Point points[] = {
+        { "receiver 200 ppm fast", 3.1, 0.9998 },
+        { "receiver 200 ppm slow", 11.6, 1.0002 },
+        { "receiver 500 ppm slow", 0.0, 1.0005 },
+    };
+
+    for (const Point &p : points) {
+        INFO(p.name);
+
+        double evm = 0.0;
+        Decoded d = runStream(stream.samples, p.start, p.step, -1, 0, false, &evm);
+
+        checkStream(stream, d, 0x0BEE, 0x0117, FRAMES - 1);
+
+        /* A tracker that is not following leaves the eye wide open: the mean
+         * EVM of a stream read at the wrong rate is far above this. */
+        REQUIRE(evm < 0.12);
+    }
+}
+
+TEST_CASE("NXDN frame grid is re-acquired after a lost block",
+          "[nxdn][rx][timing]")
+{
+    /*
+     * The rtx thread resets the demodulator when the audio stream drops
+     * samples -- the symbol clock jumped -- and the receiver then has to find
+     * the frame grid again with no preamble in front of it: mid-call it only
+     * has the frame sync words of the frames it is landing on.  What the
+     * operator loses is the frames the jump cost, not the rest of the call.
+     */
+    constexpr int FRAMES = 14;
+    AirStream stream = buildStream(0x0005, 0xFFF0, 63, FRAMES);
+
+    /* 15 ms of stream lost inside the second frame of the call */
+    const long dropAt = (long)((2 * NXDN_TX_FRAME_SAMPLES)
+                               + NXDN_TX_FRAME_SAMPLES / 2);
+    Decoded d = runStream(stream.samples, 0.0, 1.0, dropAt, 720, true,
+                          nullptr);
+
+    /*
+     * The frames before the jump and, after one frame of re-acquisition, every
+     * frame to the end: the call is followed again without the operator doing
+     * anything.
+     */
+    checkStream(stream, d, 0x0005, 0xFFF0, FRAMES - 3);
 }
