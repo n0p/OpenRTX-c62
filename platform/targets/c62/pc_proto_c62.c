@@ -816,24 +816,44 @@ void pc_proto_capturePush(const int16_t *samples, size_t stride, size_t count)
  * change applies on the next pass without the UI having to know that this file
  * exists, and a value that arrives from the CPS lands the same way.
  *
- * In "Auto" the pad stays muxed to the UART and the switch is read from the
- * receiver's side, not from the GPIO: every character is classified by the line
- * status it came with, and a break or a missing stop bit means the pad was held
- * low through a whole character (87 us at 115200).  A run of those longer than
- * PORT_PTT_HOLD_MS is a finger on the switch.  The GPIO input is *not* usable
- * for this: with the pad on UART2 RXD its DATAIN reads low always (the first
- * version of this detector trusted it and keyed the radio from boot), while a
- * clean 0x00 byte has a stop bit and never counts.  While the switch is held,
- * the bytes the UART collects are drained, counted and thrown away, and the half
- * frame the parser had is dropped.  On release the parser waits for the next end
- * delimiter and everything is normal again.  The cost, and it is real, is that
- * the frames the client sends while the operator keys are lost -- the counter in
- * the status says how many.
+ * In "Auto" the pad stays muxed to the UART and the switch is read in a window:
+ * every PORT_PTT_SAMPLE_PERIOD_MS the pad goes back to plain GPIO for about a
+ * microsecond, its DATAIN is read, and it returns to UART2 RXD
+ * (c62_portPadSample()).  That level is what the sustained-low rule sees, and
+ * the 30 ms rule and the "a press needs a release first" rule are unchanged.
+ *
+ * Two things make the windows cheap instead of merely short:
+ *
+ *  - a 1 us window is an eighth of a bit at 115200 baud, so a window that lands
+ *    inside a character costs the receiver at most one bit of it, and the
+ *    protocol's CRC and the client's retry absorb that;
+ *  - no window is taken while the receiver is framing *clean* characters.  A
+ *    character with its stop bit proves the line was high, i.e. that it is not
+ *    clamped, so a client that is talking is left completely alone -- and the
+ *    switch cannot hide behind the gate either, because a clamped line makes
+ *    the receiver hand over one break and then nothing at all, which opens it.
+ *    Two passes of clean characters are also the release witness while a client
+ *    polls, so a press ends within 4 ms even with traffic on the wire, and one
+ *    pass of them is enough to arm the detector (port_ptt_seen_high()).
+ *
+ * While the switch is held, the bytes the UART collects are drained, counted
+ * and thrown away, and the half frame the parser had is dropped.  On release
+ * the parser waits for the next end delimiter and everything is normal again.
+ * The cost, and it is real, is that the frames the client sends while the
+ * operator keys are lost -- the counter in the status says how many.
  */
 static volatile uint32_t rxLost;
 static uint32_t lostAtPress;
 static int appliedMode = -1;
 static bool lineUnknownReported;
+
+/* The window schedule (core/port_ptt.h) and what the windows have cost. */
+static portPttSampler_t padSampler;
+static uint32_t padWindowCycles;       /* last window, core cycles           */
+static uint32_t padWindowMaxCycles;    /* longest window since the mode      */
+static bool     padWindowReported;
+static uint8_t  padEdgePrints;
+static int      padLevelPrior = -1;
 
 /**
  * Drain what the UART holds and classify it by the line status of each
@@ -896,6 +916,15 @@ static void portApplyMode(uint8_t mode)
     c62_portPadToUart(plan.padIsUart);
     lineUnknownReported = false;
 
+    /* A new mode starts a new schedule: the first window is due at once, and
+     * nothing measured under the old mode is carried over. */
+    port_ptt_sampler_reset(&padSampler, k_uptime_get_32());
+    padWindowCycles = 0;
+    padWindowMaxCycles = 0;
+    padWindowReported = false;
+    padEdgePrints = 0;
+    padLevelPrior = -1;
+
     if (!plan.useProtocol) {
         /*
          * Nothing can arrive any more.  Close the session instead of leaving a
@@ -910,15 +939,17 @@ static void portApplyMode(uint8_t mode)
     /*
      * After the reset, so the line reaches the console even when a client was
      * linked a moment ago.  The line names the *source* the mode reads the
-     * switch from, and, in Auto, what the GPIO witness says at this instant:
-     * with the pad on UART2 RXD a low reading there while the line is idle is
-     * how the first version of this detector keyed itself (docs/ACCESSORY.md).
+     * switch from, and, in Auto, what the pad says at this instant when it is
+     * looked at as a GPIO: with the pad on UART2 RXD the same read says low
+     * always, which is how the first version of this detector keyed itself
+     * (docs/ACCESSORY.md).
      */
     if (plan.useDetector) {
-        printk("port: mode %s, pad %s, PTT sustained break > %d ms (uart LSR "
-               "FE|BI), gpio %d\n",
+        printk("port: mode %s, pad %s, PTT pad sampled as GPIO > %d ms, "
+               "window <%d us every %d ms, gpio-while-on-uart %d\n",
                settings_portModeName(mode), plan.padIsUart ? "UART RX" : "GPIO",
-               PORT_PTT_HOLD_MS, (int)c62_portPadLevel());
+               PORT_PTT_HOLD_MS, PORT_PTT_SAMPLE_WINDOW_MAX_US,
+               PORT_PTT_SAMPLE_PERIOD_MS, (int)c62_portPadLevel());
     } else if (plan.useButton) {
         printk("port: mode %s, pad GPIO, PTT button level, gpio %d\n",
                settings_portModeName(mode), (int)c62_portPadLevel());
@@ -965,61 +996,111 @@ static void pcProtoMain(void *a, void *b, void *c)
         }
 
         /*
-         * Sample the accessory switch every millisecond -- that is what makes
-         * the 30 ms rule work -- and act on its edges exactly once: the frame
-         * the parser was building at the moment of the press is garbage, and
-         * the counters of the press are reported on release.
+         * The switch.  "Auto" takes the pad as a GPIO for a window of about a
+         * microsecond, at most once per PORT_PTT_SAMPLE_PERIOD_MS, and never on
+         * a pass that framed a clean character: a stream proves the line is not
+         * clamped (its stop bits were sampled high) and is left untouched, so
+         * the pad costs the client nothing while it talks.  The schedule and
+         * the gate are port_ptt_sample_step(), in core, where a host test walks
+         * them; this is only the hardware half.
          */
         bool up = false;
         if (plan.useDetector) {
-            /*
-             * "Low" has two witnesses, and the second one is the one that
-             * matters with the cable plugged in.  A press held down stops the
-             * line at zero: the UART frames one break and then has nothing
-             * left to hand over, so a detector fed only by characters sees a
-             * single millisecond of low and never the 30 ms a press needs --
-             * which is a radio that does not transmit while the client is
-             * connected.  The break and framing flags latch on the line
-             * itself, so reading the status register each pass catches a
-             * press that lasts as long as the operator holds the button.
-             */
-            const uint32_t lsrNow = sys_read32(UART_BASE + UART_LSR);
-            const bool breakSeen = (lsrNow & (LSR_BI | LSR_FE)) != 0;
-            const int  rawLevel  = c62_portPadLevel();
-            const bool lineLow = (held > 0) || breakSeen;
+            /* Characters this pass framed correctly: what it took from the
+             * FIFO minus the ones that were a break or had no stop bit.  The
+             * FIFO's sticky error bits can only over-count the held ones, so
+             * this errs on the side of "no clean character": the sampler then
+             * takes a window it could have skipped, which costs one window, not
+             * a frame. */
+            const uint32_t clean = (n > held) ? (uint32_t)(n - held) : 0;
+            const portPttStep_t step =
+                port_ptt_sample_step(&padSampler, clean > 0, loopMs);
+            bool changed = false;
 
-            /*
-             * The witnesses, on change only: which of them fires on a press
-             * with the pad owned by the UART decides how the switch can be
-             * read at all in this mode (docs/ACCESSORY.md).
-             */
-            static int  priorRaw = -1;
-            static bool priorLow = false;
-            static bool priorBreak = false;
-            if ((rawLevel != priorRaw) || (lineLow != priorLow)
-                || (breakSeen != priorBreak)) {
-                printk("port: pad %d low %d break %d held %lu\n", rawLevel,
-                       (int)lineLow, (int)breakSeen, (unsigned long)held);
-                priorRaw = rawLevel;
-                priorLow = lineLow;
-                priorBreak = breakSeen;
+            switch (step) {
+                case PORT_PTT_STEP_TAKE: {
+                    bool grounded = false;
+                    uint32_t window = 0;
+
+                    if (c62_portPadSample(&grounded, &window)) {
+                        padWindowCycles = window;
+                        if (window > padWindowMaxCycles)
+                            padWindowMaxCycles = window;
+                        changed = port_ptt_update(ptt, grounded, loopMs);
+
+                        if (!padWindowReported) {
+                            padWindowReported = true;
+                            if (padWindowCycles != 0) {
+                                printk("port: pad window %lu cycles (~%lu ns),"
+                                       " level %d, every %d ms\n",
+                                       (unsigned long)padWindowCycles,
+                                       (unsigned long)c62_cyclesToNs(
+                                           padWindowCycles),
+                                       (int)grounded,
+                                       PORT_PTT_SAMPLE_PERIOD_MS);
+                            } else {
+                                /* No DWT cycle counter on this core: the level
+                                 * is still read, the window is just not
+                                 * measured (docs/ACCESSORY.md). */
+                                printk("port: pad window not measured (no "
+                                       "cycle counter), level %d, every %d "
+                                       "ms\n", (int)grounded,
+                                       PORT_PTT_SAMPLE_PERIOD_MS);
+                            }
+                        } else if ((int)grounded != padLevelPrior
+                                   && padEdgePrints < 16) {
+                            /* The bench line: the level moved between two
+                             * windows, with what that window cost.  Bounded, so
+                             * a line that flaps cannot flood the log. */
+                            padEdgePrints++;
+                            printk("port: pad level %d -> %d, window %lu "
+                                   "cycles\n", padLevelPrior, (int)grounded,
+                                   (unsigned long)padWindowCycles);
+                        }
+                        padLevelPrior = (int)grounded;
+                    } else {
+                        /* Two reads disagreed: no level this pass, and no
+                         * evidence either -- the run must not span the gap. */
+                        padSampler.unstable++;
+                        port_ptt_unobserved(ptt);
+                    }
+                    break;
+                }
+
+                case PORT_PTT_STEP_RELEASE:
+                    /* A stream has been running: its stop bits were sampled
+                     * high, so the line is up.  This is also what unkeys a
+                     * transmitter without waiting for the next window. */
+                    changed = port_ptt_update(ptt, false, loopMs);
+                    break;
+
+                case PORT_PTT_STEP_WAIT:
+                    /* First pass of a stream.  Too soon to unkey on it (a
+                     * window taken over a clamped line can fake one clean
+                     * character), but a stop bit that was sampled high does
+                     * prove the line is not clamped: it arms the detector and
+                     * ends a run that was not declared, and leaves a press
+                     * alone.  Without this a client whose polls land on every
+                     * due pass would never let the switch key at all. */
+                    port_ptt_seen_high(ptt);
+                    break;
+
+                case PORT_PTT_STEP_IDLE:
+                default:
+                    break;
             }
-
-            const bool changed = port_ptt_update(ptt, lineLow,
-                                                 k_uptime_get_32());
 
             up = port_ptt_pressed(ptt);
 
             /*
              * A line that is already low when the detector starts is unknown,
-             * not pressed: say so once, with both witnesses, instead of keying
+             * not pressed: say so once, with the pad level, instead of keying
              * the radio for ever or blaming the client.
              */
             if (ptt->unknown && !lineUnknownReported) {
                 lineUnknownReported = true;
-                printk("port: PTT line held at start-up (uart break, gpio %d): "
-                       "unknown, ignored until it is released\n",
-                       (int)c62_portPadLevel());
+                printk("port: PTT line held at start-up (pad %d): unknown, "
+                       "ignored until it is released\n", padLevelPrior);
             }
 
             if (changed && up) {
@@ -1031,11 +1112,15 @@ static void pcProtoMain(void *a, void *b, void *c)
                        "release\n");
             } else if (changed) {
                 printk("port: accessory PTT up, held %lums, %lu bytes/%lu "
-                       "errors dropped (%lu since boot)\n",
+                       "errors dropped (%lu since boot), windows %u/%u/%u, "
+                       "max %lu ns\n",
                        (unsigned long)ptt->lastPressMs,
                        (unsigned long)(ptt->lost - lostAtPress),
                        (unsigned long)ptt->glitches,
-                       (unsigned long)ptt->lost);
+                       (unsigned long)ptt->lost,
+                       padSampler.samples, padSampler.skipped,
+                       padSampler.unstable,
+                       (unsigned long)c62_cyclesToNs(padWindowMaxCycles));
                 /* Whatever arrived as the key was released is already drained
                  * below; the parser starts from a delimiter again. */
                 pc_proto_rxResync(&proto);

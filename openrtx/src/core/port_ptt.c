@@ -103,6 +103,103 @@ bool port_ptt_update(portPttState_t *s, bool heldLow, uint32_t nowMs)
     return false;
 }
 
+void port_ptt_seen_high(portPttState_t *s)
+{
+    if (s == NULL)
+        return;
+
+    /*
+     * A stop bit that was sampled high is a release witness -- the line cannot
+     * be clamped and frame a clean character -- so it arms the detector.  It
+     * does not end a press: one pass is little enough that a window over a
+     * clamped line can fake it (see core/port_ptt.h).
+     */
+    s->armed = true;
+    s->unknown = false;
+
+    if (s->pressed)
+        return;
+
+    s->low = false;
+    s->lowSince = 0;
+}
+
+void port_ptt_unobserved(portPttState_t *s)
+{
+    if (s == NULL)
+        return;
+
+    /*
+     * Only the timing of a run that has not been declared yet: a press already
+     * on the air ends when the line is seen up, not when a window is missed.
+     */
+    if (s->pressed)
+        return;
+
+    s->low = false;
+    s->lowSince = 0;
+}
+
+void port_ptt_sampler_reset(portPttSampler_t *s, uint32_t nowMs)
+{
+    if (s == NULL)
+        return;
+
+    s->nextMs = nowMs;
+    s->samples = 0;
+    s->skipped = 0;
+    s->unstable = 0;
+    s->stream = 0;
+    s->started = true;
+}
+
+portPttStep_t port_ptt_sample_step(portPttSampler_t *s, bool cleanChar,
+                                   uint32_t nowMs)
+{
+    if (s == NULL)
+        return PORT_PTT_STEP_IDLE;
+
+    if (!s->started)
+        port_ptt_sampler_reset(s, nowMs);
+
+    /*
+     * The stream counter, and the reason the gate is not simply "no bytes":
+     * a clean character carries a stop bit, so the line was high there.  A
+     * clamped line cannot produce one -- everything it yields has FE or BI --
+     * which is what makes "the receiver is framing clean characters" the
+     * right test for "the pad is carrying a live stream".
+     */
+    if (cleanChar) {
+        if (s->stream < 255)
+            s->stream++;
+    } else {
+        s->stream = 0;
+    }
+
+    /* Signed difference: the clock wraps, the schedule does not care. */
+    if ((int32_t)(nowMs - s->nextMs) < 0)
+        return PORT_PTT_STEP_IDLE;
+
+    /*
+     * One window per period, scheduled from this pass rather than from the
+     * deadline it missed: a stalled loop must not come back with a burst.
+     */
+    s->nextMs = nowMs + PORT_PTT_SAMPLE_PERIOD_MS;
+
+    if (s->stream >= PORT_PTT_STREAM_PASSES) {
+        s->skipped++;
+        return PORT_PTT_STEP_RELEASE;
+    }
+
+    if (s->stream > 0) {
+        s->skipped++;
+        return PORT_PTT_STEP_WAIT;
+    }
+
+    s->samples++;
+    return PORT_PTT_STEP_TAKE;
+}
+
 portPttPlan_t port_ptt_plan(uint8_t mode)
 {
     portPttPlan_t plan = { .padIsUart = false, .useProtocol = false,
@@ -124,7 +221,12 @@ portPttPlan_t port_ptt_plan(uint8_t mode)
 
         case PORT_MODE_AUTO:
         default:
-            /* Both, with the sustained-low rule deciding. */
+            /*
+             * Both, with the sustained-low rule deciding.  padIsUart stays true
+             * because that is where the pad lives: the windows that read it as
+             * a GPIO are a few microseconds long and belong to the platform
+             * (c62_portPadSample()), not to the description of the mode.
+             */
             plan.padIsUart = true;
             plan.useProtocol = true;
             plan.useDetector = true;

@@ -190,10 +190,40 @@ portPttState_t *c62_portPttState(void);
  *
  * A witness, and the whole truth only in "Never", where the pad really is a
  * plain input.  With the pad muxed to UART2 RXD this bit does not follow the
- * line (docs/ACCESSORY.md), which is why "Auto" takes its evidence from the
- * receiver instead.
+ * line (docs/ACCESSORY.md); that is what c62_portPadSample() is for.
  */
 bool c62_portPadLevel(void);
+
+/**
+ * Read the pad in a window: GPIO for a microsecond, then back to UART2 RXD.
+ *
+ * The pad is muxed to plain GPIO, DATAIN is read twice, and the pad goes back
+ * to UART2 RXD with the register value it had, pull-up included.  The whole
+ * thing is a handful of instructions: the UART is without its line for about a
+ * microsecond, under an eighth of a bit at 115200 baud.
+ *
+ * @param grounded: out: true when the pad was low, i.e. the switch is down.
+ *                  Only written when the function returns true.
+ * @param windowCycles: out, may be NULL: core cycles the pad spent off the
+ *                  UART, measured with DWT->CYCCNT when the core has one, and
+ *                  0 when it does not.
+ * @return false when the two reads disagreed (the pad had not settled, the
+ *         line moved inside the window): nothing can be said about the level
+ *         and the caller must treat the pass as unobserved.
+ *
+ * One context only: it is the transport thread's window, the same one that
+ * owns the UART FIFO.
+ */
+bool c62_portPadSample(bool *grounded, uint32_t *windowCycles);
+
+/**
+ * CPU cycles to nanoseconds, for the numbers the transport reports.
+ *
+ * The window is measured in core cycles and it is shorter than a microsecond
+ * (one cycle is 3.3 ns at the C62's 300 MHz,
+ * CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC), so microseconds would round it to zero.
+ */
+uint32_t c62_cyclesToNs(uint32_t cycles);
 
 /**
  * Route the pad: UART2 RXD when @p uart, plain GPIO with its pull-up otherwise.
