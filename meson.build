@@ -1951,6 +1951,14 @@ slevel_test = executable('slevel_test',
                          sources : unit_test_src + ['tests/unit/slevel.cpp'],
                          kwargs  : unit_test_opts)
 
+# The FM squelch and the two analogue audio routes it drives: the hysteresis,
+# the level being the operator's setting, the tone deciding when it is enabled,
+# and a route that is opened, swapped and released without leaving one behind.
+fm_squelch_test = executable('fm_squelch_test',
+                             sources : unit_test_src +
+                                       ['tests/unit/fm_squelch.cpp'],
+                             kwargs  : unit_test_opts)
+
 audio_codec_test = executable('audio_codec_test',
                               sources : unit_test_src + ['tests/unit/audio_codec.cpp'],
                               kwargs  : unit_test_opts)
@@ -2123,6 +2131,7 @@ test('PC Protocol Debug Test', pc_proto_dbg_test)
 test('PC Bench Test',        pc_bench_test)
 test('PC Bench Production Test', pc_bench_nobench_test)
 test('Zones Test',           zones_test)
+test('FM Squelch Test',      fm_squelch_test, timeout : 120)
 test('AGC Test',             agc_test)
 test('AM TX Test',           am_tx_test)
 test('Airband Test',         airband_test)
