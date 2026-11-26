@@ -227,6 +227,57 @@ with the levels the previous frame settled on (864 symbols of measurement on
 the same channel). That is what keeps the 8 dB row at 24 frames instead of 23;
 it costs a second BCH decode on candidates that were about to fail anyway.
 
+## A frame whose end never arrived
+
+The last defect of the frame cut, found by a test rather than on the air: when
+the carrier drops after the NID, the demodulator used to publish the frame as a
+complete LDU. The remaining symbols of its span never arrived - what the ring
+holds where they should be is the line the discriminator sits on with no carrier
+behind it - and every one of those samples slices to the same level. An all-zero
+word is a valid codeword of both the Golay(23,12) and the Hamming(15,11) inside
+an IMBE header, so the nine voice frames decoded "clean", with no corrected bit
+anywhere, and `OpMode_P25` (which pushes on `voiceCount > 0`) handed the vocoder
+180 ms of speech nobody transmitted. `unit/p25_phy` could only say that no link
+control came out of that frame, because the RS(24,12) *does* refuse it; the voice
+had no test.
+
+**What a truncated frame is.** A frame is cut at its *end*: the stream stops and
+a frame never loses its middle. It is complete when every symbol its NID
+announced has arrived, and the demodulator already waits for the ring to hold
+that many samples (`TRY_WAIT`); the defect was that the samples that follow a
+carrier drop count as arrived. So the frame's own end is measured before
+anything is decoded: the last 10 ms (48 symbols, a tenth of an LDU) have to show
+the modulation the sync field promised - they must span at least a quarter of the
+outer level and cross their own mean at least four times. A line does neither, in
+any mix: 48 flat symbols, 47 and one spike, or a slow drift that never crosses.
+
+Measured on the captures the fixtures come from (513 frames: 483 of the APCO data
+capture, 30 of the voice file), no frame that was on the air comes near either
+threshold: the flattest real tail spans **0.69** outer levels and the quietest
+crosses its mean **13** times, three times each threshold. The frame in the
+synthetic test whose carrier drops measures **0.00 and 0**. Two rejected designs
+are worth writing down, because both look right: the mean deviation of the tail
+from its own mean (0.18 on a real TDULC frame whose low-speed data repeats - it
+is a clustering measure, and structured payloads are clustered), and the distance
+from the carrier's DC (the DC the slicer works with is the mean of the sync
+field, and that field is unipolar enough for the matched filter's ISI to bias it
+by 0.39 of the outer level against a true offset of 0.15, so a line at zero
+measures 0.385 "away from DC" and passes as if it were a symbol).
+
+**What is published.** A truncated frame is still a frame: the sync and the NID
+were on the air, so the NAC and the DUID are published (the same rule the mode
+already applied to a frame it could not read) and `p25Frame::truncated` says so.
+Nothing is decoded from the missing part - no voice, no link control, no TSBK, no
+header - so `voiceCount` is 0, `status.voice` stays false and the vocoder is
+never called.
+
+What the gate cannot see, and does not have to: a carrier that drops inside the
+last 10 ms of the frame, a carrier that drops into *noise* instead of into DC
+(noise moves), a line held at a symbol level instead of at DC, and a frame whose
+body is shorter than one window (a TDU, which carries no voice). The first three
+arrive in the FEC as errors instead of as clean silence, which is what the gate
+is for.
+
 ## Evidence
 
 Firmware PHY (`tests/host/p25_phy_host`), fed the same files as the prototype:
