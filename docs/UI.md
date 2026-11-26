@@ -93,6 +93,8 @@ Per screen:
 | Tools menu | previous / next row (P1/P2 too) | run the row | previous row | next row | back to the main screen |
 | Tools menu, mode submenu | previous / next mode (P1/P2 too) | apply the mode and leave | previous mode | next mode | back to the tools list |
 | Menu (top, banks, settings, backup, info, about) | previous / next | open | — | — | back |
+| Backup | — | save, then `BACKUP OK` | — | — | back |
+| Restore | — | ask `Restore it?` (Yes/No) | — | — | back / No |
 | Settings pages | previous / next | edit | — | — | back (leaves edit first) |
 | Settings page of a mode (NXDN, dPMR, P25, YSF, D-STAR, AM, WFM) | previous / next row | cycle the value | value − (long: coarse) | value + (long: coarse) | back |
 | Settings page, editing | change value | confirm | — | — | leave edit |
@@ -192,7 +194,9 @@ other's keys:
    `state.txDisable` true.
 7. P2 long on the FM main screen: APRS, and the popup it may have opened on the
    way is closed first. Then MONI / P2 long: macro grid.
-8. Channels: P1 long opens, and the module consumes everything while open.
+8. Channels: P1 long opens the tools menu, whose last row is the channel list;
+the module consumes everything while open. The backup and restore screens are
+reachable from the top menu and are documented in `docs/BACKUP.md`.
 9. The screen switch (main screens, menus, settings).
 
 Everything an overlay opens goes through `ui_open_screen(screen, item)` and

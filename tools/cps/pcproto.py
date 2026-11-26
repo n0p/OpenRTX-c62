@@ -243,6 +243,7 @@ T_FLASH_USED = 0x00E4
 T_FLASH_TOTAL = 0x00E5
 T_RAM_USED = 0x00E6
 T_RAM_TOTAL = 0x00E7
+T_MEM_REGION = 0x00F2
 T_TASK_STACK = 0x00E8
 T_AGC = 0x00E9
 T_RATE = 0x00EA
@@ -789,12 +790,26 @@ class Link:
             name, unused, size = struct.unpack("<12sHH", blob[off:off + 16])
             stacks.append({"name": name.split(b"\0")[0].decode(),
                            "unused": unused, "size": size})
+        # Memory per region: what the platform can actually measure, one
+        # record per region. A region that is not measurable is not sent, and
+        # neither is the heap when the platform cannot ask its allocator --
+        # the client shows what was measured instead of a zero.
+        regions = []
+        blob = f.get(T_MEM_REGION, b"")
+        for off in range(0, len(blob) - 19, 20):
+            name, used, total, known, _ = struct.unpack(
+                "<8sIIB3s", blob[off:off + 20])
+            regions.append({"name": name.split(b"\0")[0].decode(),
+                            "used": used, "total": total,
+                            "known": bool(known)})
         return {
             "protocol": f.u16(T_VERSION), "protocol_min": f.u16(T_VERSION_MIN),
             "firmware": f.s(T_FIRMWARE), "hardware": f.s(T_HARDWARE),
             "model": f.s(T_MODEL), "uptime_ms": f.u32(T_UPTIME_MS),
             "caps": f.u32(T_CAPS), "reset_cause": f.u32(T_RESET_CAUSE),
             "reset_name": f.s(T_RESET_NAME), "wdt_resets": f.u32(T_WDT_RESETS),
+            "regions": regions,
+            "heap_known": f.get(T_HEAP_TOTAL) is not None,
             "heap_free": f.u32(T_HEAP_FREE), "heap_total": f.u32(T_HEAP_TOTAL),
             "psram_free": f.u32(T_PSRAM_FREE),
             "psram_total": f.u32(T_PSRAM_TOTAL),

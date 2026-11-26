@@ -286,10 +286,19 @@ def cmd_diag(link, args):
     print("uptime      %.1f s   reset cause 0x%x (%s)   wdt %d" % (
         d["uptime_ms"] / 1000.0, d["reset_cause"],
         d["reset_name"] or "unknown", d["wdt_resets"]))
-    print("heap        %d / %d B free" % (d["heap_free"], d["heap_total"]))
-    print("psram       %d / %d B free" % (d["psram_free"], d["psram_total"]))
-    print("flash       %d / %d B" % (d["flash_used"], d["flash_total"]))
-    print("ram         %d / %d B" % (d["ram_used"], d["ram_total"]))
+    if d.get("heap_known"):
+        print("heap        %d / %d B free" % (d["heap_free"], d["heap_total"]))
+    # What the radio can measure, region by region: a region it cannot read is
+    # not printed at all rather than printed as zero.
+    for r in d.get("regions", []):
+        if not r["known"]:
+            continue
+        pct = (100.0 * r["used"] / r["total"]) if r["total"] else 0.0
+        print("%-11s %8d / %8d B  (%.2f %%)" % (r["name"], r["used"],
+                                                 r["total"], pct))
+    if not d.get("regions"):
+        print("flash       %d / %d B" % (d["flash_used"], d["flash_total"]))
+        print("ram         %d / %d B" % (d["ram_used"], d["ram_total"]))
     print("agc         %s" % ("unknown" if d["agc"] == 0xFF else d["agc"]))
     for t in d["tasks"]:
         print("stack       %-10s %4d free of %4d" % (t["name"], t["unused"],
