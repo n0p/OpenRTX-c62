@@ -63,6 +63,14 @@ public:
     virtual void update(rtxStatus_t *const status, const bool newCfg) override;
 
     /**
+     * Force the end of the over from the transmit supervisor: cancel the
+     * baseband output stream, so a thread blocked in it returns, and stop the
+     * encoder. The PA is already off; the RTX thread releases the audio paths
+     * as it leaves transmit.
+     */
+    virtual void abortTx() override;
+
+    /**
      * Get the mode identifier corresponding to the OpMode class.
      *
      * @return the corresponding flag from the opmode enum.
@@ -121,12 +129,30 @@ private:
      */
     bool compareCallsigns(const std::string& localCs, const std::string& incomingCs);
 
+    /**
+     * Pop one compressed voice frame, waiting a bounded time for the encoder.
+     *
+     * codec_popFrame(blocking) waits on a condition variable that is only
+     * signalled by the encoder thread: if that thread has died (a stream
+     * error, a failed start) the rtx thread would wait for ever with the PA
+     * keyed.  This polls instead and gives up, so the over can be ended.
+     *
+     * @param dst: 8-byte destination, written only on success.
+     * @return true if a frame was written.
+     */
+    bool popFrame(uint8_t *dst);
+
+    /// Frames of 20 ms the encoder may make the transmitter wait for: 10x.
+    static constexpr unsigned TX_FRAME_WAIT_MS = 200;
+
     // GPS update interval in superframes. Each superframe is 6 LICH frames
     // (~240 ms), so 25 superframes ≈ 6 seconds.
     static constexpr uint16_t GPS_UPDATE_TICKS = 25;
 
     bool startRx;                      ///< Flag for RX management.
     bool startTx;                      ///< Flag for TX management.
+    /// Set by abortTx(): no new over until the PTT has been released
+    volatile bool txBlocked;
     bool locked;                       ///< Demodulator locked on data stream.
     bool dataValid;                    ///< Demodulated data is valid
     bool extendedCall;                 ///< Extended callsign data received
