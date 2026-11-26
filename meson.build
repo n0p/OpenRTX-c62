@@ -1441,6 +1441,31 @@ p25_status_test = executable('p25_status_test',
                                                           threads_dep],
                                         'link_args' : linux_l_args})
 
+# System Fusion frame layer (tests/unit/ysf_frame.cpp): the FICH, the data
+# channel and the voice slots, fed straight to ysfFrame_decode() -- the
+# modulator stays out of the comparison, so a refusal here is a refusal of the
+# frame layer and not of the demodulator.  Compiled with CONFIG_YSF, the switch
+# the radio builds with; lib/dmr_vocoder is where the Golay(24,12) decoder and
+# the AMBE+2 types this layer links come from.
+ysf_frame_src = ['openrtx/src/protocols/YSF/YsfFrame.c',
+                 'openrtx/src/protocols/YSF/YsfTx.c',
+                 'openrtx/src/protocols/C4FM/C4fmMod.c',
+                 'lib/dmr_vocoder/dmr_decoder.c',
+                 'lib/dmr_vocoder/dmr_golay.c',
+                 'lib/dmr_vocoder/dmr_golay_table.c',
+                 'lib/dmr_vocoder/dmr_fft.c']
+
+ysf_frame_test = executable('ysf_frame_test',
+                            sources : ysf_frame_src +
+                                      ['tests/unit/ysf_frame.cpp'],
+                            kwargs  : {'include_directories' : linux_inc +
+                                                              ['lib/dmr_vocoder'],
+                                       'c_args' : linux_c_args + ['-DCONFIG_YSF'],
+                                       'cpp_args' : linux_cpp_args +
+                                                    ['-DCONFIG_YSF'],
+                                       'dependencies' : [catch2_dep],
+                                       'link_args' : linux_l_args + ['-lm']})
+
 m17_viterbi_test = executable('m17_viterbi_test',
                                sources : unit_test_src + ['tests/unit/M17_viterbi.cpp'],
                                kwargs  : unit_test_opts)
@@ -2113,6 +2138,7 @@ test('M17 Golay Unit Test',   m17_golay_test)
 test('P25 PHY Test',           p25_phy_test)
 test('P25 FEC Limits Test',    p25_fec_test)
 test('P25 Status Test',        p25_status_test, timeout : 60)
+test('YSF Frame Test',         ysf_frame_test)
 test('M17 Viterbi Unit Test', m17_viterbi_test)
 test('M17 Demodulator Test',  m17_demodulator_test)
 test('M17 RRC Test',          m17_rrc_test)
