@@ -971,6 +971,23 @@ void rtx_task()
      * Call is placed after RSSI update to allow handler's code have a fresh
      * version of the RSSI level.
      */
+
+    /*
+     * The key gate follows the PTT line, and it is sampled here once per pass.
+     *
+     * A mode asks the gate only when it wants to key, and at least one of them
+     * asks at the edge of the press (the airband mode's confirmation dialogue,
+     * OpMode_Airband). The gate will not let a press through unless it has seen
+     * the line released since the mode change, so a mode that never samples the
+     * line while the radio is idle never lets the gate see the release and can
+     * never key: that mode showed TX ARMED on the screen and stayed in receive.
+     * Sampling it here is the same thing this function does with the RSSI, and
+     * no mode has to remember to.
+     */
+    pthread_mutex_lock(&txMutex);
+    keyGate_sample(&keyGate, (uint32_t)getTick(), platform_getPttStatus());
+    pthread_mutex_unlock(&txMutex);
+
     currMode->update(&rtxStatus, reconfigure);
 
     /*

@@ -245,7 +245,12 @@ Además:
   pida el canal: con 90 % de profundidad los picos son 3,6 veces la portadora, y
   el PA de esta radio no está calibrado por encima de eso en esta banda;
 - `platform_getPttStatus()` se lee con detección de flanco, de modo que la misma
-  pulsación que abre el aviso no puede ser la que confirme;
+  pulsación que abre el aviso no puede ser la que confirme; y, con el modo ya
+  armado, la petición de claveado **se repite en cada pasada mientras el PTT
+  siga pulsado**, porque la compuerta (`rtx/KeyGate.h`) no deja subir el PA
+  hasta que la pulsación ha durado unas decenas de milisegundos: pedirlo sólo
+  en el flanco es una petición que la compuerta rechaza siempre, y el modo se
+  quedaba en `TX ARM` con la radio en recepción;
 - el vigilante de transmisión de `rtx.cpp` (`TxGuard`) sigue siendo el que corta
   una transmisión que se alarga o un PTT atascado.
 

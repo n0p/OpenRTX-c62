@@ -236,16 +236,30 @@ void OpMode_Airband::update(rtxStatus_t *const status, const bool newCfg)
      */
     const bool ptt = platform_getPttStatus();
 
-    if (ptt && (!pttLatch)) {
-        pttLatch = true;
-
-        if (status->opStatus != TX)
-            requestTx(status);
-    } else if (!ptt) {
+    if (!ptt) {
         pttLatch = false;
 
         if (status->opStatus == TX)
             stopTx(status);
+    } else if (!pttLatch) {
+        pttLatch = true;
+
+        if (status->opStatus != TX)
+            requestTx(status);
+    } else if ((status->opStatus != TX)
+               && (airband_txState() == AIRBAND_TX_ARMED)) {
+        /*
+         * Held, with the consent already given: ask again on every pass until
+         * the radio is transmitting.
+         *
+         * The key gate lets the PA up only after the press has lasted a few
+         * tens of milliseconds (rtx/KeyGate.h, KEYGATE_HOLD_MS), so the request
+         * made at the edge of the press -- the only one the edge detection
+         * above allows -- is refused by it every single time: the mode said TX
+         * ARMED on the screen and the radio stayed in receive. Asking once is
+         * the bug this loop is the fix for.
+         */
+        requestTx(status);
     }
 #endif
 

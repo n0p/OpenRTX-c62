@@ -1966,6 +1966,48 @@ slevel_test = executable('slevel_test',
                          sources : unit_test_src + ['tests/unit/slevel.cpp'],
                          kwargs  : unit_test_opts)
 
+# The FM squelch and the two analogue audio routes it drives: the hysteresis,
+# the level being the operator's setting, the tone deciding when it is enabled,
+# and a route that is opened, swapped and released without leaving one behind.
+fm_squelch_test = executable('fm_squelch_test',
+                             sources : unit_test_src +
+                                       ['tests/unit/fm_squelch.cpp'],
+                             kwargs  : unit_test_opts)
+
+# CTCSS on the analogue modes: the EIA table and its inverse, the index a 7 bit
+# channel field can carry versus the 50 tones the table has, the channel-to-
+# transmitter mapping in both directions, the clearing on a mode change and what
+# the voice prompt says about a tone pair (read back from the prompt queue).
+fm_ctcss_test = executable('fm_ctcss_test',
+                           sources : unit_test_src +
+                                     ['tests/unit/fm_ctcss.cpp'],
+                           kwargs  : unit_test_opts)
+
+# The airband mode with its transmitter compiled in: CONFIG_C62_AIR_TX is what
+# the shipped image carries, and the mode's keying is a dialogue with the
+# operator that only exists when it is on. Built twice like the protocol tests,
+# so the option is part of the test and not of the emulator.
+airband_tx_opts = {'c_args' : linux_c_args + ['-DCONFIG_C62_AIR_TX'],
+                   'cpp_args' : linux_cpp_args + ['-DCONFIG_C62_AIR_TX'],
+                   'include_directories' : linux_inc,
+                   'dependencies' : [sdl_dep, threads_dep, codec2_dep,
+                                     catch2_dep],
+                   'link_args' : linux_l_args}
+
+airband_mode_test = executable('airband_mode_test',
+                               sources : unit_test_src +
+                                         ['tests/unit/airband_mode.cpp'],
+                               kwargs  : airband_tx_opts)
+
+# Tuning step and band limits through the UI FSM: the step table, the airband
+# raster (25 kHz / 8.33 kHz) put back when the mode or one of its channels is
+# selected, the snap that keeps an 8.33 kHz step on a carrier, stepping stopped
+# at the platform's band edge, and the service band that limits transmitting
+# but not tuning.
+fm_step_test = executable('fm_step_test',
+                          sources : unit_test_src + ['tests/unit/fm_step.cpp'],
+                          kwargs  : unit_test_opts)
+
 audio_codec_test = executable('audio_codec_test',
                               sources : unit_test_src + ['tests/unit/audio_codec.cpp'],
                               kwargs  : unit_test_opts)
@@ -2138,6 +2180,10 @@ test('PC Protocol Debug Test', pc_proto_dbg_test)
 test('PC Bench Test',        pc_bench_test)
 test('PC Bench Production Test', pc_bench_nobench_test)
 test('Zones Test',           zones_test)
+test('FM Squelch Test',      fm_squelch_test, timeout : 120)
+test('FM CTCSS Test',        fm_ctcss_test, timeout : 120)
+test('Airband Mode Test',    airband_mode_test, timeout : 120)
+test('FM Step And Limits Test', fm_step_test, timeout : 120)
 test('AGC Test',             agc_test)
 test('AM TX Test',           am_tx_test)
 test('Airband Test',         airband_test)

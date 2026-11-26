@@ -374,7 +374,7 @@ void vp_announceCTCSS(const bool rxToneEnabled, const uint8_t rxTone,
         if (flags & vpqIncludeDescriptions)
             vp_queuePrompt(PROMPT_TONE);
 
-        uint16_t tone = ctcss_tone[rxTone];
+        uint16_t tone = ctcssFreqFromIndex(rxTone);
         sniprintf(buffer, sizeof(buffer), "%d.%d", (tone / 10), (tone % 10));
 
         vp_queueString(buffer, vpAnnounceCommonSymbols);
@@ -391,7 +391,7 @@ void vp_announceCTCSS(const bool rxToneEnabled, const uint8_t rxTone,
             vp_queuePrompt(PROMPT_TONE);
         }
 
-        uint16_t tone = ctcss_tone[rxTone];
+        uint16_t tone = ctcssFreqFromIndex(rxTone);
         sniprintf(buffer, sizeof(buffer), "%d.%d", (tone / 10), (tone % 10));
 
         vp_queueString(buffer, vpAnnounceCommonSymbols);
@@ -403,7 +403,7 @@ void vp_announceCTCSS(const bool rxToneEnabled, const uint8_t rxTone,
             vp_queuePrompt(PROMPT_TONE);
         }
 
-        uint16_t tone = ctcss_tone[txTone];
+        uint16_t tone = ctcssFreqFromIndex(txTone);
         sniprintf(buffer, sizeof(buffer), "%d.%d", (tone / 10), (tone % 10));
 
         vp_queueString(buffer, vpAnnounceCommonSymbols);
