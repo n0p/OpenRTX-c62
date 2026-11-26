@@ -108,6 +108,19 @@ static int s_cc_ref = -1;     /* colour code of the last proving burst */
 static bool s_burst_checked;  /* a CRC checked content in this burst */
 static int s_burst_errors;    /* bits the slot type / EMB code corrected */
 static int s_burst_cc;        /* colour code it carries */
+/*
+ * Whether the colour code a burst carries may be published.  The codes that
+ * protect it (Golay(20,8) for the slot type, QR(16,7) for the embedded LC)
+ * always land on some word, so a field with an error in it decodes onto a
+ * *different* colour code - and the screen showed the colour code dancing
+ * from burst to burst while the audio was perfectly fine.  A correction is
+ * taken only when the colour code it lands on is the one already heard; with
+ * nothing heard yet there is nothing to compare against and it is taken.
+ * tests/unit/dmr_rx_status.cpp holds this down. */
+static bool cc_publishable(int cc)
+{
+    return (s_burst_errors == 0) || (s_cc_ref < 0) || (cc == s_cc_ref);
+}
 /* BS slot tracking: timeslots strictly alternate every 30 ms, so the slot is
  * predicted by alternation and the CACH TACT only re-phases the prediction
  * when two consecutive TACTs agree against it. A single TACT with two bit
@@ -896,7 +909,8 @@ static bool handle_data_burst(int slot_idx, const uint8_t bits[264],
     cc = (int)((cw >> 16) & 0xFu);
     dt = (int)((cw >> 12) & 0xFu);
     s_burst_cc = cc;
-    st->info.cc = cc;
+    if (cc_publishable(cc))
+        st->info.cc = cc;
     st->voice_idx = -1;
 
     memcpy(info, bits, 98);
@@ -1173,8 +1187,12 @@ static bool handle_voice_nosync(int slot_idx, const uint8_t burst[132],
         }
     } else {
         st->emb_bad_run = 0;
-        st->info.cc = (int)((cw >> 12) & 0xFu);
-        s_burst_cc = st->info.cc;
+        /* Not published when the word only decoded with a correction that
+         * moved its colour code off the one being heard (cc_publishable) */
+        if (cc_publishable((int)((cw >> 12) & 0xFu))) {
+            st->info.cc = (int)((cw >> 12) & 0xFu);
+            s_burst_cc = st->info.cc;
+        }
         lcss = (int)((cw >> 9) & 0x3u);
         s_stats.lcss[lcss]++;
         st->info.activity = DMR_ACT_VOICE;

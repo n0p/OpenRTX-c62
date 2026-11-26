@@ -166,12 +166,36 @@ void idleBurst(uint8_t burst[kBurstSyms], uint8_t cc)
     putSync(burst, kSyncBsData);
 }
 
+/* What the call being transmitted is, and what is wrong with it on purpose */
+struct CallOpts
+{
+    int callTs = 1;      /* timeslot the repeater repeats the call in */
+    int frames = 40;     /* 60 ms TDMA frames */
+    bool terminator = false;
+    bool voice = true;   /* voice superframes after the two headers */
+    /* The header's FEC fails: the link control in it never decodes */
+    bool headerBroken = false;
+    /* Frame whose burst C carries a colour code that only decodes with one
+     * bit of error correction (-1: none) */
+    int miscorrectFrame = -1;
+    /* ... and the same with a clean field (a different colour code on the
+     * air, correctly received) */
+    int differentCcFrame = -1;
+};
+
+/* The info field of a data burst, zeroed: FEC and RS(12,9) cannot survive it */
+void breakInfo(uint8_t burst[kBurstSyms])
+{
+    memset(burst, 0, 54);                    /* info, before the slot type */
+    memset(&burst[78], 0, kBurstSyms - 78);  /* info, after the sync */
+}
+
 /*
  * A whole call on a repeater: a voice LC header twice, then voice superframes
  * (A..F, A carrying the sync, B..E the embedded LC), and a terminator if
  * asked.  The other timeslot carries idle bursts, as a busy repeater's does.
  */
-void buildCall(Gen &g, int callTs, int frames, bool terminator)
+void buildCall(Gen &g, const CallOpts &o)
 {
     uint8_t burst[kBurstSyms];
     unsigned voice = 0;
@@ -179,35 +203,61 @@ void buildCall(Gen &g, int callTs, int frames, bool terminator)
     dmr_tx_setup(&g.tx, kSrc, kTg, true, kCc);
     dmr_mod_init(&g.mod, kTxLevel, true);
 
-    for (int f = 0; f < frames; f++) {
+    for (int f = 0; f < o.frames; f++) {
         for (int ts = 1; ts <= 2; ts++) {
-            if (ts != callTs) {
+            if (ts != o.callTs) {
                 idleBurst(burst, kCc);
                 appendSlot(g, burst, true, ts, "idle");
                 continue;
             }
             if (f < 2) {
                 dmr_tx_header(&g.tx, burst);
+                if (o.headerBroken)
+                    breakInfo(burst);
                 putSync(burst, kSyncBsData);
                 appendSlot(g, burst, true, ts, "header");
                 continue;
             }
-            if (terminator && f == frames - 1) {
+            if (o.terminator && f == o.frames - 1) {
                 dmr_tx_terminator(&g.tx, burst);
                 putSync(burst, kSyncBsData);
                 appendSlot(g, burst, true, ts, "terminator");
                 continue;
             }
+            if (!o.voice) {
+                /* The headers and nothing else: no embedded LC to fall back on */
+                idleBurst(burst, kCc);
+                appendSlot(g, burst, true, ts, "idle");
+                continue;
+            }
+
             uint8_t ambe[3][9];
 
             ambeFrames(voice++, ambe);
             /* Burst A of the superframe carries the sync; B..F carry the
              * embedded LC in its place, so the sync must go in only there */
             const bool burstA = (g.tx.voiceIdx == 0);
+            const bool otherCc =
+                (f == o.miscorrectFrame || f == o.differentCcFrame);
 
+            /*
+             * A burst of another colour code: the colour code of a voice
+             * burst lives in the embedded LC word, which dmr_tx_voice() fills
+             * from the call's, so the call's is moved for this one burst.
+             */
+            const uint8_t cc = g.tx.cc;
+
+            if (otherCc)
+                g.tx.cc = static_cast<uint8_t>(kCc + 4);
             dmr_tx_voice(&g.tx, ambe, burst);
+            g.tx.cc = cc;
             if (burstA)
                 putSync(burst, kSyncBsVoice);
+            /* One bit of the embedded LC word wrong: the FEC corrects it, so
+             * the word still decodes - onto another colour code.  Only on a
+             * burst that carries an EMB: burst A has the sync there. */
+            if (f == o.miscorrectFrame && !burstA)
+                burst[kSyncAt] ^= 1u;
             appendSlot(g, burst, true, ts, "voice");
         }
     }
@@ -308,7 +358,10 @@ TEST_CASE("A DMR repeater call publishes CC, timeslot, call and quality",
     resetReceiver();
 
     Gen g;
-    buildCall(g, 1, 40, false);
+    CallOpts o;
+
+    o.frames = 40;
+    buildCall(g, o);
 
     const std::vector<Obs> obs = feed(g.s);
     const std::vector<Obs> st = tail(obs, 40); /* 1.2 s of steady state */
@@ -373,7 +426,11 @@ TEST_CASE("A call in timeslot 2 is reported as timeslot 2", "[dmr][rx]")
     resetReceiver();
 
     Gen g;
-    buildCall(g, 2, 40, false);
+    CallOpts o;
+
+    o.callTs = 2;
+    o.frames = 40;
+    buildCall(g, o);
 
     const std::vector<Obs> st = tail(feed(g.s), 40);
     int ts2 = 0, ts1 = 0;
@@ -427,4 +484,97 @@ TEST_CASE("Silence and noise lock nothing and publish nothing", "[dmr][rx]")
         REQUIRE(o.st.src == 0);
         REQUIRE(o.st.dst == 0);
     }
+}
+
+/*
+ * A link control that fails its checksum is not a call: the burst is there
+ * (its slot type decoded), but who is calling whom is not published.  The
+ * same stream with the header intact does announce it, so the test is about
+ * the checksum and not about the stream.
+ */
+TEST_CASE("A DMR link control that fails its checksum announces no call",
+          "[dmr][rx]")
+{
+    for (int broken = 1; broken >= 0; broken--) {
+        resetReceiver();
+
+        Gen g;
+        CallOpts o;
+
+        o.frames = 20;
+        o.voice = false;         /* no embedded LC to fall back on */
+        o.headerBroken = (broken != 0);
+        buildCall(g, o);
+
+        const std::vector<Obs> st = tail(feed(g.s), 20);
+        int callSlots = 0, announced = 0;
+
+        for (const Obs &obs : st) {
+            /* Whatever the header carried, the burst itself was heard */
+            REQUIRE(obs.st.sync);
+            REQUIRE(obs.st.colourCode == kCc);
+            if (obs.st.timeslot != 1)
+                continue;
+            callSlots++;
+            if (obs.st.idsValid) {
+                announced++;
+                REQUIRE(obs.st.src == kSrc);
+                REQUIRE(obs.st.dst == kTg);
+                REQUIRE(obs.st.group);
+            } else {
+                /* Nothing decoded: neither half of an identifier is made up */
+                REQUIRE(obs.st.src == 0);
+                REQUIRE(obs.st.dst == 0);
+            }
+        }
+        REQUIRE(callSlots >= 8);
+
+        if (broken)
+            REQUIRE(announced == 0);
+        else
+            REQUIRE(announced > 0);
+    }
+}
+
+/*
+ * The colour code comes from a field protected by a code that always lands on
+ * some word, so a burst with an error in it can decode onto a *different*
+ * colour code.  The status must not follow it: the colour code that only came
+ * out of the correction is not published, and the screen keeps the one that
+ * was heard.  A clean burst announcing another colour code is published as it
+ * is - this receiver is a listener, not a filter.
+ */
+TEST_CASE("A miscorrected colour code does not overwrite the one on the air",
+          "[dmr][rx]")
+{
+    int highest = -1;
+
+    for (int corrupted = 1; corrupted >= 0; corrupted--) {
+        resetReceiver();
+
+        Gen g;
+        CallOpts o;
+
+        o.frames = 40;
+        /* Frame 22 is burst C of a superframe: one that carries the EMB */
+        if (corrupted)
+            o.miscorrectFrame = 22;
+        else
+            o.differentCcFrame = 22;
+        buildCall(g, o);
+
+        int top = -1;
+
+        for (const Obs &obs : feed(g.s))
+            if (obs.st.sync && obs.st.colourCode > top)
+                top = obs.st.colourCode;
+
+        REQUIRE(top > 0);
+        if (corrupted)
+            REQUIRE(top == kCc);          /* the dancing colour code */
+        else
+            REQUIRE(top == kCc + 4);      /* what the air said, cleanly */
+        highest = top;
+    }
+    REQUIRE(highest == kCc + 4);
 }
