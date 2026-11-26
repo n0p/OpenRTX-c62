@@ -43,10 +43,16 @@
 /* mbelib's synthesis keeps a few KB of arrays on the stack */
 #define THREAD_STACK 8192
 #else
-/* lib/dmr_vocoder keeps its scratch in the instance (DTCM, dmr_voice.c):
- * 4 KB is what the audio path, the queue and the sink need.  DTCM is 16 KB
- * and holds the 8.5 KB decoder state beside it. */
-#define THREAD_STACK 4096
+/*
+ * lib/dmr_vocoder keeps its scratch in the instance (DTCM, dmr_voice.c), but
+ * the synthesis is not flat: dmr_rfft256 puts 128+128 floats of its own on the
+ * stack and synth_unvoiced calls it with the frame's buffers live.  A DMR
+ * session with 4 KB overflowed exactly there -- the black box caught
+ * K_ERR_STACK_CHK_FAIL with PC in dmr_rfft256 and LR in synth_unvoiced -- so
+ * the thread gets what DTCM can still hold: 16 KB total, 8.5 KB of decoder
+ * state beside it, 672 B left over after this.
+ */
+#define THREAD_STACK 7168
 #endif
 #define STATS_MS 10000
 
