@@ -298,6 +298,38 @@ void bb_platformSnapshot(bbSnapshot_t *s)
 #endif
 }
 
+/*
+ * The stalled thread's pended-on object.  Zephyr keeps it in the thread's
+ * base: a pointer to whatever it is waiting for (a k_sem, a mutex's owner
+ * wait, a fifo).  The address is what lets a symbol lookup name it, which is
+ * the difference between "the UI stopped" and "the UI is waiting for this".
+ */
+uint32_t bb_platformPendedOn(uint32_t stallMask)
+{
+    uint32_t pended = 0;
+
+#if defined(CONFIG_THREAD_MONITOR)
+    /* First stalled role wins: a mask with several bits is still one hang. */
+    for (uint8_t beat = 0; beat < BB_BEAT_COUNT; beat++) {
+        const void *owner;
+
+        if (!(stallMask & (1U << beat)))
+            continue;
+
+        owner = bb_threadOfBeat(beat);
+        if (owner == NULL)
+            continue;
+
+        pended = (uint32_t)(uintptr_t)((const struct k_thread *)owner)->base.pended_on;
+        break;
+    }
+#else
+    (void)stallMask;
+#endif
+
+    return pended;
+}
+
 const void *bb_platformCurrentThread(void)
 {
     return (const void *)k_current_get();

@@ -73,6 +73,19 @@ __attribute__((weak)) void bb_platformSnapshot(bbSnapshot_t *s)
         memset(s, 0, sizeof(*s));
 }
 
+/**
+ * What the stalled thread was waiting on, when the platform can tell.
+ *
+ * A stalled thread parked in a semaphore says nothing about which semaphore;
+ * the address of the kernel object is the one fact that turns "the UI is
+ * stuck" into "the UI is stuck on this".  Zero when the platform cannot say.
+ */
+__attribute__((weak)) uint32_t bb_platformPendedOn(uint32_t stallMask)
+{
+    (void)stallMask;
+    return 0;
+}
+
 __attribute__((weak)) int bb_platformPersist(const uint8_t *rec, size_t len)
 {
     (void)rec;
@@ -263,6 +276,19 @@ uint32_t bb_markCount(void)
     return bbMarks;
 }
 
+/**
+ * The thread that owns a beat, as learnt from the beat itself.  NULL before
+ * that beat has been seen once, which is what the stall hook has to tolerate:
+ * a thread that never beat cannot be the one that stopped beating.
+ */
+const void *bb_threadOfBeat(uint8_t beat)
+{
+    if (beat >= BB_BEAT_COUNT)
+        return NULL;
+
+    return bbThreadOf[beat];
+}
+
 uint16_t bb_threadRole(const void *thread)
 {
     if (thread == NULL)
@@ -344,6 +370,15 @@ int bb_recordBuild(uint8_t *rec, size_t cap, uint32_t nowMs, uint8_t reason,
     put32(&rec[BB_OFF_TXFREQ], snap.txFreq);
     put16(&rec[BB_OFF_RTXFLAGS], snap.rtxFlags);
     put16(&rec[BB_OFF_THREADSZ], BB_THREAD_REC_SIZE);
+
+    /*
+     * The reserved word now carries the kernel object the stalled thread was
+     * pended on, for stalls only: an address is worth nothing in a fatal or a
+     * manual record, and a reader that does not know the field sees the zero
+     * it has always seen.
+     */
+    if (reason == BB_REASON_STALL)
+        put32(&rec[BB_OFF_SPARE], bb_platformPendedOn(detail));
 
     uint16_t nThreads = snap.threadCount;
     if (nThreads > BB_MAX_THREADS)

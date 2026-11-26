@@ -312,6 +312,9 @@ uint32_t bb_markCount(void);
  */
 uint16_t bb_threadRole(const void *thread);
 
+/** Thread that owns a beat (NULL until it has beaten once). */
+const void *bb_threadOfBeat(uint8_t beat);
+
 /*
  * ---------------------------------------------------------------------------
  * Record

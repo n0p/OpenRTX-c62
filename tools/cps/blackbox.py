@@ -82,6 +82,7 @@ def decode(rec):
         "uptime_ms": uptime,
         "reason": REASONS.get(reason, "?"),
         "detail": detail,
+        "pended": struct.unpack_from("<I", rec, 52)[0],
         "reset_cause": reset,
         "marks": crumb_seq,
         "rtx_mode": MODES.get(rtx_mode, str(rtx_mode)),
@@ -121,6 +122,11 @@ def decode(rec):
     stalled = [BEATS[i] for i in range(4) if detail & (1 << i)]
     suffix = " [%s]" % " ".join(stalled) if out["reason"] == "STALL" else ""
     add("reason: %s detail 0x%08x%s" % (out["reason"], detail, suffix))
+
+    # The reserved header word carries the kernel object the stalled thread was
+    # waiting on, so the reader says which address to look up.
+    if out["reason"] == "STALL" and out["pended"]:
+        add("pended: 0x%08x" % out["pended"])
     add("uptime: %u ms (%u min %u s), reset cause 0x%08x" % (
         uptime, uptime // 60000, (uptime // 1000) % 60, reset))
     add("radio: rtx=%s ui=%s flags 0x%02x" % (out["rtx_mode"], out["ui_mode"],
@@ -148,7 +154,7 @@ def fetch(port, baud, timeout):
     link = pcproto.Link(pcproto.Port(port, baud=baud, timeout=timeout))
     try:
         link.connect()
-        if not (link.caps() & pcproto.CAP_DEBUG):
+        if not (_caps := (link.caps if isinstance(link.caps, int) else link.caps())) & pcproto.CAP_DEBUG:
             raise SystemExit("this firmware has no debug namespace "
                              "(build with -DC62_DEBUG_PROTO=ON)")
 
