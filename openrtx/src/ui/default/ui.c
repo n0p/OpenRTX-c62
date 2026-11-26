@@ -3318,19 +3318,26 @@ void ui_updateFSM(bool *sync_rtx)
                              * writes the record three seconds later, like any
                              * other setting.
                              */
+                            /*
+                             * Two states, not three: Auto is not offered because
+                             * the pad on the UART does not key on this board
+                             * (docs/ACCESSORY.md), and a third position that
+                             * silently leaves the radio mute is the one thing a
+                             * menu must not have.
+                             */
                             if(msg.keys & (KEY_UP | KEY_RIGHT | KNOB_RIGHT))
                             {
                                 state.settings.pc_port =
-                                    (state.settings.pc_port >= PORT_MODE_NEVER)
-                                        ? (uint8_t)PORT_MODE_AUTO
-                                        : (uint8_t)(state.settings.pc_port + 1);
+                                    (state.settings.pc_port == PORT_MODE_ALWAYS)
+                                        ? (uint8_t)PORT_MODE_NEVER
+                                        : (uint8_t)PORT_MODE_ALWAYS;
                             }
                             else if(msg.keys & (KEY_DOWN | KEY_LEFT | KNOB_LEFT))
                             {
                                 state.settings.pc_port =
-                                    (state.settings.pc_port == PORT_MODE_AUTO)
+                                    (state.settings.pc_port == PORT_MODE_ALWAYS)
                                         ? (uint8_t)PORT_MODE_NEVER
-                                        : (uint8_t)(state.settings.pc_port - 1);
+                                        : (uint8_t)PORT_MODE_ALWAYS;
                             }
                             break;
                         default:

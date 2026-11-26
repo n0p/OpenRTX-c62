@@ -107,7 +107,13 @@ static const qm_menu_t *qm_active(void)
 /* Items shared by all modes                                                  */
 /* ------------------------------------------------------------------------- */
 
-const char *const qm_names_port[] = { "AUTO", "ALWAYS", "NEVER" };
+/*
+ * Two names, indexed by the value that reaches the record: Auto has no entry
+ * because it is not offered -- the pad on the UART does not key on this board
+ * (docs/ACCESSORY.md) -- but its slot stays so the enum and the record do not
+ * have to move.
+ */
+const char *const qm_names_port[] = { "AUTO", "SERIE", "PTT" };
 
 /*
  * The accessory pad: protocol and PTT on the same line (docs/ACCESSORY.md).
@@ -119,7 +125,9 @@ const char *const qm_names_port[] = { "AUTO", "ALWAYS", "NEVER" };
 static int qm_port_get(void)
 {
     uint8_t mode = state.settings.pc_port;
-    return (mode > (uint8_t)PORT_MODE_NEVER) ? (int)PORT_MODE_AUTO : (int)mode;
+    /* Auto is not offered: it comes back as Never, the way a stale record does */
+    return (mode == (uint8_t)PORT_MODE_ALWAYS) ? (int)PORT_MODE_ALWAYS
+                                               : (int)PORT_MODE_NEVER;
 }
 
 static void qm_port_set(int mode)
@@ -995,7 +1003,7 @@ void qm_am_applyRaster(void)
  * can end with a bare QM_ITEM_MSG().
  */
 #define QM_ITEM_PORT() \
-    QM_ITEM_ENUM("PUERTO", PORT_MODE_AUTO, PORT_MODE_NEVER, qm_port_get, \
+    QM_ITEM_ENUM("PUERTO", PORT_MODE_ALWAYS, PORT_MODE_NEVER, qm_port_get, \
                  qm_port_set, qm_names_port, NULL),
 
 

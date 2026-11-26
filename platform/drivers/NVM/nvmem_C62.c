@@ -204,6 +204,7 @@ int nvm_readSettings(settings_t *settings)
 {
     uint8_t buf[SETTINGS_RECORD_SIZE];
     uint8_t cause = SETTINGS_RESET_BLANK;
+    bool coerced = false;
 
     if (settings == NULL)
         return -1;
@@ -234,8 +235,33 @@ int nvm_readSettings(settings_t *settings)
                (unsigned)SETTINGS_VERSION);
     }
 
+    /*
+     * Auto is not a working mode on this board: with the pad handed to the UART
+     * the accessory switch does not key, and a radio that does not transmit is
+     * the one failure nobody diagnoses.  A record saved with Auto -- or a fresh
+     * one from an older default -- comes back as Never, and the log says so, so
+     * that the operator finds out here instead of in front of a dead PTT.
+     * Selecting Auto in the menu is still possible: the value that reaches the
+     * record is what this line rewrites on the next boot.
+     */
+    if ((ret == 0) && (settings->pc_port == (uint8_t)PORT_MODE_AUTO)) {
+        settings->pc_port = (uint8_t)PORT_MODE_NEVER;
+        printk("settings: accessory port was Auto, brought back as Never "
+               "(the switch does not key with the pad on the UART)\n");
+        /*
+         * The rewritten value has to reach the flash, not only RAM.  The debounce
+         * key is the CRC of the record as it sits on flash, so spoiling it makes
+         * the next writeSettingsAndVfo() store the corrected record: the state
+         * task writes three seconds after any change, and this one counts.
+         */
+        coerced = true;
+    }
+
     /* Debounce key: the record as it is on flash, not the parsed structure */
     settingsCrc = crc_ccitt(buf, sizeof(buf));
+
+    if (coerced)
+        settingsCrc = (uint16_t)~settingsCrc;
 
     if (ret != 0)
         return -(int)cause;
