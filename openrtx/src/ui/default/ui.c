@@ -433,6 +433,16 @@ uint32_t ui_frames(void)
     return frameCount;
 }
 
+void ui_requestRedraw(void)
+{
+    redraw_needed = true;
+}
+
+bool ui_macroGridOpen(void)
+{
+    return macro_menu;
+}
+
 
 /*
  * Set by code that changes the radio configuration outside the UI FSM (the

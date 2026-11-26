@@ -157,6 +157,27 @@ enum uiKeyClaim
 uint8_t ui_menu_selected(void);
 bool ui_edit_mode(void);
 
+/**
+ * True while the macro grid is drawn over the screen (MONI pressed, or P2 held
+ * with the latch on).
+ *
+ * The grid dims the screen with an overlay and draws its cells on top of it, so
+ * the strings underneath it are still recorded but are dark: a layout check has
+ * to know the difference between "two texts collide" and "a popup covers the
+ * screen on purpose" (tests/unit/ui_fit.cpp).
+ */
+bool ui_macroGridOpen(void);
+
+/**
+ * Ask for a redraw on the next ui_updateGUI() pass.
+ *
+ * The FSM asks for it on every key event and screen change; a caller that
+ * writes `state` or a module's screen directly -- a test, the simulator's
+ * `inject`, the remote control -- has to ask too, or the next dump describes
+ * the screen before the change.
+ */
+void ui_requestRedraw(void);
+
 /** Block that consumed the last key event (enum uiKeyClaim). */
 uint8_t ui_lastClaim(void);
 
