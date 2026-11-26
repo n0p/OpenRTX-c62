@@ -112,6 +112,8 @@ def open_receiver(args, radio=None):
             args.anritsu_host
     if args.sdr == "soapy":
         return S.Soapy(args.soapy_args), "SoapySDR device"
+    if args.sdr == "b200":
+        return S.B200(), "Ettus B200 through libuhd (32 MHz TCXO)"
     raise SystemExit("unknown --sdr %r" % args.sdr)
 
 
@@ -308,7 +310,7 @@ def main(argv=None):
     ap.add_argument("--device", help="programming cable, e.g. /dev/ttyUSB0")
     ap.add_argument("--baud", type=int, default=115200)
     ap.add_argument("--sdr", default="sim",
-                    choices=["sim", "rtl", "soapy", "anritsu"])
+                    choices=["sim", "rtl", "soapy", "anritsu", "b200"])
     ap.add_argument("--freq", default="145.500M",
                     help="frequency to measure, default 145.500M")
     ap.add_argument("--tone", type=int, default=88,

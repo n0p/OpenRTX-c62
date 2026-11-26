@@ -27,6 +27,7 @@ sensitivity case is written the way it is: the instrument measures the level,
 the radio reports its own CRC errors (docs/BENCH.md, case 5).
 """
 
+import os
 import math
 import socket
 import subprocess
@@ -497,6 +498,64 @@ class Sim(Backend):
 # Factory
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Ettus B200 / B210 through libuhd (our own CLI, no Python bindings)
+# ---------------------------------------------------------------------------
+
+class B200(Backend):
+    """
+    A USRP B200mini and friends, driven through the small `b200` helper we
+    built against libuhd: it writes interleaved complex64 and prints one line.
+
+    Calibrated enough for absolute frequency, and its 32 MHz clock is a TCXO,
+    so it is a fair reference for carrier error and deviation.
+    """
+
+    name = "b200"
+    kinds = (KIND_IQ,)
+
+    def __init__(self, binary=os.path.join(os.path.dirname(os.path.abspath(__file__)), "b200"),
+                 images_dir="/tmp/imgs", gain_db=10.0, antenna="RX2"):
+        self.binary = binary
+        self.images_dir = images_dir
+        self.gain = gain_db
+        self.antenna = antenna
+
+    def bandwidth_hint_hz(self):
+        return 240000.0
+
+    def capture(self, kind, center_hz, seconds, rate_hz=None, gain_db=None):
+        if kind != KIND_IQ:
+            raise BackendError("the B200 backend only produces I/Q")
+        fs = float(rate_hz or self.bandwidth_hint_hz())
+        g = gain_db if gain_db is not None else (self.gain or 20.0)
+        import tempfile, os
+        fd, path = tempfile.mkstemp(suffix=".fc32")
+        os.close(fd)
+        try:
+            env = dict(os.environ, UHD_IMAGES_DIR=self.images_dir)
+            cmd = [self.binary, "rx", "%d" % int(center_hz), "%d" % int(fs),
+                   "%.3f" % seconds, "%g" % g, path]
+            out = subprocess.run(cmd, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE,
+                                 timeout=seconds + 60, env=env)
+            if out.returncode != 0:
+                raise BackendError("b200 failed: %s" %
+                                   out.stderr.decode("utf-8", "replace").strip()[-300:])
+            iq = np.fromfile(path, dtype=np.complex64)
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        if iq.size < 16:
+            raise BackendError("b200 produced no samples")
+        line = out.stdout.decode("utf-8", "replace").strip().splitlines()[-1:]
+        return Capture(KIND_IQ, iq, rate_hz=fs, center_hz=float(center_hz),
+                       meta={"backend": "b200", "gain": g,
+                             "summary": line[0] if line else ""})
+
+
 def open_backend(name, **kw):
     name = (name or "sim").lower()
     if name == "rtl":
@@ -505,6 +564,8 @@ def open_backend(name, **kw):
         return Soapy(**kw)
     if name == "anritsu":
         return Anritsu(**kw)
+    if name == "b200" or name == "uhd":
+        return B200(**kw)
     if name == "sim":
         return Sim(**kw)
     raise BackendError("unknown receiver %r (rtl, soapy, anritsu, sim)" % name)
