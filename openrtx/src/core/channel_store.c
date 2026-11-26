@@ -7,6 +7,7 @@
 #include "core/channel_store.h"
 #include "core/crc.h"
 #include "core/settings.h"
+#include "core/utils.h"
 #include "interfaces/delays.h"
 #include "core/psram_state.h"
 #include <string.h>
@@ -592,9 +593,9 @@ int chstore_applyRtx(uint16_t idx, rtxStatus_t *rtx)
     rtx->txDisable = (ch->flags & CHSTORE_FLAG_RX_ONLY) ? 1 : 0;
 
     rtx->rxToneEn = ch->rx_tone_en;
-    rtx->rxTone = ch->rx_tone_en ? ctcss_tone[ch->rx_tone % CTCSS_FREQ_NUM] : 0;
+    rtx->rxTone = ch->rx_tone_en ? ctcssFreqFromIndex(ch->rx_tone) : 0;
     rtx->txToneEn = ch->tx_tone_en;
-    rtx->txTone = ch->tx_tone_en ? ctcss_tone[ch->tx_tone % CTCSS_FREQ_NUM] : 0;
+    rtx->txTone = ch->tx_tone_en ? ctcssFreqFromIndex(ch->tx_tone) : 0;
 
     if (ch->mode == OPMODE_DMR) {
         rtx->dmrColourCode = ch->dmr_cc;

@@ -587,6 +587,20 @@ bool vp_sequenceNotEmpty()
     return (vpCurrentSequence.length > 0);
 }
 
+size_t vp_pendingSequence(uint16_t *out, size_t max)
+{
+    if ((out == NULL) || (max == 0))
+        return 0;
+
+    size_t n = ((size_t)vpCurrentSequence.length < max)
+             ? (size_t)vpCurrentSequence.length : max;
+
+    for (size_t i = 0; i < n; i++)
+        out[i] = vpCurrentSequence.buffer[i];
+
+    return n;
+}
+
 void vp_beep(uint16_t freq, uint16_t duration)
 {
     if (state.settings.vpLevel < vpBeep)

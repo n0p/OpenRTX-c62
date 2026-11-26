@@ -1959,6 +1959,15 @@ fm_squelch_test = executable('fm_squelch_test',
                                        ['tests/unit/fm_squelch.cpp'],
                              kwargs  : unit_test_opts)
 
+# CTCSS on the analogue modes: the EIA table and its inverse, the index a 7 bit
+# channel field can carry versus the 50 tones the table has, the channel-to-
+# transmitter mapping in both directions, the clearing on a mode change and what
+# the voice prompt says about a tone pair (read back from the prompt queue).
+fm_ctcss_test = executable('fm_ctcss_test',
+                           sources : unit_test_src +
+                                     ['tests/unit/fm_ctcss.cpp'],
+                           kwargs  : unit_test_opts)
+
 audio_codec_test = executable('audio_codec_test',
                               sources : unit_test_src + ['tests/unit/audio_codec.cpp'],
                               kwargs  : unit_test_opts)
@@ -2132,6 +2141,7 @@ test('PC Bench Test',        pc_bench_test)
 test('PC Bench Production Test', pc_bench_nobench_test)
 test('Zones Test',           zones_test)
 test('FM Squelch Test',      fm_squelch_test, timeout : 120)
+test('FM CTCSS Test',        fm_ctcss_test, timeout : 120)
 test('AGC Test',             agc_test)
 test('AM TX Test',           am_tx_test)
 test('Airband Test',         airband_test)

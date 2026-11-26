@@ -94,6 +94,18 @@ rssi_t sLevelToRssi(const uint8_t slevel)
     return -127 + (6 * (rssi_t)level);
 }
 
+uint16_t ctcssFreqFromIndex(const uint8_t index)
+{
+    /*
+     * The index comes from a 7 bit field, so it can hold values the table does
+     * not have: a codeplug written by another tool, or a record that was
+     * damaged. Reading past the table is not a wrong tone but whatever follows
+     * it in flash, which is then programmed into the chip and spoken by the
+     * voice prompt. Wrapping is what channel_store.c has always done.
+     */
+    return ctcss_tone[index % CTCSS_FREQ_NUM];
+}
+
 uint8_t ctcssFreqToIndex(const uint16_t freq)
 {
     for(uint8_t idx = 0; idx < CTCSS_FREQ_NUM; idx += 1)
