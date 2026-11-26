@@ -113,8 +113,10 @@ int pc_proto_platformDiag(pcProtoDiag_t *out)
     out->wdtResets = 1;
     out->heapFree = 12345;
     out->heapTotal = 40960;
+    out->heapKnown = 1;
     out->psramFree = 400000;
     out->psramTotal = 4194304;
+    out->psramKnown = 1;
     out->flashUsed = 480000;
     out->flashTotal = 1048576;
     out->ramUsed = 166000;

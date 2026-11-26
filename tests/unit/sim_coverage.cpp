@@ -52,6 +52,7 @@
 
 extern "C" {
 #include "core/aprs_service.h"
+#include "core/backup_image.h"
 #include "core/channel_store.h"
 #include "core/contact_store.h"
 #include "core/cps.h"
@@ -307,6 +308,45 @@ const chstorePort ramPort = {
     (uint32_t)sizeof(gFlash), CHSTORE_SECTOR_SIZE
 };
 
+/*
+ * The internal backup needs a port too: two areas in RAM, so the walk can press
+ * green on the backup screen and really write a record (the round trip itself
+ * is tests/unit/backup_image.cpp's job and the tour's).
+ */
+uint8_t gBackup[2U * BKP_AREA_SIZE];
+
+int bkpRead(void *ctx, uint32_t off, void *buf, size_t len)
+{
+    (void)ctx;
+    if ((size_t)off + len > sizeof(gBackup))
+        return -1;
+    memcpy(buf, &gBackup[off], len);
+    return 0;
+}
+
+int bkpErase(void *ctx, uint32_t off, size_t len)
+{
+    (void)ctx;
+    if ((size_t)off + len > sizeof(gBackup))
+        return -1;
+    memset(&gBackup[off], 0xFF, len);
+    return 0;
+}
+
+int bkpWrite(void *ctx, uint32_t off, const void *buf, size_t len)
+{
+    (void)ctx;
+    if ((size_t)off + len > sizeof(gBackup))
+        return -1;
+    memcpy(&gBackup[off], buf, len);
+    return 0;
+}
+
+const bkpPort_t bkpRamPort = {
+    bkpRead, bkpErase, bkpWrite, nullptr,
+    (uint32_t)sizeof(gBackup), 0x1000
+};
+
 /** One APRS packet, as the deframer would hand it to the service. */
 void injectAprs(const char *from, const char *info)
 {
@@ -335,6 +375,9 @@ void seedStores()
     memset(gFlash, 0xFF, sizeof(gFlash));
     chstore_bind(&ramPort);
     chstore_init();
+
+    memset(gBackup, 0xFF, sizeof(gBackup));
+    bkp_bind(&bkpRamPort);
 
     channel_t ch = cps_getDefaultChannel();
     ch.rx_frequency = 145500000;

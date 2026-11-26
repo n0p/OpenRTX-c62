@@ -104,7 +104,7 @@ MODE_ORDER = ["FM", "M17", "TETRA", "DMR", "NXDN", "dPMR", "P25", "YSF",
 
 # Rows of the top menu, in menu order (ui.c, menu_items[]).
 TOP_MENU = ["Banks", "Channels", "Zones", "Contacts", "Messages", "GPS",
-            "Settings", "Info", "About"]
+            "Settings", "Backup", "Info", "About"]
 
 # Settings pages, in menu order (ui.c, settings_items[]).
 SETTINGS_PAGES = ["Display", "Time & Date", "GPS", "Radio", "Audio", "M17",
@@ -116,7 +116,8 @@ SETTINGS_PAGES = ["Display", "Time & Date", "GPS", "Radio", "Audio", "M17",
 SCREENS = [
     "MAIN_VFO", "MAIN_VFO_INPUT", "MAIN_MEM",
     "MENU_TOP", "MENU_BANK", "MENU_CHANNEL", "MENU_ZONES", "MENU_CONTACTS",
-    "MENU_GPS", "MENU_SETTINGS", "MENU_INFO", "MENU_ABOUT",
+    "MENU_GPS", "MENU_SETTINGS", "MENU_BACKUP_RESTORE", "MENU_BACKUP",
+    "MENU_RESTORE", "MENU_INFO", "MENU_ABOUT",
     "SETTINGS_TIMEDATE", "SETTINGS_TIMEDATE_SET", "SETTINGS_DISPLAY",
     "SETTINGS_GPS", "SETTINGS_RADIO", "SETTINGS_AUDIO", "SETTINGS_M17",
     "SETTINGS_TETRA", "SETTINGS_FM", "SETTINGS_MODE", "SETTINGS_ACCESSIBILITY",
@@ -136,10 +137,6 @@ UNREACHABLE = {
     "MODE_VFO": "leftover of the memory/VFO mode pair: nothing sets ui_screen "
                 "to it (the main screens are MAIN_VFO/MAIN_MEM)",
     "MODE_MEM": "same pair, same reason",
-    "MENU_BACKUP_RESTORE": "the flash backup menu: no key and no row of "
-                           "menu_items[] opens it",
-    "MENU_BACKUP": "only reached from MENU_BACKUP_RESTORE, which is unreachable",
-    "MENU_RESTORE": "only reached from MENU_BACKUP_RESTORE, which is unreachable",
 }
 
 # Fraction of lit pixels below which a screen is considered blank.
@@ -1343,6 +1340,133 @@ class Tour:
         self.home()
         self.assert_alive("after the analyser")
 
+    def phase_backup(self):
+        """
+        The internal backup, end to end: take one, change the radio, restore it
+        and check that the six stores came back (docs/BACKUP.md).
+
+        The record is a file of this run (`backup.img` in the state directory the
+        tour gave the simulator), so what is restored here is what this run
+        wrote and not something left behind by another one.
+        """
+        self.step_name = "backup"
+        self.goto_mode("FM")
+        self.home()
+
+        d = self.dump()
+        before = {
+            "brightness": d["settings"]["brightness"],
+            "sql": d["settings"]["sql"],
+            "channels": d["radio"]["bank_count"],
+            "contacts": d["radio"]["contact_count"],
+            "name": d["radio"]["name"],
+        }
+        self.check(before["channels"] > 0,
+                   "the bank is empty: there is nothing to back up")
+        self.check(before["contacts"] > 0,
+                   "the contact book is empty: there is nothing to back up")
+
+        # Menu -> Backup: the two rows the generic branch never reached
+        self.top_menu(TOP_MENU.index("Backup"))
+        self.key("GREEN")
+        d = self.capture("backup-menu", screen="MENU_BACKUP_RESTORE",
+                         need=["Backup", "Restore"])
+        self.check(len(self.rows_of(d)) == 2,
+                   "the backup menu has %d rows, not 2" % len(self.rows_of(d)))
+
+        # The Backup row, and green on it: the state, not a confirmation
+        self.key("GREEN")
+        d = self.capture("backup-screen", screen="MENU_BACKUP",
+                         need=["channels", "contacts"])
+        self.check("Save the stores?" in self.text_of(d),
+                   "the backup screen does not say what green does: %s"
+                   % self.text_of(d))
+        self.key("GREEN")
+        d = self.capture("backup-done", screen="MENU_BACKUP")
+        self.check("BACKUP OK" in self.text_of(d),
+                   "the backup does not report OK: %s" % self.text_of(d))
+
+        # Back to the pair, and out: the record is on flash now
+        self.key("RED")
+        d = self.capture("backup-menu-after", screen="MENU_BACKUP_RESTORE")
+        self.key("RED")
+        self.check(self.dump()["screen"]["name"] == "MENU_TOP",
+                   "red from the backup menu does not come back to the menu")
+        self.home()
+
+        # Change the radio: a setting and the bank
+        self.settings_list()
+        self.menu_to(0, on="MENU_SETTINGS")
+        self.key("GREEN")
+        self.key("GREEN")
+        self.key("DOWN")
+        self.key("GREEN")
+        changed = self.dump()["settings"]["brightness"]
+        self.check(changed != before["brightness"],
+                   "Display -> Brightness did not change (%d)" % changed)
+        self.key("RED")
+        self.key("RED")
+
+        self.open_channels()
+        self.key("P1")            # new channel, ready to save
+        self.key("P2")            # SAVE
+        d = self.capture("backup-bank-changed")
+        self.check(d["radio"]["bank_count"] == before["channels"] + 1,
+                   "the extra channel was not saved (%d)"
+                   % d["radio"]["bank_count"])
+        self.home()
+
+        # Now the restore, and the question it asks first
+        self.top_menu(TOP_MENU.index("Backup"))
+        self.key("GREEN")
+        self.key("DOWN")          # the Restore row
+        self.key("GREEN")
+        d = self.capture("restore-ask", screen="MENU_RESTORE",
+                         need=["Restore it?"])
+        self.check("Yes" in self.text_of(d) and "No" in self.text_of(d),
+                   "the restore does not offer yes/no: %s" % self.text_of(d))
+
+        # Red is "no", and nothing is written: the radio keeps what it has
+        self.key("RED")
+        d = self.capture("restore-cancelled", screen="MENU_BACKUP_RESTORE")
+        self.check(self.dump()["radio"]["bank_count"] == before["channels"] + 1,
+                   "cancelling the restore changed the bank")
+
+        # Green is "yes": the six stores come back
+        self.key("GREEN")
+        self.key("DOWN")
+        self.key("GREEN")
+        self.capture("restore-ask-again", screen="MENU_RESTORE")
+        self.key("GREEN")
+        d = self.capture("restore-done", screen="MENU_RESTORE")
+        self.check("RESTORE OK" in self.text_of(d),
+                   "the restore does not report OK: %s" % self.text_of(d))
+
+        after = self.dump()
+        self.check(after["settings"]["brightness"] == before["brightness"],
+                   "the brightness did not come back (%d, was %d)"
+                   % (after["settings"]["brightness"], before["brightness"]))
+        self.check(after["settings"]["sql"] == before["sql"],
+                   "the squelch did not come back")
+        self.check(after["radio"]["bank_count"] == before["channels"],
+                   "the bank did not come back (%d, was %d)"
+                   % (after["radio"]["bank_count"], before["channels"]))
+        self.check(after["radio"]["contact_count"] == before["contacts"],
+                   "the contact book did not come back (%d, was %d)"
+                   % (after["radio"]["contact_count"], before["contacts"]))
+        self.check(after["radio"]["name"] == before["name"],
+                   "the radio did not come back to its channel (%r, was %r)"
+                   % (after["radio"]["name"], before["name"]))
+
+        # The bank on the screen too, not only in the state behind it
+        self.home()
+        self.open_channels()
+        d = self.capture("backup-bank-restored")
+        self.check(d["radio"]["bank_count"] == before["channels"],
+                   "the restored bank does not list what it had")
+        self.home()
+        self.assert_alive("after the backup and the restore")
+
     def phase_low_battery(self):
         """
         The low battery screen, last: leaving it latches `state.emergency`, so
@@ -1412,6 +1536,7 @@ class Tour:
         self.phase_aprs()
         self.phase_packet()
         self.phase_spectrum()
+        self.phase_backup()
         self.phase_low_battery()
 
         self.step_name = "end"

@@ -235,21 +235,49 @@ int pc_dbg_info(struct pcReq *r)
                          d.resetCause);
         off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_WDT_RESETS,
                          d.wdtResets);
-        off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_HEAP_FREE,
-                         d.heapFree);
-        off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_HEAP_TOTAL,
-                         d.heapTotal);
-        off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_PSRAM_FREE,
-                         d.psramFree);
-        off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_PSRAM_TOTAL,
-                         d.psramTotal);
-        off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_FLASH_USED,
-                         d.flashUsed);
-        off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_FLASH_TOTAL,
-                         d.flashTotal);
-        off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_RAM_USED, d.ramUsed);
-        off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_RAM_TOTAL,
-                         d.ramTotal);
+        /*
+         * Memory, only where the platform measured it. A tag that is missing
+         * says "this radio cannot tell", which is the truth: a zero would be
+         * printed by a client as "0 of 40960 bytes free", and that is exactly
+         * what the diagnostics used to say about a heap of 40 KiB that was
+         * mostly free (docs/PC_PROTO.md).
+         */
+        if (d.heapKnown) {
+            off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_HEAP_FREE,
+                             d.heapFree);
+            off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_HEAP_TOTAL,
+                             d.heapTotal);
+        }
+        if (d.psramKnown) {
+            off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_PSRAM_FREE,
+                             d.psramFree);
+            off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_PSRAM_TOTAL,
+                             d.psramTotal);
+        }
+        if (d.flashTotal != 0) {
+            off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_FLASH_USED,
+                             d.flashUsed);
+            off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_FLASH_TOTAL,
+                             d.flashTotal);
+        }
+        if (d.ramTotal != 0) {
+            off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_RAM_USED,
+                             d.ramUsed);
+            off = pc_tlv_u32(r->out, r->outCap, off, PC_TAG_RAM_TOTAL,
+                             d.ramTotal);
+        }
+        /*
+         * The regions travel as one array, the way the task stacks do: a tag
+         * per region would collapse in any client that keeps a tag -> value
+         * map, and the last one would be the only one shown.
+         */
+        if (d.regionCount > 0) {
+            uint8_t count = (d.regionCount < PC_DIAG_REGIONS) ? d.regionCount
+                                                             : PC_DIAG_REGIONS;
+            off = pc_tlv_bytes(r->out, r->outCap, off, PC_TAG_MEM_REGION,
+                               &d.regions[0],
+                               (size_t)count * sizeof(pcProtoRegion_t));
+        }
         off = pc_tlv_u8(r->out, r->outCap, off, PC_TAG_AGC, d.agc);
         /* The power the radio would key with: in the diagnostics as well as in
          * the status, because "the PTT does nothing" is the first thing a bench

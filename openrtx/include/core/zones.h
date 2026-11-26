@@ -189,6 +189,16 @@ void zones_setShiftInverted(bool inverted);
 /** True when the repeater shift is inverted. */
 bool zones_shiftInverted(void);
 
+/**
+ * CRC-32 of the plan of every zone of this build (fields and name prefixes).
+ *
+ * The internal backup stores it next to the zones it saves: a restore is
+ * refused when the plan of the build doing the restore is another one, because
+ * a backup taken with other zones would otherwise come back as if nothing had
+ * changed (docs/BACKUP.md).
+ */
+uint32_t zones_signature(void);
+
 #ifdef __cplusplus
 }
 #endif

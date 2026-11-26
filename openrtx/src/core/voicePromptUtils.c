@@ -716,13 +716,15 @@ void vp_announceAboutScreen()
 
 void vp_announceBackupScreen()
 {
+    /*
+     * Only the title: the screen no longer asks the operator to plug the radio
+     * into a computer and press PTT (it takes its own backup now, see
+     * docs/BACKUP.md), and a voice prompt that describes an action the screen
+     * does not take is worse than a short one.
+     */
     vp_flush();
 
     vp_queueStringTableEntry(&currentLanguage->flashBackup);
-
-    vp_queueStringTableEntry(&currentLanguage->connectToRTXTool);
-    vp_queueStringTableEntry(&currentLanguage->toBackupFlashAnd);
-    vp_queueStringTableEntry(&currentLanguage->pressPTTToStart);
     vp_queuePrompt(PROMPT_VP_UNAVAILABLE);
 
     vp_play();
@@ -730,13 +732,10 @@ void vp_announceBackupScreen()
 
 void vp_announceRestoreScreen()
 {
+    /* Title only, for the same reason as the backup screen above */
     vp_flush();
 
     vp_queueStringTableEntry(&currentLanguage->flashRestore);
-
-    vp_queueStringTableEntry(&currentLanguage->connectToRTXTool);
-    vp_queueStringTableEntry(&currentLanguage->toRestoreFlashAnd);
-    vp_queueStringTableEntry(&currentLanguage->pressPTTToStart);
     vp_queuePrompt(PROMPT_VP_UNAVAILABLE);
 
     vp_play();

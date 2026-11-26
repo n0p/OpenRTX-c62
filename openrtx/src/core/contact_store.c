@@ -26,6 +26,11 @@ __attribute__((weak)) const slot_ops_t *cstore_platformOps(void)
 void cstore_bind(const slot_ops_t *ops)
 {
     port = ops;
+    /* A bound port is a new medium: the next cstore_init() has to read it,
+     * and the handle of the previous one (a dangling ops pointer otherwise)
+     * must not be reused. chstore_bind() has always done the same. */
+    ready = false;
+    pending = false;
 }
 
 static void sanitize(cstore_contact_t *c)
@@ -190,4 +195,61 @@ void cstore_forget(void)
 cstore_bank_t *cstore_bank(void)
 {
     return &bank;
+}
+
+int cstore_export(void *buf, size_t cap)
+{
+    if (!ready)
+        cstore_init();
+
+    if (buf == NULL || cap < sizeof(cstore_bank_t))
+        return -ENOSPC;
+
+    memcpy(buf, &bank, sizeof(bank));
+    return (int)sizeof(bank);
+}
+
+int cstore_import(const void *buf, size_t len)
+{
+    if (!ready)
+        cstore_init();
+
+    if (buf == NULL || len != sizeof(cstore_bank_t))
+        return -EINVAL;
+
+    cstore_bank_t in;
+    memcpy(&in, buf, sizeof(in));
+
+    if (in.count > CSTORE_MAX_CONTACTS)
+        return -EINVAL;
+
+    /* Validate the whole book before the one in RAM is replaced */
+    for (uint16_t i = 0; i < in.count; i++) {
+        in.list[i].call[CSTORE_CALL_LEN - 1] = '\0';
+        in.list[i].name[CSTORE_NAME_LEN - 1] = '\0';
+        if (!cstore_valid(&in.list[i]))
+            return -EINVAL;
+    }
+
+    bank = in;
+    for (uint16_t i = 0; i < bank.count; i++)
+        sanitize(&bank.list[i]);
+
+    pending = true;
+
+    if (cstore_commit() != 0) {
+        /*
+         * The write failed and the slot holding the previous book is still the
+         * valid one, so re-read it instead of keeping a copy of the book on the
+         * stack (1 kB of a 2 kB UI stack). The reload also clears `pending`, so
+         * a later commit does not write the restored book and call it a
+         * success.
+         */
+        pending = false;
+        ready = false;
+        cstore_init();
+        return -EIO;
+    }
+
+    return 0;
 }

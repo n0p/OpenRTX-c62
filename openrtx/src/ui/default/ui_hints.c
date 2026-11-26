@@ -20,6 +20,11 @@ static const ui_hints_t hints_edit    = { "Edit", NULL, NULL, "Back" };
 static const ui_hints_t hints_vfo_in  = { "Set", NULL, NULL, "Cancel" };
 static const ui_hints_t hints_channel = { "Load", NULL, NULL, "Back" };
 static const ui_hints_t hints_reset   = { "Reset", NULL, NULL, "Back" };
+/*
+ * The restore asks before it writes: green is yes and red is no, the same pair
+ * the channel list uses to delete a channel (ui_channels.c).
+ */
+static const ui_hints_t hints_confirm = { "Yes", NULL, NULL, "No" };
 /* A mode's settings page behaves like the popup: green cycles, P1/P2 change */
 static const ui_hints_t hints_modePage = { "Chg", "-", "+", "Back" };
 /*
@@ -39,13 +44,16 @@ const ui_hints_t *ui_hints_for_screen(uint8_t screen)
         case MENU_SETTINGS:
         case MENU_BACKUP_RESTORE:
         case MENU_BACKUP:
-        case MENU_RESTORE:
         case MENU_INFO:
         case MENU_ABOUT:
 #ifdef CONFIG_GPS
         case MENU_GPS:
 #endif
             return &hints_nav;
+
+        /* The restore is destructive: it asks, and yes/no are the two keys */
+        case MENU_RESTORE:
+            return &hints_confirm;
 
         /*
          * The CPS channel list has no per-entry action yet on the targets that

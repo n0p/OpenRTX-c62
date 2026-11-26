@@ -200,6 +200,7 @@ enum menuItems
     M_GPS,
 #endif
     M_SETTINGS,
+    M_BACKUP_RESTORE,
     M_INFO,
     M_ABOUT
 };

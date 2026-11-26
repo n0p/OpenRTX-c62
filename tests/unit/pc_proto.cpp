@@ -294,15 +294,29 @@ const char *pc_proto_platformModel(void) { return "c62-test"; }
 const char *pc_proto_platformFirmware(void) { return "test-fw"; }
 const char *pc_proto_platformHardware(void) { return "rev 0"; }
 
+/* Set by the memory test: a platform that can measure nothing (a build without
+ * the heap statistics, the case of the radio) must send no memory figure. */
+bool diagZeroed = false;
+
 int pc_proto_platformDiag(pcProtoDiag_t *out)
 {
     std::memset(out, 0, sizeof(*out));
     out->resetCause = 0x42;
+    if (diagZeroed) {
+        out->wdtResets = 2;
+        out->taskCount = 1;
+        std::strcpy(out->tasks[0].name, "main");
+        out->tasks[0].unused = 1536;
+        out->tasks[0].size = 2048;
+        return 0;
+    }
     out->wdtResets = 2;
     out->heapFree = 1234;
     out->heapTotal = 40960;
+    out->heapKnown = 1;
     out->psramFree = 500000;
     out->psramTotal = 4194304;
+    out->psramKnown = 1;
     out->flashUsed = 600000;
     out->flashTotal = 4194304;
     out->ramUsed = 200000;
@@ -311,6 +325,16 @@ int pc_proto_platformDiag(pcProtoDiag_t *out)
     std::strcpy(out->tasks[0].name, "main");
     out->tasks[0].unused = 1536;
     out->tasks[0].size = 2048;
+    /* Two regions, measured: the table the client prints (docs/PC_PROTO.md) */
+    std::strcpy(out->regions[0].name, "SRAM");
+    out->regions[0].used = 200000;
+    out->regions[0].total = 262144;
+    out->regions[0].known = 1;
+    std::strcpy(out->regions[1].name, "DTCM");
+    out->regions[1].used = 12640;
+    out->regions[1].total = 16384;
+    out->regions[1].known = 1;
+    out->regionCount = 2;
     return 0;
 }
 
@@ -1046,6 +1070,59 @@ TEST_CASE("Debug: diag carries every mandatory field", "[pcproto]")
     std::memcpy(&task, stacks.data(), sizeof(task));
     REQUIRE(std::string(task.name) == "main");
     REQUIRE(task.unused == 1536);
+}
+
+/*
+ * The memory figures, and the rule that makes them worth believing: a platform
+ * that cannot measure one does not send it. The old answer said "0 of 40960
+ * bytes free" for a heap it had never asked about (docs/PC_PROTO.md).
+ */
+TEST_CASE("Debug: diag sends memory it measured and omits memory it cannot",
+          "[pcproto][memory]")
+{
+    Device d;
+    hello(d);
+    takeFrames();
+
+    /* The platform of this harness measures everything it fills in */
+    Frame f = request(d, PC_MSG_DBG_INFO, 92);
+    uint32_t heap = 0;
+    REQUIRE(getU32(f.payload, PC_TAG_HEAP_FREE, heap));
+    REQUIRE(heap == 1234);
+
+    std::vector<uint8_t> regions;
+    REQUIRE(getRaw(f.payload, PC_TAG_MEM_REGION, regions));
+    REQUIRE(regions.size() == 2 * sizeof(pcProtoRegion_t));
+
+    pcProtoRegion_t r[2];
+    std::memcpy(r, regions.data(), sizeof(r));
+    REQUIRE(std::string(r[0].name) == "SRAM");
+    REQUIRE(r[0].used == 200000);
+    REQUIRE(r[0].total == 262144);
+    REQUIRE(r[0].known == 1);
+    REQUIRE(std::string(r[1].name) == "DTCM");
+    REQUIRE(r[1].used == 12640);
+    REQUIRE(r[1].total == 16384);
+
+    /*
+     * And now a platform that can measure nothing: no heap, no PSRAM free, no
+     * region. The answer has to say nothing at all about them rather than
+     * zeros, which is what a client would print as a full heap.
+     */
+    diagZeroed = true;
+    f = request(d, PC_MSG_DBG_INFO, 93);
+    REQUIRE_FALSE(getU32(f.payload, PC_TAG_HEAP_FREE, heap));
+    REQUIRE_FALSE(getU32(f.payload, PC_TAG_HEAP_TOTAL, heap));
+    REQUIRE_FALSE(getU32(f.payload, PC_TAG_PSRAM_FREE, heap));
+    REQUIRE_FALSE(getU32(f.payload, PC_TAG_RAM_TOTAL, heap));
+    REQUIRE_FALSE(getU32(f.payload, PC_TAG_FLASH_TOTAL, heap));
+    REQUIRE_FALSE(getRaw(f.payload, PC_TAG_MEM_REGION, regions));
+
+    /* The rest of the answer is still there: it is the memory that is unknown,
+     * not the radio */
+    REQUIRE(getU32(f.payload, PC_TAG_RESET_CAUSE, heap));
+    REQUIRE(heap == 0x42);
+    diagZeroed = false;
 }
 
 TEST_CASE("Debug: log subscription filters, streams and counts its drops",

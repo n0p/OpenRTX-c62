@@ -931,51 +931,15 @@ void _ui_drawMenuBackupRestore(ui_state_t* ui_state)
     _ui_drawMenuList(currentLanguage->backupAndRestore, ui_state->menu_selected, _ui_getBackupRestoreEntryName);
 }
 
-void _ui_drawMenuBackup(ui_state_t* ui_state)
-{
-    (void) ui_state;
-
-    ui_list_header(currentLanguage->flashBackup, NULL);
-    // Print backup message
-    point_t line = layout.line2_pos;
-    gfx_print(line, FONT_SIZE_8PT, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->connectToRTXTool);
-    line.y += 18;
-    gfx_print(line, FONT_SIZE_8PT, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->toBackupFlashAnd);
-    line.y += 18;
-    gfx_print(line, FONT_SIZE_8PT, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->pressPTTToStart);
-
-   if (!platform_getPttStatus())
-        return;
-
-    state.devStatus     = DATATRANSFER;
-    state.backup_eflash = true;
-}
-
-void _ui_drawMenuRestore(ui_state_t* ui_state)
-{
-    (void) ui_state;
-
-    ui_list_header(currentLanguage->flashRestore, NULL);
-    // Print backup message
-    point_t line = layout.line2_pos;
-    gfx_print(line, FONT_SIZE_8PT, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->connectToRTXTool);
-    line.y += 18;
-    gfx_print(line, FONT_SIZE_8PT, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->toRestoreFlashAnd);
-    line.y += 18;
-    gfx_print(line, FONT_SIZE_8PT, TEXT_ALIGN_CENTER,
-              color_white, currentLanguage->pressPTTToStart);
-
-    if (!platform_getPttStatus())
-        return;
-
-    state.devStatus      = DATATRANSFER;
-    state.restore_eflash = true;
-}
+/*
+ * MENU_BACKUP and MENU_RESTORE used to live here: they printed "connect to the
+ * RTX tool and press PTT", and keying the PTT started an xmodem dump of the
+ * whole 16 MB of flash over the programming cable. Nothing ever called
+ * eflash_dump(): the screens were unreachable, and the path they described
+ * would have overwritten the bootloader of a radio whose flash is not the
+ * MD-3x0's. They are now ui_backup.c's screens, which work on the radio's own
+ * stores inside its own partition (docs/BACKUP.md).
+ */
 
 void _ui_drawMenuInfo(ui_state_t* ui_state)
 {

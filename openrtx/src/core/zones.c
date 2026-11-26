@@ -294,3 +294,43 @@ bool zones_shiftInverted(void)
 {
     return shiftInverted;
 }
+
+uint32_t zones_signature(void)
+{
+    /*
+     * CRC-32 (reflected, polynomial 0xEDB88320, initial and final xor all
+     * ones: the zlib/"file CRC" every tool can compute) over the plan of every
+     * zone. It is what a restored backup is checked against: a backup taken on
+     * a build with other zones must be refused, not applied on top of a plan
+     * that no longer matches it (docs/BACKUP.md).
+     *
+     * Only the fields that define a plan are hashed, field by field: the
+     * descriptor's pointers are addresses and the structure has padding, and
+     * neither is part of the plan.
+     */
+    uint32_t crc = 0xFFFFFFFFU;
+
+    for (int i = 0; i < ZONE_COUNT; i++) {
+        const zone_t *z = &zones[i];
+        const uint32_t nums[] = {
+            z->id,   z->base,         (uint32_t)z->step, (uint32_t)z->shift,
+            z->count, z->first,       z->mode,           z->bandwidth,
+            z->power, z->flags,       z->planEvery
+        };
+        const uint8_t *nbytes = (const uint8_t *)nums;
+
+        for (size_t n = 0; n < sizeof(nums); n++) {
+            crc ^= nbytes[n];
+            for (int bit = 0; bit < 8; bit++)
+                crc = (crc >> 1) ^ (0xEDB88320U & (uint32_t)(-(int32_t)(crc & 1)));
+        }
+
+        for (const char *c = z->prefix; (c != NULL) && (*c != '\0'); c++) {
+            crc ^= (uint8_t)*c;
+            for (int bit = 0; bit < 8; bit++)
+                crc = (crc >> 1) ^ (0xEDB88320U & (uint32_t)(-(int32_t)(crc & 1)));
+        }
+    }
+
+    return crc ^ 0xFFFFFFFFU;
+}
