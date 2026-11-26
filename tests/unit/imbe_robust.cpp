@@ -204,3 +204,61 @@ TEST_CASE("the same parameters always render the same samples",
     imbe_vocoder_decode_errs(params, 0, second);
     REQUIRE(imbe_vocoder_last_errors() == 0);
 }
+
+TEST_CASE("the channel decoder's error count decides repeat, not playback",
+          "[imbe][p25][vocoder]")
+{
+    /*
+     * TIA-102.BABA 7.7: a frame whose channel decoding corrected more than five
+     * bits is not played -- the decoder repeats the previous model, the way a
+     * P25 receiver covers a lost frame -- and the P25 PHY's count reaches the
+     * decoder through p25Vocoder_decode_errs().  That decision is the whole
+     * point of the count: playing a frame the FEC had to repair six times is
+     * how a corrupted pitch reaches the speaker.
+     *
+     * The return value is the contract the speech path reads: 0 for a frame
+     * that was played, 1 for one that was repeated or muted, and no state is
+     * lost either way (the frame after a repeat plays normally again).
+     */
+    const std::vector<uint8_t> frames =
+        readFile(std::string(IMBE_CORPUS_DIR) + "/p25_vc_frames.imbe");
+    REQUIRE(frames.size() >= 3 * FRAME_BYTES);
+
+    int16_t pcm[IMBE_VOCODER_PCM_SAMPLES];
+
+    /* A clean frame: played */
+    imbe_vocoder_reset();
+    REQUIRE(imbe_vocoder_decode(&frames[0], pcm) == 0);
+
+    /* The same frame with a count past the repeat threshold: repeated */
+    imbe_vocoder_reset();
+    REQUIRE(imbe_vocoder_decode(&frames[0], pcm) == 0);
+    {
+        uint8_t params[FRAME_BYTES];
+        memcpy(params, &frames[FRAME_BYTES], FRAME_BYTES);
+        REQUIRE(imbe_vocoder_decode_errs(params, 8, pcm) == 1);
+        REQUIRE(imbe_vocoder_last_errors() == 8);
+    }
+
+    /* And the state survives it: the next frame without errors plays again */
+    {
+        uint8_t params[FRAME_BYTES];
+        memcpy(params, &frames[2 * FRAME_BYTES], FRAME_BYTES);
+        REQUIRE(imbe_vocoder_decode_errs(params, 0, pcm) == 0);
+        REQUIRE(imbe_vocoder_last_errors() == 0);
+    }
+
+    /* A long run of repeats must not leave the decoder stuck: 7.8's mute noise
+     * out, bounded, and every call still reporting the repeat. */
+    imbe_vocoder_reset();
+    for (int f = 0; f < 40; f++) {
+        uint8_t params[FRAME_BYTES];
+        memcpy(params, &frames[(size_t)(f % 3) * FRAME_BYTES], FRAME_BYTES);
+
+        memset(pcm, 0x7F, sizeof(pcm));
+        REQUIRE(imbe_vocoder_decode_errs(params, 8, pcm) == 1);
+        REQUIRE(rendered(pcm));
+        for (int16_t v : pcm)
+            REQUIRE(((v < 0) ? -(int)v : (int)v) <= 31128);
+    }
+}
