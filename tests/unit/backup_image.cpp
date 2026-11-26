@@ -600,6 +600,59 @@ TEST_CASE("Both stores round trip through a backup and a restore",
     REQUIRE(nvm_readSettings(&reloaded) == 0);
     CHECK(reloaded.brightness == before.brightness);
     CHECK(std::string(reloaded.callsign) == before.callsign);
+
+    /* Same for the VFO, which the restore writes on its own with a NULL
+     * settings pointer: this is the check that the half write reached the
+     * flash and not only state.channel */
+    channel_t vfo;
+    REQUIRE(nvm_readVfoChannelData(&vfo) == 0);
+    CHECK(vfo.rx_frequency == before.vfoFreq);
+}
+
+TEST_CASE("The NVM port writes only the half it is given",
+          "[backup][restore][nvmem]")
+{
+    scratch();
+
+    /*
+     * The contract the restore relies on (interfaces/nvmem.h): a NULL means
+     * "leave that record alone". The host port used to hand the NULL down to
+     * write(2), whose EFAULT came back as a positive errno that
+     * nvm_writeSettingsAndVfo() -- testing "< 0" -- read as success: the VFO
+     * was written, the settings write that had failed disappeared, and a
+     * restore answered WRITE FAILED with the code the wrong way round.
+     */
+    settings_t s = default_settings;
+    s.brightness = 33;
+    s.sqlLevel = 4;
+    REQUIRE(nvm_writeSettings(&s) == 0);
+
+    channel_t ch = cps_getDefaultChannel();
+    ch.rx_frequency = 444000000;
+    ch.tx_frequency = 444000000;
+
+    /* What applyVfo() does: settings NULL, VFO not */
+    CHECK(nvm_writeSettingsAndVfo(NULL, &ch) == 0);
+
+    settings_t back;
+    REQUIRE(nvm_readSettings(&back) == 0);
+    CHECK(back.brightness == 33);
+
+    channel_t vfo;
+    REQUIRE(nvm_readVfoChannelData(&vfo) == 0);
+    CHECK(vfo.rx_frequency == 444000000);
+
+    /* And the other half on its own: the settings, the VFO untouched */
+    s.brightness = 44;
+    CHECK(nvm_writeSettingsAndVfo(&s, NULL) == 0);
+
+    REQUIRE(nvm_readSettings(&back) == 0);
+    CHECK(back.brightness == 44);
+    REQUIRE(nvm_readVfoChannelData(&vfo) == 0);
+    CHECK(vfo.rx_frequency == 444000000);
+
+    /* Nothing to write is not an error either */
+    CHECK(nvm_writeSettingsAndVfo(NULL, NULL) == 0);
 }
 
 TEST_CASE("The zone plan of the build is part of the record",

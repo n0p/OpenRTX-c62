@@ -1426,21 +1426,29 @@ class Tour:
         self.check("Yes" in self.text_of(d) and "No" in self.text_of(d),
                    "the restore does not offer yes/no: %s" % self.text_of(d))
 
-        # Red is "no", and nothing is written: the radio keeps what it has
+        # Red is "no", and nothing is written: the radio keeps what it has, and
+        # the pair comes back with its cursor on Restore -- on Backup it would
+        # take a new record at the next green, which is exactly the way a "no"
+        # used to end in a write.
         self.key("RED")
         d = self.capture("restore-cancelled", screen="MENU_BACKUP_RESTORE")
         self.check(self.dump()["radio"]["bank_count"] == before["channels"] + 1,
                    "cancelling the restore changed the bank")
+        self.check(self.selected_of(d) == "Restore",
+                   "red from the restore leaves the cursor on %r, not on "
+                   "Restore" % self.selected_of(d))
 
-        # Green is "yes": the six stores come back
+        # Green again is "ask me again", and the second green is "yes"
         self.key("GREEN")
-        self.key("DOWN")
-        self.key("GREEN")
-        self.capture("restore-ask-again", screen="MENU_RESTORE")
+        self.capture("restore-ask-again", screen="MENU_RESTORE",
+                     need=["Restore it?"])
         self.key("GREEN")
         d = self.capture("restore-done", screen="MENU_RESTORE")
-        self.check("RESTORE OK" in self.text_of(d),
-                   "the restore does not report OK: %s" % self.text_of(d))
+        # 6/6 on purpose: the counter is the number of stores the engine
+        # applied, so this is the check that all six went in, not five
+        self.check("RESTORE OK 6/6" in self.text_of(d),
+                   "the restore does not report six stores applied: %s"
+                   % self.text_of(d))
 
         after = self.dump()
         self.check(after["settings"]["brightness"] == before["brightness"],
