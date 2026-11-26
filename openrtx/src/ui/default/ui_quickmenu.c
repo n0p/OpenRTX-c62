@@ -2192,6 +2192,23 @@ void qm_draw(void)
  */
 qm_page_t qm_page_state;
 
+/*
+ * A Settings page is the mode's own rows minus the ones that only report what
+ * the receiver is doing.
+ *
+ * The popup can afford a row that shows "SYNC SRCH": it is glanced at while
+ * the radio is being operated. A Settings page is a list of things to change,
+ * and a read-only row there is a row whose keys do nothing: A read-only row in
+ * an edit page was the dead-row class the audit turned up in every mode (CC,
+ * TS, SYNC, NXDN's CALL and TYPE, P25's NAC, D-STAR's five callsigns, WFM's
+ * meter). They are dropped here, once, by kind -- the popup still has them and
+ * the table is still the one the popup uses for every other row.
+ */
+#define QM_PAGE_MAX 16
+
+static qm_item_t qm_page_items[QM_PAGE_MAX];
+static qm_menu_t qm_page_menu;
+
 static void qm_page_scroll(void)
 {
     uint16_t sel;
@@ -2209,7 +2226,25 @@ static void qm_page_scroll(void)
 
 void qm_page_open(uint8_t mode)
 {
-    qm_page_state.qm = qm_findMenu(mode);
+    const qm_menu_t *src = qm_findMenu(mode);
+    uint8_t n = 0;
+
+    qm_page_state.qm = NULL;
+
+    if (src == NULL)
+        return;
+
+    for (uint8_t i = 0; (i < src->count) && (n < QM_PAGE_MAX); i++) {
+        if (src->items[i].type == QM_INFO)
+            continue;
+        qm_page_items[n++] = src->items[i];
+    }
+
+    qm_page_menu        = *src;
+    qm_page_menu.items  = qm_page_items;
+    qm_page_menu.count  = n;
+
+    qm_page_state.qm = &qm_page_menu;
     qm_page_state.selected = 0;
     qm_page_state.first = 0;
 }

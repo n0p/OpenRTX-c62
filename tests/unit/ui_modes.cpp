@@ -350,7 +350,7 @@ TEST_CASE("Airband raster and snap reach the tuning step", "[ui][modes]")
 }
 #endif /* UI_MODE_AIRBAND */
 
-TEST_CASE("A mode's Settings page is its quick menu table", "[ui][modes]")
+TEST_CASE("A mode's Settings page is its editable quick menu rows", "[ui][modes]")
 {
     qm_close();
     qm_page_close();
@@ -369,8 +369,33 @@ TEST_CASE("A mode's Settings page is its quick menu table", "[ui][modes]")
 
         qm_page_open(m->mode);
         REQUIRE(qm_page_isOpen());
-        REQUIRE(qm_page_state.qm == qm_findMenu(m->mode));
+        /*
+         * The page is built from the popup's table but drops the rows that
+         * only report what the receiver is doing: a read-only row in a list of
+         * settings is a row whose keys do nothing (docs/UI.md, "the mode
+         * page"). Everything else is the same row, with the same limits.
+         */
+        REQUIRE(qm_page_state.qm != NULL);
+        REQUIRE(qm_page_state.qm->mode == m->mode);
         REQUIRE(qm_page_state.selected == 0);
+
+        uint8_t expected = 0;
+        for (uint8_t row = 0; row < m->count; row++) {
+            if (m->items[row].type == QM_INFO) {
+                for (uint8_t pageRow = 0; pageRow < qm_page_state.qm->count;
+                     pageRow++) {
+                    INFO("mode " << m->title << " info row "
+                                 << m->items[row].label);
+                    REQUIRE(strcmp(qm_page_state.qm->items[pageRow].label,
+                                   m->items[row].label) != 0);
+                }
+                continue;
+            }
+            REQUIRE(strcmp(qm_page_state.qm->items[expected].label,
+                           m->items[row].label) == 0);
+            expected++;
+        }
+        REQUIRE(qm_page_state.qm->count == expected);
 
         /* Walk every row of the page, three times round */
         for (int round = 0; round < 3; round++) {
@@ -487,7 +512,8 @@ TEST_CASE("A mode page never leaves the screen or the popup in a bad state",
         qm_page_enter();
         REQUIRE(state.ui_screen == MSG_COMPOSE);
         REQUIRE(qm_page_isOpen());
-        REQUIRE(qm_page_state.qm == qm_findMenu(OPMODE_FM));
+        REQUIRE(qm_page_state.qm != NULL);
+        REQUIRE(qm_page_state.qm->mode == OPMODE_FM);
     }
 
     /* Back to a clean state for the rest of the suite */
