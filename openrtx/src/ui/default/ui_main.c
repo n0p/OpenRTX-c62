@@ -123,8 +123,12 @@ static void _ui_drawTetraInfo(void)
     char a[32], b[32], c[32];
 
     if (_ui_tetraCallShown(&ts)) {
-        // Talking party
-        _ui_formatSsi(a, sizeof(a), "", ts.talker);
+        /*
+         * Talking party. An uplink call is an MS transmitting, not the
+         * network: it is marked as such and its own SSI is the sending one.
+         */
+        uint32_t ssi = (ts.talker != 0) ? ts.talker : ts.uplinkSs;
+        _ui_formatSsi(a, sizeof(a), ts.uplink ? "UL " : "", ssi);
         const char *talker[] = { a };
         _ui_printWithSymbol(layout.line1_pos, layout.line1_symbol_size,
                             SYMBOL_CALL_MADE, layout.line1_font, talker, 1);
@@ -196,6 +200,20 @@ static void _ui_drawTetraLine1(ui_state_t *ui_state)
 
     long long now = getTick();
     char sds[96];
+
+    /*
+     * An MS heard on the uplink: the sending SSI, for the few seconds the
+     * status keeps the flag (TetraStatus.c, UPLINK_TIMEOUT_MS). It goes first
+     * because it is the event the operator is listening for.
+     */
+    if (ts.uplink) {
+        char ul[32];
+
+        _ui_formatSsi(ul, sizeof(ul), "UL ", ts.uplinkSs);
+        gfx_print(layout.line1_pos, layout.line1_font, TEXT_ALIGN_CENTER,
+                  color_white, "%s", ul);
+        return;
+    }
 
     /*
      * tetraSds_line() pages through the messages not seen yet and marks them

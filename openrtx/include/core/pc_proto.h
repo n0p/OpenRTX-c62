@@ -350,6 +350,13 @@ enum pcProtoTag
     PC_TAG_PORT_PTT     = 0x008C, /**< u8 1 the accessory PTT is down      */
     PC_TAG_PORT_LOST    = 0x008D, /**< u32 bytes/errors discarded while it
                                    *   was down                           */
+    /*
+     * TETRA uplink (MS to BS): what the "Cell uplink" row of the TETRA quick
+     * menu hears. Both travel with every status, zero outside TETRA, so a
+     * client can watch the uplink without a TETRA-specific subscription.
+     */
+    PC_TAG_TETRA_UL     = 0x008E, /**< u8 1 an MS is heard on the uplink   */
+    PC_TAG_TETRA_UL_SSI = 0x008F, /**< u32 sending MS, 0 if unknown        */
 
     PC_TAG_MSG_TRANSPORT= 0x00A0, /**< u8  enum msgTransport               */
     PC_TAG_MSG_PEER     = 0x00A1, /**< str peer address                    */
@@ -643,6 +650,14 @@ typedef struct
      */
     uint8_t  portMode;        /**< enum portMode: 0 auto, 1 always, 2 never */
     uint32_t portLost;        /**< bytes/errors discarded, cumulative     */
+    /**
+     * TETRA uplink (MS to BS), from protocols/TETRA/TetraStatus.h: 1 while an
+     * uplink call, SDS or slot arrived in the last seconds, and the SSI of the
+     * MS that sent the last uplink PDU. Zero in every other mode and in a
+     * build without TETRA, so a client that shows them has nothing to hide.
+     */
+    uint8_t  tetraUplink;     /**< 1 while an MS is heard on the uplink  */
+    uint32_t tetraUlSsi;      /**< Sending MS, 0 if unknown              */
 }
 pcProtoStatus_t;
 

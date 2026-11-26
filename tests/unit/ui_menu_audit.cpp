@@ -61,6 +61,7 @@ extern "C" {
 #include "core/vfo_search_service.h"
 #include "interfaces/cps_io.h"
 #include "interfaces/nvmem.h"
+#include "protocols/TETRA/TetraUplink.h"
 #include "rtx/rtx.h"
 #include "ui/ui_default.h"
 #include "ui/ui_tools.h"
@@ -1181,6 +1182,42 @@ TEST_CASE("Every editable row writes settings or the channel, and survives the N
             settings_t beforeSettings = state.settings;
             channel_t  beforeChannel  = state.channel;
             const int  before = row.get();
+
+            /*
+             * "CELL UL" is a tuning session, not a setting: what it does
+             * depends on what the receiver holds.  With no cell it has to
+             * refuse, say NO UL and leave the channel alone; with a cell whose
+             * uplink is known it retunes there, and Off takes the frequency it
+             * came from back (protocols/TETRA/TetraUplink.h).  The cell is
+             * injected through the emulator's receiver state.
+             */
+            if (strcmp(row.label, "CELL UL") == 0) {
+                tetraUplink_reset();
+                tetra_sim_clearCell();
+
+                row.set(1);
+                REQUIRE(row.get() == (int)TETRA_UL_NO_FREQ);
+                REQUIRE(memcmp(&beforeChannel, &state.channel,
+                               sizeof(channel_t)) == 0);
+
+                tetra_sim_setCell(228, 8889, 1, 430500000u, 420500000u);
+                row.set(0);
+                REQUIRE(row.get() == (int)TETRA_UL_OFF);
+                row.set(1);
+                REQUIRE(row.get() == (int)TETRA_UL_ON);
+                REQUIRE(state.channel.rx_frequency == 420500000u);
+                REQUIRE(state.channel.tx_frequency == 420500000u);
+
+                row.set(0);
+                REQUIRE(row.get() == (int)TETRA_UL_OFF);
+                REQUIRE(state.channel.rx_frequency
+                        == beforeChannel.rx_frequency);
+
+                state.channel = beforeChannel;
+                tetra_sim_clearCell();
+                tetraUplink_reset();
+                continue;
+            }
 
             /* To the maximum, from a known state */
             row.set(row.max);

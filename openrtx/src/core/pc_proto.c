@@ -466,6 +466,12 @@ size_t pc_proto_statusTlv(const pcProtoStatus_t *s, uint8_t *buf, size_t cap,
      */
     off = pc_tlv_u8(buf, cap, off, PC_TAG_PORT_MODE, s->portMode);
     off = pc_tlv_u32(buf, cap, off, PC_TAG_PORT_LOST, s->portLost);
+    /*
+     * TETRA uplink: the MS side of the cell, when the operator has the "Cell
+     * uplink" session on. Zero on every other mode, so a client may always ask.
+     */
+    off = pc_tlv_u8(buf, cap, off, PC_TAG_TETRA_UL, s->tetraUplink);
+    off = pc_tlv_u32(buf, cap, off, PC_TAG_TETRA_UL_SSI, s->tetraUlSsi);
     return off;
 }
 

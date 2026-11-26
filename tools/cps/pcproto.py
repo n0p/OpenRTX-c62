@@ -194,6 +194,8 @@ T_SQUELCH = 0x0087
 T_PERIOD_MS = 0x0088
 T_CHANNEL_NAME = 0x0089
 T_TX_POWER = 0x008A
+T_TETRA_UL = 0x008E
+T_TETRA_UL_SSI = 0x008F
 T_TX_REASON = 0x00EF
 
 T_MSG_TRANSPORT = 0x00A0
@@ -768,6 +770,10 @@ class Link:
             # to "the PTT does nothing" without opening the radio.
             "power_mw": f.u16(T_TX_POWER),
             "tx_reason": f.s(T_TX_REASON),
+            # The MS side of a TETRA cell, while the "Cell uplink" session is
+            # on: 1 and the sending SSI, zero in every other mode.
+            "tetra_uplink": f.u8(T_TETRA_UL),
+            "tetra_ul_ssi": f.u32(T_TETRA_UL_SSI),
         }
 
     def subscribe_status(self, period_ms):

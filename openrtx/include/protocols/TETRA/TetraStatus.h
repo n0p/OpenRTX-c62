@@ -27,6 +27,16 @@ struct tetraStatus {
     bool sysinfo;       /**< la and dlFreq are valid */
     uint16_t la;        /**< Location area */
     uint32_t dlFreq;    /**< Main carrier downlink frequency, Hz */
+    /*
+     * The cell's uplink: `ulFreq` is the frequency it published (0 when it
+     * published none); the three fields below are the SYSINFO raw values, so
+     * the duplex conversion can be applied when the frequency is missing
+     * (protocols/TETRA/TetraUplink.h).
+     */
+    uint32_t ulFreq;    /**< Uplink frequency the cell published, Hz, 0 none */
+    uint8_t band;       /**< Frequency band, as in tetra_cell.band */
+    uint8_t duplexSpacing; /**< Duplex spacing code, 3 bits */
+    bool reverseOp;     /**< Reverse operation: uplink above downlink */
     bool airEncryption; /**< Cell uses air interface encryption */
 
     bool call;          /**< A call is set up or traffic is flowing */
