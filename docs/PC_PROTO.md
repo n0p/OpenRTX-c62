@@ -657,10 +657,11 @@ muda porque el PC se haya ido.
 El UART va a 115200 8N1, el mismo que el resto del firmware. El protocolo toma
 la línea RX del pad del PTT (GPIOA_15), que es **también el pulsador del
 microaltavoz** del accesorio. Quién manda en ese pad lo elige el operador en
-**Ajustes ▸ Radio ▸ Puerto PC** (`Auto` / `Always` / `Never`): con `Auto`, el
-pad sigue siendo UART RX y el pulsador se lee del **estado de línea del propio
-receptor** (`FE`/`BI` en cada carácter: el `DATAIN` del GPIO no sigue la línea con
-la función en UART), y un nivel bajo sostenido más de 30 ms se toma por el
+**Ajustes ▸ Radio ▸ Puerto PC** (`Always` / `Never`, y `Auto` desde el CPS): con
+`Auto`, el pad sigue siendo UART RX y el pulsador se lee **muxando el pad a GPIO
+durante unos 130 ns cada 4 ms** y devolviéndolo a la UART (el `DATAIN` con la
+función en UART no sigue la línea, y el estado de trama del receptor no acumula
+con la línea sujeta a cero), y un nivel bajo sostenido más de 30 ms se toma por el
 pulsador, descartando y contando lo que llegue mientras tanto; con `Always`, el
 cable manda y el pulsador no se lee (el comportamiento de siempre); con `Never`,
 el pad es GPIO y esta interfaz no existe. El estado lo

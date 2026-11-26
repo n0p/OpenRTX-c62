@@ -37,6 +37,8 @@ extern void kiss_uart_init(void);
 #include "blackbox_c62.h"
 #include "dsp.h"
 #include <IOMuxManager.h>
+/* GPIO0_BASE and CMN_IOMUX_BASE: the pad window writes the registers itself. */
+#include <csk6_cm33/include/venus_ap.h>
 #include "core/blackbox.h"
 #include "core/port_ptt.h"
 #include "core/settings.h"
@@ -538,16 +540,17 @@ void platform_pttOverride(int state)
  *
  * GPIOA_15 is the accessory jack's PTT contact and UART2 RXD at the same time.
  * The pad stays muxed to the UART -- that is how the PC talks to the radio --
- * and the switch is then read from the *receiver's* side: a character that the
- * UART framed as a break or without a stop bit is a line held low through a
- * whole character time, and a run of those longer than PORT_PTT_HOLD_MS is a
- * finger on the switch (core/port_ptt.h).  The GPIO input is not the source:
- * with the pad on UART2 RXD its DATAIN does not follow the line (it reads low
- * always, which is what the first port-mode build did in hardware).
+ * and "Auto" reads the switch by taking the pad off the UART for about a
+ * microsecond every PORT_PTT_SAMPLE_PERIOD_MS (c62_portPadSample()) and feeding
+ * that level to the sustained-low rule (core/port_ptt.h).  Reading DATAIN with
+ * the pad left on UART2 RXD does not work -- it reads low always, which is what
+ * the first port-mode build did in hardware -- and neither does the receiver's
+ * framing status: a clamped line makes it frame one break and then hand nothing
+ * more over, so a rule fed by characters never sees the 30 ms a press lasts.
  *
  * One instance, fed by one context: the protocol transport, every 1 ms, because
- * it is the only one that may consume the UART FIFO.  Everybody else reads the
- * verdict.
+ * it is the only one that may consume the UART FIFO and the only one that may
+ * take a window.  Everybody else reads the verdict.
  */
 static portPttState_t portPtt;
 
@@ -571,8 +574,131 @@ bool c62_portPadLevel(void)
     /* The device tree declares the key active low, so the logical level is 1
      * while the pad is grounded.  Only a witness, and the whole truth in
      * "Never": with the pad muxed to UART2 RXD this bit does not follow the
-     * line, which is why the detector in "Auto" does not use it. */
+     * line, which is why "Auto" reads it in a window (c62_portPadSample()).
+     * It is still printed in the boot log, because what it says with the pad on
+     * the UART is the measurement that produced this design. */
     return gpio_pin_get_dt(&button_ptt) != 0;
+}
+
+/*
+ * The window, in registers.
+ *
+ * The pad is GPIOA_15: function-select field (bits 0..4) of the CMN_IOMUX
+ * register, pulled up, and its level is bit 15 of GPIOA's DATAIN.  Both
+ * addresses come from the HAL headers (venus_ap.h for the bases,
+ * cmn_iomux_reg_venus.h and gpio_reg_venus.h for the offsets), used here
+ * directly because the driver calls are not affordable in a window:
+ * gpio_pin_configure_dt() walks the Zephyr GPIO API and touches direction,
+ * pull and function, and IOMuxManager_PinConfigure() is an out-of-line function
+ * that reads and rewrites the pad register twice.  A handful of instructions is
+ * the point of this function.
+ */
+#define C62_IOMUX_PAD_A(n) (CMN_IOMUX_BASE + 0x000u + 4u * (uint32_t)(n))
+#define C62_GPIOA_DATAIN   (GPIO0_BASE + 0x020u)
+#define C62_PAD_FSEL_MASK  0x1Fu
+#define C62_PAD_BIT        (1u << 15)
+
+static volatile uint32_t *const padFselReg =
+    (volatile uint32_t *)C62_IOMUX_PAD_A(15);
+static volatile uint32_t *const gpioADataInReg =
+    (volatile uint32_t *)C62_GPIOA_DATAIN;
+
+/*
+ * The core's cycle counter, for the only number this design has to defend: how
+ * long the pad was off the UART.  DWT->CYCCNT counts core cycles, which are the
+ * 300 MHz ones (CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC), and the core can report
+ * that it has none (DWT_CTRL.NOCYCCNT) -- in which case the window is measured
+ * as 0, "not measured", and the design's own bound
+ * (PORT_PTT_SAMPLE_WINDOW_MAX_US) is what the log falls back to.  Nothing here
+ * is on the press-detection path: the level is read whether or not the counter
+ * exists.
+ */
+#define C62_DWT_CTRL     (*(volatile uint32_t *)0xE0001000u)
+#define C62_DWT_CYCCNT   (*(volatile uint32_t *)0xE0001004u)
+#define C62_DEMCR        (*(volatile uint32_t *)0xE000EDFCu)
+#define C62_DEMCR_TRCENA (1u << 24)
+#define C62_DWT_CYCCNTENA (1u << 0)
+#define C62_DWT_NOCYCCNT  (1u << 25)
+
+#define C62_CYCLES_PER_US (CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC / 1000000u)
+
+static bool c62_cyclesReady(void)
+{
+    static int state = -1; /* -1: not tried, 0: no counter, 1: counting */
+
+    if (state < 0) {
+        C62_DEMCR |= C62_DEMCR_TRCENA;
+        if ((C62_DWT_CTRL & C62_DWT_NOCYCCNT) != 0) {
+            state = 0;
+        } else {
+            C62_DWT_CYCCNT = 0;
+            C62_DWT_CTRL |= C62_DWT_CYCCNTENA;
+            state = 1;
+        }
+    }
+
+    return state == 1;
+}
+
+static inline void pad_nop(void)
+{
+    __asm__ volatile("nop");
+}
+
+uint32_t c62_cyclesToNs(uint32_t cycles)
+{
+    /* Nanoseconds, because the window is shorter than a microsecond: one core
+     * cycle is 3.3 ns at 300 MHz. */
+    return (cycles * 1000u + (C62_CYCLES_PER_US / 2u)) / C62_CYCLES_PER_US;
+}
+
+bool c62_portPadSample(bool *grounded, uint32_t *windowCycles)
+{
+    const bool  timed  = c62_cyclesReady();
+    const uint32_t saved = *padFselReg;
+    const uint32_t t0 = timed ? C62_DWT_CYCCNT : 0;
+
+    /* The pad is a GPIO from here: function select 0, pull-up untouched
+     * because only bits 0..4 are written. */
+    *padFselReg = saved & ~C62_PAD_FSEL_MASK;
+
+    /*
+     * Settling: the pad reaches DATAIN through the GPIO block's input
+     * synchroniser, which runs on the peripheral clock, so the first read can
+     * still be the previous level.  Twelve NOPs between the two reads are about
+     * 40 ns of core time -- a fraction of the window, and the second read is
+     * what the answer comes from.
+     */
+    pad_nop(); pad_nop(); pad_nop(); pad_nop();
+    pad_nop(); pad_nop(); pad_nop(); pad_nop();
+    const uint32_t first = *gpioADataInReg;
+    pad_nop(); pad_nop(); pad_nop(); pad_nop();
+    pad_nop(); pad_nop(); pad_nop(); pad_nop();
+    const uint32_t second = *gpioADataInReg;
+
+    /* Back to UART2 RXD with every bit this register had, pull-up included. */
+    *padFselReg = saved;
+
+    const uint32_t t1 = timed ? C62_DWT_CYCCNT : 0;
+
+    if (windowCycles != NULL)
+        *windowCycles = (timed && t1 != t0) ? (t1 - t0) : 0;
+
+    /*
+     * The two reads have to agree on this bit: if the level moved inside the
+     * window, the pad had not settled or the line did, and the pass says
+     * nothing -- the sampler treats it as unobserved instead of inventing a
+     * level.  Only the pad's bit enters the comparison; the rest of DATAIN is
+     * other people's pins and moves on its own.
+     */
+    if (((first ^ second) & C62_PAD_BIT) != 0)
+        return false;
+
+    /* Active low: the pad is grounded when its bit is 0. */
+    if (grounded != NULL)
+        *grounded = (second & C62_PAD_BIT) == 0;
+
+    return true;
 }
 
 void c62_portPadToUart(bool uart)

@@ -20,14 +20,19 @@
  *    bytes that arrive while the switch is held are discarded and counted, the
  *    half frame the parser had at that moment is dropped, and the session
  *    survives;
+ *  - the window schedule that makes "Auto" possible at all: one window every
+ *    PORT_PTT_SAMPLE_PERIOD_MS, never while the receiver is framing clean
+ *    characters, one window and not a burst after a stalled loop, and the
+ *    arithmetic that says a window is a fraction of a bit;
  *  - the three modes mean what the menu says they mean, and a change of mode
  *    cannot carry a press across it.
  *
  * The line is modelled the way the transport sees it in
- * platform/targets/c62/pc_proto_c62.c: one pass per millisecond, and per pass
- * the characters the receiver framed since the last one, each carrying whether
- * it was a break or had no stop bit (LSR.FE/BI).  That flag is the press
- * evidence; the GPIO level is not modelled because it is not used.
+ * platform/targets/c62/pc_proto_c62.c: one pass per millisecond, per pass the
+ * characters the receiver framed since the last one -- each carrying whether it
+ * was a break or had no stop bit (LSR.FE/BI) -- and, every few milliseconds, a
+ * window in which the pad is read as a GPIO.  The window is the press evidence;
+ * the framing flags are what says the line is *not* clamped.
  */
 
 #include <catch2/catch_test_macros.hpp>
@@ -190,32 +195,48 @@ std::vector<uint8_t> helloFrame(uint8_t seq = 1)
 /* The simulated transport                                                    */
 /* ------------------------------------------------------------------------- */
 
-/** Characters a line held low produces per millisecond: 115200/10/1000. */
-constexpr uint32_t BREAK_CHARS_PER_MS = 11;
+/** One bit at 115200 baud, ns: the unit the window has to be small against. */
+constexpr uint32_t BIT_NS = 8681;
+
+/** One character, start bit plus eight data bits plus the stop bit, us. */
+constexpr uint32_t CHAR_US = 87;
 
 /*
  * One pass per millisecond of platform/targets/c62/pc_proto_c62.c:
  *
  *   1. the characters the receiver framed since the last pass arrive, each one
  *      flagged if it was a break or had no stop bit;
- *   2. that flag is the press evidence and goes to the detector;
- *   3. on an edge, the half frame the parser had is dropped;
- *   4. while the switch is held, the characters are counted and never parsed;
- *   5. otherwise they go to the real parser.
+ *   2. the sampler decides what this pass does with the pad
+ *      (port_ptt_sample_step, core/port_ptt.h): take a window, believe a live
+ *      stream's stop bits, or leave the line unobserved;
+ *   3. a window reads the pad -- the switch and nothing else, because while it
+ *      is closed the line is clamped and no clean character can arrive;
+ *   4. on an edge, the half frame the parser had is dropped;
+ *   5. while the switch is held, the characters are counted and never parsed;
+ *   6. otherwise they go to the real parser.
+ *
+ * The pad is modelled the way the hardware behaves and not the way the design
+ * wishes: with the switch down the line is clamped, so every byte the client
+ * writes arrives as a break and *no* clean character is framed -- which is the
+ * hardware fact the window exists for.
  */
 struct Sim
 {
     pcProto_t proto;
     portPttState_t ptt;
+    portPttSampler_t sampler;
     uint32_t now = 0;
-    uint32_t lost = 0;   /**< bytes thrown away, as the transport counts them */
+    uint32_t lost = 0;    /**< bytes thrown away, as the transport counts them */
     bool held = false;
-    std::vector<uint8_t> rx; /**< characters framed since the last pass     */
-    uint32_t bad = 0;        /**< ... of which this many were break/no stop */
+    bool switchDown = false; /**< the operator's finger on the PTT           */
+    std::vector<uint8_t> rx; /**< characters framed since the last pass       */
+    uint32_t bad = 0;        /**< ... of which this many were break/no stop   */
+    uint32_t clean = 0;      /**< ... of which this many had their stop bit   */
 
     Sim()
     {
         port_ptt_reset(&ptt);
+        port_ptt_sampler_reset(&sampler, 0);
         pc_proto_init(&proto, &sink);
     }
 
@@ -223,7 +244,25 @@ struct Sim
     {
         now++;
 
-        const bool changed = port_ptt_update(&ptt, bad > 0, now);
+        const portPttStep_t what = port_ptt_sample_step(&sampler, clean > 0, now);
+        bool changed = false;
+
+        switch (what) {
+            case PORT_PTT_STEP_TAKE:
+                /* The window: the pad, as a GPIO, is the switch's state. */
+                changed = port_ptt_update(&ptt, switchDown, now);
+                break;
+            case PORT_PTT_STEP_RELEASE:
+                /* A live stream: its stop bits were sampled high. */
+                changed = port_ptt_update(&ptt, false, now);
+                break;
+            case PORT_PTT_STEP_WAIT:
+                port_ptt_seen_high(&ptt);
+                break;
+            case PORT_PTT_STEP_IDLE:
+            default:
+                break;
+        }
 
         held = port_ptt_pressed(&ptt);
 
@@ -241,14 +280,18 @@ struct Sim
 
         rx.clear();
         bad = 0;
+        clean = 0;
     }
 
-    /** One character as the receiver framed it. */
+    /** One character as the receiver framed it.  A clamped line has no stop. */
     void ch(uint8_t b, bool noStopBit = false)
     {
+        const bool broken = switchDown || noStopBit;
         rx.push_back(b);
-        if (noStopBit)
+        if (broken)
             bad++;
+        else
+            clean++;
     }
 
     /** Bytes from the client: clean characters, they always have a stop bit. */
@@ -265,19 +308,38 @@ struct Sim
             ch(0x00, false);
     }
 
-    /** The switch grounding the line for ms: breaks at the character rate. */
+    /** The operator holds the switch for ms. */
     void press(uint32_t ms)
     {
+        switchDown = true;
         for (uint32_t i = 0; i < ms; i++) {
-            for (uint32_t k = 0; k < BREAK_CHARS_PER_MS; k++)
-                ch(0x00, true);
+            /* A clamped line: the receiver frames one break and then waits for
+             * it to go high again, so there is nothing to hand over. */
             step();
         }
     }
 
-    /** The line idle for ms: no characters at all. */
+    /** The operator lets go. */
+    void release()
+    {
+        switchDown = false;
+    }
+
+    /**
+     * The operator lets go and the transport gets the passes it needs to see
+     * it: one sampling period at most, which is the release latency of "Auto".
+     */
+    void releaseAndSettle()
+    {
+        switchDown = false;
+        for (uint32_t i = 0; i <= PORT_PTT_SAMPLE_PERIOD_MS; i++)
+            step();
+    }
+
+    /** The line idle for ms: no characters at all, the switch up. */
     void idle(uint32_t ms)
     {
+        switchDown = false;
         for (uint32_t i = 0; i < ms; i++)
             step();
     }
@@ -446,13 +508,15 @@ TEST_CASE("A clean byte and a short break are not a press", "[port]")
 /* Auto: the two of them on one pad                                          */
 /* ------------------------------------------------------------------------- */
 
-TEST_CASE("Auto: the boot line reads low and the protocol still talks", "[port]")
+TEST_CASE("Auto: a pad held low at boot is unknown, not a press", "[port]")
 {
     /*
-     * The hardware case: from the first sample the line looks held (broken
-     * cable, switch held at power-on, a pad with no pull-up).  The detector
-     * must not key, and -- the other half of the same bug -- the transport must
-     * keep parsing, because nothing has been pressed.
+     * The hardware case: the switch is held while the radio boots (or the pad
+     * is shorted to ground, or the cable is broken with the line at zero).
+     * From the first window the pad reads low, and a level with no release
+     * behind it is not a press: the radio must not key itself.  Nothing is
+     * counted as a glitch either, and no bytes are thrown away, because the
+     * detector has not decided anything.
      */
     Sim sim;
 
@@ -460,7 +524,11 @@ TEST_CASE("Auto: the boot line reads low and the protocol still talks", "[port]"
     REQUIRE_FALSE(sim.held);
     REQUIRE(sim.ptt.presses == 0);
     REQUIRE(sim.ptt.unknown);
+    REQUIRE(sim.sampler.samples > 40); /* it did look: 200 ms / 4 ms */
 
+    /* Released: the line is free, and the client is answered from there on. */
+    sim.release();
+    sim.idle(2);
     sim.send(helloFrame(1));
     sim.idle(3);
 
@@ -484,13 +552,13 @@ TEST_CASE("Auto: HELLO is answered before, between and after a press", "[port]")
     REQUIRE(sim.lost == 0);
 
     /*
-     * The operator keys the speaker-microphone while the client keeps talking:
-     * the line is grounded and the client's bytes arrive into a UART that
-     * frames nothing but breaks.  The press is declared 31 ms in, so the
-     * characters before that are the ones the parser gets -- and from then on
-     * everything is discarded, never parsed.
+     * The operator keys the speaker-microphone: the line is grounded, the
+     * receiver frames one break and then hands nothing more over, and the
+     * windows are what see the press.  It is declared between 32 and 36 ms
+     * after the edge -- the hold rounded up to a sample, plus up to one period
+     * of phase -- so everything from there on is discarded, never parsed.
      */
-    sim.press(PORT_PTT_HOLD_MS + 5); /* declared */
+    sim.press(PORT_PTT_HOLD_MS + 2 * PORT_PTT_SAMPLE_PERIOD_MS + 2);
     REQUIRE(sim.held);
     REQUIRE(sim.ptt.presses == 1);
 
@@ -498,8 +566,11 @@ TEST_CASE("Auto: HELLO is answered before, between and after a press", "[port]")
 
     /* The client keeps writing into a grounded line: those characters are
      * breaks, and they are thrown away rather than parsed. */
+    sim.send(encode(PC_MSG_PING, 3));
     sim.press(15);
-    sim.idle(1); /* release */
+
+    /* Let go: the next window sees the line up, one sampling period at most. */
+    sim.releaseAndSettle();
 
     REQUIRE_FALSE(sim.held);
     REQUIRE(sim.lost > lostAtPress);
@@ -536,7 +607,7 @@ TEST_CASE("Auto: a press drops the half frame the parser was building",
     sim.idle(1);
     sim.press(40);
     sim.send(tail);
-    sim.idle(3);
+    sim.releaseAndSettle();
 
     REQUIRE(takeFrames().empty());
 
@@ -556,10 +627,10 @@ TEST_CASE("Auto: the counters say how much the press cost the cable", "[port]")
     sim.idle(2);
     REQUIRE(takeFrames().size() == 1);
 
-    /* Something that is not a frame, and a hold exactly at the threshold. */
+    /* Something that is not a frame, and a hold well under the threshold. */
     sim.zeroes(120);
     sim.idle(1);
-    sim.press(PORT_PTT_HOLD_MS); /* exactly the threshold: not a press */
+    sim.press(PORT_PTT_HOLD_MS - 5); /* 25 ms: below the threshold */
     sim.idle(5);
     REQUIRE(sim.ptt.presses == 0);
     REQUIRE_FALSE(sim.held);
@@ -567,21 +638,269 @@ TEST_CASE("Auto: the counters say how much the press cost the cable", "[port]")
     /* 120 clean zeroes are the framing's business, and the switch was never
      * pressed, so the detector counts neither. */
     REQUIRE(sim.lost == 0);
-    REQUIRE(sim.ptt.glitches == 1); /* ... except the 30 ms hold that ended */
+    REQUIRE(sim.ptt.glitches == 1); /* ... except the 25 ms hold that ended */
 
     /* A real press, with the client still writing: those bytes are lost. */
-    sim.press(PORT_PTT_HOLD_MS + 15); /* 45 ms: declared at 31 */
+    sim.press(PORT_PTT_HOLD_MS + 2 * PORT_PTT_SAMPLE_PERIOD_MS + 5);
     REQUIRE(sim.held);
 
     const uint32_t before = sim.lost;
+    sim.send(encode(PC_MSG_PING, 9));
     sim.press(5);
-    sim.idle(2);
+    sim.releaseAndSettle();
 
     REQUIRE(sim.ptt.presses == 1);
     REQUIRE(sim.lost > before);
     REQUIRE(sim.ptt.lost == sim.lost);
-    /* The detector reports the press with its real length, from the edge. */
-    REQUIRE(sim.ptt.lastPressMs == 50);
+    /*
+     * The press is reported with its real length, measured from the first
+     * window that saw the line low -- so it is quantised to the sampling
+     * period: 50 ms of finger reads as 46 to 54.
+     */
+    REQUIRE(sim.ptt.lastPressMs >= 50 - PORT_PTT_SAMPLE_PERIOD_MS);
+    REQUIRE(sim.ptt.lastPressMs <= 50 + PORT_PTT_SAMPLE_PERIOD_MS);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Auto: the window schedule, and what it costs                              */
+/* ------------------------------------------------------------------------- */
+
+TEST_CASE("Auto: a window is taken on a schedule, not on every pass", "[port]")
+{
+    portPttSampler_t s;
+    port_ptt_sampler_reset(&s, 0);
+
+    /*
+     * A quiet line and the transport's 1 ms loop.  The first pass looks at
+     * once, then one pass in PORT_PTT_SAMPLE_PERIOD_MS: 250 windows in a
+     * second, not 1000, and never two in the same millisecond.
+     */
+    uint32_t takes = 0;
+    uint32_t firstAt = 0;
+    uint32_t lastAt = 0;
+
+    for (uint32_t t = 1; t <= 1000; t++) {
+        if (port_ptt_sample_step(&s, false, t) == PORT_PTT_STEP_TAKE) {
+            if (firstAt != 0)
+                REQUIRE(t - lastAt >= PORT_PTT_SAMPLE_PERIOD_MS);
+            else
+                firstAt = t;
+            takes++;
+            lastAt = t;
+        }
+    }
+
+    REQUIRE(firstAt == 1);
+    REQUIRE(takes == 1 + (1000 - firstAt) / PORT_PTT_SAMPLE_PERIOD_MS);
+    REQUIRE(s.samples == takes);
+
+    SECTION("A stalled loop takes one window, not a burst")
+    {
+        port_ptt_sampler_reset(&s, 0);
+        REQUIRE(port_ptt_sample_step(&s, false, 1) == PORT_PTT_STEP_TAKE);
+        REQUIRE(port_ptt_sample_step(&s, false, 2) == PORT_PTT_STEP_IDLE);
+
+        /* The thread was away for 100 ms and comes back: one window now, and
+         * the next one a period later.  Catching up with a burst would multiply
+         * the price for nothing the 30 ms rule needs. */
+        REQUIRE(port_ptt_sample_step(&s, false, 101) == PORT_PTT_STEP_TAKE);
+        REQUIRE(port_ptt_sample_step(&s, false, 102) == PORT_PTT_STEP_IDLE);
+        REQUIRE(port_ptt_sample_step(&s, false, 104) == PORT_PTT_STEP_IDLE);
+        REQUIRE(port_ptt_sample_step(&s, false, 105) == PORT_PTT_STEP_TAKE);
+        REQUIRE(s.samples == 3);
+    }
+
+    SECTION("The clock wraps and the schedule does not care")
+    {
+        port_ptt_sampler_reset(&s, 0xFFFFFFF0u);
+        REQUIRE(port_ptt_sample_step(&s, false, 0xFFFFFFF0u)
+                == PORT_PTT_STEP_TAKE);
+        REQUIRE(port_ptt_sample_step(&s, false, 0xFFFFFFF2u)
+                == PORT_PTT_STEP_IDLE);
+        REQUIRE(port_ptt_sample_step(&s, false, 0x00000000u)
+                == PORT_PTT_STEP_TAKE);
+    }
+}
+
+TEST_CASE("Auto: a live stream suppresses the window and is the release",
+       "[port]")
+{
+    portPttSampler_t s;
+
+    /*
+     * The gate: while the receiver frames clean characters the pad is not
+     * touched at all, because those characters already prove the line is up.
+     * One pass is not enough to believe it (a window over a clamped line can
+     * fake one clean character), two passes cannot be faked: the first one
+     * stops the sampler, so a second has to come from the wire.
+     */
+    port_ptt_sampler_reset(&s, 0);
+    REQUIRE(port_ptt_sample_step(&s, true, 1) == PORT_PTT_STEP_WAIT);
+    REQUIRE(port_ptt_sample_step(&s, true, 2) == PORT_PTT_STEP_IDLE);
+    REQUIRE(port_ptt_sample_step(&s, true, 5) == PORT_PTT_STEP_RELEASE);
+    REQUIRE(port_ptt_sample_step(&s, true, 6) == PORT_PTT_STEP_IDLE);
+    REQUIRE(port_ptt_sample_step(&s, true, 9) == PORT_PTT_STEP_RELEASE);
+    REQUIRE(s.samples == 0);
+    REQUIRE(s.skipped == 3);
+
+    /* Not one window in half a second of continuous traffic. */
+    port_ptt_sampler_reset(&s, 0);
+    for (uint32_t t = 1; t <= 500; t++)
+        REQUIRE(port_ptt_sample_step(&s, true, t) != PORT_PTT_STEP_TAKE);
+    REQUIRE(s.samples == 0);
+
+    /* The stream stops: the next due pass looks at the pad again. */
+    REQUIRE(port_ptt_sample_step(&s, false, 501) != PORT_PTT_STEP_RELEASE);
+}
+
+TEST_CASE("Auto: a low either side of an unwatched gap is not a long low",
+       "[port]")
+{
+    /*
+     * The windows are 4 ms apart on purpose, and the 30 ms rule counts them.
+     * A window that is due but not taken leaves the line unwatched, and the
+     * detector must not go on counting across it: two lows either side of a
+     * gap are two samples, not one long low -- that is how a press would be
+     * invented out of nothing.
+     */
+    portPttState_t p;
+    port_ptt_reset(&p);
+
+    port_ptt_update(&p, false, 1);   /* armed */
+    port_ptt_update(&p, true, 2);    /* a low */
+    port_ptt_unobserved(&p);         /* ... and then nobody looked */
+    port_ptt_update(&p, true, 40);   /* a low, 38 ms later */
+    REQUIRE_FALSE(port_ptt_pressed(&p));
+    REQUIRE(p.presses == 0);
+
+    /* Contiguous samples from there: the 30 ms are counted from 40. */
+    port_ptt_update(&p, true, 71);
+    REQUIRE(port_ptt_pressed(&p));
+
+    /* A press already declared is not dropped by a gap: only a release ends
+     * it, because a transmitter must stop when the operator lets go, not when
+     * a window was missed. */
+    port_ptt_unobserved(&p);
+    REQUIRE(port_ptt_pressed(&p));
+    port_ptt_update(&p, false, 80);
+    REQUIRE_FALSE(port_ptt_pressed(&p));
+}
+
+TEST_CASE("Auto: one clean character on a clamped line does not unkey", "[port]")
+{
+    /*
+     * A window taken while the line is clamped can be the very thing that lets
+     * the receiver frame one clean-looking character.  If a single character
+     * were believed as a release, a long press would unkey and re-key about
+     * once a second -- so the first pass of a stream only leaves the line
+     * unobserved, and the press keeps its 30 ms.
+     */
+    portPttState_t p;
+    portPttSampler_t s;
+
+    port_ptt_reset(&p);
+    port_ptt_sampler_reset(&s, 0);
+
+    /* Armed, then held: the windows declare the press. */
+    REQUIRE(port_ptt_sample_step(&s, false, 1) == PORT_PTT_STEP_TAKE);
+    port_ptt_update(&p, false, 1);
+    for (uint32_t t = 5; t <= 37; t += PORT_PTT_SAMPLE_PERIOD_MS) {
+        REQUIRE(port_ptt_sample_step(&s, false, t) == PORT_PTT_STEP_TAKE);
+        port_ptt_update(&p, true, t);
+    }
+    REQUIRE(port_ptt_pressed(&p));
+
+    /* The faked character arrives on the first pass that is due after it: it
+     * arms the detector and must not unkey the press. */
+    REQUIRE(port_ptt_sample_step(&s, true, 41) == PORT_PTT_STEP_WAIT);
+    port_ptt_seen_high(&p);
+    REQUIRE(port_ptt_armed(&p));
+    REQUIRE(port_ptt_pressed(&p));
+
+    /* ...and the pass after it frames nothing, so a window is taken again. */
+    REQUIRE(port_ptt_sample_step(&s, false, 42) == PORT_PTT_STEP_IDLE);
+    REQUIRE(port_ptt_sample_step(&s, false, 45) == PORT_PTT_STEP_TAKE);
+    port_ptt_update(&p, true, 45);
+    REQUIRE(port_ptt_pressed(&p));
+    REQUIRE(p.presses == 1);
+}
+
+TEST_CASE("Auto: the window is a fraction of a bit and the schedule is cheap",
+       "[port]")
+{
+    /*
+     * The arithmetic the design rests on, in one place.  One bit at 115200
+     * baud is 8.681 us and one character is ten of them (87 us).
+     */
+    REQUIRE(BIT_NS == 8681);
+    REQUIRE(CHAR_US == 87);
+
+    /* The pad is off the UART for an eighth of a bit at most: a window can cost
+     * the receiver one bit it was sampling, never a character's framing. */
+    REQUIRE(PORT_PTT_SAMPLE_WINDOW_MAX_US * 1000u * 8u <= BIT_NS);
+
+    /* One window per period, at most: 1 part in 4000 of the time, and none at
+     * all while a client is talking. */
+    REQUIRE(PORT_PTT_SAMPLE_PERIOD_MS * 1000u / PORT_PTT_SAMPLE_WINDOW_MAX_US >=
+            4000u);
+
+    /* A press is declared at HOLD + two periods at worst (the threshold rounded
+     * up to a sample, plus the phase of the first window), which is far inside
+     * the shortest human press and still over the key gate's 25 ms. */
+    REQUIRE(PORT_PTT_HOLD_MS + 2 * PORT_PTT_SAMPLE_PERIOD_MS <= 40);
+    REQUIRE(PORT_PTT_SAMPLE_PERIOD_MS * 4 <= PORT_PTT_HOLD_MS);
+
+    /* The period is also the shortest low the detector can see, so a 1-3 ms
+     * break from a host hanging up can never be two consecutive lows. */
+    REQUIRE(PORT_PTT_SAMPLE_PERIOD_MS > 3);
+
+    /* ...and 30 ms of held line is 344 characters: no frame of the protocol can
+     * last that long, which is what keeps ordinary traffic from looking like a
+     * press even before the gate. */
+    REQUIRE(PORT_PTT_HOLD_MS * 1000u / CHAR_US == 344);
+}
+
+TEST_CASE("Auto: keying with the CPS polling, the switch still wins", "[port]")
+{
+    /*
+     * The realistic session: a client polling every few milliseconds while the
+     * operator keys.  The gate closes the pad during each frame and opens it
+     * between frames, so the press is seen as soon as the traffic stops -- and
+     * the press stops the traffic, because a clamped line frames no clean
+     * character.
+     */
+    Sim sim;
+
+    /* Half a second of a client asking for status every 4 ms. */
+    for (int i = 0; i < 60; i++) {
+        sim.send(encode(PC_MSG_PING, (uint8_t)i));
+        sim.idle(PORT_PTT_SAMPLE_PERIOD_MS);
+    }
+    takeFrames(); /* the answers to those, nobody is checking them here */
+    REQUIRE_FALSE(sim.held);
+    REQUIRE(sim.sampler.skipped > 0); /* the gate did its job */
+
+    /* The operator keys in the middle of it: the windows see it. */
+    sim.press(PORT_PTT_HOLD_MS + 2 * PORT_PTT_SAMPLE_PERIOD_MS + 2);
+    REQUIRE(sim.held);
+    REQUIRE(sim.ptt.presses == 1);
+
+    /* ...and while it is held, a frame the client sends is lost, not parsed. */
+    const uint32_t before = sim.lost;
+    sim.send(encode(PC_MSG_PING, 60));
+    sim.press(4);
+    REQUIRE(sim.lost > before);
+    REQUIRE(takeFrames().empty());
+
+    /* Let go, and the next poll is answered: the session never left. */
+    sim.releaseAndSettle();
+    REQUIRE_FALSE(sim.held);
+    sim.send(encode(PC_MSG_PING, 61));
+    sim.idle(2);
+    auto frames = takeFrames();
+    REQUIRE(frames.size() == 1);
+    REQUIRE(frames[0].id == PC_MSG_PING);
+    REQUIRE(frames[0].seq == 61);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -694,7 +1013,9 @@ TEST_CASE("A change of mode cannot carry a press across it", "[port]")
 TEST_CASE("The port mode survives the settings record and names its values",
        "[port]")
 {
-    REQUIRE(default_settings.pc_port == PORT_MODE_AUTO);
+    /* The factory value is the switch, and Auto is a valid, non-default mode
+     * that the CPS can select (docs/ACCESSORY.md). */
+    REQUIRE(default_settings.pc_port == PORT_MODE_NEVER);
     REQUIRE(settings_portModeValid(PORT_MODE_AUTO));
     REQUIRE(settings_portModeValid(PORT_MODE_ALWAYS));
     REQUIRE(settings_portModeValid(PORT_MODE_NEVER));

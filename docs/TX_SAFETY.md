@@ -275,17 +275,22 @@ place -- and it lives in `core/port_ptt.h`:
 
 | port mode (`Settings ▸ Radio ▸ PC Port`) | what `platform_getPttStatus()` answers |
 |---|---|
-| `Auto` | the sustained-break detector: the receiver's own line status, `FE`/`BI` on the characters it frames, for **more than 30 ms** is a press (a clean `0x00` byte is not evidence, a 1-3 ms break is not a press) |
+| `Auto` | the sustained-low detector, fed by a window: the pad is muxed to GPIO for about 130 ns every 4 ms, read, and put back on the UART; **more than 30 ms** of it low is a press (a clean character is not evidence, a 1-3 ms break is not a press) |
 | `Always` | `false` unless the remote/bench override is set: the pad belongs to the cable |
 | `Never` | `gpio_pin_get_dt(&button_ptt)`, the plain level, because the pad is a plain GPIO with its pull-up |
 
-The GPIO level is *not* the source in `Auto`: with the pad muxed to UART2 RXD its
-`DATAIN` does not follow the line (it reads low from boot, which is how the first
-version of this detector keyed the radio with nobody touching anything). The
+The GPIO level read *with the pad still on the UART* is not the source in `Auto`:
+there it does not follow the line (it reads low from boot, which is how the first
+version of this detector keyed the radio with nobody touching anything). Only
+inside the window -- pad muxed to GPIO for a microsecond at most, then put back
+-- is the level the line's own; and the window is skipped entirely while the
+receiver is framing clean characters, so a talking client is never disturbed. The
 detector also requires a release first, so a pad that is already low when the
 radio starts is unknown, not pressed.
 
-`Auto` is the default and the only mode where both work at once; the frames that
+`Auto` is the only mode where both work at once (it is selected from the CPS, not
+from the menu, until the switch is confirmed on hardware: see
+`docs/ACCESSORY.md`); the frames that
 arrive while the switch is held are discarded and counted (`PC_TAG_PORT_LOST`),
 and the half frame the parser had is dropped. `docs/ACCESSORY.md` has the wiring,
 the numbers and the limits. The 90 s air clock above still applies to whatever

@@ -39,7 +39,8 @@ Hay **una sola excepción**, y es la versión 7: la 8 añadió
 `settings_t.pc_port` como **último byte** del payload, así que el registro que
 escribió la 7 *es* el de hoy un byte más corto, con su propio CRC sobre su propia
 longitud. `settings_recordRead()` lo detecta, comprueba ese CRC y carga el
-prefijo dejando el campo añadido a su valor por defecto (`Auto`). El operador
+prefijo dejando el campo añadido a su valor por defecto (`Never`, el pulsador
+del accesorio). El operador
 conserva indicativo, potencias, scan y todo lo demás al actualizar, y el log dice
 `settings: record v7 migrated to v8`. Cualquier otra versión que no sea la de hoy
 se sigue descartando entera.
