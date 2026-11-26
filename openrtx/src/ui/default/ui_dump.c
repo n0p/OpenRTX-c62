@@ -470,34 +470,117 @@ size_t ui_dump_json(char *buf, size_t len)
            state.txDisable ? "true" : "false",
            (state.rtxStatus == RTX_TX) ? "true" : "false");
 
+    /*
+     * The settings record, field by field.
+     *
+     * Every field of settings_t is here, not only the ones the quick menu
+     * shows: tools/simulator/menu_audit.py attributes each row of each screen
+     * to the settings it writes by diffing this block across a key press, so a
+     * field missing from the dump is a row the walk cannot account for. The
+     * keys are the struct's names, with the three the tour has always read kept
+     * as they were (`sql`, `vol_prompt`, `key_backlight`).
+     */
     append(buf, len, &pos,
-           ",\"settings\":{\"brightness\":%u,\"sql\":%u,\"tx_power\":%u,"
-           "\"rx_fine\":%d,\"key_backlight\":%s,\"m17_can\":%u,"
-           "\"display_timer\":%u,\"vol_prompt\":%u,"
-           "\"callsign\":\"%s\",\"dmr_id\":%lu}",
-           state.settings.brightness, state.settings.sqlLevel,
-           (unsigned)state.settings.tx_power, (int)state.settings.rxFineHz,
+           ",\"settings\":{\"brightness\":%u,\"contrast\":%u,\"sql\":%u,"
+           "\"vox\":%u,\"utc_offset\":%d,\"gps\":%s,\"callsign\":",
+           state.settings.brightness, state.settings.contrast,
+           state.settings.sqlLevel, state.settings.voxLevel,
+           (int)state.settings.utc_timezone,
+           state.settings.gps_enabled ? "true" : "false");
+    append_json_string(buf, len, &pos, state.settings.callsign);
+    append(buf, len, &pos,
+           ",\"display_timer\":%u,\"m17_can\":%u,\"vol_prompt\":%u,"
+           "\"phonetic\":%s,\"macro_latch\":%s,\"tetra_afc_off\":%s,"
+#ifdef CONFIG_KEY_BACKLIGHT
+           "\"key_backlight\":%s,"
+#else
+           "\"key_backlight\":null,"
+#endif
+           "\"m17_can_rx\":%s,\"m17_dest\":",
+           state.settings.display_timer, state.settings.m17_can,
+           state.settings.vpLevel,
+           state.settings.vpPhoneticSpell ? "true" : "false",
+           state.settings.macroMenuLatch ? "true" : "false",
+           state.settings.tetraAfcOff ? "true" : "false",
 #ifdef CONFIG_KEY_BACKLIGHT
            state.settings.keyBacklight ? "true" : "false",
-#else
-           "null",
 #endif
-           state.settings.m17_can, state.settings.display_timer,
-           state.settings.vpLevel, state.settings.callsign,
-           (unsigned long)state.settings.dmr_id);
+           state.settings.m17_can_rx ? "true" : "false");
+    append_json_string(buf, len, &pos, state.settings.m17_dest);
+    append(buf, len, &pos, ",\"m17_meta\":");
+    append_json_string(buf, len, &pos, state.settings.M17_meta_text);
+    append(buf, len, &pos,
+           ",\"battery_icon\":%s,\"gps_set_time\":%s,\"tetra_afc\":%d,"
+           "\"rx_fine\":%d,\"dmr_id\":%lu,\"dmr_dest\":%lu,"
+           "\"dmr_dest_type\":%u,\"sms_format\":%u,\"dmr_timeslot\":%u,"
+           "\"nxdn_ran\":%u,\"am_agc\":%s,\"am_step\":%s,\"am_snap\":%s,"
+           "\"am_depth\":%u,\"dmr_air_delay\":%d,"
+           "\"scan_resume\":%u,\"scan_priority\":%u,\"scan_step\":%u,"
+           "\"scan_dwell\":%u,\"scan_hold\":%u,\"scan_prio_interval\":%u,"
+           "\"scan_flags\":%u,\"scan_vfo_low\":%lu,\"scan_vfo_high\":%lu,"
+           "\"tx_power\":%u,\"pc_port\":%u}",
+           state.settings.showBatteryIcon ? "true" : "false",
+           state.settings.gpsSetTime ? "true" : "false",
+           (int)state.settings.tetraAfcOffset, (int)state.settings.rxFineHz,
+           (unsigned long)state.settings.dmr_id,
+           (unsigned long)state.settings.dmr_dest_id,
+           state.settings.dmr_dest_type, state.settings.sms_format,
+           state.settings.dmr_timeslot, state.settings.nxdn_ran,
+           state.settings.am_agc ? "true" : "false",
+           state.settings.am_step ? "true" : "false",
+           state.settings.am_snap ? "true" : "false",
+           state.settings.am_depth, (int)state.settings.dmr_tx_air_delay_us,
+           state.settings.scan_resume, state.settings.scan_priority,
+           state.settings.scan_step, state.settings.scan_dwell,
+           state.settings.scan_hold, state.settings.scan_prioInterval,
+           state.settings.scan_flags,
+           (unsigned long)state.settings.scan_vfoLow,
+           (unsigned long)state.settings.scan_vfoHigh,
+           (unsigned)state.settings.tx_power, state.settings.pc_port);
 
 #ifdef CONFIG_APRS
+    /*
+     * table and symbol are single characters and a zeroed record has them at
+     * 0x00: printing them with %c would put a NUL inside the JSON and the
+     * control channel would stop at it (say_block writes up to the first NUL),
+     * so a non-printable one is printed as a space.
+     */
+    char aprs_table[2] = { (state.settings.aprs_table >= 0x20 &&
+                            state.settings.aprs_table < 0x7F)
+                           ? state.settings.aprs_table : ' ', 0 };
+    char aprs_symbol[2] = { (state.settings.aprs_symbol >= 0x20 &&
+                             state.settings.aprs_symbol < 0x7F)
+                            ? state.settings.aprs_symbol : ' ', 0 };
+
     append(buf, len, &pos,
-           ",\"aprs\":{\"decode\":%s,\"beacon\":%s,\"ssid\":%u}",
+           ",\"aprs\":{\"decode\":%s,\"beacon\":%s,\"ack\":%s,\"ssid\":%u,"
+           "\"lat\":%ld,\"lon\":%ld,\"table\":",
            state.settings.aprs_decode ? "true" : "false",
            state.settings.aprs_beaconEn ? "true" : "false",
-           state.settings.aprs_ssid);
+           state.settings.aprs_msgAck ? "true" : "false",
+           state.settings.aprs_ssid,
+           (long)state.settings.aprs_lat_e4, (long)state.settings.aprs_lon_e4);
+    append_json_string(buf, len, &pos, aprs_table);
+    append(buf, len, &pos, ",\"symbol\":");
+    append_json_string(buf, len, &pos, aprs_symbol);
+    append(buf, len, &pos, ",\"interval\":%u,\"txdelay\":%u,\"comment\":",
+           state.settings.aprs_interval_s, state.settings.aprs_txdelay_ms);
+    append_json_string(buf, len, &pos, state.settings.aprs_comment);
+    append(buf, len, &pos, ",\"path\":");
+    append_json_string(buf, len, &pos, state.settings.aprs_path);
+    append(buf, len, &pos, "}");
 #endif
 
 #ifdef CONFIG_KISS
-    append(buf, len, &pos, ",\"packet\":{\"enabled\":%s,\"modem\":%u}",
+    append(buf, len, &pos,
+           ",\"packet\":{\"enabled\":%s,\"modem\":%u,\"port\":%u,"
+           "\"persist\":%u,\"fulldup\":%u,\"txdelay\":%u,\"txtail\":%u,"
+           "\"slottime\":%u,\"maxframe\":%u}",
            state.settings.packet_enable ? "true" : "false",
-           state.settings.packet_modem);
+           state.settings.packet_modem, state.settings.packet_port,
+           state.settings.packet_persist, state.settings.packet_fulldup,
+           state.settings.packet_txdelay_ms, state.settings.packet_txtail_ms,
+           state.settings.packet_slottime_ms, state.settings.packet_maxframe);
 #endif
 
     append(buf, len, &pos,

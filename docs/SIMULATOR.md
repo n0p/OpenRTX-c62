@@ -118,7 +118,14 @@ client reads until `#begin`, then until `#end`, and ignores everything else.
 | `sync` | wait until the UI has consumed every key and drawn |
 | `sleep <ms>` | wait |
 | `probe` | frame counter, queued keys and events, last key event |
-| `quit` | power the radio off |
+| `quit` | power the radio off, shutdown sequence included |
+| `powercut` | cut the power: the process exits, nothing is written on the way out |
+
+`powercut` is the radio's own way off -- the volume knob cuts the rail, so
+`state_terminate()` never runs and only what the settings debouncer had already
+written is on the flash (`core/state.c`). `quit` is the graceful path. A test
+that wants to know whether a change reached the record uses the first one:
+`tools/simulator/settings_persist.py`.
 
 Key names are the radio's: `GREEN` (`KEY_ENTER`), `RED` (`KEY_ESC`), `P1`
 (`KEY_F1`), `P2` (`KEY_F2`), `SIDE` (`KEY_MONI`), `UP`, `DOWN`, `LEFT`,
@@ -194,8 +201,11 @@ object. Both come from the firmware's structures, never from the bitmap:
 - **`radio`** is `state`: operating mode, RX/TX frequency, channel index and
   name, bandwidth, power, squelch, volume, RSSI, battery, step, bank and contact
   counts, `tx_disable`, `ptt`.
-- **`settings`**, **`aprs`**, **`packet`** are the settings blocks the screens
-  write.
+- **`settings`**, **`aprs`**, **`packet`** are the settings record, field by
+  field: every member of `settings_t`, under the struct's own name (`sql`,
+  `vol_prompt` and `key_backlight` are the three the tour reads by their old
+  names). A row that writes a field has to show up in a diff of this block, so
+  a field missing here is a row no test can attribute to the record.
 - **`modules`** says which overlay owns the screen (channel list, contacts,
   zones, messages, tools).
 - **`tools`** is the tools menu (P1 held down): whether it is open, which of its
