@@ -21,22 +21,48 @@ cmake_minimum_required(VERSION 3.20.0)
 # NOTE: the board-specific CMakeLists.txt files have to use the ${OPENRTX_ROOT}
 # variable as the base path. E.g. ${OPENRTX_ROOT}/platform/drivers/somedriver.c
 #
+get_filename_component(WEST_TOPDIR $ENV{ZEPHYR_BASE} DIRECTORY)
+
 if (${BOARD} STREQUAL "ttwrplus")
     set(ARCH xtensa)
     set(CONF_FILE ${CMAKE_CURRENT_LIST_DIR}/platform/mcu/ESP32S3/zephyr.conf)
+
+    list(APPEND ZEPHYR_EXTRA_MODULES ${WEST_TOPDIR}/modules/hal/espressif)
+elseif (${BOARD} STREQUAL "c62")
+    set(ARCH arm)
+    set(Zephyr-sdk_DIR $ENV{ZEPHYR_16_SDK_INSTALL_DIR}/cmake/)
+    set(CONF_FILE ${CMAKE_CURRENT_LIST_DIR}/platform/mcu/CSK6011B/zephyr.conf)
+
+    list(APPEND ZEPHYR_EXTRA_MODULES ${WEST_TOPDIR}/csk)
+    list(APPEND ZEPHYR_EXTRA_MODULES ${WEST_TOPDIR}/modules/hal/cmsis)
+    list(APPEND ZEPHYR_EXTRA_MODULES ${WEST_TOPDIR}/modules/hal/listenai/csk6_cm33)
+    list(APPEND ZEPHYR_EXTRA_MODULES ${WEST_TOPDIR}/modules/lib/af)
+    list(APPEND ZEPHYR_EXTRA_MODULES ${WEST_TOPDIR}/modules/lib/freertos_shims)
+    list(APPEND ZEPHYR_EXTRA_MODULES ${WEST_TOPDIR}/modules/lib/lsf)
+    list(APPEND ZEPHYR_EXTRA_MODULES ${WEST_TOPDIR}/modules/lib/urpc)
 endif()
 
 #
 # Create the board_root folder and the proper folder tree for the targets
 #
-execute_process(COMMAND ${CMAKE_COMMAND} -E copy_directory
-                ${CMAKE_CURRENT_LIST_DIR}/platform/targets/${BOARD}
-                ${CMAKE_CURRENT_LIST_DIR}/build/board_root/boards/${ARCH}/${BOARD})
+set(BOARD_SRC_DIR ${CMAKE_CURRENT_LIST_DIR}/platform/targets/${BOARD})
+# configure_file makes every copied file a configure dependency, so editing a
+# board file in the source tree refreshes the copy on the next build.
+file(GLOB_RECURSE BOARD_FILES
+     RELATIVE ${BOARD_SRC_DIR}
+     CONFIGURE_DEPENDS
+     ${BOARD_SRC_DIR}/*)
+
+foreach (BOARD_FILE IN LISTS BOARD_FILES)
+    configure_file(${BOARD_SRC_DIR}/${BOARD_FILE}
+                   ${CMAKE_BINARY_DIR}/board_root/boards/${ARCH}/${BOARD}/${BOARD_FILE}
+                   COPYONLY)
+endforeach()
 
 #
 # Set the BOARD_ROOT and OPENRTX_ROOT variables
 #
-set(BOARD_ROOT ${CMAKE_CURRENT_LIST_DIR}/build/board_root)
+set(BOARD_ROOT ${CMAKE_BINARY_DIR}/board_root)
 set(OPENRTX_ROOT ${CMAKE_CURRENT_LIST_DIR})
 
 #
@@ -93,6 +119,11 @@ target_sources(app
     openrtx/src/core/crc.c
     openrtx/src/core/datetime.c
     openrtx/src/core/openrtx.c
+    # Post-mortem recorder: breadcrumbs, liveness beats, the crash record
+    # (docs/BLACKBOX.md).  Portable C; the platform side lives in the target.
+    openrtx/src/core/blackbox.c
+    openrtx/src/core/backup_image.c
+    openrtx/src/core/display_flush.c
     openrtx/src/core/audio_codec.c
     openrtx/src/core/audio_stream.c
     openrtx/src/core/audio_path.cpp
@@ -102,8 +133,38 @@ target_sources(app
     openrtx/src/core/voicePromptUtils.c
     openrtx/src/core/voicePromptData.S
     openrtx/src/core/nvmem_access.c
+    openrtx/src/core/channel_store.c
+    openrtx/src/core/settings.c
+    openrtx/src/core/settings_record.c
+    # The accessory jack's PTT rule: one pad, UART2 RXD and the speaker-mic
+    # switch (docs/ACCESSORY.md).
+    openrtx/src/core/port_ptt.c
+    openrtx/src/core/zones.c
+    openrtx/src/core/agc.c
+    openrtx/src/core/am_tx.c
+    openrtx/src/core/airband.c
+    openrtx/src/core/wfm.c
+    openrtx/src/core/spectrum.c
+    openrtx/src/core/spectrum_service.c
+    openrtx/src/core/slot_store.c
+    openrtx/src/core/contact_store.c
+    openrtx/src/core/msg_service.c
+    openrtx/src/core/messaging.c
+    openrtx/src/core/messaging_store_none.c
+    # Binary protocol between the radio and a computer (docs/PC_PROTO.md).
+    # The transport and its two build options live in the platform target.
+    openrtx/src/core/pc_proto.c
+    openrtx/src/core/pc_proto_ops.c
+    openrtx/src/core/pc_proto_dbg.c
+    # The bench namespace: scripted measurements against an external receiver
+    # (docs/BENCH.md).  Compiled in always; served only with C62_BENCH_PROTO.
+    openrtx/src/core/pc_proto_bench.c
     openrtx/src/rtx/rtx.cpp
+    openrtx/src/rtx/ModeArena.cpp
+    openrtx/src/rtx/TxGuard.c
     openrtx/src/rtx/OpMode_FM.cpp
+    openrtx/src/rtx/OpMode_Airband.cpp
+    openrtx/src/rtx/OpMode_WFM.cpp
     openrtx/src/rtx/OpMode_M17.cpp
     openrtx/src/protocols/M17/DSP.cpp
     openrtx/src/protocols/M17/Golay.cpp
@@ -118,7 +179,18 @@ target_sources(app
     openrtx/src/ui/default/ui.c
     openrtx/src/ui/default/ui_main.c
     openrtx/src/ui/default/ui_menu.c
+    openrtx/src/ui/default/ui_hints.c
+    openrtx/src/ui/default/ui_layout.c
+    openrtx/src/ui/default/ui_mode_state.c
+    openrtx/src/ui/default/ui_zones.c
+    openrtx/src/ui/default/ui_quickmenu.c
     openrtx/src/ui/default/ui_strings.c
+    openrtx/src/ui/default/ui_channels.c
+    openrtx/src/ui/default/ui_contacts.c
+    openrtx/src/ui/default/ui_messages.c
+    openrtx/src/ui/default/ui_tools.c
+    openrtx/src/ui/default/ui_backup.c
+    openrtx/src/ui/default/ui_spectrum.c
 
     subprojects/codec2/src/dump.c
     subprojects/codec2/src/lpc.c

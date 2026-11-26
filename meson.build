@@ -47,6 +47,14 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/core/crc.c',
                'openrtx/src/core/datetime.c',
                'openrtx/src/core/openrtx.c',
+               # Post-mortem recorder: breadcrumbs, liveness beats, the crash
+               # record. Portable C, built into the host tests as well as the
+               # firmware. See docs/BLACKBOX.md.
+               'openrtx/src/core/blackbox.c',
+               # Panel transfers with a deadline: a frame the screen cannot
+               # send is dropped and counted instead of parking the UI thread
+               # in an endless wait. See docs/RX_AIRBAND.md.
+               'openrtx/src/core/display_flush.c',
                'openrtx/src/core/audio_codec.c',
                'openrtx/src/core/audio_stream.c',
                'openrtx/src/core/audio_path.cpp',
@@ -56,8 +64,71 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/core/voicePromptUtils.c',
                'openrtx/src/core/voicePromptData.S',
                'openrtx/src/core/nvmem_access.c',
+               'openrtx/src/core/channel_store.c',
+               'openrtx/src/core/scanner.c',
+               'openrtx/src/core/scan_service.c',
+               'openrtx/src/core/vfo_search.c',
+               'openrtx/src/core/vfo_search_service.c',
+               'openrtx/src/core/spectrum.c',
+               'openrtx/src/core/spectrum_service.c',
+               'openrtx/src/rtx/ModeReport.c',
+               'openrtx/src/core/settings.c',
+               'openrtx/src/core/settings_record.c',
+               # The accessory pad's PTT rule and the table of the three port
+               # modes (docs/ACCESSORY.md). Portable C, no radio in it.
+               'openrtx/src/core/port_ptt.c',
+               'openrtx/src/core/zones.c',
+               'openrtx/src/core/agc.c',
+               'openrtx/src/core/am_tx.c',
+               'openrtx/src/core/airband.c',
+               'openrtx/src/core/wfm.c',
+               # NXDN status and FEC: the UI reads the receive status (RAN,
+               # sync, the SACCH message) and the host tests need exactly that
+               # module linked. They are portable C and do not pull the
+               # demodulator or the vocoder in, which is what keeps the UI
+               # testable without the radio.
+               'openrtx/src/protocols/NXDN/NxdnStatus.c',
+               'openrtx/src/protocols/NXDN/NxdnFec.c',
+               # The dPMR status block, for the same reason: the mode's screen
+               # reads it and it is portable C. It has no dependency beyond
+               # DpmrDefs.h, so the UI tests get it without the demodulator.
+               'openrtx/src/protocols/DPMR/DpmrStatus.c',
+               # The P25 and D-STAR status blocks, for the same reason: the mode
+               # screens read them and they are portable C. See docs/UI.md.
+               'openrtx/src/protocols/P25/P25Status.c',
+               # The burst data type names: the main screen's state block
+               # prints what the last DMR burst was, in both builds.
+               'openrtx/src/protocols/DMR/DmrDefs.c',
+               'openrtx/src/protocols/DSTAR/DStarStatus.c',
+               'openrtx/src/protocols/DSTAR/DStarSlowData.c',
+               # The TETRA "Cell uplink" session: the quick menu row, the mode
+               # and the host tests share its rules, and it is portable C with
+               # no radio and no libtetra in it (docs/TETRA_LIB.md).
+               'openrtx/src/protocols/TETRA/TetraUplink.c',
+               'openrtx/src/core/slot_store.c',
+               'openrtx/src/core/contact_store.c',
+               # The internal backup of the stores: header, directory, CRC and
+               # the two areas a save ping-pongs between (docs/BACKUP.md).
+               'openrtx/src/core/backup_image.c',
+               'openrtx/src/core/msg_service.c',
+               'openrtx/src/core/messaging.c',
+               'openrtx/src/core/messaging_store_none.c',
+               # Binary protocol between the radio and a computer: framing,
+               # session, the store handlers and the debug namespace. Portable
+               # C, built into the host tests as well as the firmware. See
+               # docs/PC_PROTO.md.
+               'openrtx/src/core/pc_proto.c',
+               'openrtx/src/core/pc_proto_ops.c',
+               'openrtx/src/core/pc_proto_dbg.c',
+               # The bench namespace: scripted measurements against an
+               # external receiver. See docs/BENCH.md.
+               'openrtx/src/core/pc_proto_bench.c',
                'openrtx/src/rtx/rtx.cpp',
+               'openrtx/src/rtx/ModeArena.cpp',
+               'openrtx/src/rtx/TxGuard.c',
                'openrtx/src/rtx/OpMode_FM.cpp',
+               'openrtx/src/rtx/OpMode_Airband.cpp',
+               'openrtx/src/rtx/OpMode_WFM.cpp',
                'openrtx/src/rtx/OpMode_M17.cpp',
                'openrtx/src/protocols/M17/DSP.cpp',
                'openrtx/src/protocols/M17/Golay.cpp',
@@ -78,7 +149,20 @@ openrtx_inc = ['openrtx/include', 'platform']
 ui_src_default = ['openrtx/src/ui/default/ui.c',
                   'openrtx/src/ui/default/ui_main.c',
                   'openrtx/src/ui/default/ui_menu.c',
-                  'openrtx/src/ui/default/ui_strings.c']
+                  'openrtx/src/ui/default/ui_hints.c',
+                  'openrtx/src/ui/default/ui_layout.c',
+                  # The decoded state of each mode, drawn on the main screen
+                  'openrtx/src/ui/default/ui_mode_state.c',
+                  'openrtx/src/ui/default/ui_zones.c',
+                  'openrtx/src/ui/default/ui_quickmenu.c',
+                  'openrtx/src/ui/default/ui_strings.c',
+                  'openrtx/src/ui/default/ui_channels.c',
+                  'openrtx/src/ui/default/ui_contacts.c',
+                  'openrtx/src/ui/default/ui_messages.c',
+                  'openrtx/src/ui/default/ui_tools.c',
+                  'openrtx/src/ui/default/ui_spectrum.c',
+                  # The backup and restore screens behind MENU_BACKUP_RESTORE
+                  'openrtx/src/ui/default/ui_backup.c']
 
 ui_src_module17 = ['openrtx/src/ui/module17/ui.c',
                    'openrtx/src/ui/module17/ui_main.c',
@@ -345,6 +429,11 @@ at32f423_def += miosix_cm4f_def
 ##
 linux_src = ['platform/targets/linux/emulator/emulator.c',
              'platform/targets/linux/emulator/sdl_engine.c',
+             # DMR and TETRA keep their decoded status in a translation unit
+             # that includes the demodulator; the host decodes nothing, so it
+             # answers the two getters with "no sync" and the screens of both
+             # modes still build and are walked by the UI tests.
+             'platform/targets/linux/emulator/ui_mode_status.c',
              'platform/drivers/display/display_libSDL.c',
              'platform/drivers/keyboard/keyboard_linux.c',
              'platform/drivers/NVM/nvmem_linux.c',
@@ -365,7 +454,15 @@ linux_inc = ['platform/targets/linux',
              'platform/drivers/audio',
              'platform/drivers/tones']
 
-linux_def = {'PLATFORM_LINUX': '', 'VP_USE_FILESYSTEM':''}
+linux_def = {'PLATFORM_LINUX': '', 'VP_USE_FILESYSTEM':'',
+             # Scan and vigilance run in the host emulator as well, so the
+             # integration path of core/state.c is compiled and exercised
+             # outside the radio. See docs/SCAN.md.
+             'CONFIG_SCAN': '',
+             # Same for the VFO carrier search: state_task() polls it and the
+             # UI hooks are compiled, so the host build covers the whole path
+             # except the radio itself. See docs/VFO_SEARCH.md.
+             'CONFIG_VFO_SEARCH': ''}
 
 sdl_dep     = dependency('SDL2',     required: false)
 threads_dep = dependency('threads',  required: false)
@@ -378,8 +475,22 @@ linux_def  += {'sniprintf':'snprintf', 'vsniprintf':'vsnprintf'}
 # Standard UI
 #
 linux_default_src = linux_src + ui_src_default
+# UI_TEST_NXDN compiles the UI's NXDN screens into the host build. It is not
+# CONFIG_NXDN on purpose: that one makes rtx.cpp instantiate OpMode_NXDN, which
+# would drag the demodulator and the AMBE+2 vocoder into every test binary. The
+# UI only needs the status module (NxdnStatus.c, above), so the screens are
+# tested here and the mode itself on the radio.
 linux_default_def = linux_def + {'CONFIG_SCREEN_WIDTH': '160', 'CONFIG_SCREEN_HEIGHT': '128', 'CONFIG_PIX_FMT_RGB565': '',
-                                 'CONFIG_GPS': '', 'CONFIG_RTC': ''}
+                                 'CONFIG_GPS': '', 'CONFIG_RTC': '', 'UI_TEST_NXDN': '',
+                                 'UI_TEST_DPMR': '', 'UI_TEST_P25': '',
+                                 'UI_TEST_YSF': '', 'UI_TEST_DSTAR': '',
+                                 # M17, TETRA and DMR: their screens, their
+                                 # registry entries and their Settings pages,
+                                 # without the engines. See ui_modes.h.
+                                 'UI_TEST_M17': '', 'UI_TEST_TETRA': '',
+                                 'UI_TEST_DMR': '',
+                                 # The TETRA page of Settings (AFC) too.
+                                 'CONFIG_TETRA_AFC': ''}
 linux_small_def   = linux_def + {'CONFIG_SCREEN_WIDTH': '128', 'CONFIG_SCREEN_HEIGHT': '64', 'CONFIG_PIX_FMT_BW': '',
                                  'CONFIG_GPS': '', 'CONFIG_RTC': ''}
 
@@ -793,6 +904,83 @@ linux_mod17_opts = {
     'link_args'          : linux_l_args
 }
 
+##
+## The C62 simulator
+##
+## The host emulator, built with the radio's own UI configuration instead of the
+## generic Linux one: every mode's screens, the quick menu rows that only exist
+## when the platform defines the feature (the keypad backlight, the fine RX
+## tuning), APRS and the packet modem page. It adds the frame recorder
+## (core/gfx_capture.c) and the text dump of the screen (ui/ui_dump.c), and the
+## scriptable control channel that replaces the readline shell
+## (platform/targets/linux/emulator/sim_control.c). docs/SIMULATOR.md.
+##
+## It is a host-only target: the firmware builds of the radio get the same
+## screens from its Kconfig options, and none of this code is compiled into an
+## image.
+##
+zlib_dep = dependency('zlib', required : false)
+
+sim_src = linux_default_src + [
+  'openrtx/src/core/gfx_capture.c',
+  'openrtx/src/core/aprs_service.c',
+  'openrtx/src/core/messaging_aprs.c',
+  'openrtx/src/protocols/APRS/ax25.c',
+  'openrtx/src/protocols/APRS/hdlc.c',
+  'openrtx/src/protocols/APRS/afsk.c',
+  'openrtx/src/protocols/APRS/aprs.c',
+  'openrtx/src/protocols/APRS/aprs_msg.c',
+  # The packet modem's protocol layer is freestanding: the host bench
+  # (tests/host/kiss_loop) runs the same three files. The service on top of it
+  # (core/packet_service.c) needs the audio streams and a thread of its own, so
+  # it stays the double in platform/targets/linux/emulator/ui_mode_status.c.
+  'openrtx/src/protocols/KISS/kiss.c',
+  'openrtx/src/protocols/KISS/afsk9600.c',
+  'openrtx/src/protocols/KISS/packet_modem.c',
+  'openrtx/src/ui/default/ui_aprs.c',
+  'openrtx/src/ui/default/ui_packet.c',
+  'openrtx/src/ui/default/ui_dump.c',
+  'platform/targets/linux/emulator/sim_control.c',
+  'platform/targets/linux/emulator/sim_png.c',
+  # The channel bank and the contact book, in a file instead of a partition
+  'platform/targets/linux/emulator/user_store_host.c',
+  # The internal backup of the stores, in a file of the run's state directory
+  'platform/targets/linux/emulator/backup_host.c',
+]
+
+# The radio's own feature flags, as -D on top of linux_default_def, which
+# already turns on the screens of the modes that need an engine
+# (UI_TEST_M17/NXDN/DPMR/P25/YSF/DSTAR/DMR/TETRA). CONFIG_APRS and CONFIG_KISS
+# are the two the C62's Kconfig builds (platform/targets/c62/Kconfig.board).
+#
+# CONFIG_DMR_TX is here, and only here: the C62 image transmits DMR, so the
+# simulator has to show the radio's DMR screens and not a receive-only variant
+# of them (the mode is marked TX in the tools menu, the frequency entry asks for
+# Rx and Tx, PTT is no longer refused). It is *not* in linux_default_def on
+# purpose: that would put it in every test binary, and with it
+# opmode_canTransmit(DMR) and the DMR row of the mode tests would stop
+# describing the receive-only build they were written for. Nothing of the
+# encoder is pulled in -- the host build has no DMR modem sources -- so what
+# changes is the UI and the status module only.
+sim_def = ['-DPLATFORM_LINUX_SIM', '-DUI_CAPTURE', '-DSIM_INJECT',
+           '-DCONFIG_APRS', '-DCONFIG_KISS', '-DCONFIG_DMR_TX']
+
+sim_c_args   = linux_c_args + sim_def
+sim_cpp_args = linux_cpp_args + sim_def
+
+if zlib_dep.found()
+  openrtx_c62_sim = executable('openrtx_c62_sim',
+                               sources             : sim_src + main_src,
+                               include_directories : linux_inc,
+                               dependencies        : [sdl_dep, threads_dep,
+                                                      codec2_dep, zlib_dep],
+                               c_args              : sim_c_args,
+                               cpp_args            : sim_cpp_args,
+                               link_args           : linux_l_args)
+  alias_target('simulator', openrtx_c62_sim)
+endif
+
+
 md3x0_opts = {
   'sources'            : md3x0_src,
   'include_directories': md3x0_inc,
@@ -858,6 +1046,15 @@ rt4d_opts = {
 }
 
 ttwrplus_opts = {
+  'sources'            : ['CMakeLists.txt'],
+  'include_directories': [],
+  'dependencies'       : [codec2_dep],
+  'c_args'             : [],
+  'cpp_args'           : [],
+  'link_args'          : [],
+}
+
+c62_opts = {
   'sources'            : ['CMakeLists.txt'],
   'include_directories': [],
   'dependencies'       : [codec2_dep],
@@ -982,6 +1179,13 @@ targets = [
     'cpu'      : 'lx7'
   },
   {
+    'name'     : 'c62',
+    'opts'     : c62_opts,
+    'flashable': true,
+    'wrap'     : ' ',
+    'load_addr': ' '
+  },
+  {
     'name'     : 'cs7000',
     'opts'     : cs7000_opts,
     'flashable': true,
@@ -1046,6 +1250,12 @@ foreach t : targets
                               build_by_default : true)
       endif
 
+      deps = custom_target(name+'_deps',
+                          output  : name+'_deps.stamp',
+                          capture : true,
+                          command : [west,
+                                    'update',
+                                    '--group-filter', '+esp32'])
 
       bin = custom_target(name,
                           input   : txt,
@@ -1070,6 +1280,19 @@ foreach t : targets
                     output  : name+'_flash',
                     command : [uf2conv, '-D', '@INPUT@'])
 
+  # C62 is a Zephyr target, we compile it using west and package it in uf2 format
+  elif name == 'openrtx_c62'
+      c62_modules = custom_target('c62_west_update',
+                                  output  : 'c62_west_update.stamp',
+                                  command : ['sh', '-c', 'west update --group-filter +csk6 && touch @OUTPUT@'])
+
+      bin = custom_target(name,
+                          input   : [txt, c62_modules],
+                          output  : name+'_bin',
+                          command : [west,
+                                    'build',
+                                    '-b', 'c62',
+                                    '-d', '.', '..'])
   else
 
     target_opts = t['opts']
@@ -1186,6 +1409,132 @@ m17_golay_test = executable('m17_golay_test',
                             sources : unit_test_src + ['tests/unit/M17_golay.cpp'],
                             kwargs  : unit_test_opts)
 
+# P25 receive PHY.  The sources are added to the test on their own: nothing else
+# in the Linux build pulls them in, and the test is the only consumer.
+p25_phy_src = ['openrtx/src/protocols/P25/P25Phy.c',
+               'openrtx/src/protocols/P25/P25Fec.c',
+               'openrtx/src/protocols/P25/P25Defs.c',
+               'openrtx/src/protocols/P25/P25Tables.c']
+
+p25_phy_test = executable('p25_phy_test',
+                          sources : unit_test_src + p25_phy_src +
+                                    ['tests/unit/p25_phy.cpp'],
+                          kwargs  : unit_test_opts)
+
+# P25 channel codes at their limits (tests/unit/p25_fec.cpp): what each code
+# has to correct and what it has to refuse, which neither the end-to-end
+# transmitter nor the real-frame PHY test walks past.
+p25_fec_test = executable('p25_fec_test',
+                          sources : unit_test_src + p25_phy_src +
+                                    ['tests/unit/p25_fec.cpp'],
+                          kwargs  : unit_test_opts)
+
+# What the P25 mode publishes to the screen (tests/unit/p25_status.cpp).  The
+# host build compiles P25Status.c with CONFIG_P25 off, i.e. the simulator stub
+# the UI tests walk; this target compiles the translation unit the radio runs,
+# so the -1 identifiers and the bad-frame rules are the firmware's own.
+p25_status_test = executable('p25_status_test',
+                             sources : ['tests/unit/p25_status.cpp',
+                                        'openrtx/src/protocols/P25/P25Status.c',
+                                        'openrtx/src/protocols/P25/P25Defs.c',
+                                        'platform/mcu/x86_64/drivers/delays.c'],
+                             kwargs  : {'include_directories' : linux_inc,
+                                        'c_args' : linux_c_args + ['-DCONFIG_P25'],
+                                        'cpp_args' : linux_cpp_args,
+                                        'dependencies' : [catch2_dep,
+                                                          threads_dep],
+                                        'link_args' : linux_l_args})
+
+# D-STAR: the radio header and what the mode publishes (tests/unit/
+# dstar_header.cpp), and the whole DV transmission through the demodulator
+# (tests/unit/dstar_phy.cpp).  The header is the only part of a DV
+# transmission that carries an identity, so its P_FCS and the Viterbi behind it
+# are the refusals that matter.  These are portable C with no radio in them,
+# the same files tests/host/dstar runs.
+dstar_src = ['openrtx/src/protocols/DSTAR/DStarFec.c',
+             'openrtx/src/protocols/DSTAR/DStarPhy.c',
+             'openrtx/src/protocols/DSTAR/DStarSlowData.c',
+             'openrtx/src/protocols/DSTAR/DStarStatus.c',
+             'openrtx/src/protocols/DSTAR/DStarTx.c',
+             'openrtx/src/protocols/DSTAR/DStarVocoder.c',
+             'lib/dmr_vocoder/dmr_golay.c',
+             'lib/dmr_vocoder/dmr_golay_table.c']
+
+dstar_test_opts = {'include_directories' : linux_inc + ['lib/dmr_vocoder'],
+                   'c_args' : linux_c_args,
+                   'cpp_args' : linux_cpp_args,
+                   'dependencies' : [catch2_dep],
+                   'link_args' : linux_l_args + ['-lm']}
+
+dstar_header_test = executable('dstar_header_test',
+                               sources : dstar_src +
+                                         ['tests/unit/dstar_header.cpp'],
+                               kwargs  : dstar_test_opts)
+
+dstar_phy_test = executable('dstar_phy_test',
+                            sources : dstar_src +
+                                      ['tests/unit/dstar_phy.cpp'],
+                            kwargs  : dstar_test_opts)
+
+# The P25 transmitter closed through the mode's own demodulator
+# (tests/unit/p25_tx.cpp): what a call without a voice source is, and that the
+# NAC is masked to the twelve bits the NID has room for.
+p25_tx_src = ['openrtx/src/protocols/C4FM/C4fmMod.c',
+              'openrtx/src/protocols/P25/P25Tx.c',
+              'openrtx/src/protocols/P25/P25Phy.c',
+              'openrtx/src/protocols/P25/P25Fec.c',
+              'openrtx/src/protocols/P25/P25Defs.c',
+              'openrtx/src/protocols/P25/P25Tables.c']
+
+p25_tx_test = executable('p25_tx_test',
+                         sources : p25_tx_src + ['tests/unit/p25_tx.cpp'],
+                         kwargs  : {'include_directories' : linux_inc,
+                                    'c_args' : linux_c_args,
+                                    'cpp_args' : linux_cpp_args,
+                                    'dependencies' : [catch2_dep],
+                                    'link_args' : linux_l_args + ['-lm']})
+
+# System Fusion frame layer (tests/unit/ysf_frame.cpp): the FICH, the data
+# channel and the voice slots, fed straight to ysfFrame_decode() -- the
+# modulator stays out of the comparison, so a refusal here is a refusal of the
+# frame layer and not of the demodulator.  Compiled with CONFIG_YSF, the switch
+# the radio builds with; lib/dmr_vocoder is where the Golay(24,12) decoder and
+# the AMBE+2 types this layer links come from.
+ysf_frame_src = ['openrtx/src/protocols/YSF/YsfFrame.c',
+                 'openrtx/src/protocols/YSF/YsfTx.c',
+                 'openrtx/src/protocols/C4FM/C4fmMod.c',
+                 'lib/dmr_vocoder/dmr_decoder.c',
+                 'lib/dmr_vocoder/dmr_golay.c',
+                 'lib/dmr_vocoder/dmr_golay_table.c',
+                 'lib/dmr_vocoder/dmr_fft.c']
+
+# The System Fusion synchroniser (tests/unit/ysf_phy.cpp): a frame placed
+# anywhere in the sample stream must be found, a frame whose sync is wrong, cut
+# short or absent must not be, and a lost frame must not take the next one with
+# it.
+ysf_phy_test = executable('ysf_phy_test',
+                          sources : ysf_frame_src +
+                                    ['openrtx/src/protocols/YSF/YsfPhy.c',
+                                     'tests/unit/ysf_phy.cpp'],
+                          kwargs  : {'include_directories' : linux_inc +
+                                                            ['lib/dmr_vocoder'],
+                                     'c_args' : linux_c_args + ['-DCONFIG_YSF'],
+                                     'cpp_args' : linux_cpp_args +
+                                                  ['-DCONFIG_YSF'],
+                                     'dependencies' : [catch2_dep],
+                                     'link_args' : linux_l_args + ['-lm']})
+
+ysf_frame_test = executable('ysf_frame_test',
+                            sources : ysf_frame_src +
+                                      ['tests/unit/ysf_frame.cpp'],
+                            kwargs  : {'include_directories' : linux_inc +
+                                                              ['lib/dmr_vocoder'],
+                                       'c_args' : linux_c_args + ['-DCONFIG_YSF'],
+                                       'cpp_args' : linux_cpp_args +
+                                                    ['-DCONFIG_YSF'],
+                                       'dependencies' : [catch2_dep],
+                                       'link_args' : linux_l_args + ['-lm']})
+
 m17_viterbi_test = executable('m17_viterbi_test',
                                sources : unit_test_src + ['tests/unit/M17_viterbi.cpp'],
                                kwargs  : unit_test_opts)
@@ -1226,17 +1575,813 @@ ui_check_standby_test = executable('ui_check_standby_test',
                                     sources : unit_test_src + ['tests/unit/ui_check_standby.cpp'],
                                     kwargs  : unit_test_opts)
 
+ui_vfo_input_test = executable('ui_vfo_input_test',
+                               sources : unit_test_src + ['tests/unit/ui_vfo_input.cpp'],
+                               kwargs : unit_test_opts)
+
+# The VFO carrier search through the real UI FSM: the three second hold, the
+# arming, and the keys that cancel it.  It sleeps for the hold, so it is slow
+# on purpose: the timing is the feature (docs/VFO_SEARCH.md).
+ui_vfo_search_test = executable('ui_vfo_search_test',
+                                sources : unit_test_src + ['tests/unit/ui_vfo_search.cpp'],
+                                kwargs : unit_test_opts)
+
+# Regresiones de la interfaz, por sintoma: el despacho de teclas se prueba a
+# traves del FSM real (ui_updateFSM), con eventos como los que encola el teclado.
+#
+# Se compila dos veces. La primera, con CONFIG_APRS y las fuentes de APRS, es la
+# misma configuracion de despacho que lleva la radio (la build mega tiene APRS).
+# La segunda, sin APRS, es la que demuestra que las pantallas de mensajes,
+# contactos y zonas siguen despachandose: su bloque vivia dentro de
+# `#ifdef CONFIG_APRS`, asi que en esa configuracion no habia menu de mensajes.
+# The Identity page (callsign and DMR ID) has its own file: it is the only
+# settings page whose rows are typed, and its harness (keys, NVM) is the same
+# one the regressions use, so it rides in the same binary.
+ui_regressions_src = ['tests/unit/ui_regressions.cpp',
+                      'tests/unit/ui_identity.cpp']
+ui_regressions_aprs_src = ['openrtx/src/ui/default/ui_aprs.c',
+                           'openrtx/src/core/aprs_service.c',
+                           'openrtx/src/core/messaging_aprs.c',
+                           'openrtx/src/protocols/APRS/ax25.c',
+                           'openrtx/src/protocols/APRS/hdlc.c',
+                           'openrtx/src/protocols/APRS/afsk.c',
+                           'openrtx/src/protocols/APRS/aprs.c',
+                           'openrtx/src/protocols/APRS/aprs_msg.c']
+
+ui_regressions_opts = unit_test_opts + {
+    'c_args'   : linux_c_args + ['-DCONFIG_APRS'],
+    'cpp_args' : linux_cpp_args + ['-DCONFIG_APRS'],
+}
+
+ui_regressions_test = executable('ui_regressions_test',
+                                 sources : unit_test_src + ui_regressions_aprs_src +
+                                           ui_regressions_src,
+                                 kwargs  : ui_regressions_opts)
+
+ui_regressions_noaprs_test = executable('ui_regressions_noaprs_test',
+                                        sources : unit_test_src + ui_regressions_src,
+                                        kwargs  : unit_test_opts)
+
+# El recorrido de los menús (docs/UI.md): cada pantalla de cada modo compilado,
+# fila a fila y tecla a tecla, a través del FSM real. Se compila dos veces, como
+# las regresiones: con APRS y el módem de paquetes (la configuración de la
+# radio) y sin ellos, que es la build en la que las pantallas de mensajes,
+# contactos y zonas se quedaban fuera por un #ifdef mal cerrado.
+ui_menu_audit_src = ['tests/unit/ui_menu_audit.cpp']
+# El módem de paquetes entra con su pantalla: core/packet_service.c pertenece al
+# kernel (hilo propio, streams de audio, PSRAM), así que el host usa el doble de
+# platform/targets/linux/emulator/ui_mode_status.c, como con los estados de DMR
+# y TETRA.
+ui_menu_audit_aprs_src = ui_regressions_aprs_src + [
+  'openrtx/src/ui/default/ui_packet.c',
+  # ui_packet.c names the modems through pkt_modem_info() (ui_packet.c,
+  # modemLabel), which lives in the protocol layer: without these three the
+  # link fails, and the screen has nothing to show.
+  'openrtx/src/protocols/KISS/kiss.c',
+  'openrtx/src/protocols/KISS/afsk9600.c',
+  'openrtx/src/protocols/KISS/packet_modem.c',
+]
+
+ui_menu_audit_opts = unit_test_opts + {
+    'c_args'   : linux_c_args + ['-DCONFIG_APRS', '-DCONFIG_KISS'],
+    'cpp_args' : linux_cpp_args + ['-DCONFIG_APRS', '-DCONFIG_KISS'],
+}
+
+ui_menu_audit_test = executable('ui_menu_audit_test',
+                                sources : unit_test_src + ui_menu_audit_aprs_src +
+                                          ui_menu_audit_src,
+                                kwargs  : ui_menu_audit_opts)
+
+ui_menu_audit_plain_test = executable('ui_menu_audit_plain_test',
+                                      sources : unit_test_src + ui_menu_audit_src,
+                                      kwargs  : unit_test_opts)
+
+ui_quickmenu_test = executable('ui_quickmenu_test',
+                               sources : unit_test_src + ['tests/unit/ui_quickmenu.cpp'],
+                               kwargs  : unit_test_opts)
+
+# P2 held on the FM main screen has to reach the APRS screens: the keypad
+# reports the press and, 700 ms later, the long press, so the popup is already
+# open when the long press arrives and used to eat it. The test presses the two
+# events in that order (tests/unit/ui_aprs_entry.cpp).
+ui_aprs_entry_test = executable('ui_aprs_entry_test',
+                                sources : unit_test_src + ui_regressions_aprs_src +
+                                          ['tests/unit/ui_aprs_entry.cpp'],
+                                kwargs  : ui_regressions_opts)
+
+# Green on a bank entry loads it as a memory channel: MAIN_MEM, tuner_mode CH,
+# and the VFO kept for the way back (tests/unit/ui_bank_tune.cpp).
+ui_bank_tune_test = executable('ui_bank_tune_test',
+                               sources : unit_test_src + ['tests/unit/ui_bank_tune.cpp'],
+                               kwargs  : unit_test_opts)
+
 m17_packet_test = executable('m17_packet_test',
                               sources : unit_test_src + ['tests/unit/M17_packet.cpp'],
                               kwargs  : unit_test_opts)
+
+m17_decoder_test = executable('m17_decoder_test',
+                              sources : unit_test_src + ['tests/unit/M17_decoder.cpp'],
+                              kwargs  : unit_test_opts)
+ui_messages_test = executable('ui_messages_test',
+                              sources : unit_test_src + ['tests/unit/ui_messages.cpp'],
+                              kwargs : unit_test_opts)
+
+# The messaging queue as a state machine (tests/unit/messaging_fsm.cpp):
+# queue -> begin -> retries up to MSG_MAX_ATTEMPTS -> FAILED, SENT against
+# DELIVERED per the confirmation asked, cancel, a full outbox, and the record
+# that keeps the outbox, the inbox and the draft. The model, not the screens.
+messaging_fsm_test = executable('messaging_fsm_test',
+                                sources : unit_test_src + ['tests/unit/messaging_fsm.cpp'],
+                                kwargs  : unit_test_opts)
+
+ui_layout_test = executable('ui_layout_test',
+                            sources : unit_test_src + ['tests/unit/ui_layout.cpp'],
+                            kwargs : unit_test_opts)
+
+ui_zones_test = executable('ui_zones_test',
+                           sources : unit_test_src + ['tests/unit/ui_zones.cpp'],
+                           kwargs : unit_test_opts)
+
+# El menú de herramientas (P1 largo): abrir y cerrar, recorrer las filas, que
+# cada una arranque el servicio que dice, el submenú de modos y el TX apagado
+# mientras está abierto. Por el FSM real, con el teclado como lo alimenta la
+# matriz (tests/unit/ui_tools.cpp).
+ui_tools_test = executable('ui_tools_test',
+                           sources : unit_test_src + ['tests/unit/ui_tools.cpp'],
+                           kwargs : unit_test_opts)
+
+# Registro de modos: la lista única de la que salen el editor de canales, la
+# tecla lateral, el menú rápido y las páginas de ajustes de cada modo.
+ui_modes_test = executable('ui_modes_test',
+                           sources : unit_test_src + ['tests/unit/ui_modes.cpp'],
+                           kwargs : unit_test_opts)
+
+user_stores_test = executable('user_stores_test',
+                                sources : unit_test_src + ['tests/unit/user_stores.cpp'],
+                                kwargs : unit_test_opts)
+
+channel_store_test = executable('channel_store_test',
+                                sources : unit_test_src + ['tests/unit/channel_store.cpp'],
+                                kwargs  : unit_test_opts)
+
+# The internal backup: the record, the two areas, the CRC and the six stores
+# coming back from a restore (docs/BACKUP.md).
+backup_image_test = executable('backup_image_test',
+                               sources : unit_test_src + [
+                                 'tests/unit/backup_image.cpp'],
+                               kwargs  : unit_test_opts)
+
+# Protocolo binario con el PC. Se compila dos veces: la primera con el espacio
+# de nombres de depuracion, la segunda sin el, para que "una build de produccion
+# responde NOT_ALLOWED y no filtra nada" sea un test y no una promesa.
+tx_power_test = executable('tx_power_test',
+                           sources : unit_test_src + ['tests/unit/tx_power.cpp'],
+                           kwargs  : unit_test_opts)
+
+pc_proto_test = executable('pc_proto_test',
+                           sources : unit_test_src + ['tests/unit/pc_proto.cpp'],
+                           kwargs  : unit_test_opts)
+
+pc_proto_opts_dbg = {'c_args' : linux_c_args + ['-DCONFIG_C62_DEBUG_PROTO'],
+                     'cpp_args' : linux_cpp_args + ['-DCONFIG_C62_DEBUG_PROTO'],
+                     'include_directories' : linux_inc,
+                     'dependencies' : [sdl_dep, threads_dep, codec2_dep,
+                                       catch2_dep],
+                     'link_args' : linux_l_args}
+
+pc_proto_dbg_test = executable('pc_proto_dbg_test',
+                               sources : unit_test_src + ['tests/unit/pc_proto.cpp'],
+                               kwargs  : pc_proto_opts_dbg)
+
+# El banco de medidas (docs/BENCH.md). Igual: dos veces, con el espacio de
+# nombres del banco y sin el, para que "una build de produccion no mueve la
+# radio" sea un test y no una promesa.
+pc_bench_opts = {'c_args' : linux_c_args + ['-DCONFIG_C62_DEBUG_PROTO',
+                                            '-DCONFIG_C62_BENCH_PROTO'],
+                 'cpp_args' : linux_cpp_args + ['-DCONFIG_C62_DEBUG_PROTO',
+                                                '-DCONFIG_C62_BENCH_PROTO'],
+                 'include_directories' : linux_inc,
+                 'dependencies' : [sdl_dep, threads_dep, codec2_dep,
+                                   catch2_dep],
+                 'link_args' : linux_l_args}
+
+pc_bench_test = executable('pc_bench_test',
+                           sources : unit_test_src + ['tests/unit/pc_proto_bench.cpp'],
+                           kwargs  : pc_bench_opts)
+
+pc_bench_nobench_test = executable('pc_bench_nobench_test',
+                                   sources : unit_test_src + ['tests/unit/pc_proto_bench.cpp'],
+                                   kwargs  : unit_test_opts)
+
+# Zonas: los planes de canales como datos (repetidoras R0-R7 y U0-U100, PMR446)
+zones_test = executable('zones_test',
+                        sources : unit_test_src + ['tests/unit/zones.cpp'],
+                        kwargs  : unit_test_opts)
+
+# Airband: los dos rasters de canales y los designadores de 8,33 kHz
+airband_test = executable('airband_test',
+                          sources : unit_test_src + ['tests/unit/airband.cpp'],
+                          kwargs  : unit_test_opts)
+
+# AGC de la banda aerea: ataque, liberacion y limitador
+agc_test = executable('agc_test',
+                      sources : unit_test_src + ['tests/unit/agc.cpp'],
+                      kwargs  : unit_test_opts)
+
+# Analizador de espectro, desde el teclado: la pantalla, sus teclas y su menu
+ui_spectrum_test = executable('ui_spectrum_test',
+                              sources : unit_test_src + ['tests/unit/ui_spectrum.cpp'],
+                              kwargs  : unit_test_opts)
+
+# Analizador de espectro: la rejilla del barrido, la traza contra un receptor
+# sintetico, el pico, la retencion de maximos y el mapeo de nivel a pixel
+spectrum_test = executable('spectrum_test',
+                           sources : unit_test_src + ['tests/unit/spectrum.cpp'],
+                           kwargs  : unit_test_opts)
+
+# El coste del barrido visto por el servicio (tests/unit/spectrum_settle.cpp): la
+# tabla de espera que recorre la fila ESPERA, el indice por defecto de la build,
+# el estado que leen la pantalla y el menu, y el span de 96 MHz que el barrido
+# rapido hizo posible.
+spectrum_settle_test = executable('spectrum_settle_test',
+                                  sources : unit_test_src + ['tests/unit/spectrum_settle.cpp'],
+                                  kwargs  : unit_test_opts)
+
+# Vocoder IMBE de P25 (lib/imbe_vocoder, docs/IMBE.md): el decodificador que
+# lleva el modo P25 por defecto. El primero compara 64 tramas de la captura real
+# contra su propia renderizacion comprometida (regresion bit a bit); el segundo
+# barre errores de un bit y parametros aleatorios, que es lo que la cadena
+# entrega en un canal con ruido. Los dos necesitan la ruta de los corpora y la
+# del asset como rutas absolutas, para no depender del directorio de ejecucion.
+imbe_defs = {
+    'IMBE_CORPUS_DIR' : meson.project_source_root() / 'lib/imbe_vocoder/tests/data',
+    'IMBE_ASSET_DIR'  : meson.project_source_root() / 'tests/unit/assets'
+}
+imbe_inc = linux_inc + ['lib/imbe_vocoder', 'lib/dmr_vocoder']
+imbe_src = ['lib/imbe_vocoder/imbe_vocoder.c',
+            'lib/imbe_vocoder/imbe_decoder.c',
+            'lib/imbe_vocoder/imbe_fft.c']
+imbe_test_defs = []
+foreach k, v : imbe_defs
+    imbe_test_defs += '-D@0@="@1@"'.format(k, v)
+endforeach
+
+imbe_vocoder_test = executable('imbe_vocoder_test',
+                               sources : imbe_src + ['tests/unit/imbe_vocoder.cpp'],
+                               kwargs  : {'include_directories' : imbe_inc,
+                                          'c_args' : linux_c_args + ['-ffp-contract=off'],
+                                          'cpp_args' : linux_cpp_args + imbe_test_defs,
+                                          'dependencies' : [catch2_dep],
+                                          'link_args' : linux_l_args})
+
+imbe_robust_test = executable('imbe_robust_test',
+                              sources : imbe_src + ['tests/unit/imbe_robust.cpp'],
+                              kwargs  : {'include_directories' : imbe_inc,
+                                         'c_args' : linux_c_args + ['-ffp-contract=off'],
+                                         'cpp_args' : linux_cpp_args + imbe_test_defs,
+                                         'dependencies' : [catch2_dep],
+                                         'link_args' : linux_l_args})
+
+# Modulador AM de la banda aerea: banda de audio, profundidad, portadora y rampas
+am_tx_test = executable('am_tx_test',
+                        sources : unit_test_src + ['tests/unit/am_tx.cpp'],
+                        kwargs  : unit_test_opts)
+
+# FM de radiodifusion: la banda, su rejilla de 100/50 kHz y el nombre de canal
+wfm_test = executable('wfm_test',
+                      sources : unit_test_src + ['tests/unit/wfm.cpp'],
+                      kwargs  : unit_test_opts)
+
+# Registro de ajustes: version, CRC y descarte limpio de un registro viejo
+settings_record_test = executable('settings_record_test',
+                                  sources : unit_test_src + ['tests/unit/settings_record.cpp'],
+                                  kwargs : unit_test_opts)
+
+# El puerto de accesorio: un pad, tres modos (docs/ACCESSORY.md). El
+# discriminador de PTT contra el byte 0x00 y el break, la convivencia con las
+# tramas HELLO intercaladas y la tabla de los tres modos, sobre el parser real.
+port_mode_test = executable('port_mode_test',
+                            sources : unit_test_src + ['tests/unit/port_mode.cpp'],
+                            kwargs  : unit_test_opts)
+
+# Caja negra (docs/BLACKBOX.md): el detector de atasco con un hilo que deja de
+# latir y un reloj de mentira, el contenido del registro (campos, orden de las
+# migajas, CRC, version) y la lectura al arrancar sobre una flash falsa con
+# semantica NOR.
+blackbox_test = executable('blackbox_test',
+                           sources : unit_test_src + ['tests/unit/blackbox.cpp'],
+                           kwargs  : unit_test_opts)
+
+# La reacción por defecto al atasco (core/blackbox.c, bb_platformHang()): el
+# registro se escribe y DESPUÉS se pide el reinicio, se pide aunque la escritura
+# falle, y un atasco se informa una sola vez en lugar de reescribir el sector
+# cada 100 ms.  En su propio binario porque el test de arriba sustituye el hook
+# para no reiniciar, y con él sustituido este camino no se ejecuta nunca.
+blackbox_hang_test = executable('blackbox_hang_test',
+                                sources : unit_test_src +
+                                          ['tests/unit/blackbox_hang.cpp'],
+                                kwargs  : unit_test_opts)
+
+# El volcado de pantalla con plazo (core/display_flush.h): con un bus que no
+# completa, el frame se descarta, se cuenta y el hilo que dibuja sigue; sin el
+# plazo, el hilo de UI se queda en el semáforo del driver (docs/RX_AIRBAND.md).
+display_flush_test = executable('display_flush_test',
+                                sources : unit_test_src +
+                                          ['tests/unit/display_flush.cpp'],
+                                kwargs  : unit_test_opts)
+
+# APRS: validacion de indicativo, SSID y path antes de emitir
+aprs_config_test = executable('aprs_config_test',
+                              sources : unit_test_src + [
+                                  'openrtx/src/protocols/APRS/ax25.c',
+                                  'openrtx/src/protocols/APRS/aprs.c',
+                                  'tests/unit/aprs_config.cpp'],
+                              kwargs  : unit_test_opts)
+
+# The package's own files include their headers without a prefix (dmr_fec.h,
+# dmr_sms.h), so a target that compiles them needs the DMR directories too.
+dmr_inc = ['openrtx/include/protocols/DMR',
+           'openrtx/include/protocols/DMR/trunk']
+dmr_test_opts = unit_test_opts + {'include_directories' : linux_inc + dmr_inc}
+
+# Cabecera de llamada de DMR: el destino configurado llega al LC del paquete
+# (dmr_tx_setup) y se lee de vuelta de la rafaga, como lo hace un receptor.
+dmr_lc_dest_test = executable('dmr_lc_dest_test',
+                              sources : unit_test_src + [
+                                  'openrtx/src/protocols/DMR/dmr_fec.c',
+                                  'openrtx/src/protocols/DMR/dmr_trellis.c',
+                                  'openrtx/src/protocols/DMR/dmr_tx.c',
+                                  'tests/unit/dmr_lc_dest.cpp'],
+                              kwargs  : dmr_test_opts)
+
+# DMR SMS: formato de payload elegido en los ajustes -> las tres formas del
+# paquete, y las rafagas que salen por el aire para cada una.
+dmr_sms_format_test = executable('dmr_sms_format_test',
+                                 sources : unit_test_src + [
+                                     'openrtx/src/protocols/DMR/dmr_fec.c',
+                                     'openrtx/src/protocols/DMR/dmr_trellis.c',
+                                     'openrtx/src/protocols/DMR/dmr_data.c',
+                                     'openrtx/src/protocols/DMR/dmr_lrrp.c',
+                                     'openrtx/src/protocols/DMR/dmr_sms.c',
+                                     'openrtx/src/protocols/DMR/dmr_glue.c',
+                                     'tests/unit/dmr_sms_format.cpp'],
+                                 kwargs  : dmr_test_opts)
+
+# Nuestro glue: los records que lee el paquete, el retardo de aire y su
+# pre-roll.
+dmr_glue_test = executable('dmr_glue_test',
+                           sources : unit_test_src + [
+                               'openrtx/src/protocols/DMR/dmr_glue.c',
+                               'tests/unit/dmr_glue.cpp'],
+                           kwargs  : dmr_test_opts)
+
+# The DMR receiver with a stand-in for the radio (tests/unit/dmr_rx_status.cpp):
+# a repeater's baseband built by the mode's own modulator, fed to the
+# demodulator in the block size OpMode_DMR::feed() uses, asserting what
+# dmr_getStatus() publishes (sync, colour code, timeslot, the call's source and
+# destination, quality) and what it must refuse (silence, a link control whose
+# checksum failed, a miscorrected colour code).  The whole receive chain is
+# linked -- demodulator, FEC, bursts and slots, the embedded LC, the vocoder --
+# because the status can only be right if all of them are.  The emulator's stub
+# of DmrStatus.c and of the demodulator is deliberately NOT linked: this test
+# is about the real ones.  See docs/TEST_PLAN.md.
+dmr_rx_status_test = executable(
+    'dmr_rx_status_test',
+    sources : [
+        'tests/unit/dmr_rx_status.cpp',
+        'openrtx/src/protocols/DMR/DmrDefs.c',
+        'openrtx/src/protocols/DMR/DmrStatus.c',
+        'openrtx/src/protocols/DMR/dmr_glue.c',
+        'openrtx/src/protocols/DMR/dmr_demod.c',
+        'openrtx/src/protocols/DMR/dmr_fec.c',
+        'openrtx/src/protocols/DMR/dmr_trellis.c',
+        'openrtx/src/protocols/DMR/dmr_proto.c',
+        'openrtx/src/protocols/DMR/dmr_data.c',
+        'openrtx/src/protocols/DMR/dmr_lrrp.c',
+        'openrtx/src/protocols/DMR/dmr_track.c',
+        'openrtx/src/protocols/DMR/dmr_voice.c',
+        'openrtx/src/protocols/DMR/dmr_sms.c',
+        'openrtx/src/protocols/DMR/dmr_ep.c',
+        'openrtx/src/protocols/DMR/dmr_aes.c',
+        'openrtx/src/protocols/DMR/dmr_hytera.c',
+        'openrtx/src/protocols/DMR/aes/tinyaes.c',
+        'openrtx/src/protocols/DMR/aes/tinyaes128.c',
+        'openrtx/src/protocols/DMR/aes/des.c',
+        'openrtx/src/protocols/DMR/dmr_tx.c',
+        'openrtx/src/protocols/DMR/trunk/dmr_trunk.c',
+        'openrtx/src/protocols/DMR/trunk/t3_ms.c',
+        'openrtx/src/protocols/DMR/trunk/t3_pdu.c',
+        'openrtx/src/protocols/DMR/trunk/t3_plan.c',
+        'openrtx/src/protocols/DMR/trunk/t3_sys.c',
+        # The voice path the firmware uses for DMR (lib/dmr_vocoder): without
+        # it dmr_voice_burst() is a no-op and the AMBE+2 frame count of the
+        # status would be untestable.
+        'lib/dmr_vocoder/dmr_vocoder.c',
+        'lib/dmr_vocoder/dmr_decoder.c',
+        'lib/dmr_vocoder/dmr_fft.c',
+    ],
+    kwargs : {
+        'include_directories' : linux_inc + dmr_inc + ['lib/dmr_vocoder'],
+        # -O2 and -ffp-contract=off as the firmware builds them: the
+        # demodulator's decisions are margins, and they move with -O0.
+        'c_args'       : linux_c_args + ['-O2', '-ffp-contract=off',
+                                         '-DCONFIG_DMR_TRUNK',
+                                         '-DDMR_VOICE_OWN'],
+        'cpp_args'     : linux_cpp_args + ['-O2'],
+        'dependencies' : [catch2_dep],
+        'link_args'    : linux_l_args,
+    })
+
+# dPMR (TS 102 490): capa de codificacion, reparto AMBE+2 contra el camino DMR,
+# datos cortos y una captura real por el demodulador completo.  El vocoder es
+# el mismo lib/dmr_vocoder que usa el modo DMR.
+# NXDN transmit: las mitades de codificacion (LICH, SACCH, VCH) cerradas
+# contra sus decodificadores, y la cadena entera -- NxdnTx.c, el modulador 4FSK
+# y nxdnPhy_push() -- exigiendo los 182 dibits, los cuatro cuadros AMBE+2 y el
+# mensaje de la SACCH bit a bit, en tres configuraciones y dos niveles.
+nxdn_tx_test = executable('nxdn_tx_test',
+                          sources : ['tests/unit/nxdn_tx.cpp',
+                                     'openrtx/src/protocols/Fsk4Tx.c',
+                                     'openrtx/src/protocols/NXDN/NxdnDefs.c',
+                                     'openrtx/src/protocols/NXDN/NxdnFec.c',
+                                     'openrtx/src/protocols/NXDN/NxdnPhy.c',
+                                     'openrtx/src/protocols/NXDN/NxdnStatus.c',
+                                     'openrtx/src/protocols/NXDN/NxdnTx.c'],
+                          kwargs : {'include_directories' : linux_inc,
+                                    'cpp_args' : linux_cpp_args + ['-O2'],
+                                    'c_args' : linux_c_args + ['-O2',
+                                                               '-ffp-contract=off'],
+                                    'dependencies' : [catch2_dep],
+                                    'link_args' : linux_l_args})
+
+# NXDN receive: la captura del aire y sus versiones con ruido a un Eb/N0
+# conocido (tests/unit/nxdn_rx.cpp).  Fija lo que el filtro adaptado y las
+# decisiones blandas cambiaron: las tramas y la SACCH que sobreviven al ruido,
+# y que la SACCH blanda no pierde ni un bloque que la dura saca.
+nxdn_rx_test = executable('nxdn_rx_test',
+                          sources : ['tests/unit/nxdn_rx.cpp',
+                                     'openrtx/src/protocols/NXDN/NxdnDefs.c',
+                                     'openrtx/src/protocols/NXDN/NxdnFec.c',
+                                     'openrtx/src/protocols/NXDN/NxdnPhy.c'],
+                          kwargs : {'include_directories' : linux_inc,
+                                    'cpp_args' : linux_cpp_args +
+                                        ['-O2',
+                                         '-DREPLAY_ASSET_DIR="' +
+                                         meson.project_source_root() /
+                                         'tests/unit/assets"'],
+                                    'c_args' : linux_c_args + ['-O2',
+                                                               '-ffp-contract=off'],
+                                    'dependencies' : [catch2_dep],
+                                    'link_args' : linux_l_args})
+
+# Las dos herramientas de banco de la recepcion NXDN: la que barre Eb/N0 y
+# escribe las capturas con ruido (c62_nxdn_bench) y la que sintetiza una
+# llamada con el transmisor del arbol (c62_nxdn_gen).  No son tests de Catch2:
+# se compilan para que no se oxiden y se usan a mano, como c62_nxdn_host.c.
+nxdn_bench_exe = executable('c62_nxdn_bench',
+                            sources : ['tests/platform/c62_nxdn_bench.c',
+                                       'openrtx/src/protocols/NXDN/NxdnDefs.c',
+                                       'openrtx/src/protocols/NXDN/NxdnFec.c',
+                                       'openrtx/src/protocols/NXDN/NxdnPhy.c'],
+                            kwargs : {'include_directories' : linux_inc,
+                                      'c_args' : linux_c_args +
+                                                 ['-O2', '-ffp-contract=off'],
+                                      'link_args' : linux_l_args})
+
+nxdn_gen_exe = executable('c62_nxdn_gen',
+                          sources : ['tests/platform/c62_nxdn_gen.c',
+                                     'openrtx/src/protocols/Fsk4Tx.c',
+                                     'openrtx/src/protocols/NXDN/NxdnDefs.c',
+                                     'openrtx/src/protocols/NXDN/NxdnFec.c',
+                                     'openrtx/src/protocols/NXDN/NxdnTx.c'],
+                          kwargs : {'include_directories' : linux_inc,
+                                    'c_args' : linux_c_args +
+                                               ['-O2', '-ffp-contract=off'],
+                                    'link_args' : linux_l_args})
+
+# El coste del demodulador en un Cortex-M33 (QEMU mps2-an505), como el de dPMR:
+# necesita arm-none-eabi-gcc y qemu-system-arm y se salta (exit 77) donde no
+# los haya.  Con NXDN_INSNFRAME apunta al plugin de QEMU y da instrucciones por
+# segundo de audio, que es lo que cita docs/RX_NXDN.md.
+nxdn_phy_cost_run = find_program('tests/platform/run_nxdn_phy_cost.sh')
+nxdn_capture = meson.project_source_root() / 'tests/unit/assets/nxdn_air_frame.wav'
+
+# dPMR transmit: las mitades de codificacion (CCH, HI, END, TCH) cerradas
+# contra sus decodificadores y la cadena completa -- cabecera, supertramas y
+# trama END -- bit a bit por dpmrPhy_push(), en dos llamadas y dos niveles.
+dpmr_tx_test = executable('dpmr_tx_test',
+                          sources : ['tests/unit/dpmr_tx.cpp',
+                                     'openrtx/src/protocols/Fsk4Tx.c',
+                                     'openrtx/src/protocols/DPMR/DpmrDefs.c',
+                                     'openrtx/src/protocols/DPMR/DpmrPhy.c',
+                                     'openrtx/src/protocols/DPMR/DpmrTx.c'],
+                          kwargs : {'include_directories' : linux_inc,
+                                    'cpp_args' : linux_cpp_args + ['-O2'],
+                                    'c_args' : linux_c_args + ['-O2',
+                                                               '-ffp-contract=off'],
+                                    'dependencies' : [catch2_dep],
+                                    'link_args' : linux_l_args})
+
+dpmr_rx_test = executable('dpmr_rx_test',
+                          sources : unit_test_src + [
+                              'openrtx/src/protocols/DPMR/DpmrDefs.c',
+                              'openrtx/src/protocols/DPMR/DpmrData.c',
+                              'openrtx/src/protocols/DPMR/DpmrPhy.c',
+                              'lib/dmr_vocoder/dmr_vocoder.c',
+                              'lib/dmr_vocoder/dmr_decoder.c',
+                              'lib/dmr_vocoder/dmr_fft.c',
+                              'tests/unit/dpmr_rx.cpp'],
+                          kwargs : unit_test_opts + {
+                              'include_directories' : linux_inc + ['lib/dmr_vocoder'],
+                              # El demodulador decide por margenes de EVM y de
+                              # correlacion: -O2 y -ffp-contract=off son las
+                              # opciones del firmware, y con ellas las capturas
+                              # dan el mismo numero de tramas en host y en el
+                              # C62.  Con -O0 el mismo fichero da 111 en vez de
+                              # 121: la sensibilidad esta medida y documentada
+                              # en docs/RX_DPMR.md.
+                              'c_args' : linux_c_args + ['-O2', '-ffp-contract=off'],
+                              'cpp_args' : linux_cpp_args + ['-O2']})
+
+# The dPMR status the main screen reads (tests/unit/dpmr_status.cpp): a call
+# built by the tree's own transmitter goes through the real demodulator
+# (DpmrPhy.c) into the real DpmrStatus.c, and the assertions are on both the
+# struct it publishes and the strings ui_mode_state.c gives the main screen.
+#
+# Only the dPMR screens of ui_mode_state.c are compiled here: linux_default_def
+# turns on the UI_TEST_* of every mode, which would pull in the status module
+# (and the dependencies) of each of them, none of which this test says anything
+# about. Same filtering as the TETRA status test.
+dpmr_status_def = ['-DUI_TEST_DPMR']
+dpmr_status_c_args = dpmr_status_def
+dpmr_status_cpp_args = dpmr_status_def
+
+foreach a : linux_c_args
+  if not a.startswith('-DUI_TEST_')
+    dpmr_status_c_args += a
+  endif
+endforeach
+
+foreach a : linux_cpp_args
+  if not a.startswith('-DUI_TEST_')
+    dpmr_status_cpp_args += a
+  endif
+endforeach
+
+dpmr_status_test = executable('dpmr_status_test',
+                              sources : ['tests/unit/dpmr_status.cpp',
+                                         'openrtx/src/protocols/Fsk4Tx.c',
+                                         'openrtx/src/protocols/DPMR/DpmrDefs.c',
+                                         'openrtx/src/protocols/DPMR/DpmrPhy.c',
+                                         'openrtx/src/protocols/DPMR/DpmrStatus.c',
+                                         'openrtx/src/protocols/DPMR/DpmrTx.c',
+                                         'openrtx/src/ui/default/ui_mode_state.c'],
+                              kwargs : {'include_directories' : linux_inc,
+                                        'c_args' : dpmr_status_c_args +
+                                                   ['-O2', '-ffp-contract=off'],
+                                        'cpp_args' : dpmr_status_cpp_args +
+                                                     ['-O2'],
+                                        'dependencies' : [catch2_dep],
+                                        'link_args' : linux_l_args})
+
+# The dPMR receive chain also has the two harnesses of tests/platform: the host
+# one runs the firmware's own demodulator over a capture and prints what it
+# decodes, and the bare-metal one measures its cost on a Cortex-M33 under QEMU.
+# The host harness is built here like any other test and run by `meson test` on
+# the seven seconds of the real capture kept in tests/unit/assets; the cost
+# harness needs arm-none-eabi-gcc and qemu-system-arm, and its runner skips
+# (exit 77) where they are missing.
+dpmr_host_exe = executable('c62_dpmr_host',
+                           sources : ['tests/platform/c62_dpmr_host.c',
+                                      'openrtx/src/protocols/DPMR/DpmrDefs.c',
+                                      'openrtx/src/protocols/DPMR/DpmrData.c',
+                                      'openrtx/src/protocols/DPMR/DpmrPhy.c'],
+                           kwargs  : {'include_directories' : linux_inc,
+                                      'c_args' : linux_c_args +
+                                                 ['-O2', '-ffp-contract=off'],
+                                      'link_args' : linux_l_args})
+dpmr_phy_cost_run = find_program('tests/platform/run_dpmr_phy_cost.sh')
+dpmr_capture = meson.project_source_root() / 'tests/unit/assets/dpmr_air_frame.dis'
+
+c62_calib_test = executable('c62_calib_test',
+                            sources : ['tests/unit/C62_calib.cpp',
+                                       'platform/targets/c62/calib_C62.c'],
+                            kwargs  : unit_test_opts)
+
+# The BK4819 configuration of every C62 mode as data: the plan the driver walks
+# and the golden table it has to match (docs/RADIO_CONFIG.md).  BK4819.c is
+# compiled for the host here, against a recording fake bus, so the comparison is
+# against the driver's own setters and not against a copy of them.
+regplan_test = executable('regplan_test',
+                          sources : ['tests/unit/regplan.cpp',
+                                     'platform/drivers/baseband/radioPlan.c',
+                                     'platform/drivers/baseband/BK4819.c',
+                                     'platform/mcu/x86_64/drivers/delays.c'],
+                          kwargs : {'include_directories' : linux_inc,
+                                    'cpp_args' : linux_cpp_args,
+                                    'c_args' : linux_c_args,
+                                    'dependencies' : [catch2_dep],
+                                    'link_args' : linux_l_args})
 
 dsp_oversampling_test = executable('dsp_oversampling_test',
                                     sources : unit_test_src + ['tests/unit/dsp_oversampling.cpp'],
                                     kwargs  : unit_test_opts)
 
+dsp_dcblock_test = executable('dsp_dcblock_test',
+                              sources : unit_test_src + ['tests/unit/dsp_dcblock.cpp'],
+                              kwargs  : unit_test_opts)
+
 gfx_text_test = executable('gfx_text_test',
                             sources : unit_test_src + ['tests/unit/gfx_text.cpp'],
                             kwargs  : unit_test_opts)
+
+slevel_test = executable('slevel_test',
+                         sources : unit_test_src + ['tests/unit/slevel.cpp'],
+                         kwargs  : unit_test_opts)
+
+# The FM squelch and the two analogue audio routes it drives: the hysteresis,
+# the level being the operator's setting, the tone deciding when it is enabled,
+# and a route that is opened, swapped and released without leaving one behind.
+fm_squelch_test = executable('fm_squelch_test',
+                             sources : unit_test_src +
+                                       ['tests/unit/fm_squelch.cpp'],
+                             kwargs  : unit_test_opts)
+
+# CTCSS on the analogue modes: the EIA table and its inverse, the index a 7 bit
+# channel field can carry versus the 50 tones the table has, the channel-to-
+# transmitter mapping in both directions, the clearing on a mode change and what
+# the voice prompt says about a tone pair (read back from the prompt queue).
+fm_ctcss_test = executable('fm_ctcss_test',
+                           sources : unit_test_src +
+                                     ['tests/unit/fm_ctcss.cpp'],
+                           kwargs  : unit_test_opts)
+
+# The airband mode with its transmitter compiled in: CONFIG_C62_AIR_TX is what
+# the shipped image carries, and the mode's keying is a dialogue with the
+# operator that only exists when it is on. Built twice like the protocol tests,
+# so the option is part of the test and not of the emulator.
+airband_tx_opts = {'c_args' : linux_c_args + ['-DCONFIG_C62_AIR_TX'],
+                   'cpp_args' : linux_cpp_args + ['-DCONFIG_C62_AIR_TX'],
+                   'include_directories' : linux_inc,
+                   'dependencies' : [sdl_dep, threads_dep, codec2_dep,
+                                     catch2_dep],
+                   'link_args' : linux_l_args}
+
+airband_mode_test = executable('airband_mode_test',
+                               sources : unit_test_src +
+                                         ['tests/unit/airband_mode.cpp'],
+                               kwargs  : airband_tx_opts)
+
+# Tuning step and band limits through the UI FSM: the step table, the airband
+# raster (25 kHz / 8.33 kHz) put back when the mode or one of its channels is
+# selected, the snap that keeps an 8.33 kHz step on a carrier, stepping stopped
+# at the platform's band edge, and the service band that limits transmitting
+# but not tuning.
+fm_step_test = executable('fm_step_test',
+                          sources : unit_test_src + ['tests/unit/fm_step.cpp'],
+                          kwargs  : unit_test_opts)
+
+audio_codec_test = executable('audio_codec_test',
+                              sources : unit_test_src + ['tests/unit/audio_codec.cpp'],
+                              kwargs  : unit_test_opts)
+
+# Transmit lifecycle: phases, deadlines and trace. TxGuard.c has no dependency
+# on the OS at all (the time is passed in), so this links the guard alone.
+tx_guard_test = executable('tx_guard_test',
+                           sources : ['tests/unit/tx_guard.cpp',
+                                      'openrtx/src/rtx/TxGuard.c'],
+                           kwargs  : {'c_args'             : linux_c_args,
+                                      'cpp_args'           : linux_cpp_args,
+                                      'include_directories': linux_inc +
+                                           ['openrtx/include'],
+                                      'dependencies'       : [catch2_dep],
+                                      'link_args'          : linux_l_args})
+
+# The modes share one block of memory, the size of the largest of them
+# (rtx/ModeArena.hpp, docs/MEMORY.md). The arena takes its storage and its
+# registry as arguments, so this test needs no radio, no mode implementation
+# and no protocol package: it drives the eleven sizes measured on the C62 image
+# and sweeps all 121 ordered pairs of modes. Built against OpMode.hpp for the
+# stub objects only.
+mode_arena_test = executable('mode_arena_test',
+                             sources : ['tests/unit/mode_arena.cpp',
+                                        'openrtx/src/rtx/ModeArena.cpp',
+                                        # OpMode::update() sleeps: the vtable
+                                        # of the stubs pulls it in
+                                        'platform/mcu/x86_64/drivers/delays.c'],
+                             kwargs  : {'c_args'             : linux_c_args,
+                                        'cpp_args'           : linux_cpp_args,
+                                        'include_directories': linux_inc +
+                                             ['openrtx/include'],
+                                        'dependencies'       : [catch2_dep],
+                                        'link_args'          : linux_l_args})
+
+# The keying rule on its own (rtx/KeyGate.h): a mode change vetoes keying, the
+# PTT has to be released once after it and a press has to last. Header-only, so
+# the test needs nothing but Catch2.
+# The radio thread's stack against the deepest chain of the build
+# (rtx/DmrTxPlan.h's encoder path).  The failing combination -- TETRA and
+# DMR_TX in the same image -- is compiled on purpose.
+rtx_stack_test = executable('rtx_stack_budget_test',
+                            sources : ['tests/unit/rtx_stack_budget.cpp'],
+                            kwargs  : {'c_args'             : linux_c_args,
+                                       'cpp_args'           : linux_cpp_args,
+                                       'include_directories': linux_inc +
+                                            ['openrtx/include'],
+                                       'dependencies'       : [catch2_dep],
+                                       'link_args'          : linux_l_args})
+test('RTX Stack Budget Test', rtx_stack_test)
+
+# The stacks of every thread that is not the rtx one (core/stack_budget.h):
+# keypad, codec worker, PC protocol, black box supervisor and the speech
+# playback threads, each with a floor the build enforces.
+thread_stacks_test = executable('thread_stacks_test',
+                                sources : ['tests/unit/thread_stacks.cpp'],
+                                kwargs  : {'c_args'             : linux_c_args,
+                                           'cpp_args'           : linux_cpp_args,
+                                           'include_directories': linux_inc +
+                                                ['openrtx/include'],
+                                           'dependencies'       : [catch2_dep],
+                                           'link_args'          : linux_l_args})
+test('Thread Stack Budget Test', thread_stacks_test)
+
+# The guarantees that are in the source text and not in a value: the supervisor
+# is called from the main loop, the watchdog feed hangs off the UI rule, the
+# transmit clock is sampled there from the driver state, and every thread takes
+# its stack from the budget header instead of a literal.
+platform_wiring_test = executable('platform_wiring_test',
+                                  sources : ['tests/unit/platform_wiring.cpp'],
+                                  kwargs  : {'c_args'             : linux_c_args,
+                                             'cpp_args'           : linux_cpp_args +
+                                                  ['-DPLAT_SRC_ROOT="' +
+                                                   meson.project_source_root() + '"'],
+                                             'include_directories': linux_inc +
+                                                  ['openrtx/include'],
+                                             'dependencies'       : [catch2_dep],
+                                             'link_args'          : linux_l_args})
+test('Platform Wiring Test', platform_wiring_test)
+
+key_gate_test = executable('key_gate_test',
+                           sources : ['tests/unit/key_gate.cpp'],
+                           kwargs  : {'c_args'             : linux_c_args,
+                                      'cpp_args'           : linux_cpp_args,
+                                      'include_directories': linux_inc +
+                                           ['openrtx/include'],
+                                      'dependencies'       : [catch2_dep],
+                                      'link_args'          : linux_l_args})
+
+# The absolute transmit clock (rtx/TxWatch.h): air counted since the last
+# release, the 90 s cut, the rekey, the unattended chain and the driver's
+# margin. Header-only, so the test needs nothing but Catch2.
+tx_watch_test = executable('tx_watch_test',
+                           sources : ['tests/unit/tx_watch.cpp'],
+                           kwargs  : {'c_args'             : linux_c_args,
+                                      'cpp_args'           : linux_cpp_args,
+                                      'include_directories': linux_inc +
+                                           ['openrtx/include'],
+                                      'dependencies'       : [catch2_dep],
+                                      'link_args'          : linux_l_args})
+
+# The mode switch through the firmware's own entry points (rtx.cpp): the real
+# modes of the Linux build, every ordered pair of them, on the real arena. The
+# radio driver, the audio paths and the UI come along in unit_test_src, which
+# is what the emulator runs too.
+mode_switch_test = executable('mode_switch_test',
+                              sources : unit_test_src +
+                                        ['tests/unit/mode_switch.cpp'],
+                              kwargs  : unit_test_opts)
+
+# The audio path table on its own: the priorities, the suspend/resume, and the
+# property a change of mode depends on -- that the RTX thread and the UI thread
+# can use it at the same time. The table had no lock, and the loop this test runs
+# is the one that corrupted it (see tests/unit/audio_path.cpp).
+audio_path_test = executable('audio_path_test',
+                             sources : unit_test_src +
+                                       ['tests/unit/audio_path.cpp'],
+                             kwargs  : unit_test_opts)
+
+# FM -> AM (airband) -> FM through rtx_configure()/rtx_task(), with the UI
+# thread's share of a mode change on the same audio path table, and with a
+# driver that refuses to receive. This is the reported freeze, modelled.
+mode_switch_am_test = executable('mode_switch_am_test',
+                                 sources : unit_test_src +
+                                           ['tests/unit/mode_switch_am.cpp'],
+                                 kwargs  : unit_test_opts)
+
+# Scan and vigilance: the state machine (core/scanner.c) is pure — no clock, no
+# radio — so this test drives it with a simulated receiver (synthetic squelch,
+# a bank with SKIP flags, a priority channel) and measures its cost.  settings.c
+# comes along for the step table it owns.
+scanner_test = executable('scanner_test',
+                          sources : ['tests/unit/scanner.cpp',
+                                     'openrtx/src/core/scanner.c',
+                                     'openrtx/src/core/settings.c'],
+                          kwargs  : {'c_args'             : linux_c_args,
+                                     'cpp_args'           : linux_cpp_args,
+                                     'include_directories': linux_inc +
+                                          ['openrtx/include'],
+                                     'dependencies'       : [catch2_dep],
+                                     'link_args'          : linux_l_args})
 
 # Baseband replay (tests/platform/M17Replay.hpp): a command line tool and a
 # unit test replaying a committed recording through the same class. The test
@@ -1260,6 +2405,14 @@ m17_replay_test = executable('m17_replay_test',
                              kwargs  : m17_replay_test_opts)
 
 test('M17 Golay Unit Test',   m17_golay_test)
+test('P25 PHY Test',           p25_phy_test)
+test('P25 FEC Limits Test',    p25_fec_test)
+test('P25 Status Test',        p25_status_test, timeout : 60)
+test('P25 TX Test',            p25_tx_test, timeout : 60)
+test('YSF Frame Test',         ysf_frame_test)
+test('YSF PHY Test',           ysf_phy_test)
+test('D-STAR Header Test',     dstar_header_test)
+test('D-STAR PHY Test',        dstar_phy_test, timeout : 120)
 test('M17 Viterbi Unit Test', m17_viterbi_test)
 test('M17 Demodulator Test',  m17_demodulator_test)
 test('M17 RRC Test',          m17_rrc_test)
@@ -1269,7 +2422,478 @@ test('Codeplug Test',         cps_test)
 ## test('Linux InputStream Test', linux_inputStream_test)
 test('minmea conversion Test', minmea_conversion_test)
 test('UI Check Standby Test', ui_check_standby_test)
+test('UI VFO Input Test', ui_vfo_input_test)
+test('UI VFO Search Test', ui_vfo_search_test, timeout : 120)
+test('UI Regressions Test', ui_regressions_test, timeout : 120)
+test('UI Regressions Test (no APRS)', ui_regressions_noaprs_test, timeout : 120)
+test('UI Quick Menu Test', ui_quickmenu_test)
+test('UI APRS Entry Test',   ui_aprs_entry_test)
+test('UI Bank Tune Test',    ui_bank_tune_test)
+
+# El mapa del menu despues de cinco pasadas (tests/unit/ui_menu_map.cpp): el
+# registro de modos y el menu rapido son la misma lista, cada fila es pintable,
+# UI_MODE_TX y opmode_canTransmit() dicen lo mismo, y el analizador es
+# alcanzable desde los dos modos analogicos con su fila ESPERA.
+ui_menu_map_test = executable('ui_menu_map_test',
+                              sources : unit_test_src + ['tests/unit/ui_menu_map.cpp'],
+                              kwargs  : unit_test_opts)
+test('UI Menu Map Test', ui_menu_map_test)
 test('M17 Packet Frame Test', m17_packet_test)
+test('M17 Frame Decoder Test', m17_decoder_test)
+test('C62 Calibration Test', c62_calib_test)
+test('Channel Store Test',   channel_store_test)
+test('Backup Image Test',    backup_image_test)
+test('TX Power Test',        tx_power_test)
+test('PC Protocol Test',     pc_proto_test)
+test('PC Protocol Debug Test', pc_proto_dbg_test)
+test('PC Bench Test',        pc_bench_test)
+test('PC Bench Production Test', pc_bench_nobench_test)
+test('Zones Test',           zones_test)
+test('FM Squelch Test',      fm_squelch_test, timeout : 120)
+test('FM CTCSS Test',        fm_ctcss_test, timeout : 120)
+test('Airband Mode Test',    airband_mode_test, timeout : 120)
+test('FM Step And Limits Test', fm_step_test, timeout : 120)
+test('AGC Test',             agc_test)
+test('AM TX Test',           am_tx_test)
+test('Airband Test',         airband_test)
+test('Radio Plan Test',      regplan_test)
+test('Broadcast FM Test',    wfm_test)
+
+test('Spectrum Test',        spectrum_test)
+test('Spectrum Settle Test',  spectrum_settle_test)
+test('UI Spectrum Test',     ui_spectrum_test)
+test('Settings Record Test', settings_record_test)
+test('Accessory Port Test',  port_mode_test)
+test('Blackbox Test',        blackbox_test)
+test('Blackbox Hang Test',   blackbox_hang_test)
+test('Display Flush Test',   display_flush_test)
+test('P25 IMBE Vocoder Test', imbe_vocoder_test)
+test('P25 IMBE Robustness Test', imbe_robust_test)
+test('APRS Config Test',     aprs_config_test)
+test('DMR SMS Format Test',  dmr_sms_format_test)
+test('DMR LC Destination Test', dmr_lc_dest_test)
+test('NXDN TX Test',          nxdn_tx_test)
+test('NXDN RX Test',          nxdn_rx_test, timeout : 120)
+test('NXDN PHY Cost',         nxdn_phy_cost_run, args : [nxdn_capture])
+test('dPMR TX Test',          dpmr_tx_test)
+test('dPMR RX Test',          dpmr_rx_test)
+test('dPMR Status Test',      dpmr_status_test)
+test('dPMR Host Harness',     dpmr_host_exe, args : [dpmr_capture])
+test('dPMR PHY Cost',         dpmr_phy_cost_run, args : [dpmr_capture])
+test('DMR Glue Test',        dmr_glue_test)
+test('DMR RX Status Test',   dmr_rx_status_test)
+test('User Stores Test',     user_stores_test)
+test('UI Messages Test',     ui_messages_test)
+test('Messaging FSM Test',   messaging_fsm_test)
+test('UI Layout Test',       ui_layout_test)
+test('UI Zones Test',        ui_zones_test)
+test('UI Tools Test',        ui_tools_test)
+test('UI Modes Test',        ui_modes_test)
 test('DSP Oversampling Test', dsp_oversampling_test)
+test('DSP DC Block Test',    dsp_dcblock_test)
 test('GFX Text Test',        gfx_text_test)
+test('S-Level Test', slevel_test)
+test('Audio Codec Test',     audio_codec_test)
+test('TX Guard Test',        tx_guard_test)
+test('Key Gate Test',        key_gate_test)
+test('TX Watch Test',        tx_watch_test)
+test('Mode Arena Test',      mode_arena_test)
+test('Mode Switch Test',     mode_switch_test, timeout : 120)
+test('Audio Path Test',      audio_path_test, timeout : 120)
+test('Mode Switch AM Test',  mode_switch_am_test, timeout : 120)
+
+# Los once modos del enum, ida y vuelta, sobre el bloque compartido, y el lazo
+# TX->RX despues del recorrido (tests/unit/mode_walk.cpp). El host tiene cuatro
+# de los once, asi que los otros ocho comprueban que pedirlos deja la radio
+# inactiva sin romper el cambio.
+mode_walk_test = executable('mode_walk_test',
+                            sources : unit_test_src + ['tests/unit/mode_walk.cpp'],
+                            kwargs  : unit_test_opts)
+test('Mode Walk Test',       mode_walk_test)
+
+# Per-mode statistics (core/mode_stats.h). The layer takes everything it
+# measures as an argument and its cycle counter is a weak symbol, so this links
+# mode_stats.c alone and drives the counter from the test. Built with the
+# option on and one cycle per microsecond, so the cost figures in the test are
+# the cycle counts it sets.
+mode_stats_test = executable('mode_stats_test',
+                             sources : ['tests/unit/mode_stats.cpp',
+                                        'openrtx/src/core/mode_stats.c'],
+                             kwargs  : {'c_args'             : linux_c_args +
+                                           ['-DCONFIG_C62_MODE_STATS',
+                                            '-DMODE_STATS_CPU_MHZ=1'],
+                                        'cpp_args'           : linux_cpp_args +
+                                           ['-DCONFIG_C62_MODE_STATS'],
+                                        'include_directories': linux_inc +
+                                           ['openrtx/include'],
+                                        'dependencies'       : [catch2_dep],
+                                        'link_args'          : linux_l_args})
+test('Mode Stats Test', mode_stats_test)
+
+# And with the option off: the hooks must compile to nothing at all.
+mode_stats_off_script = find_program('tests/mode_stats_off.sh')
+test('Mode Stats Off Test', mode_stats_off_script,
+     args : [meson.project_source_root(), ''])
+
+test('Scanner Test',         scanner_test)
+
+# La sesión "Cell uplink" del modo TETRA (protocols/TETRA/TetraUplink.c): el
+# conversor de duplex y las reglas Off/On/sin uplink del menú rápido, sin radio
+# y sin libtetra. El módulo es C portátil y solo depende de su cabecera, así
+# que se enlaza solo, como mode_stats.
+tetra_uplink_test = executable('tetra_uplink_test',
+                               sources : ['tests/unit/tetra_uplink.cpp',
+                                          'openrtx/src/protocols/TETRA/TetraUplink.c'],
+                               kwargs  : {'c_args'             : linux_c_args,
+                                          'cpp_args'           : linux_cpp_args,
+                                          'include_directories': linux_inc,
+                                          'dependencies'       : [catch2_dep],
+                                          'link_args'          : linux_l_args})
+test('TETRA Uplink Session Test', tetra_uplink_test)
+
+# El demodulador TETRA, con las entradas que lo colgaban (silencio digital,
+# continua a fondo de escala, ruido) y los invariantes que acotan el lazo de
+# símbolos: protocols/TETRA/TetraDemod.c es C portátil y solo depende de su
+# cabecera.
+tetra_demod_test = executable('tetra_demod_test',
+                              sources : ['tests/unit/tetra_demod.cpp',
+                                         'openrtx/src/protocols/TETRA/TetraDemod.c'],
+                              kwargs  : {'c_args'             : linux_c_args,
+                                         'cpp_args'           : linux_cpp_args,
+                                         'include_directories': linux_inc,
+                                         'dependencies'       : [catch2_dep],
+                                         'link_args'          : linux_l_args})
+test('TETRA Demodulator Bounded Test', tetra_demod_test, timeout : 120)
+
+# What the TETRA mode publishes, and the SDS message path, from real PDUs.
+#
+# TetraStatus.c is the translation unit the UI reads: the cell, the location
+# area and MCC-MNC the main screen draws, the registration the MM layer
+# reports (D-LOCATION-UPDATE-ACCEPT/REJECT, group attach), the D-NWRK-BROADCAST
+# (neighbours, cell load, network time) and the uplink activity. It is written
+# only by libtetra's event callback, so on the host it has no writer at all and
+# ui_mode_status.c stands in for it -- with "nothing decoded", which is what
+# the simulator needs and what leaves every one of those states untested.
+#
+# These tests are the stand-in: the real libtetra, fed with real PDUs (the
+# downlink recording excerpt the module ships as tests/vectors/tmo_call.dibits
+# and the MM PDUs from its own capture replay), writes the events; the
+# firmware's TetraStatus.c turns them into the published state; and
+# ui_mode_state.c turns that into the texts the main screen draws.
+#
+# libtetra is a west module and is not vendored (docs/TETRA_LIB.md), so the
+# tests are registered only when it is there; -Dtetra_lib_dir points at a tree
+# outside the workspace.
+tetra_module_dir = get_option('tetra_lib_dir')
+if tetra_module_dir == ''
+  tetra_module_dir = join_paths(meson.current_source_dir(), 'modules/lib/libtetra')
+endif
+
+fs = import('fs')
+if not fs.exists(join_paths(tetra_module_dir, 'include/tetra/tetra.h'))
+  warning('libtetra not found in "' + tetra_module_dir + '": the TETRA status and SDS tests are not registered. Point -Dtetra_lib_dir at a libtetra tree to run them (docs/TETRA_LIB.md).')
+else
+  # The module's own source list (its CMakeLists.txt), without the crypto
+  # translation units: TETRA_ENABLE_CRYPTO is off in the firmware and in the
+  # fallback include/tetra/tetra_config.h this build uses, which is the same
+  # configuration the radio compiles (uplink detect and decode on).
+  tetra_lib_src = files(
+    join_paths(tetra_module_dir, 'src/common.c'),
+    join_paths(tetra_module_dir, 'src/dmo_rx.c'),
+    join_paths(tetra_module_dir, 'src/tmo_rx.c'),
+    join_paths(tetra_module_dir, 'src/l1/burst.c'),
+    join_paths(tetra_module_dir, 'src/l1/l1.c'),
+    join_paths(tetra_module_dir, 'src/l2/coding.c'),
+    join_paths(tetra_module_dir, 'src/l2/conv.c'),
+    join_paths(tetra_module_dir, 'src/l2/dmo_mac.c'),
+    join_paths(tetra_module_dir, 'src/l2/lmac.c'),
+    join_paths(tetra_module_dir, 'src/l2/speech.c'),
+    join_paths(tetra_module_dir, 'src/l2/tmo_mac.c'),
+    join_paths(tetra_module_dir, 'src/l2/tmo_ul_mac.c'),
+    join_paths(tetra_module_dir, 'src/l3/dmo_cc.c'),
+    join_paths(tetra_module_dir, 'src/l3/lip.c'),
+    join_paths(tetra_module_dir, 'src/l3/sds.c'),
+    join_paths(tetra_module_dir, 'src/l3/tmo_l3.c'),
+    join_paths(tetra_module_dir, 'src/l3/tmo_mle.c'),
+    join_paths(tetra_module_dir, 'src/util/bits.c'))
+
+  tetra_lib_inc = [join_paths(tetra_module_dir, 'include'),
+                   # tmo_int.h, the seam between the receiver and its layer 3:
+                   # the tests deliver a PDU where the MAC would have handed
+                   # it over, which is what libtetra's own L3 tests do.
+                   join_paths(tetra_module_dir, 'src')]
+
+  tetra_host_lib = static_library('tetra_host', tetra_lib_src,
+                                  include_directories : tetra_lib_inc,
+                                  c_args : ['-std=gnu17'],
+                                  override_options : ['warning_level=2'])
+
+  # The firmware's own units, as the radio compiles them: the status layer and
+  # the UI block that renders it, plus the SDS message model and ring.
+  tetra_chain_src = ['openrtx/src/protocols/TETRA/TetraStatus.c',
+                     'openrtx/src/protocols/TETRA/SdsMsg.c',
+                     'openrtx/src/protocols/TETRA/SdsHist.c',
+                     'openrtx/src/protocols/TETRA/TetraSdsEnc.c',
+                     'openrtx/src/ui/default/ui_mode_state.c']
+
+  # The TETRA test compiles the TETRA screens of ui_mode_state.c and nothing
+  # else: the other UI_TEST_* the host build carries would pull in the status
+  # modules (and the squelch of rtx) of every other mode, none of which this
+  # test says anything about.
+  tetra_test_def = ['-DUI_TEST_TETRA',
+                    '-DTETRA_VECTOR_DIR="' +
+                      join_paths(tetra_module_dir, 'tests/vectors') + '"']
+  tetra_test_c_args = tetra_test_def
+  tetra_test_cpp_args = tetra_test_def
+
+  foreach a : linux_c_args
+    if not a.startswith('-DUI_TEST_')
+      tetra_test_c_args += a
+    endif
+  endforeach
+
+  foreach a : linux_cpp_args
+    if not a.startswith('-DUI_TEST_')
+      tetra_test_cpp_args += a
+    endif
+  endforeach
+
+  # UI_TEST_TETRA is what the host builds use for the TETRA screens (the
+  # simulator's ui_mode_status.c is its fixture); here the state behind them
+  # is the real one.
+  tetra_test_opts = {'c_args'             : tetra_test_c_args,
+                     'cpp_args'           : tetra_test_cpp_args,
+                     'include_directories': linux_inc + tetra_lib_inc + ['tests/unit'],
+                     'dependencies'       : [catch2_dep, threads_dep],
+                     'link_with'          : tetra_host_lib,
+                     'link_args'          : linux_l_args}
+
+  tetra_status_test = executable('tetra_status_test',
+                                 sources : ['tests/unit/tetra_status.cpp'] +
+                                           tetra_chain_src,
+                                 kwargs  : tetra_test_opts)
+  test('TETRA Status Stand-in Test', tetra_status_test)
+
+  # The other direction: what the mode's own encoder produces, decoded by the
+  # real receiver. Nothing keys the radio (TETRA transmit is not viable on
+  # this hardware), the burst only ever goes back into the receiver.
+  tetra_sds_test = executable('tetra_sds_test',
+                              sources : ['tests/unit/tetra_sds.cpp'] +
+                                        tetra_chain_src,
+                              kwargs  : tetra_test_opts)
+  test('TETRA SDS Message Path Test', tetra_sds_test)
+endif
+
+
+# VFO carrier search: the machine (core/vfo_search.c) is pure — the time and a
+# sample of the receiver are arguments — so this test sweeps a band with a
+# synthetic squelch, frames and a published frequency, and measures its cost.
+vfo_search_test = executable('vfo_search_test',
+                             sources : ['tests/unit/vfo_search.cpp',
+                                        'openrtx/src/core/vfo_search.c'],
+                             kwargs  : {'c_args'             : linux_c_args,
+                                        'cpp_args'           : linux_cpp_args,
+                                        'include_directories': linux_inc +
+                                             ['openrtx/include'],
+                                        'dependencies'       : [catch2_dep],
+                                        'link_args'          : linux_l_args})
+test('VFO Search Test',      vfo_search_test)
 test('M17 Baseband Replay Test', m17_replay_test, timeout : 120) # ~40 s in CI with coverage
+
+# The packet modem bench (tests/host/kiss_loop): the KISS codec, AFSK 1200 and
+# G3RUH 9600 in loopback and their BER against noise. It builds itself with cc
+# in its own directory, the way the operator runs it; the direwolf cross-check
+# is optional and the script skips it when the tools are not installed.
+kiss_loop_script = find_program('tests/host/kiss_loop/run.sh')
+test('KISS Packet Modem Loop', kiss_loop_script, timeout : 300)
+
+# The DMR transmitter on the host (tests/host/dmr_tx_host): the mode's own slot
+# machine (rtx/DmrTxPlan.h), its burst builders and its encoder, walked through
+# TUNE(DMR) -> PTT -> three seconds of bursts -> unkey, and the baseband decoded
+# by the repository's reference receiver (work/dmr-rx).  It also runs the same
+# loop against a sink that stops consuming and fails if the thread does not
+# come back.
+dmr_tx_host_script = find_program('tests/host/dmr_tx_host/run.sh')
+test('DMR TX Host Sequence', dmr_tx_host_script, timeout : 300)
+
+# The menu tour of the simulator (docs/SIMULATOR.md): every screen of the C62's
+# interface, walked with keys through the control channel, with a PNG and a
+# text dump per screen. It fails on a blank screen, on a row that cannot be
+# selected, on a value that does not change and on a key that no block of the
+# UI claims. `ninja -C build_sim test` builds the simulator first through the
+# dependency.
+python3 = import('python').find_installation('python3')
+sim_tour_py = files('tools/simulator/tour.py')
+if python3.found() and zlib_dep.found()
+  test('Simulator Menu Tour',
+       python3,
+       args : [sim_tour_py, '--quiet', '--out', meson.current_build_dir() / 'sim-tour'],
+       depends : openrtx_c62_sim,
+       env : ['OPENRTX_SIM_BIN=' + openrtx_c62_sim.full_path()],
+       timeout : 600)
+
+  # The menu audit (docs/MENU_AUDIT.md): every screen of the interface, walked
+  # row by row, and the two promises of the reworked menus as its exit status --
+  # no row that no key can actuate, and no settings field that two screens can
+  # change (the quick-access block declared in the tool is the only exception).
+  # It is the slowest of the simulator tests: it probes every row with three
+  # keys and dumps the screen between them, ~12 minutes on a laptop, which is
+  # the price of asserting the whole interface instead of a sample of it.
+  sim_audit_py = files('tools/simulator/menu_audit.py')
+  test('Simulator Menu Audit',
+       python3,
+       args : [sim_audit_py, '--out', meson.current_build_dir() / 'sim-audit'],
+       depends : openrtx_c62_sim,
+       env : ['OPENRTX_SIM_BIN=' + openrtx_c62_sim.full_path()],
+       timeout : 2400)
+
+  # The settings record across a restart and a power cut: a change made on a
+  # Settings page and one made in the tools menu survive a power cycle, the
+  # deferred write lands inside the debounce window of core/state.c and a
+  # record the firmware has to repair is written back. The simulator saves the
+  # way the radio does (platform/targets/linux/hwconfig.h), and `powercut` is
+  # what makes the difference between "saved" and "written on the way out"
+  # visible at all.
+  sim_persist_py = files('tools/simulator/settings_persist.py')
+  test('Simulator Settings Persistence',
+       python3,
+       args : [sim_persist_py, '--out', meson.current_build_dir() / 'sim-persist'],
+       depends : openrtx_c62_sim,
+       env : ['OPENRTX_SIM_BIN=' + openrtx_c62_sim.full_path()],
+       timeout : 600)
+
+  # The coverage contract (tests/unit/sim_coverage.cpp): the modes, the menu
+  # tables and the screens the firmware registers, and every screen its own key
+  # walk can reach, against the list the tour declares. The list is not written
+  # twice: it is generated from tour.py, which is the file that has to be
+  # extended when a mode or a screen is added.
+  #
+  # The test is built with the simulator's own -D and, since it links the
+  # control channel that the simulator's emulator.c needs, with its two host
+  # sources: what it walks is the interface the tour walks, not a variant.
+  sim_coverage_manifest = custom_target('sim-coverage-manifest',
+                                        input   : sim_tour_py,
+                                        output  : 'sim-coverage.txt',
+                                        command : [python3, '@INPUT@',
+                                                   '--coverage-manifest',
+                                                   '@OUTPUT@'])
+
+  sim_coverage_test = executable('sim_coverage_test',
+                                 sources : unit_test_src + ui_menu_audit_aprs_src + [
+                                   'openrtx/src/ui/default/ui_packet.c',
+                                   'openrtx/src/core/gfx_capture.c',
+                                   'openrtx/src/ui/default/ui_dump.c',
+                                   'platform/targets/linux/emulator/sim_control.c',
+                                   'platform/targets/linux/emulator/sim_png.c',
+                                   'tests/unit/sim_coverage.cpp'],
+                                 include_directories : linux_inc,
+                                 dependencies : [sdl_dep, threads_dep,
+                                                 codec2_dep, catch2_dep,
+                                                 zlib_dep],
+                                 c_args   : linux_c_args + sim_def,
+                                 cpp_args : linux_cpp_args + sim_def,
+                                 link_args : linux_l_args)
+
+  test('Simulator Coverage', sim_coverage_test,
+       depends : sim_coverage_manifest,
+       env : ['SIM_TOUR_COVERAGE=' + sim_coverage_manifest.full_path()],
+       timeout : 600)
+
+  # The four keys of the hint row, screen by screen (tests/unit/ui_keys.cpp):
+  # the bar the screen draws is read back from the frame recorder, and every
+  # key it documents has to change something when it is pressed. Built with the
+  # simulator's -D so the screens the radio has are the ones walked, and with
+  # the recorder and the dump, which are what "something changed" is measured
+  # on.
+  ui_keys_test = executable('ui_keys_test',
+                            sources : unit_test_src + ui_menu_audit_aprs_src + [
+                              'openrtx/src/ui/default/ui_packet.c',
+                              'openrtx/src/core/gfx_capture.c',
+                              'openrtx/src/ui/default/ui_dump.c',
+                              'platform/targets/linux/emulator/sim_control.c',
+                              'platform/targets/linux/emulator/sim_png.c',
+                              'tests/unit/ui_keys.cpp'],
+                            include_directories : linux_inc,
+                            dependencies : [sdl_dep, threads_dep, codec2_dep,
+                                            catch2_dep, zlib_dep],
+                            c_args   : linux_c_args + sim_def,
+                            cpp_args : linux_cpp_args + sim_def,
+                            link_args : linux_l_args)
+
+  test('UI Keys Test', ui_keys_test, timeout : 300)
+
+  # No text leaves its row, on any screen (tests/unit/ui_fit.cpp): every string
+  # a screen drew, with its anchor, alignment and width, against the 160x128
+  # panel and against every other string on the same rows -- plus the two widest
+  # cases by name, a nine-digit frequency and the longest mode-state line. Same
+  # build as the simulator, whose `dump` is where those numbers come from.
+  ui_fit_test = executable('ui_fit_test',
+                           sources : unit_test_src + ui_menu_audit_aprs_src + [
+                             'openrtx/src/ui/default/ui_packet.c',
+                             'openrtx/src/core/gfx_capture.c',
+                             'openrtx/src/ui/default/ui_dump.c',
+                             'platform/targets/linux/emulator/sim_control.c',
+                             'platform/targets/linux/emulator/sim_png.c',
+                             'tests/unit/ui_fit.cpp'],
+                           include_directories : linux_inc,
+                           dependencies : [sdl_dep, threads_dep, codec2_dep,
+                                           catch2_dep, zlib_dep],
+                           c_args   : linux_c_args + sim_def,
+                           cpp_args : linux_cpp_args + sim_def,
+                           link_args : linux_l_args)
+
+  test('UI Fit Test', ui_fit_test, timeout : 300)
+
+  # The empty states (tests/unit/ui_empty_state.cpp): what a screen says with
+  # nothing decoded -- "SRCH"/"searching", "-" for an identifier nobody has
+  # decoded yet, and never a zero that reads like a value.
+  ui_empty_state_test = executable('ui_empty_state_test',
+                                   sources : unit_test_src + ui_menu_audit_aprs_src + [
+                                     'openrtx/src/ui/default/ui_packet.c',
+                                     'openrtx/src/core/gfx_capture.c',
+                                     'openrtx/src/ui/default/ui_dump.c',
+                                     'platform/targets/linux/emulator/sim_control.c',
+                                     'platform/targets/linux/emulator/sim_png.c',
+                                     'tests/unit/ui_empty_state.cpp'],
+                                   include_directories : linux_inc,
+                                   dependencies : [sdl_dep, threads_dep,
+                                                   codec2_dep, catch2_dep,
+                                                   zlib_dep],
+                                   c_args   : linux_c_args + sim_def,
+                                   cpp_args : linux_cpp_args + sim_def,
+                                   link_args : linux_l_args)
+
+  test('UI Empty State Test', ui_empty_state_test, timeout : 300)
+
+  # The in-radio channel editor (tests/unit/ui_channels_editor.cpp): create,
+  # edit, save, delete behind a long press and a confirmation, and the list that
+  # opens on the channel the radio was on at power-off. Built like the
+  # simulator because what it asserts on is what the editor drew -- the title,
+  # the rows, the inverted selection and the caret rectangle -- through the
+  # frame recorder, and the keys it presses are the keypad's.
+  ui_channels_editor_test = executable('ui_channels_editor_test',
+                                       sources : unit_test_src + ui_menu_audit_aprs_src + [
+                                         'openrtx/src/ui/default/ui_packet.c',
+                                         'openrtx/src/core/gfx_capture.c',
+                                         'openrtx/src/ui/default/ui_dump.c',
+                                         'platform/targets/linux/emulator/sim_control.c',
+                                         'platform/targets/linux/emulator/sim_png.c',
+                                         'tests/unit/ui_channels_editor.cpp'],
+                                       include_directories : linux_inc,
+                                       dependencies : [sdl_dep, threads_dep,
+                                                       codec2_dep, catch2_dep,
+                                                       zlib_dep],
+                                       c_args   : linux_c_args + sim_def,
+                                       cpp_args : linux_cpp_args + sim_def,
+                                       link_args : linux_l_args)
+
+  test('UI Channels Editor Test', ui_channels_editor_test, timeout : 300)
+endif
+
+# The PC protocol's own harness (tests/host/pc_proto_host): three device builds
+# -- protocol, protocol+debug, protocol+debug+bench -- driven through a pty by
+# the Python clients that ship in tools/cps and tools/bench, including the bench
+# end to end against a simulated radio. It builds itself with cc in its own
+# directory, the way the operator runs it.
+pc_proto_host_script = find_program('tests/host/pc_proto_host/run.sh')
+test('PC Protocol Host Harness', pc_proto_host_script, timeout : 300)
