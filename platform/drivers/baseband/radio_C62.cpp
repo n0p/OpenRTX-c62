@@ -18,6 +18,7 @@
 #include "core/state.h"
 #include "core/wfm.h"
 #include "drivers/baseband/BK4819.h"
+#include "drivers/baseband/radioPlan.h"
 #include "drivers/baseband/BK1080.h"
 #include "drivers/audio/csk6_codec.h"
 #include "radioUtils.h"
@@ -56,122 +57,46 @@ static const char *txRefusedReason = "none";
 static constexpr uint8_t CTCSS_TX_GAIN = 65;
 
 /*
- * C62 BK4819 settings for M17, on top of the audio bypass mode, from the
- * A36Plus profile: https://wiki.m17foundation.org/index.php?title=A36Plus
- */
-// Raw deviation tuning (not Hz), set for the TX DAC gain in hwconfig.h
-static constexpr uint16_t M17_TX_DEVIATION = 0x582;
-static constexpr uint8_t M17_RF_BW = 7;          // 4.5 kHz
-static constexpr uint8_t M17_RF_BW_WEAK = 4;     // 3.75 kHz
-static constexpr uint8_t M17_TX_LPF2_BW = 0;     // 3 kHz
-static constexpr uint8_t M17_RX_AUDIO_GAIN1 = 1; // -6 dB
-static constexpr uint8_t M17_RX_AUDIO_GAIN2 = 0x3f;
-static constexpr uint8_t M17_MIC_GAIN = 0;
-
-/*
- * C62 BK4819 settings for DMR. DMR channels are 12.5 kHz, but
- * the demodulator needs the discriminator flat and wide: as with TETRA, the
- * chip runs in 25 kHz mode with the widest RF filters (REG_43 0x7e28), which
- * is what the host prototype was validated on. The receiver estimates its
- * levels per burst, so the deviation (1944 Hz on ETSI, 1600 Hz on the C62)
- * does not have to be configured.
+ * The BK4819 configuration of every mode -- its channel mode, IF filters, audio
+ * path, gains and deviation words -- is a table of register writes in
+ * radioPlan.c, and every mode change and reconfiguration walks it.  There is no
+ * per-mode constant left in this file: docs/RADIO_CONFIG.md has the section per
+ * mode, and tests/unit/regplan.cpp pins every word of the table against what
+ * this driver issued before the plan existed.
  *
- * C62_DMR_12K5 builds it the other way, the way the stock firmware runs its own
- * 4FSK digital mode (REG_43 = 0x7e48: 12.5 kHz mode, RF filters 4.5 kHz, where
- * the 25 kHz mode doubles them to 9 kHz). A 12.5 kHz channel with a 9 kHz IF
- * filter lets a neighbouring channel through, so this is the setting to try
- * when a capture shows energy from outside the channel. See
- * reports/dmr_rx_hw.md.
+ * What stays here is what is not a register write: the airband audio AGC and
+ * its limits, the amplitude modulator's calibration and the broadcast tuner.
  */
-#ifdef C62_DMR_12K5
-static constexpr uint8_t DMR_RF_BW = 7;      // 4.5 kHz, not doubled
-static constexpr uint8_t DMR_RF_BW_WEAK = 7; // 4.5 kHz
-#else
-static constexpr uint8_t DMR_RF_BW = 7;      // 4.5 kHz, doubled to 9 kHz
-static constexpr uint8_t DMR_RF_BW_WEAK = 7; // 4.5 kHz
-#endif
-static constexpr uint8_t DMR_TX_LPF2_BW = 0; // 3 kHz: REG_43 AF TX LPF2
-
-/*
- * TX deviation tuning word (REG_40 <11:0>).  M17 uses 0x582 for its 4FSK,
- * whose outer symbols sit at +-2.4 kHz; ETSI DMR puts them at +-1.944 kHz, so
- * 0x582 * 1944/2400 = 0x476.  It is a starting point, not a calibration: the
- * BK4819 drives a varactor whose sensitivity differs per band and per PA, and
- * the C62 stores per-band TX calibration (calib_C62, txDevNarrow/txDevWide,
- * raw words with no Hz attached).  Measure +3/-3 alternating symbols with an
- * analyser (or with a second C62 and its level estimates) and put the result
- * in DMR_TX_DEVIATION, then in the calibration table like the FM values.
- *
- * The modulator scales the symbols, not the deviation: DMR_TX_INNER_LEVEL is
- * the audio amplitude and this word is the FM sensitivity.
- */
-static constexpr uint16_t DMR_TX_DEVIATION = 0x476;
-static constexpr uint8_t DMR_RX_AUDIO_GAIN1 = 1; // -6 dB
-static constexpr uint8_t DMR_RX_AUDIO_GAIN2 = 0x3f;
-static constexpr uint8_t DMR_MIC_GAIN = 0;
-
-/*
- * C62 BK4819 settings for TETRA, receive only. TETRA channels are 25 kHz
- * wide, so the chip runs in 25 kHz mode with the widest RF filters
- * (REG_43 0x7e28): that is the flat receive path the measured equalizer taps
- * in CONFIG_TETRA_EQ_INIT come from.
- */
-static constexpr uint8_t TETRA_RF_BW = 7;      // 4.5 kHz
-static constexpr uint8_t TETRA_RF_BW_WEAK = 7; // 4.5 kHz
-static constexpr uint8_t TETRA_TX_LPF2_BW = 0; // 3 kHz, unused in RX
-static constexpr uint8_t TETRA_RX_AUDIO_GAIN1 = 1; // -6 dB
-static constexpr uint8_t TETRA_RX_AUDIO_GAIN2 = 0x3f;
-static constexpr uint8_t TETRA_MIC_GAIN = 0;
-
-/*
- * C62 BK4819 settings for the airband mode, AM receive only. The AM detector
- * itself is bk4819_setAmReceive(); what is left here is the AF level it hands
- * over and the software AGC that holds it.
- *
- * REG_48<11:10> (AF Rx Gain1) is the coarse step of that AGC: the chip's own
- * AGC keeps the IF at a constant level in five coarse steps, but what comes
- * out of an AM detector is the carrier amplitude, so the AF level still follows
- * the field strength. The loop in radio_getRssi() moves this step to keep the
- * codec ADC in range; core/agc.h then does the fine work per sample. AM starts
- * one step down from FM: a receiver landing on a strong local tower should not
- * clip the ADC in the 100 ms the loop needs.
- */
-static constexpr uint8_t AM_RX_AUDIO_GAIN1 = 1; // -6 dB, first step
-static constexpr uint8_t AM_RX_AUDIO_GAIN2 = 0x3f;
 
 /* Codec ADC peak, sample units, that asks for a coarser or a finer AF step */
 static constexpr uint16_t AM_AF_PEAK_HIGH = 28000; // 0.85 of full scale
 static constexpr uint16_t AM_AF_PEAK_LOW = 7000;   // 0.21 of full scale
 
+/* REG_48<11:10> has four steps, 0 dB to -18 dB in 6 dB steps */
+static constexpr uint8_t AM_RX_AUDIO_GAIN1_MAX = 3;
+
+/*
+ * AF Rx Gain2 of the AM path, REG_48<9:4>, which the AGC loop below never
+ * moves: it re-writes gain1 with the same gain2 the airband plan set on entry.
+ * The two must agree -- a difference would make the loop's first step a change
+ * of the fine gain as well -- and the plan's value is in radioPlan.c.
+ */
+static constexpr uint8_t AM_RX_AUDIO_GAIN2 = 0x3f;
+
+static constexpr int64_t AM_AF_STEP_MS = 300;
+
 /*
  * Airband AM transmitter (CONFIG_C62_AIR_TX). The carrier is a BK4819
  * transmission with no audio in it: the amplitude modulation happens in the PA,
  * where the APC duty sets its bias, and core/am_tx.c turns the microphone into
- * that duty. Three numbers describe the calibration:
- *
- *  - AM_CARRIER_MW: the carrier power the mode asks for. 1 W, the low point of
- *    the factory band calibration and the only one this radio can produce
- *    without leaving the linear part of the PA for the peaks of the envelope:
- *    at 90 % depth the peaks are 3.6 times the carrier.
- *  - AM_DUTY_MIN_PCT: the bottom of the linear window, in percent of the 1 W
- *    duty. One tenth is what a 90 % depth needs; the PA of this radio has not
- *    been measured there yet, and if it stops being linear earlier the
- *    modulator caps the depth instead of clipping the envelope.
- *  - AM_DUTY_MAX_PCT: the top, 190 % of the carrier duty, which is what a 90 %
- *    depth asks for (1.9 times the carrier voltage). Well below the 5 W point,
- *    which would be 4 times the carrier voltage.
- *
- * None of the three is measured: the factory calibration has no point below
- * 136.125 MHz, so the duty for 118 MHz is extrapolated. docs/TX_AIRBAND.md has
- * the bench procedure that replaces them.
+ * that duty. The three numbers that describe the calibration -- the carrier
+ * power the mode asks for, and the bottom and top of the linear window of the
+ * bias around it -- are part of the mode's description and live with it, as
+ * RADIO_PLAN_AM_CARRIER_MW and RADIO_PLAN_AM_DUTY_{MIN,MAX}_PCT in
+ * radioPlan.h.  None of the three is measured: the factory calibration has no
+ * point below 136.125 MHz, so the duty for 118 MHz is extrapolated, and
+ * docs/TX_AIRBAND.md has the bench procedure that replaces them.
  */
-static constexpr uint32_t AM_CARRIER_MW = 1000;
-static constexpr uint8_t AM_DUTY_MIN_PCT = 10;
-static constexpr uint8_t AM_DUTY_MAX_PCT = 190;
-
-/* REG_48<11:10> has four steps, 0 dB to -18 dB in 6 dB steps */
-static constexpr uint8_t AM_RX_AUDIO_GAIN1_MAX = 3;
-static constexpr int64_t AM_AF_STEP_MS = 300;
 
 /*
  * Broadcast FM. The BK1080 is a receiver of its own, with its own LNA, IF,
@@ -188,39 +113,6 @@ static constexpr int64_t AM_AF_STEP_MS = 300;
 static constexpr uint32_t WFM_STATUS_MS = 100;  // Status poll period, ms
 static constexpr uint8_t WFM_VOLUME = 0x0F;     // 0 dBFS: the pot does volume
 
-/*
- * C62 BK4819 settings for dPMR, receive only.  A dPMR channel is 6,25 kHz, half
- * of what the chip can filter: its narrowest IF filter is 4,5 kHz, in 12,5 kHz
- * mode, so the radio runs the 12,5 kHz receive path (REG_43 0x7e48, the word
- * the stock firmware uses for its own 4FSK mode) and the 6,25 kHz
- * selectivity comes from the mode's own square root raised cosine matched
- * filter, alpha = 0.2, which is what TS 102 490 clause 12.2.2.2 asks for
- * anyway.  A wider filter costs adjacent channel immunity, not sensitivity, and
- * the alternative -- 25 kHz mode, 9 kHz of IF -- lets a whole neighbour in.
- *
- * The RX audio gain is the DMR one: it is the same discriminator output through
- * the same audio bypass, and the slicer estimates its own levels per frame, so
- * the deviation the chip delivers (+-1,6 kHz measured against ETSI's 1,05 kHz)
- * does not have to be corrected here.
- */
-static constexpr uint8_t DPMR_RF_BW = 7;      // 4.5 kHz, 12.5 kHz mode
-static constexpr uint8_t DPMR_RF_BW_WEAK = 7; // 4.5 kHz
-static constexpr uint8_t DPMR_TX_LPF2_BW = 0; // 3 kHz, no transmitter
-static constexpr uint8_t DPMR_RX_AUDIO_GAIN1 = 1; // -6 dB
-static constexpr uint8_t DPMR_RX_AUDIO_GAIN2 = 0x3f;
-static constexpr uint8_t DPMR_MIC_GAIN = 0;   // no transmitter
-
-/**
- * Digital modes receive the raw discriminator through the flat audio path:
- * M17, and DMR (which transmits from the same flat path).
- */
-static bool flatMode(enum opmode mode)
-{
-    return (mode == OPMODE_M17) || (mode == OPMODE_DMR)
-           || (mode == OPMODE_TETRA) || (mode == OPMODE_NXDN)
-           || (mode == OPMODE_DPMR) || (mode == OPMODE_P25)
-           || (mode == OPMODE_YSF) || (mode == OPMODE_DSTAR);
-}
 
 /*
  * Fine RX tuning offset, Hz, added to the channel frequency: for tests and the
@@ -298,6 +190,70 @@ static bool reg43SweepStarted;
 
 static struct C62Calib calData;  // TX calibration
 static struct C62CalPoint txCal; // TX calibration at the TX frequency
+
+/*
+ * The options every plan is built with, from the build's macros.  They are
+ * passed to the plan instead of being #ifdefs inside it so that the host test
+ * reaches each variant, including the DMR one whose absence was the defect the
+ * plan exists to expose.
+ */
+static void planOptions(struct radioPlanOptions *opt)
+{
+    radioPlan_defaultOptions(opt);
+
+#ifdef C62_WIDE_RX
+    opt->wideRx = true;
+#else
+    opt->wideRx = false;
+#endif
+
+#ifdef C62_DMR_12K5
+    opt->dmr12k5 = true;
+#else
+    opt->dmr12k5 = false;
+#endif
+
+#ifdef C62_TETRA_IF_DC_FILTER
+    opt->tetraIfDcFilter = true;
+#else
+    opt->tetraIfDcFilter = false;
+#endif
+
+#ifdef CONFIG_C62_SPECTRUM_AGC_FIX
+    opt->spectrumAgcFix = true;
+#else
+    opt->spectrumAgcFix = false;
+#endif
+
+#ifdef CONFIG_C62_AIR_TX
+    opt->airTx = true;
+#else
+    opt->airTx = false;
+#endif
+
+    /* The FM deviation words are the band calibration's, not a constant */
+    opt->fmTxDevNarrow = txCal.txDevNarrow;
+    opt->fmTxDevWide = txCal.txDevWide;
+}
+
+/** The channel spacing a plan is built for, when it comes from the status */
+static enum bandwidth planBandwidth()
+{
+    return (config != nullptr) ? (enum bandwidth)config->bandwidth : BW_12_5;
+}
+
+/**
+ * Walk a plan: ask the chip for exactly what the table says, in its order, and
+ * keep the driver's own state in step with what is not a register.
+ */
+static void applyPlan(const struct radioPlan &plan)
+{
+    radioPlan_apply(&plan, &c62_bk4819);
+
+    /* The word the baseband dump reports and the REG_43 sweep writes */
+    if (plan.knobs.rxReg43 != 0)
+        c62_rx_reg43 = plan.knobs.rxReg43;
+}
 
 /*
  * ---------------------------------------------------------------------------
@@ -406,7 +362,8 @@ static void paNoteOff(void)
 
 /* Level control of the AM receive path, see the airband settings above */
 static struct agc amAgc;
-static uint8_t amAfGain1 = AM_RX_AUDIO_GAIN1;
+/* REG_48<11:10>, the coarse AF step: set from the plan on airband entry */
+static uint8_t amAfGain1;
 static int64_t amAfGainTime;
 
 /**
@@ -650,19 +607,6 @@ void radio_setOpmode(const enum opmode mode)
     radio_disableRtx();
 
     /*
-     * Only the airband mode receives AM. Every other one goes back to the FM
-     * demodulator profile first, because the AM one changes registers they
-     * would otherwise inherit: the top of the RX AGC gain table (REG_13), the
-     * undocumented REG_4A, the AF de-emphasis (REG_2B<8>) and the AF expander
-     * (REG_28). The audio processing of the AM path is uninstalled at the same
-     * time, while its audio path is closed.
-     */
-    if (mode != OPMODE_AIRBAND) {
-        bk4819_setModulation(&c62_bk4819, true);
-        csk6codec_setRxProcessor(NULL);
-    }
-
-    /*
      * Leaving broadcast FM: the tuner has its own output on the amplifier
      * input, so it has to be powered down and the analog path closed, or it
      * keeps playing under the next mode.
@@ -672,161 +616,53 @@ void radio_setOpmode(const enum opmode mode)
         audio_setExtSource(false);
     }
 
-    if (mode == OPMODE_M17) {
-        bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_BYPASS);
-        bk4819_setTxDeviation(&c62_bk4819, true, M17_TX_DEVIATION);
-#ifdef C62_WIDE_RX
-        // 25 kHz mode with the widest documented RF filters (REG_43 0x7e28)
-        bk4819_setBandwidth(&c62_bk4819, BK4819_BW_25K);
-        bk4819_setRfFilter(&c62_bk4819, M17_RF_BW, 7);
-        c62_rx_reg43 = 0x7e28;
-#else
-        // 12.5 kHz bandwidth mode; the M17 filters then replace its filters
-        bk4819_setBandwidth(&c62_bk4819, BK4819_BW_12K5);
-        bk4819_setRfFilter(&c62_bk4819, M17_RF_BW, M17_RF_BW_WEAK);
-        c62_rx_reg43 = 0x7808;
-#endif
-        bk4819_setTxAudioFilter(&c62_bk4819, M17_TX_LPF2_BW);
-        bk4819_setRxAudioGain(&c62_bk4819, M17_RX_AUDIO_GAIN1,
-                              M17_RX_AUDIO_GAIN2);
-        bk4819_setMicGain(&c62_bk4819, M17_MIC_GAIN);
-    } else if (mode == OPMODE_DMR) {
-        /*
-         * Flat, wide receive path, as for TETRA, and the same flat,
-         * DC-coupled transmit path: AUDIO_BYPASS clears the AF TX filters,
-         * the ALC, the compander and the TX DC filter (REG_2B/31/47/4B/7E),
-         * which is what a 4FSK baseband that starts at DC needs.  The
-         * deviation word sets the FM sensitivity of the varactor, and the
-         * modulator (DmrTx.c) does the pulse shaping.
-         */
-        bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_BYPASS);
-        bk4819_setTxDeviation(&c62_bk4819, true, DMR_TX_DEVIATION);
-#ifdef C62_DMR_12K5
-        /* The stock firmware's own digital setting: 12.5 kHz channel mode */
-        bk4819_setBandwidth(&c62_bk4819, BK4819_BW_12K5);
-        bk4819_setRfFilter(&c62_bk4819, DMR_RF_BW, DMR_RF_BW_WEAK);
-        c62_rx_reg43 = 0x7e48;
-#else
-        bk4819_setBandwidth(&c62_bk4819, BK4819_BW_25K);
-        bk4819_setRfFilter(&c62_bk4819, DMR_RF_BW, DMR_RF_BW_WEAK);
-        c62_rx_reg43 = 0x7e28;
-#endif
-        bk4819_setTxAudioFilter(&c62_bk4819, DMR_TX_LPF2_BW);
-        bk4819_setRxAudioGain(&c62_bk4819, DMR_RX_AUDIO_GAIN1,
-                              DMR_RX_AUDIO_GAIN2);
-        bk4819_setMicGain(&c62_bk4819, DMR_MIC_GAIN);
-    } else if (mode == OPMODE_NXDN) {
-        /*
-         * NXDN is 4FSK at 2400 symbols/s with a 2.9 kHz occupied bandwidth in
-         * a 6.25 kHz channel, and the same waveform in 12.5 kHz.  The BK4819
-         * has no 6.25 kHz mode, so the narrowest it offers is used (12.5 kHz
-         * channel, RF filters not doubled: REG_43 = 0x7e48, the stock
-         * firmware's own digital setting) and the demodulator's 81-tap
-         * matched filter does the channel selection.  AUDIO_BYPASS is what the
-         * DC-coupled 4FSK baseband needs: no de-emphasis, no compander, no
-         * high-pass (REG_7E = 0, the defect that costs DMR its payload).
-         */
-        bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_BYPASS);
-        bk4819_setBandwidth(&c62_bk4819, BK4819_BW_12K5);
-        /*
-         * The IF filter follows the channel spacing the operator picked. 7,7 is
-         * 4.5 kHz, the widest, and the one every measurement in docs/RX_NXDN.md
-         * was taken with; a 6.25 kHz channel asks for 3,3 (about 2.9 kHz), which
-         * fits the 2.9 kHz the waveform occupies and rejects the adjacent
-         * 6.25 kHz slot. Only the IF changes: the channel selection is the
-         * demodulator's matched filter either way.
-         */
-        if (config->bandwidth == BW_6_25)
-            bk4819_setRfFilter(&c62_bk4819, 3, 3);
-        else
-            bk4819_setRfFilter(&c62_bk4819, 7, 7);
-        c62_rx_reg43 = 0x7e48;
-        bk4819_setTxAudioFilter(&c62_bk4819, DMR_TX_LPF2_BW);
-        bk4819_setRxAudioGain(&c62_bk4819, DMR_RX_AUDIO_GAIN1,
-                              DMR_RX_AUDIO_GAIN2);
-        bk4819_setMicGain(&c62_bk4819, DMR_MIC_GAIN);
-    } else if (mode == OPMODE_DPMR) {
-        /*
-         * Flat, narrow receive path: 4FSK baseband straight to the DSP, with
-         * the mode's own matched filter doing the shaping.  No transmit setup:
-         * the mode has no transmitter.
-         */
-        bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_BYPASS);
-        bk4819_setBandwidth(&c62_bk4819, BK4819_BW_12K5);
-        bk4819_setRfFilter(&c62_bk4819, DPMR_RF_BW, DPMR_RF_BW_WEAK);
-        bk4819_setTxAudioFilter(&c62_bk4819, DPMR_TX_LPF2_BW);
-        bk4819_setRxAudioGain(&c62_bk4819, DPMR_RX_AUDIO_GAIN1,
-                              DPMR_RX_AUDIO_GAIN2);
-        bk4819_setMicGain(&c62_bk4819, DPMR_MIC_GAIN);
-        c62_rx_reg43 = 0x7808;
-    } else if ((mode == OPMODE_P25) || (mode == OPMODE_YSF) ||
-               (mode == OPMODE_DSTAR)) {
-        /*
-         * P25 Phase 1 (C4FM, 4800 sym/s), System Fusion (C4FM, 4800 sym/s) and
-         * D-STAR (GMSK, 4800 bit/s in a 6.25 kHz channel) are all constant
-         * envelope digital basebands: they need the same flat, DC-coupled path
-         * as DMR, with no de-emphasis, no compander and no high-pass, or the
-         * slicer sees a shaped constellation instead of the discriminator.
-         *
-         * None of the three has been measured on air yet, so they take the
-         * 12.5 kHz channel mode with the stock firmware's digital word
-         * (REG_43 = 0x7e48) and the demodulator's own matched filter does the
-         * channel selection, exactly like NXDN.  Receive only: no transmit
-         * setup.
-         */
-        bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_BYPASS);
-        bk4819_setBandwidth(&c62_bk4819, BK4819_BW_12K5);
-        bk4819_setRfFilter(&c62_bk4819, 7, 7);
-        c62_rx_reg43 = 0x7e48;
-        bk4819_setTxAudioFilter(&c62_bk4819, DMR_TX_LPF2_BW);
-        bk4819_setRxAudioGain(&c62_bk4819, DMR_RX_AUDIO_GAIN1,
-                              DMR_RX_AUDIO_GAIN2);
-        bk4819_setMicGain(&c62_bk4819, DMR_MIC_GAIN);
-    } else if (mode == OPMODE_TETRA) {
-        // Flat, wide receive path: 25 kHz channel, widest RF filters
-        bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_BYPASS);
-        bk4819_setBandwidth(&c62_bk4819, BK4819_BW_25K);
-        bk4819_setRfFilter(&c62_bk4819, TETRA_RF_BW, TETRA_RF_BW_WEAK);
-        bk4819_setTxAudioFilter(&c62_bk4819, TETRA_TX_LPF2_BW);
-        bk4819_setRxAudioGain(&c62_bk4819, TETRA_RX_AUDIO_GAIN1,
-                              TETRA_RX_AUDIO_GAIN2);
-        bk4819_setMicGain(&c62_bk4819, TETRA_MIC_GAIN);
-        c62_rx_reg43 = 0x7e28;
-    } else if (mode == OPMODE_AIRBAND) {
-        /*
-         * AM receive, DSB with carrier. The IF filter follows the channel
-         * spacing; the rest is the profile of the stock firmware plus the AF
-         * processing of the airband mode: no de-emphasis, no expander, and the
-         * AGC of core/agc.h on the audio on its way to the speaker, installed
-         * here because it is part of the receive path.
-         */
+    /*
+     * The chip configuration of the mode, as one list of writes in one place
+     * (radioPlan.c, docs/RADIO_CONFIG.md): the FM demodulator profile that every
+     * mode but airband puts back first (the AM detector's REG_13, REG_4A,
+     * REG_2B<8> and REG_28 would otherwise be inherited), then the mode's own
+     * audio path, channel mode, filters, deviation and gains.
+     */
+    struct radioPlanOptions opt;
+    struct radioPlan plan;
+
+    planOptions(&opt);
+    radioPlan_build(&plan, RADIO_PLAN_STAGE_MODE, mode, planBandwidth(),
+                    RADIO_PLAN_BOTH, &opt);
+
+    if (mode == OPMODE_AIRBAND)
         bb_mark(BB_M_AIRBAND_LOAD);
-        bk4819_setAmReceive(&c62_bk4819, (config->bandwidth == BW_25)
-                                             ? BK4819_AM_WIDE
-                                             : BK4819_AM_NARROW);
-        amAfGain1 = AM_RX_AUDIO_GAIN1;
-        bk4819_setRxAudioGain(&c62_bk4819, amAfGain1, AM_RX_AUDIO_GAIN2);
+
+    applyPlan(plan);
+
+    /*
+     * What the plan asks for that is not a register. Only the airband mode
+     * receives AM, and its audio AGC is part of the receive path: installed
+     * here, and uninstalled by every other mode while the path is still closed.
+     */
+    if (mode != OPMODE_AIRBAND)
+        csk6codec_setRxProcessor(NULL);
+
+    if (plan.knobs.amAudio) {
+        amAfGain1 = plan.knobs.rxAfGain1;
         agc_init(&amAgc, NULL);
         csk6codec_setRxProcessor(amAudioProcess);
-#ifdef CONFIG_C62_AIR_TX
-        air_tx_setDepth(state.settings.am_depth);
-#endif
-    } else if (mode == OPMODE_WFM_BC) {
+    }
+
+    if (mode == OPMODE_WFM_BC) {
         /*
-         * Broadcast FM. The BK4819 is not in this path at all: its audio is
-         * muted so it cannot sum into the amplifier input, and the analog FM
-         * profile is restored for when the operator leaves the mode. The
-         * tuner is powered and configured here, before the first tune, so
+         * The tuner is powered and configured here, before the first tune, so
          * that the calibration waits of BK1080_Init are paid once.
          */
-        bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_VOICE);
-        bk4819_setAfOutput(&c62_bk4819, BK4819_AF_MUTE);
         wfmReady = wfmEnter();
         if (!wfmReady)
             printk("BK1080: no answer on the bus, broadcast FM unavailable\n");
-    } else {
-        bk4819_setAudioMode(&c62_bk4819, BK4819_AUDIO_VOICE);
     }
+
+#ifdef CONFIG_C62_AIR_TX
+    if (plan.knobs.amTx)
+        air_tx_setDepth(state.settings.am_depth);
+#endif
 
     radioMode = mode;
 }
@@ -839,24 +675,20 @@ bool radio_checkRxDigitalSquelch()
 void radio_enableAfOutput()
 {
     /*
-     * In broadcast FM the BK4819 audio must stay out of the amplifier input:
-     * the speaker is driven by the tuner, through the analog path, and
-     * unmuting the transceiver here would mix its noise under the station.
-     */
-    if (radioMode == OPMODE_WFM_BC)
-        return;
-
-    /*
      * Only the RTX to speaker path opens it: FM demodulated audio for the
      * analog modes, the raw discriminator for the digital ones and the AM
-     * detector for the airband one.
+     * detector for the airband one, as the mode's plan says.  Broadcast FM has
+     * no write at all: the speaker is driven by the tuner, through the analog
+     * path, and unmuting the transceiver there would mix its noise under the
+     * station.
      */
-    if (radioMode == OPMODE_AIRBAND)
-        bk4819_setAfOutput(&c62_bk4819, BK4819_AF_AM);
-    else if (flatMode(radioMode))
-        bk4819_setAfOutput(&c62_bk4819, BK4819_AF_BYPASS);
-    else
-        bk4819_setAfOutput(&c62_bk4819, BK4819_AF_FM);
+    struct radioPlanOptions opt;
+    struct radioPlan plan;
+
+    planOptions(&opt);
+    radioPlan_build(&plan, RADIO_PLAN_STAGE_AF, radioMode, planBandwidth(),
+                    RADIO_PLAN_RX, &opt);
+    applyPlan(plan);
 }
 
 void radio_disableAfOutput()
@@ -971,32 +803,25 @@ void radio_enableRx()
 
     bk4819_setFrequency(&c62_bk4819, rxFrequency);
 
-    if (flatMode(radioMode)) {
+    if (radioPlan_isFlat(radioMode)) {
         /*
          * The DSP takes the baseband from the AF output for the whole
-         * reception. M17 and TETRA set their filters on the mode change and
-         * have no CTCSS.
+         * reception: the plan opens the raw discriminator and, for TETRA, puts
+         * back the RX IF DC filter (REG_7E<2:0>) that the audio bypass clears.
+         * With it off, the IF DC offset of this low-IF receiver reaches the
+         * demodulator as a one-sided tone at the IF (16.9 kHz in 25 kHz mode)
+         * and distorts the +3pi/4 symbols much more than the -3pi/4 ones.
+         * TETRA decodes phase differences and needs it gone; DMR slices
+         * absolute 4FSK levels and must not inherit it, which is why it is
+         * TETRA's alone.  The digital modes have no CTCSS.
          */
-        bk4819_setAfOutput(&c62_bk4819, BK4819_AF_BYPASS);
-#ifdef C62_TETRA_IF_DC_FILTER
-        /*
-         * TETRA receive: re-enable the RX IF DC filter (REG_7E<2:0>, default
-         * 0b110) that the audio bypass mode clears. With it off, the IF DC
-         * offset of this low-IF receiver reaches the demodulator as a tone at
-         * the IF (16.9 kHz in 25 kHz mode), one-sided: it distorts the +3pi/4
-         * symbols much more than the -3pi/4 ones. The wanted signal is centred
-         * on the IF, so filtering DC at the IF input does not touch it.
-         *
-         * DMR used to inherit this, and it must not: TETRA decodes phase
-         * differences and needs the IF DC gone, while DMR slices absolute 4FSK
-         * levels and the baseband has to stay flat where the flat path leaves
-         * it, exactly as in M17, which is the mode that works on this radio.
-         * Keeping the two paths identical is what makes a DMR failure mean
-         * something when it is compared against M17.
-         */
-        if (radioMode == OPMODE_TETRA)
-            bk4819_maskSetRegister(&c62_bk4819, 0x7E, 0x0007, 0x0006);
-#endif
+        struct radioPlanOptions opt;
+        struct radioPlan plan;
+
+        planOptions(&opt);
+        radioPlan_build(&plan, RADIO_PLAN_STAGE_RX, radioMode,
+                        planBandwidth(), RADIO_PLAN_RX, &opt);
+        applyPlan(plan);
     } else if ((config->rxToneEn) && (radioMode != OPMODE_AIRBAND)) {
         bk4819_enableRxCtcss(&c62_bk4819, config->rxTone);
     }
@@ -1108,9 +933,9 @@ void radio_enableTx()
             return;
 
         /* The carrier level, from the band calibration at the TX frequency */
-        const uint32_t pwr = (config->txPower < AM_CARRIER_MW)
+        const uint32_t pwr = (config->txPower < RADIO_PLAN_AM_CARRIER_MW)
                                  ? config->txPower
-                                 : AM_CARRIER_MW;
+                                 : RADIO_PLAN_AM_CARRIER_MW;
 
         bk4819_setFrequency(&c62_bk4819, freq);
         if (freq < 174000000)
@@ -1125,8 +950,9 @@ void radio_enableTx()
         bk4819_enableTx(&c62_bk4819);
 
         const uint32_t carrierPct = (txCal.loPwr > 0) ? txCal.loPwr : 33;
-        air_tx_setCalibration((uint8_t)carrierPct, AM_DUTY_MIN_PCT,
-                              AM_DUTY_MAX_PCT, (uint8_t)carrierPct);
+        air_tx_setCalibration((uint8_t)carrierPct, RADIO_PLAN_AM_DUTY_MIN_PCT,
+                              RADIO_PLAN_AM_DUTY_MAX_PCT,
+                              (uint8_t)carrierPct);
         air_tx_setDepth(state.settings.am_depth);
         air_tx_key(true);
 
@@ -1397,37 +1223,20 @@ void radio_updateConfiguration()
 
     txCal = calibC62_interp(band, config->txFrequency);
 
-    // Set bandwidth and deviation, only for analog FM mode
-    if (config->opMode == OPMODE_FM) {
-        switch (config->bandwidth) {
-            case BW_6_25:
-                bk4819_setBandwidth(&c62_bk4819, BK4819_BW_6K25);
-                bk4819_setTxDeviation(&c62_bk4819, true, txCal.txDevNarrow);
-                break;
-
-            case BW_12_5:
-                bk4819_setBandwidth(&c62_bk4819, BK4819_BW_12K5);
-                bk4819_setTxDeviation(&c62_bk4819, true, txCal.txDevNarrow);
-                break;
-
-            case BW_25:
-                bk4819_setBandwidth(&c62_bk4819, BK4819_BW_25K);
-                bk4819_setTxDeviation(&c62_bk4819, true, txCal.txDevWide);
-                break;
-
-            default:
-                break;
-        }
-    }
-
     /*
-     * The AM IF filter follows the channel spacing: 1.7 kHz in 12.5 kHz mode
-     * for the 8.33 kHz raster, the 6 kHz of 25 kHz mode for the 25 kHz one.
+     * The part of the configuration that depends on the channel spacing and on
+     * the band calibration, and not on the mode being entered: FM's bandwidth
+     * and deviation word (its mode change leaves the chip in 12.5 kHz), and the
+     * AM detector's IF filter, which follows the spacing -- 1.7 kHz in 12.5 kHz
+     * mode for the 8.33 kHz raster, the 6 kHz of 25 kHz mode for the 25 kHz one.
      */
-    if (config->opMode == OPMODE_AIRBAND)
-        bk4819_setAmReceive(&c62_bk4819, (config->bandwidth == BW_25)
-                                             ? BK4819_AM_WIDE
-                                             : BK4819_AM_NARROW);
+    struct radioPlanOptions opt;
+    struct radioPlan plan;
+
+    planOptions(&opt);
+    radioPlan_build(&plan, RADIO_PLAN_STAGE_UPDATE, (enum opmode)config->opMode,
+                    planBandwidth(), RADIO_PLAN_BOTH, &opt);
+    applyPlan(plan);
 
     /*
      * Update VCO frequency and tuning parameters if current operating status
@@ -1489,7 +1298,7 @@ rssi_t radio_getRssi()
 
 #ifdef C62_REG43_SWEEP
     /* Called by the rtx thread in RX, so it can own the BK4819 here */
-    if (flatMode(radioMode) && (radioStatus == RX)) {
+    if (radioPlan_isFlat(radioMode) && (radioStatus == RX)) {
         int64_t now = k_uptime_get();
         bool recording = true;
 #ifdef C62_BASEBAND_DUMP
@@ -1699,44 +1508,27 @@ void radio_spectrumSweep(const bool on)
             return;
 
         /*
-         * The widest documented receive path (the profile C62_WIDE_RX and
-         * TETRA use): 4.5 kHz IF filter in the 25 kHz channel mode, about
-         * 9 kHz of resolution. Narrower than the smallest step the analyser
-         * offers, so two bins never see the same channel.
-         */
-        bk4819_setBandwidth(&c62_bk4819, BK4819_BW_25K);
-        bk4819_setRfFilter(&c62_bk4819, 7, 7);
-        c62_rx_reg43 = 0x7e28;
-        bk4819_setAfOutput(&c62_bk4819, BK4819_AF_MUTE);
-
-        /*
-         * AFC off (REG_73<4>, application note V3 "AFC, ALC, MIC AGC"). It is
-         * on by default and its range is the widest (REG_73<13:11> = 000): a
-         * carrier anywhere near the bin under measurement would pull the
-         * synthesizer onto itself, which moves the bin and lengthens the
-         * settling it is trying to measure. Every implementation of a spectrum
-         * on this chip that this fork could read disables it for the sweep.
-         */
-        bk4819_maskSetRegister(&c62_bk4819, 0x73, 0x0010, 0x0010);
-
-#ifdef CONFIG_C62_SPECTRUM_AGC_FIX
-        /*
-         * AGC fixed (REG_7E<15>): the automatic loop cannot follow one bin per
-         * 50 us, so each reading carries the gain the previous bins left behind,
-         * and the gain the receiver happened to have when a sweep started
-         * changes while it is parked between sweeps -- which is a trace that
-         * flickers. Fixing it makes the trace a measurement at one gain, the
-         * same one every sweep, which is what egzumer's spectrum does
-         * (BK4819_SetAGC(false), REG_7E<15> with <14:12> = 011, the maximum).
+         * The sweep's own profile, from the plan: the widest documented receive
+         * path (4.5 kHz IF filter in the 25 kHz channel mode, about 9 kHz of
+         * resolution, narrower than the smallest step the analyser offers so
+         * two bins never see the same channel), AF muted so the bins are not
+         * heard, AFC off (REG_73<4>: a carrier near the bin would pull the
+         * synthesizer onto itself and move it) and, with
+         * CONFIG_C62_SPECTRUM_AGC_FIX, the AGC fixed (REG_7E<15>).
          *
-         * Off by default: <14:12> is a fixed index, not the live gain, so
-         * fixing it also moves the absolute level of the trace (and a local
-         * carrier strong enough to overload a 0 dB front end would flatten it),
-         * and that is something only the radio can say. See docs/SPECTRUM.md
-         * §3.2.
+         * Fixing the AGC is off by default: REG_7E<14:12> is a fixed index and
+         * not the live gain, so fixing it also moves the absolute level of the
+         * trace, and a local carrier strong enough to overload a 0 dB front end
+         * would flatten the trace as well -- something only the radio can say.
+         * See docs/SPECTRUM.md §3.2.
          */
-        bk4819_maskSetRegister(&c62_bk4819, 0x7E, 0x8000, 0x8000);
-#endif
+        struct radioPlanOptions opt;
+        struct radioPlan plan;
+
+        planOptions(&opt);
+        radioPlan_build(&plan, RADIO_PLAN_STAGE_SPECTRUM, radioMode, BW_25,
+                        RADIO_PLAN_RX, &opt);
+        applyPlan(plan);
 
         specWide  = true;
         specDirty = false;

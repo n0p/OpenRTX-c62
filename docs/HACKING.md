@@ -115,6 +115,7 @@ keying gate, the air clock and the reflections are enforced.
 | the bench (tune/key/capture from the PC) | `platform/targets/c62/pc_proto_bench_c62.c`, `docs/BENCH.md`, `tools/bench/` |
 | a hardware detail of this board | `platform/targets/c62/c62.dts`, `hwconfig.h`, `platform.c` |
 | the BK4819 registers | `platform/drivers/baseband/BK4819.c` and its header |
+| what each mode asks the BK4819 for | `platform/drivers/baseband/radioPlan.c`, `docs/RADIO_CONFIG.md`, `tests/unit/regplan.cpp` |
 | why the radio froze | `docs/BLACKBOX.md`, then read the record |
 | memory limits | `docs/MEMORY.md` (classes and the arena) |
 
