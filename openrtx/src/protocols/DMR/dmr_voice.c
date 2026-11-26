@@ -174,6 +174,27 @@ void dmr_voice_burst(int slot, const uint8_t burst[132], int voice_idx,
     (void)voice_idx;
     (void)t_ms;
 }
+/*
+ * The stall rule with a clock of its own.  It used to live inside
+ * dmr_voice_burst(), which meant a call that simply stops -- nobody sends a
+ * terminator to say so -- kept the speaker for ever: with no burst there was
+ * nothing to run the timeout.  Whoever knows the stream time calls this once
+ * per block; the DMR status does, because it already runs there.
+ */
+void dmr_voice_tick(uint32_t t_ms)
+{
+    const int playing = s_playing; /* volatile: one read, one index */
+
+    if (playing < 0 || playing > 1)
+        return;
+
+    const uint32_t hold = (s_pref == DMR_VOICE_PREF_AUTO) ? VOICE_AUTO_HOLD_MS
+                                                        : VOICE_TIMEOUT_MS;
+
+    if ((t_ms - s_call[playing].last_voice_ms) > hold)
+        s_playing = -1;
+}
+
 void dmr_voice_call_end(int slot)
 {
     (void)slot;
@@ -291,6 +312,16 @@ static const uint8_t rZ[36] = { 5,  3,  4,  2,  3,  1, 2,  0, 1,  13, 0,  12,
                                 16, 5,  15, 4,  14, 3, 13, 2, 12, 1,  11, 0 };
 
 #define VOICE_TIMEOUT_MS 500 /* no voice burst for this long ends the call */
+
+/*
+ * In AUTO the call being followed keeps the speaker through the gaps that a
+ * real conversation has -- the operator pauses, the repeater drops one burst --
+ * and only lets go when the call is over: the terminator, or this long without
+ * hearing it.  Five seconds is the hang time asked for in the quick menu's TS
+ * row; a fixed slot keeps the short one, because there the operator chose who
+ * to hear.
+ */
+#define VOICE_AUTO_HOLD_MS 5000
 #ifndef DMR_VOICE_UVQUALITY
 #define DMR_VOICE_UVQUALITY \
     3 /* mbelib unvoiced synthesis quality (DSD default) */
@@ -574,6 +605,27 @@ bool dmr_voice_set_pi_hytera(int slot, uint8_t alg, uint8_t key_id,
     c->ep_hy = true;
     c->ep = true;
     return true;
+}
+
+/*
+ * The stall rule with a clock of its own.  It used to live inside
+ * dmr_voice_burst(), which meant a call that simply stops -- nobody sends a
+ * terminator to say so -- kept the speaker for ever: with no burst there was
+ * nothing to run the timeout.  Whoever knows the stream time calls this once
+ * per block; the DMR status does, because it already runs there.
+ */
+void dmr_voice_tick(uint32_t t_ms)
+{
+    const int playing = s_playing; /* volatile: one read, one index */
+
+    if (playing < 0 || playing > 1)
+        return;
+
+    const uint32_t hold = (s_pref == DMR_VOICE_PREF_AUTO) ? VOICE_AUTO_HOLD_MS
+                                                        : VOICE_TIMEOUT_MS;
+
+    if ((t_ms - s_call[playing].last_voice_ms) > hold)
+        s_playing = -1;
 }
 
 void dmr_voice_call_end(int slot)
@@ -1161,12 +1213,8 @@ void dmr_voice_burst(int slot, const uint8_t burst[132], int voice_idx,
     (void)voice_idx;
 
     slot &= 1;
-    /* drop a stalled playing slot */
-    const int playing = s_playing; /* volatile: one read, one index */
-    if (playing >= 0
-        && (t_ms - s_call[playing].last_voice_ms) > VOICE_TIMEOUT_MS) {
-        s_playing = -1;
-    }
+    /* drop a stalled playing slot (AUTO holds it through the call's gaps) */
+    dmr_voice_tick(t_ms);
     if (c->last_voice_ms == 0 || (t_ms - c->last_voice_ms) > VOICE_TIMEOUT_MS) {
         new_call = true;
     }

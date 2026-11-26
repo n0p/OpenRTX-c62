@@ -472,7 +472,7 @@ What each mode publishes, and where its quality figure comes from:
 
 | Mode | Identifiers (line 2) | Call / quality (line 1) | Note (line 2, right) |
 |---|---|---|---|
-| DMR | `CC n TS n` | `src>dst`, `LC n%` (embedded LC decoded) | data type (`CSBK`, `Idle`…) |
+| DMR | `CC n TS n` (the call's, steady) | `src>dst`, `LC n%` (embedded LC decoded) | data type (`CSBK`, `Idle`…) |
 | NXDN | `RAN n VOX` | `src>dst`, `e n% f n` (EVM, frames) | `VCALL` / `TX_REL` / `DISC` |
 | dPMR | `dPMR RX` / `SRCH` | — (the PHY publishes no counters) | — |
 | P25 | `NAC nnn VOX` | `src>tg`, `ok n% f n` (frames without uncorrectable errors) | `DUID n` |
@@ -568,14 +568,28 @@ and nothing is retuned — it never invents one. Leaving the mode or tuning
 elsewhere ends the session (the periodic part of `ui_updateFSM()` does it, so a
 mode that can transmit never inherits an uplink frequency as its TX).
 
-### DMR (8–9 rows)
+### DMR (9–10 rows)
 
-The call destination — `CALL` (`GROUP` / `USER`) and `DEST` (the talkgroup or
-the subscriber ID, 24 bits, step 1, long press ±100) — then `FINE`, `BKL`,
-`KEYLIT`, `LOCK`, `MSGS`, `MSG`.
+The timeslot — `TS` with three answers: `AUTO`, `TS1`, `TS2` — then the call
+destination: `CALL` (`GROUP` / `USER`) and `DEST` (the talkgroup or the
+subscriber ID, 24 bits, step 1, long press ±100), then `FINE`, `BKL`, `KEYLIT`,
+`LOCK`, `MSGS`, `MSG`.
+
+`AUTO` follows the call on the air: the receiver listens to both slots, locks
+onto the first one that carries a call, and stays with it — audio, identifiers
+and the `TS` on the main screen — until the call ends (its terminator) or five
+seconds pass without hearing it. Only then does it listen to both again. A call
+that simply stops, with no terminator, releases the slot on that same five
+second timeout, which is what `dmr_voice_tick()` counts. `TS1` and `TS2` are the
+operator's answer: they are used as they are, receiving *and* transmitting; in
+`AUTO` the transmitter answers in the slot the call is being heard in, which is
+the slot the repeater is repeating.
 
 The colour code, the timeslot, the sync state, the call and the link quality are
-state and are on the main screen (see "El estado del modo").
+state and are on the main screen (see "El estado del modo"). All of them are
+read from the slot the *call* is on, not from whichever burst came last: on a
+repeater with the other slot busy, taking them from the last burst made the
+timeslot alternate and the identifiers blink while the audio was fine.
 
 `DEST` writes `settings.dmr_dest_id` / `settings.dmr_dest_type` and asks for an
 RTX resync; the UI never touches `rtxStatus_t`. The two rows only exist when

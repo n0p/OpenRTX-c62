@@ -529,6 +529,27 @@ void qm_tetra_set_cellul(int value)
 /* ------------------------------------------------------------------------- */
 
 #ifdef UI_MODE_DMR
+/*
+ * Timeslot.  AUTO follows the call on the air: the receiver locks onto the
+ * first slot carrying a call, stays with it -- audio, identifiers and the row
+ * on the main screen -- until the call ends or five seconds pass without
+ * hearing it, and only then listens to both again.  TS1 and TS2 are the
+ * operator's answer and are used as they are, receive and transmit.
+ */
+static const char *const qm_names_dmr_ts[] = { "AUTO", "TS1", "TS2" };
+
+int qm_dmr_get_ts(void)
+{
+    uint8_t ts = state.settings.dmr_timeslot;
+
+    return settings_dmrTimeslotValid(ts) ? (int)ts : 0;
+}
+
+void qm_dmr_set_ts(int ts)
+{
+    state.settings.dmr_timeslot = (uint8_t)((ts < 0 || ts > 2) ? 0 : ts);
+}
+
 #endif /* UI_MODE_DMR */
 
 /* ------------------------------------------------------------------------- */
@@ -964,6 +985,8 @@ static const qm_item_t qm_items_tetra[] =
 #ifdef UI_MODE_DMR
 static const qm_item_t qm_items_dmr[] =
 {
+    QM_ITEM_ENUM("TS", 0, 2, qm_dmr_get_ts, qm_dmr_set_ts, qm_names_dmr_ts,
+                 NULL),
     QM_ITEM_DMR_DEST()
 #ifdef CONFIG_RX_FINE_OFFSET
     QM_ITEM_INT_FF("FINE", -500, 500, 10, 100, qm_get_rx_fine,

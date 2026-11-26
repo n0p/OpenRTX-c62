@@ -453,11 +453,14 @@ TEST_CASE("DMR identifiers and SMS formats are validated", "[settings]")
     REQUIRE(std::string(settings_smsFormatName(DMR_SMS_FMT_AUTO)) == "auto");
     REQUIRE(std::string(settings_smsFormatName(DMR_SMS_FMT_TMS)) == "TMS");
 
-    /* The timeslot is 1 or 2, and the menu names it the way radios do */
+    /* The timeslot is 0 (AUTO, follows the call), 1 or 2 */
+    REQUIRE(settings_dmrTimeslotValid(0));
     REQUIRE(settings_dmrTimeslotValid(1));
     REQUIRE(settings_dmrTimeslotValid(2));
-    REQUIRE_FALSE(settings_dmrTimeslotValid(0));
     REQUIRE_FALSE(settings_dmrTimeslotValid(3));
+    REQUIRE(settings_dmrTimeslotAuto(0));
+    REQUIRE_FALSE(settings_dmrTimeslotAuto(1));
+    REQUIRE(std::string(settings_dmrTimeslotName(0)) == "AUTO");
     REQUIRE(std::string(settings_dmrTimeslotName(1)) == "TS1");
     REQUIRE(std::string(settings_dmrTimeslotName(2)) == "TS2");
 

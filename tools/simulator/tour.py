@@ -79,7 +79,7 @@ MODES = {
     # The rows are what can be *changed*: the colour code, the timeslot and the
     # sync state are on the main screen (docs/UI.md, "El estado del modo").
     "DMR": {"tx": True, "page": "SETTINGS_MODE", "rows": [
-        "CALL", "DEST", "FINE", "BKL", "KEYLIT", "LOCK", "MSGS", "MSG"]},
+        "TS", "CALL", "DEST", "FINE", "BKL", "KEYLIT", "LOCK", "MSGS", "MSG"]},
     "NXDN": {"tx": False, "page": "SETTINGS_MODE", "rows": [
         "RAN", "BW", "FINE", "BKL", "KEYLIT", "LOCK", "MSGS", "MSG"]},
     "dPMR": {"tx": False, "page": "SETTINGS_MODE", "rows": [

@@ -70,5 +70,8 @@ const char *settings_smsFormatName(uint8_t format)
 
 const char *settings_dmrTimeslotName(uint8_t timeslot)
 {
+    if (timeslot == 0)
+        return "AUTO"; /* follows the call on the air */
+
     return (timeslot == 2) ? "TS2" : "TS1";
 }

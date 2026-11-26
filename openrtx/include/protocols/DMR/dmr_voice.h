@@ -109,6 +109,9 @@ void dmr_voice_set_pref(int pref);
 int dmr_voice_get_pref(void);
 /* Slot currently being played, or -1. */
 int dmr_voice_get_playing(void);
+/* Age the playing slot: call once per block with the stream time, so a call
+ * that stops without a terminator also ends. */
+void dmr_voice_tick(uint32_t t_ms);
 
 /* Vocoder frames decoded since boot and their average decode time (us) -
  * a 20 ms frame must take well under 20 ms, shared with everything else. */

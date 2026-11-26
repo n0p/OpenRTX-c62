@@ -468,12 +468,23 @@ static inline bool settings_dmrDestValid(uint8_t type, uint32_t id)
 }
 
 /**
- * True if slot is a DMR timeslot: 1 or 2.  Anything else would make the
- * transmitter key a slot the frame does not have.
+ * True if slot is a DMR timeslot setting: 0 (AUTO), 1 or 2.  Anything else
+ * would make the transmitter key a slot the frame does not have.
  */
 static inline bool settings_dmrTimeslotValid(uint8_t slot)
 {
-    return (slot == 1) || (slot == 2);
+    return slot <= 2;
+}
+
+/**
+ * True if the timeslot setting follows the call on the air instead of naming a
+ * slot: the receiver locks onto the first slot that carries a call, stays with
+ * it until the call ends or five seconds pass without hearing it, and only then
+ * listens to both again.
+ */
+static inline bool settings_dmrTimeslotAuto(uint8_t slot)
+{
+    return slot == 0;
 }
 
 /** True if f names one of the SMS payload formats. */

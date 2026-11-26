@@ -161,7 +161,9 @@ void OpMode_DMR::enable()
     dmrGlue_reset();
     c62_dmr.id = state.settings.dmr_id;
     c62_dmr.cc = (uint8_t)(state.channel.dmr.rxColorCode & 0x0Fu);
-    c62_dmr.slot = state.settings.dmr_timeslot;
+    c62_dmr.slot = settings_dmrTimeslotAuto(state.settings.dmr_timeslot)
+                     ? 1
+                     : state.settings.dmr_timeslot;
     c62_dmr.tg = state.settings.dmr_dest_id;
     c62_dmr.privateCall =
         (state.settings.dmr_dest_type == DMR_DEST_USER);
@@ -170,7 +172,9 @@ void OpMode_DMR::enable()
                               : dmrGlue_airDelayUs();
 
     reset();
-    dmr_voice_set_pref((state.settings.dmr_timeslot == 2) ? 1 : 0);
+    dmr_voice_set_pref(settings_dmrTimeslotAuto(state.settings.dmr_timeslot)
+                           ? DMR_VOICE_PREF_AUTO
+                           : ((state.settings.dmr_timeslot == 2) ? 1 : 0));
 #ifdef CONFIG_DMR_SMS
     dmrSms_setOwnId(state.settings.dmr_id);
     selfId = state.settings.dmr_id;
@@ -615,6 +619,25 @@ static void renderHalf(dmr_mod_t *mod, int16_t *out, const uint8_t *dibits,
 }
 
 /**
+ * The timeslot to transmit in.
+ *
+ * A fixed setting is the operator's answer and is used as it is.  AUTO follows
+ * the call on the air: if a call is being heard, the answer goes back in the
+ * same slot it came in, which is the slot the repeater is repeating; with
+ * nothing heard there is nothing to follow and TS1 is as good as any.
+ */
+uint8_t OpMode_DMR::txTimeslot(const rtxStatus_t *status) const
+{
+    if (settings_dmrTimeslotAuto(status->dmrTimeslot)) {
+        const int playing = dmr_voice_get_playing();
+
+        return (playing >= 0 && playing <= 1) ? (uint8_t)(playing + 1) : 1u;
+    }
+
+    return status->dmrTimeslot;
+}
+
+/**
  * One 30 ms slot of a voice call.
  *
  * @return true when the call has finished (terminator and tail on the air).
@@ -641,7 +664,7 @@ bool OpMode_DMR::txSlot(const rtxStatus_t *status)
         /* Still in the alignment silence: a whole half of it */
         txSilence -= DMR_HALF_SAMPLES;
     } else {
-        step = dmrTxNextSlot(&txCall, ptt, txEnding, status->dmrTimeslot,
+        step = dmrTxNextSlot(&txCall, ptt, txEnding, txTimeslot(status),
                              TX_TAIL_SLOTS);
     }
 
@@ -792,7 +815,7 @@ bool OpMode_DMR::dataTxSlot(const rtxStatus_t *status)
      * picks slot 1 or slot 2 (the same rule the voice planner applies).
      */
     const bool ourSlot = ((txVoiceBurst & 1u)
-                          == (uint8_t)((status->dmrTimeslot == 2) ? 1u : 0u));
+                          == (uint8_t)((txTimeslot(status) == 2) ? 1u : 0u));
 
     if (txStage == 0) {
         if (ourSlot) {

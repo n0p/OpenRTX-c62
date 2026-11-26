@@ -22,6 +22,14 @@
 #define SYNC_WINDOW_MS 300
 /** A voice burst this recent means "voice" */
 #define VOICE_WINDOW_MS 1000
+/**
+ * The call on the screen outlives its last burst by this much.  Five seconds is
+ * the same hang the AUTO timeslot uses, and it is what keeps the screen steady:
+ * the identifiers used to be taken from the last *burst*, so on a repeater with
+ * the other slot busy they appeared and disappeared with whichever slot spoke
+ * last -- the rows blinked while the audio was perfectly fine.
+ */
+#define CALL_HOLD_MS 5000
 
 static struct dmrStatus s_status;
 
@@ -68,14 +76,56 @@ void dmrStatus_update(void)
 
     const dmr_slot_info_t *last = (s1.last_ms > s0.last_ms) ? &s1 : &s0;
     const uint32_t now = ds.now_ms;
+    const dmr_slot_info_t *si[2] = { &s0, &s1 };
 
+    /* The voice layer's own clock: a call that stops without a terminator
+     * would otherwise hold the speaker for ever (dmr_voice_tick) */
+    dmr_voice_tick(now);
+
+    /*
+     * Which slot's call is the one on the screen.  The audio latch answers it
+     * while a call plays (and in AUTO it is exactly the slot being followed);
+     * before the first voice burst, the slot whose link control announced a
+     * call and is still inside the hold window.  Only when neither says
+     * anything does the last burst decide, which is the old behaviour.
+     *
+     * Everything the screen says about the *call* -- colour code, timeslot,
+     * identifiers, whether voice is flowing -- is read from that slot.  Taking
+     * it from whichever burst came last is what made the rows blink on a
+     * repeater with the other slot busy, while the audio was perfectly fine.
+     */
+    int callSlot = dmr_voice_get_playing();
+
+    if ((callSlot < 0) || (callSlot > 1)) {
+        callSlot = -1;
+        uint32_t best = 0;
+        for (int i = 0; i < 2; i++) {
+            if (si[i]->ids_valid
+                && ((uint32_t)(now - si[i]->last_ms) < CALL_HOLD_MS)
+                && ((callSlot < 0) || (si[i]->last_ms >= best))) {
+                callSlot = i;
+                best = si[i]->last_ms;
+            }
+        }
+    }
+
+    const dmr_slot_info_t *call = (callSlot >= 0) ? si[callSlot] : last;
+
+    /* Something is on the air at all: any burst, either slot */
     s_status.sync = (last->activity != DMR_ACT_NONE)
                  && ((uint32_t)(now - last->last_ms) < SYNC_WINDOW_MS);
-    s_status.voice = (last->activity == DMR_ACT_VOICE)
-                  && ((uint32_t)(now - last->last_ms) < VOICE_WINDOW_MS);
-    s_status.colourCode = (int8_t)((last->cc >= 0) ? last->cc : -1);
 
-    if (dmr_proto_bs_slot(&bsSlot))
+    /* Voice is the call's voice, not whatever spoke last */
+    s_status.voice = (call->activity == DMR_ACT_VOICE)
+                  && ((uint32_t)(now - call->last_ms) < VOICE_WINDOW_MS);
+
+    /* And the colour code of the call it belongs to */
+    s_status.colourCode = (int8_t)((call->cc >= 0) ? call->cc : -1);
+
+    /* The slot the call is on, so the screen stops following the bursts */
+    if (callSlot >= 0)
+        s_status.timeslot = (int8_t)(callSlot + 1);
+    else if (dmr_proto_bs_slot(&bsSlot))
         s_status.timeslot = (int8_t)(bsSlot + 1);
     else if (dmr_proto_is_ms_mode())
         s_status.timeslot = 0;
@@ -91,16 +141,11 @@ void dmrStatus_update(void)
 
     s_status.evm = linkQuality(&st);
 
-    /*
-     * The call's source and destination, when the last link control on that
-     * slot announced them: the main screen shows who is calling whom for as
-     * long as the call lasts (the slot keeps ids_valid until the next call).
-     */
-    s_status.idsValid = last->ids_valid;
-    s_status.group = last->group;
-    if (last->ids_valid) {
-        s_status.src = last->src;
-        s_status.dst = last->dst;
+    s_status.idsValid = call->ids_valid;
+    s_status.group = call->group;
+    if (call->ids_valid) {
+        s_status.src = call->src;
+        s_status.dst = call->dst;
     }
 
     uint32_t fecBits, fecFrames;

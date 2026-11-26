@@ -459,7 +459,20 @@ TEST_CASE("A DMR repeater call publishes CC, timeslot, call and quality",
         REQUIRE(o.st.sync);
         REQUIRE(o.st.colourCode == kCc);
 
-        if (o.st.timeslot == 1) {
+        /*
+         * The timeslot on the screen is the *call's*, not the slot of whichever
+         * burst came last: on a repeater the other slot is busy all the time,
+         * and taking the number from the last burst made it alternate and the
+         * identifiers blink.  So it reads TS1 in every block of the call, and
+         * what varies with the block is the burst.
+         */
+        REQUIRE(o.st.timeslot == 1);
+
+        /* What this block carried decides what "voice" means, not the slot
+           number on the screen: the screen prints the call's slot now. */
+        const std::string what(g.s.whatOfSlot[o.block]);
+
+        if (what == "voice") {
             voiceSlots++;
             /* The call's link control: who is calling whom */
             REQUIRE(o.st.voice);
@@ -467,17 +480,18 @@ TEST_CASE("A DMR repeater call publishes CC, timeslot, call and quality",
             REQUIRE(o.st.group);
             REQUIRE(o.st.src == kSrc);
             REQUIRE(o.st.dst == kTg);
-        } else if (o.st.timeslot == 2) {
+        } else {
             idleSlots++;
             /*
-             * The repeater's other slot is data, not this call's voice, and
-             * it carries no link control of its own: the call announced on
-             * TS1 is not read from TS2's idle bursts.
+             * The repeater's other slot is data, not this call's voice, and it
+             * carries no link control of its own: the call announced on TS1 is
+             * not read from TS2's idle bursts -- and TS2 speaking does not take
+             * the call, its identifiers or its voice flag off the screen.
              */
-            REQUIRE_FALSE(o.st.voice);
-            REQUIRE_FALSE(o.st.idsValid);
-        } else {
-            FAIL("timeslot unknown after four superframes on a repeater");
+            REQUIRE(o.st.voice);
+            REQUIRE(o.st.idsValid);
+            REQUIRE(o.st.src == kSrc);
+            REQUIRE(o.st.dst == kTg);
         }
     }
     /* Both slots were seen, so the CACH phase was established and followed */
@@ -520,15 +534,23 @@ TEST_CASE("A call in timeslot 2 is reported as timeslot 2", "[dmr][rx]")
     int ts2 = 0, ts1 = 0;
 
     for (const Obs &o : st) {
-        if (o.st.timeslot == 2) {
+        /* The call's slot, steady for the whole call (see the TS1 case) */
+        REQUIRE(o.st.timeslot == 2);
+
+        const std::string what(g.s.whatOfSlot[o.block]);
+
+        if (what == "voice") {
             ts2++;
             REQUIRE(o.st.voice);
             REQUIRE(o.st.idsValid);
             REQUIRE(o.st.src == kSrc);
             REQUIRE(o.st.dst == kTg);
-        } else if (o.st.timeslot == 1) {
+        } else {
             ts1++;
-            REQUIRE_FALSE(o.st.voice);
+            /* TS1 speaking does not take the call off the screen: the voice
+               flag belongs to the call, which is still on TS2 */
+            REQUIRE(o.st.voice);
+            REQUIRE(o.st.idsValid);
         }
     }
     REQUIRE(ts2 >= 15);
@@ -801,4 +823,97 @@ TEST_CASE("A DMR call ends with a terminator and keeps its identifiers",
     REQUIRE(last->st.idsValid);
     REQUIRE(last->st.src == kSrc);
     REQUIRE(last->st.dst == kTg);
+}
+
+/* ======================================================================== */
+/* The timeslot setting: TS1, TS2, and AUTO following the call on the air    */
+/* ======================================================================== */
+
+/*
+ * AUTO: the receiver listens to both slots, takes the one that carries a call,
+ * and the screen says which one it is.  A repeater whose other slot is idle --
+ * the case here -- is where a fixed TS2 would have been needed before; with
+ * AUTO there is nothing to set.
+ */
+TEST_CASE("AUTO takes the timeslot that speaks and reports it", "[dmr][rx][auto]")
+{
+    resetReceiver();
+    dmr_voice_set_pref(DMR_VOICE_PREF_AUTO);
+
+    Gen g;
+    CallOpts o;
+
+    o.callTs = 2;
+    o.frames = 30;
+    buildCall(g, o);
+
+    const std::vector<Obs> st = tail(feed(g.s), 20);
+
+    /* The audio latch is on slot 2 (zero-based 1) ... */
+    REQUIRE(dmr_voice_get_playing() == 1);
+
+    /* ... and the screen says TS2 in every block, including the ones that
+     * carried the other slot's idle bursts */
+    for (const Obs &o : st) {
+        INFO("block " << o.block << ", " << g.s.whatOfSlot[o.block] << " slot "
+                      << g.s.tsOfSlot[o.block]);
+        REQUIRE(o.st.timeslot == 2);
+        REQUIRE(o.st.idsValid);
+        REQUIRE(o.st.src == kSrc);
+        REQUIRE(o.st.dst == kTg);
+        REQUIRE(o.st.voice);
+    }
+}
+
+/*
+ * The hang.  When the call stops without a terminator -- the operator let go,
+ * the repeater dropped it -- AUTO keeps the slot for five seconds, because a
+ * conversation has gaps and re-choosing inside them would move the audio to
+ * whoever else is talking.  Past five seconds the slot is released and the
+ * receiver listens to both again.
+ */
+TEST_CASE("AUTO holds the call through its gaps and lets go after five seconds",
+          "[dmr][rx][auto]")
+{
+    resetReceiver();
+    dmr_voice_set_pref(DMR_VOICE_PREF_AUTO);
+
+    Gen g;
+    CallOpts o;
+
+    o.callTs = 1;
+    o.frames = 20;          /* no terminator: the call just stops */
+    buildCall(g, o);
+
+    /* Two seconds of silence: a gap, the call is not over */
+    Stream gap;
+    gap.pcm.assign(kHalf * 66, 0);
+    for (int i = 0; i < 66; i++) {
+        gap.tsOfSlot.push_back(0);
+        gap.whatOfSlot.push_back("silence");
+    }
+
+    feed(g.s);
+    REQUIRE(dmr_voice_get_playing() == 0);
+
+    feed(gap);
+    INFO("after 2 s of silence, playing " << dmr_voice_get_playing());
+    REQUIRE(dmr_voice_get_playing() == 0);
+
+    /* Six more seconds: the call is over, and the slot with it */
+    Stream rest;
+    rest.pcm.assign(kHalf * 200, 0);
+    for (int i = 0; i < 200; i++) {
+        rest.tsOfSlot.push_back(0);
+        rest.whatOfSlot.push_back("silence");
+    }
+
+    feed(rest);
+    INFO("after 8 s of silence, playing " << dmr_voice_get_playing());
+    REQUIRE(dmr_voice_get_playing() == -1);
+
+    struct dmrStatus s;
+    dmr_getStatus(&s);
+    REQUIRE_FALSE(s.sync);
+    REQUIRE_FALSE(s.idsValid);
 }

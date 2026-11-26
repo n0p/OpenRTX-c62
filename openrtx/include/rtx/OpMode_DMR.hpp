@@ -117,6 +117,7 @@ private:
     bool txRefuse(const char *why);
     bool startDataTx(const rtxStatus_t *status);
     void stopTx();
+    uint8_t txTimeslot(const rtxStatus_t *status) const;
     bool txSlot(const rtxStatus_t *status);
     bool dataTxSlot(const rtxStatus_t *status);
     bool needDataTx(const rtxStatus_t *status) const;
