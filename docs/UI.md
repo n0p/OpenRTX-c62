@@ -724,12 +724,14 @@ table entry plus its rows**. The steps, in order, and nothing outside them:
    UI. `UI_TEST_<X>` is how the host build turns a mode's screens on without
    linking its demodulator; see the note at the top of `meson.build`.
 4. **Rows.** A `static const qm_item_t qm_items_<x>[]` table in
-   `ui_quickmenu.c`, next to the others: the mode's own rows first (what the
-   engine can be told to do, then what it reports as `QM_INFO`), then the shared
-   tail every table ends with (`FINE` if `CONFIG_RX_FINE_OFFSET`, `BKL`,
-   `KEYLIT` if `CONFIG_KEY_BACKLIGHT`, `LOCK`, `MSGS`, `MSG`). Labels are at most
-   ten uppercase characters and the value column has to fit; a read-only row
-   shows `---` or `SRCH`, never a zero.
+   `ui_quickmenu.c`, next to the others: only what the engine can be *told to
+   do* (a receive filter, a channel spacing, a destination), then the shared tail
+   every table ends with (`FINE` if `CONFIG_RX_FINE_OFFSET`, `BKL`, `KEYLIT` if
+   `CONFIG_KEY_BACKLIGHT`, `LOCK`, `MSGS`, `MSG`). No `QM_INFO` row: the table is
+   also the mode's Settings page, so what the engine *reports* goes on the main
+   screen through `ui/ui_mode_state.h` (see "El estado del modo"), and
+   `tests/unit/ui_menu_audit.cpp` fails if one comes back. Labels are at most ten
+   uppercase characters and the value column has to fit.
 5. **Registry entry.** One line in `uiModes[]`:
 
    ```c

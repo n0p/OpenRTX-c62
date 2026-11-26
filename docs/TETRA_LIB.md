@@ -179,9 +179,13 @@ usa `tetra_sds_parse_text()` en el camino del host).
 | `TETRA_EV_PDU` | se ignora (monitor: no hay nada que hacer con un PDU suelto) |
 
 `tetraStatus_onEvent()` es el único callback: la voz sale antes del mutex, el
-resto se copia al estado. La UI lee con `tetra_getStatus()`; el menú rápido
-tiene ahora `REG` (registro/attach), `NET` (vecinas + reloj de red) y `UL`
-(SSI oído en el uplink) además de `CELL`, `LA/CC` y `CALL`.
+resto se copia al estado. La UI lee con `tetra_getStatus()`, y desde el cambio
+del estado del modo (docs/UI.md, "El estado del modo") no lo muestra en el menú
+rápido sino en la pantalla principal: la celda (`MCC-MNC`), el área de
+localización y el registro (`ACC G<n>` / `REJ <causa>`) en la línea 2, la
+llamada en curso en su propia pantalla, y el uplink, los SDS y las cifras del
+demodulador en la línea 1. El *broadcast* de red (vecinas, carga, reloj) ya no
+se dibuja: no cabe junto a la celda en 160 px y es diagnóstico.
 
 ### Escuchar el uplink de la celda (MS → BS)
 
