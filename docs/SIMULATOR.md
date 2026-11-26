@@ -219,9 +219,10 @@ one** -- its main screen, its P2 popup with every row selectable and a value
 edited, its own Settings page with all of its rows, and out again -- the FM
 popup in depth (every editable value, LOCK and the red held down that unlocks
 it), the DMR transmit screens (the two-step Rx/Tx entry, against TETRA's
-single one), the tools menu of P1 held down (its five rows walked, the row
+single one), the tools menu of P1 held down (its six rows walked, the row
 labels and values checked, the mode submenu with the TX/RX mark of all eleven
-modes, opened, walked and applied), the channel bank (create, edit the
+modes, opened, walked and applied; the `Puerto` row flipped and put back), the
+channel bank (create, edit the
 frequency, save, tune, open the stored record again), the contact book (create,
 save, reopen), the messages (inbox, a received message, the view, the
 composer, typing, SEND and the delivery page, the sent folder), the zone
@@ -337,9 +338,9 @@ Found by the tour and left alone because they are cosmetic or need a decision:
   the classic codeplug (`cps_readBankHeader`, `cps_readChannel`), which the
   emulator has no image of. The tour opens both and says they are empty; the
   in-radio bank of the tools menu is the one with content.
-- **The TETRA Settings page is one row** (AFC) while the TETRA popup has
-  thirteen. It is not a defect of the tour: `_ui_drawSettingsTetra` was written
-  by hand and only ever had the one row.
+- **The TETRA Settings page is two rows** (AFC, FINE) while the TETRA popup has
+  fourteen. It is not a defect of the tour: `_ui_drawSettingsTetra` was written
+  by hand and only ever had the rows it has.
 - **A receive-only mode applies the typed frequency at the eighth digit** while
   a mode with a transmitter asks for Rx and then Tx and applies at the
   sixteenth; the tour asserts both, and it is the only place the difference is

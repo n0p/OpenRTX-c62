@@ -294,7 +294,6 @@ enum settingsRadioItems
     R_STEP,
     R_SQUELCH,
     R_POWER,
-    R_PC_PORT,
 };
 
 enum settingsAudioItems
@@ -347,9 +346,6 @@ enum settingsFMItems
 {
     CTCSS_Tone,
     CTCSS_Enabled,
-    CTCSS_Tx_En,
-    CTCSS_Rx_En,
-    CTCSS_Cancel,
     FM_BANDWIDTH,
 };
 

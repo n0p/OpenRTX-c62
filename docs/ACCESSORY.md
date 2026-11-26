@@ -100,17 +100,19 @@ normal y una trama reintentada en el caso raro.
 
 ## 2. Los tres modos
 
-Se eligen en la **última fila del menú P2**, la misma en todos los modos, y en
-ningún otro sitio: la fila vivió un tiempo también en Ajustes ▸ Radio y tenerla
-en dos menús dejaba al operador sin saber cuál de los dos obedecía el firmware.
-Se descartó la de Ajustes, que está a tres pantallas de la principal.
+Se eligen en la **última fila del menú de herramientas** (P1 mantenido en
+cualquiera de las dos pantallas principales: `Herramientas ▸ Puerto`), y en
+ningún otro sitio. La fila vivió un tiempo en cada menú P2 *y* en Ajustes ▸
+Radio, y tenerla en tres menús dejaba al operador sin saber cuál de ellos
+obedecía el firmware; ahora hay una sola, la del menú que se abre desde las dos
+pantallas, y `tests/unit/ui_menu_audit.cpp` falla si reaparece en otra.
 se guardan en `settings_t.pc_port` (`enum portMode`,
 `openrtx/include/core/settings.h`) y **se aplican al instante**: el transporte del
 protocolo lee el ajuste en cada pasada de su bucle (1 ms) y remuxa el pad, sin
 reiniciar. El valor por defecto es `Never`.
 
-**`Auto` no está en el menú.** La fila `PUERTO` ofrece sólo `SERIE` y
-`Never`: `Auto` se selecciona desde el CPS (`PC_TAG_SET_PC_PORT`, o el campo
+**`Auto` no está en el menú.** La fila `Puerto` ofrece sólo `SERIE` y
+`PTT`: `Auto` se selecciona desde el CPS (`PC_TAG_SET_PC_PORT`, o el campo
 `pc_port` de `SETTINGS_SET`) y se aplica en la pasada siguiente, así que una
 sesión de banco puede probarlo sin menú. Y no sobrevive a un reinicio: un
 registro guardado con `Auto` se lee como `Never` al arrancar

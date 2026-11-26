@@ -190,7 +190,6 @@ void *main_thread(void *arg)
 {
     (void) arg;
 
-
     long long time = 0;
 
     #if defined(CONFIG_GPS)

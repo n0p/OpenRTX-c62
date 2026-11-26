@@ -86,6 +86,20 @@ static void append_json_string(char *buf, size_t len, size_t *pos,
     append(buf, len, pos, "\"");
 }
 
+/** Kind of a quick menu row, as the dump spells it. */
+static const char *qm_type_name(uint8_t type)
+{
+    switch (type) {
+        case QM_INT:    return "int";
+        case QM_ENUM:   return "enum";
+        case QM_TOGGLE: return "toggle";
+        case QM_INFO:   return "info";
+        case QM_GOTO:   return "goto";
+        case QM_ACTION: return "action";
+        default:        return "?";
+    }
+}
+
 /** "145.500000" for 145500000 Hz. */
 static void fmt_mhz(char *out, size_t len, freq_t hz)
 {
@@ -422,7 +436,8 @@ size_t ui_dump_json(char *buf, size_t len)
 
             append(buf, len, &pos, "%s{\"label\":", (i == 0) ? "" : ",");
             append_json_string(buf, len, &pos, qm->items[i].label);
-            append(buf, len, &pos, ",\"value\":");
+            append(buf, len, &pos, ",\"type\":\"%s\",\"value\":",
+                   qm_type_name(qm->items[i].type));
             append_json_string(buf, len, &pos, value);
             append(buf, len, &pos, ",\"selected\":%s}",
                    (i == sel) ? "true" : "false");

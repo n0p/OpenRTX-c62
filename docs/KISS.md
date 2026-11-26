@@ -97,7 +97,7 @@ Tres consecuencias que conviene tener escritas:
 2. **El PTT deja de funcionar.** GPIOA_15 es a la vez UART2 RXD y el botón PTT;
    el driver lo conmuta a `CSK_IOMUX_FUNC_ALTER3` (UART2 RXD) igual que el
    control remoto. Por eso la opción está apagada por defecto. El ajuste
-   **Ajustes ▸ Radio ▸ Puerto PC** (`docs/ACCESSORY.md`) no cambia esto: una
+   **Herramientas ▸ Puerto** (`docs/ACCESSORY.md`) no cambia esto: una
    build KISS se queda el pad al arrancar y este transporte no lo comparte.
 3. **Se inicializa tarde.** `platform.c` llama a `kiss_uart_init()` cuando todo
    lo que imprime ya ha impreso, justo antes de armar el watchdog, y solo si el
