@@ -32,6 +32,7 @@
 #include "p25_frame_bits.h"
 #include "p25_tsdu_bits.h"
 #include "protocols/P25/P25Defs.h"
+#include "protocols/P25/P25Fec.h"
 #include "protocols/P25/P25Phy.h"
 
 namespace {
@@ -449,4 +450,308 @@ TEST_CASE("P25 demodulator does not invent frames", "[p25][phy]")
 
     Result r = demodulate(noise);
     REQUIRE(r.frames == 0);
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * What the demodulator must refuse
+ * ---------------------------------------------------------------------------
+ *
+ * Everything above is a frame that is on the air and has to come out right.
+ * The cases below are the other half of the contract: a frame whose identity
+ * cannot be trusted must not be published at all -- no NAC, no DUID, no
+ * talkgroup, no voice -- and a frame that a DUID misdescribes must not be
+ * read as the frame the DUID claims.  Each of these is one refusal, because
+ * that is what the mode does with a wrong one: it puts a NAC or a talkgroup on
+ * the screen that nobody transmitted, and the operator keys over a call that
+ * is not there.
+ */
+
+namespace {
+
+/**
+ * Re-code the NID of a frame in place: the 64 bits at p25_imbe_nid_bits are
+ * the BCH(63,16) codeword of (NAC, DUID) followed by the DUID parity bit
+ * (TIA-102.BAAC).  The last argument flips that parity bit, which is the
+ * cheapest way to make a NID that contradicts itself.
+ */
+void putNid(uint8_t *bits, uint16_t nac, uint8_t duid, bool flipParity)
+{
+    const uint64_t cw = p25Fec_bchEncode((uint16_t)((nac << 4) | duid));
+
+    int parity;
+    switch (duid) {
+        case P25_DUID_HDU:
+        case P25_DUID_TDU:
+        case P25_DUID_TSBK:
+        case P25_DUID_PDU:
+        case P25_DUID_TDU15:
+            parity = 0;
+            break;
+        default:
+            parity = 1;   /* LDU1, LDU2 */
+            break;
+    }
+
+    const uint64_t nid = (cw << 1) | (uint64_t)(parity ^ (flipParity ? 1 : 0));
+    for (int i = 0; i < P25_NID_BITS; i++)
+        bits[p25_imbe_nid_bits[i]] = (uint8_t)((nid >> (63 - i)) & 1u);
+}
+
+/** The off-air LDU1 of the fixture, as bits, ready to be patched. */
+Bits ldu1Bits()
+{
+    return Bits();
+}
+
+/** Flip n bits of the NID field, spread so that no two coincide. */
+void corruptNid(Bits &f, int n)
+{
+    for (int k = 0; k < n; k++)
+        f.b[p25_imbe_nid_bits[(k * 5) % P25_NID_BITS]] ^= 1u;
+}
+
+/** Every frame a train produced, in order, with what it carried. */
+struct Sequence {
+    std::vector<Result> frames;
+    unsigned gridMisses = 0;
+};
+
+void countSequence(const struct p25Frame *f, void *user)
+{
+    auto *s = static_cast<Sequence *>(user);
+    s->frames.push_back(Result());
+    count(f, &s->frames.back());
+}
+
+/** Modulate a list of frames back to back and demodulate the train. */
+Sequence demodulateSequence(const std::vector<Bits> &frames, int nsym,
+                            double phase)
+{
+    std::vector<uint8_t> stream;
+    for (const Bits &f : frames)
+        stream.insert(stream.end(), f.b, f.b + (size_t)nsym * 2u);
+
+    std::vector<int16_t> pcm = modulate(stream.data(), nsym * (int)frames.size(),
+                                        phase, false, 1000);
+
+    Sequence s;
+    p25Phy_init();
+
+    const size_t block = 960;
+    for (size_t off = 0; off < pcm.size(); off += block) {
+        size_t n = pcm.size() - off;
+        if (n > block)
+            n = block;
+        p25Phy_push(&pcm[off], n, countSequence, &s);
+    }
+
+    std::vector<int16_t> tail(2 * (size_t)P25_FRAME_SYMBOLS * SPS, 0);
+    p25Phy_push(tail.data(), tail.size(), countSequence, &s);
+    s.gridMisses = p25Phy_gridMisses();
+    return s;
+}
+
+} // namespace
+
+TEST_CASE("P25 accepts four NID errors and refuses the fifth", "[p25][phy]")
+{
+    /*
+     * The NID is BCH(63,16): the code corrects far more than four bits, but
+     * the demodulator's policy (decodeNid) accepts a NID only up to four
+     * corrected bits.  Past that the NAC and the DUID are a guess, and the
+     * frame must not be published at all -- the boundary is the contract, so
+     * both sides of it are checked.
+     */
+    for (int errors = 1; errors <= 4; errors++) {
+        Bits f = ldu1Bits();
+        corruptNid(f, errors);
+        std::vector<int16_t> pcm =
+            modulate(f.b, P25_FRAME_SYMBOLS, 2.5, false, 1000);
+        Result r = demodulate(pcm);
+        INFO("errors " << errors);
+        REQUIRE(r.frames == 1);
+        requireFrame(r);          /* still the right NAC, DUID and voice */
+    }
+
+    for (int errors = 5; errors <= 12; errors++) {
+        Bits f = ldu1Bits();
+        corruptNid(f, errors);
+        std::vector<int16_t> pcm =
+            modulate(f.b, P25_FRAME_SYMBOLS, 2.5, false, 1000);
+        Result r = demodulate(pcm);
+        INFO("errors " << errors);
+        REQUIRE(r.frames == 0);
+    }
+
+    /* And a NID that is noise: twenty bits wrong */
+    Bits f = ldu1Bits();
+    corruptNid(f, 20);
+    std::vector<int16_t> pcm = modulate(f.b, P25_FRAME_SYMBOLS, 2.5, false, 1000);
+    Result r = demodulate(pcm);
+    REQUIRE(r.frames == 0);
+}
+
+TEST_CASE("P25 refuses a NID whose DUID parity bit is wrong", "[p25][phy]")
+{
+    /*
+     * The last bit of the NID is the parity of the DUID: even for the frames
+     * that carry a header or a data unit, odd for the voice frames.  A frame
+     * whose parity contradicts its DUID was not received correctly, whatever
+     * the BCH says, and must be dropped.
+     */
+    Bits f = ldu1Bits();
+    putNid(f.b, 0x293, P25_DUID_LDU1, true);
+    std::vector<int16_t> pcm = modulate(f.b, P25_FRAME_SYMBOLS, 2.5, false, 1000);
+    Result r = demodulate(pcm);
+    REQUIRE(r.frames == 0);
+
+    /* The same NID with the parity it should have is accepted, so the refusal
+     * above is the parity bit and not the re-coding. */
+    Bits g = ldu1Bits();
+    putNid(g.b, 0x293, P25_DUID_LDU1, false);
+    pcm = modulate(g.b, P25_FRAME_SYMBOLS, 2.5, false, 1000);
+    r = demodulate(pcm);
+    requireFrame(r);
+    requireReferenceBits(r);
+}
+
+TEST_CASE("P25 refuses a DUID it does not know", "[p25][phy]")
+{
+    /* 0x1, 0x2, 0x4, 0x6, 0x8, 0x9, 0xB, 0xD and 0xE are not P25 Phase 1 data
+     * units.  A frame announcing one is not a frame this mode can read, so it
+     * is not reported: the NAC would be the only usable thing on the screen
+     * and it will come back with the next good frame. */
+    for (uint8_t duid : {0x1, 0x2, 0x4, 0x6, 0x8, 0x9, 0xB, 0xD, 0xE}) {
+        Bits f = ldu1Bits();
+        putNid(f.b, 0x293, duid, false);
+        std::vector<int16_t> pcm =
+            modulate(f.b, P25_FRAME_SYMBOLS, 2.5, false, 1000);
+        Result r = demodulate(pcm);
+        INFO("duid 0x" << std::hex << (int)duid);
+        REQUIRE(r.frames == 0);
+    }
+}
+
+TEST_CASE("P25 does not read an LDU body for the DUID it announces",
+          "[p25][phy]")
+{
+    /*
+     * The DUID says how long the frame is and what is inside it.  Announce a
+     * TSBK over the body of an LDU1 and the demodulator must cut 360 symbols,
+     * find no block whose CRC checks out, and publish nothing but the NAC and
+     * the DUID: no link control, no talkgroup, no voice.  Reading the body as
+     * the frame the DUID claims is how a control-channel frame would put a
+     * talkgroup on the screen that came out of a voice frame.
+     */
+    Bits f = ldu1Bits();
+    putNid(f.b, 0x293, P25_DUID_TSBK, false);
+    std::vector<int16_t> pcm = modulate(f.b, P25_FRAME_SYMBOLS, 2.5, false, 1000);
+    Result r = demodulate(pcm);
+
+    REQUIRE(r.frames == 1);
+    REQUIRE(r.nac == 0x293);
+    REQUIRE(r.duid == (int)P25_DUID_TSBK);
+    REQUIRE(r.span == p25_frame_symbols(P25_DUID_TSBK));
+    REQUIRE_FALSE(r.tsbkValid);
+    REQUIRE_FALSE(r.lcValid);
+    REQUIRE(r.talkgroup == 0);       /* untouched: nothing decoded it */
+    REQUIRE(r.source == 0);
+    REQUIRE(r.voiceCount == 0);
+    REQUIRE(r.voiceBad == 0);
+}
+
+TEST_CASE("P25 publishes the NAC that was on the air", "[p25][phy]")
+{
+    /*
+     * Three voice frames, three NACs, one stream: the NAC of each frame must be
+     * the one it was sent with.  A demodulator that keeps the first one -- or
+     * the conventional 0x293 -- passes every single-NAC test ever written and
+     * still shows the wrong network on a busy channel.
+     */
+    std::vector<Bits> frames;
+    const uint16_t nacs[3] = {0x001, 0x293, 0xFFF};
+    for (uint16_t nac : nacs) {
+        Bits f = ldu1Bits();
+        putNid(f.b, nac, P25_DUID_LDU1, false);
+        frames.push_back(f);
+    }
+
+    Sequence s = demodulateSequence(frames, P25_FRAME_SYMBOLS, 2.5);
+    REQUIRE(s.frames.size() == 3);
+    for (size_t i = 0; i < 3; i++) {
+        INFO("frame " << i);
+        REQUIRE(s.frames[i].nac == nacs[i]);
+        REQUIRE(s.frames[i].duid == (int)P25_DUID_LDU1);
+        REQUIRE(s.frames[i].lcValid);
+        REQUIRE(s.frames[i].talkgroup == 1);
+        REQUIRE(s.frames[i].source == 1);
+    }
+}
+
+TEST_CASE("P25 refuses the link control of a frame that was cut short",
+          "[p25][phy]")
+{
+    /*
+     * The carrier drops after 400 of the 864 symbols: sync and NID arrived,
+     * the low-speed data that carries the link control did not.  The NAC and
+     * the DUID are real and may be shown, but no talkgroup and no source can
+     * come out of a field that never arrived -- the RS(24,12) has to refuse
+     * it, and the mode shows an empty call rather than a talkgroup of zeros.
+     *
+     * Known gap, not pinned here: the nine IMBE words of that frame are still
+     * counted as clean (an all-zero word is a valid codeword of both the Golay
+     * and the Hamming code used inside it), so voiceCount/voiceBad cannot be
+     * asserted until the demodulator refuses to slice a frame whose payload is
+     * not in the ring.  See docs/TEST_PLAN.md, section 1.
+     */
+    Bits f = ldu1Bits();
+    std::vector<int16_t> pcm = modulate(f.b, 400, 2.5, false, 1000);
+    Result r = demodulate(pcm);
+
+    REQUIRE(r.frames == 1);
+    REQUIRE(r.nac == 0x293);
+    REQUIRE(r.duid == (int)P25_DUID_LDU1);
+    REQUIRE_FALSE(r.lcValid);
+    REQUIRE(r.lcRsErrors < 0);
+    REQUIRE(r.talkgroup == 0);   /* never decoded, so never published */
+    REQUIRE(r.source == 0);
+}
+
+TEST_CASE("P25 recovers the frame grid after a refused frame", "[p25][phy]")
+{
+    /*
+     * A frame the demodulator throws away must cost that frame and nothing
+     * else: the next sync is still where the grid says it is.  A refusal that
+     * also loses the symbol clock turns one bad frame on a channel into a
+     * second of silence while the receiver walks the ring again -- on a control
+     * channel, where a TSDU is 360 symbols, that is every frame.
+     *
+     * Eight frames with the fifth refused: seven published, and the grid is
+     * out by exactly one prediction (the refused frame's own), which is the
+     * same count a clean train of that length costs for the frame after the
+     * last one.
+     */
+    std::vector<Bits> frames;
+    for (int i = 0; i < 8; i++) {
+        Bits f = ldu1Bits();
+        if (i == 4)
+            corruptNid(f, 8);    /* refused, not published */
+        frames.push_back(f);
+    }
+
+    Sequence s = demodulateSequence(frames, P25_FRAME_SYMBOLS, 2.5);
+
+    REQUIRE(s.frames.size() == 7);
+    for (const Result &r : s.frames) {
+        REQUIRE(r.nac == 0x293);
+        REQUIRE(r.duid == (int)P25_DUID_LDU1);
+        REQUIRE(r.lcValid);
+        REQUIRE(r.voiceBad == 0);
+        REQUIRE(r.imbeErrors == 0);
+    }
+    /* Measured: 2.  One for the refused frame, one for the frame after the
+     * last of the train; the six frames after the refusal are on the grid. */
+    INFO("grid misses " << s.gridMisses);
+    REQUIRE(s.gridMisses <= 2);
 }
