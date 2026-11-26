@@ -1417,6 +1417,14 @@ p25_phy_test = executable('p25_phy_test',
                                     ['tests/unit/p25_phy.cpp'],
                           kwargs  : unit_test_opts)
 
+# P25 channel codes at their limits (tests/unit/p25_fec.cpp): what each code
+# has to correct and what it has to refuse, which neither the end-to-end
+# transmitter nor the real-frame PHY test walks past.
+p25_fec_test = executable('p25_fec_test',
+                          sources : unit_test_src + p25_phy_src +
+                                    ['tests/unit/p25_fec.cpp'],
+                          kwargs  : unit_test_opts)
+
 m17_viterbi_test = executable('m17_viterbi_test',
                                sources : unit_test_src + ['tests/unit/M17_viterbi.cpp'],
                                kwargs  : unit_test_opts)
@@ -2087,6 +2095,7 @@ m17_replay_test = executable('m17_replay_test',
 
 test('M17 Golay Unit Test',   m17_golay_test)
 test('P25 PHY Test',           p25_phy_test)
+test('P25 FEC Limits Test',    p25_fec_test)
 test('M17 Viterbi Unit Test', m17_viterbi_test)
 test('M17 Demodulator Test',  m17_demodulator_test)
 test('M17 RRC Test',          m17_rrc_test)
