@@ -111,3 +111,8 @@ __pycache__/
 # Host simulator: the settings record of a run and the user store image
 .emulator_userstore.img
 /sim-tour/
+# nr-unet (evaluacion UNet-Audio-Denoiser)
+vendor/
+.venv/
+work/
+model_cost.json
