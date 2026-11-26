@@ -142,6 +142,11 @@ Todo lo de esta sección se decide en el host; nada de aquí necesita el banco.
 - **P1/P2 cambian el valor en toda edición de Ajustes**; las flechas también
   (`unit/ui_menu_audit`, "P1 and P2 change the value in a Settings edit"); el
   `Simulator Menu Audit` lo vuelve a medir fila a fila.
+- **El banco de canales desde el menú**: P1 largo abre Herramientas y su última
+  fila abre la lista de canales, que tunea al canal como canal de memoria
+  (`unit/ui_bank_tune`). Lo que hace cada tecla dentro de la lista y del editor
+  —y que la lista se abra en el canal que estaba en uso— lo fija
+  `unit/ui_channels_editor` (sección 3).
 - **Lo que no cubre:** los campos de canal que editan las páginas de modo
   (CTCSS, tono, ancho de banda de FM) no son `settings_t` y quedan fuera de la
   regla de duplicados; los ajustes que se escriben con el teclado (indicativo,
@@ -158,6 +163,34 @@ Todo lo de esta sección se decide en el host; nada de aquí necesita el banco.
 - **Máquinas de estado**: entrada de VFO (dígitos, límites, campo TX), editor de
   canales, mensajería (borrador, cola, ACK, reintentos), scanner y búsqueda VFO,
   standby, teclado bloqueado.
+- **Editor de canales** (`unit/ui_channels_editor`, con el recorrido de
+  `ui_walk.hpp`): crear (P1 duplica el canal seleccionado, o el VFO con el banco
+  vacío) y guardar con P2; editar un campo con verde y UP/DOWN; P1/P2 mueven el
+  cursor dentro del nombre o de la frecuencia, no la selección de campo; rojo
+  cancela sin tocar el banco; borrar sólo tras la confirmación (P2 largo y luego
+  verde; NO deja el canal donde estaba); y la lista se abre en el canal que
+  estaba en uso al apagar (`ui_channels_open()` lee `chstore_lastUsed()`,
+  probado con un apagado/encendido de verdad sobre el banco en RAM:
+  `chstore_commit()` y releer los dos slots). Las aserciones son sobre lo que la
+  pantalla dibuja —título, filas, selección invertida y el rectángulo del cursor
+  (`gfx_capture_caret`)— y sobre el registro guardado, nunca sobre un estático
+  del módulo. Al escribirla salió un fallo: P2 largo en la lista no llegaba
+  nunca a `ui_channels_handleEvent` porque la rejilla de macros se despachaba
+  antes, así que la confirmación de borrado era inalcanzable desde el teclado
+  (y la tecla siguiente se iba a un menú invisible). La lista se despacha ahora
+  con las demás capas, antes de la rejilla.
+- **Cola de mensajería** (`unit/messaging_fsm`): cola → `messaging_begin` (una
+  entrada sólo se entrega una vez) → `messaging_done(false)` la devuelve a la
+  cola hasta `MSG_MAX_ATTEMPTS` y después FAILED; `done(true)` es SENT si no se
+  pidió confirmación y sigue SENDING si se pidió, y sólo el `messaging_confirmed`
+  posterior la deja DELIVERED (por id o por peer); el plazo de 30 s lo cierra
+  `messaging_task`; `messaging_fail` da por perdida una entrada con cualquier
+  número de intentos; cancelar la saca de la cola para siempre y un resultado
+  tardío no la revive; el outbox lleno (6) y la reutilización de un hueco
+  terminado; y el registro completo —outbox, bandeja y borrador— por
+  `messaging_serialise`/`deserialise`, con el CRC que rechaza un registro
+  corrupto sin dejar media cola y la entrada que estaba en el aire al apagar
+  volviendo como encolada.
 - **Modo en la pantalla principal**: lo que el modo decodifica se ve sin abrir
   ningún menú (`ui_mode_state.c`, capturas en `reports/mode_status/`).
 - **Estados vacíos**: sin sincronismo se lee `SRCH`/`-`, nunca un cero.

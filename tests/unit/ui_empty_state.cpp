@@ -109,6 +109,31 @@ std::string drawnText()
     return text;
 }
 
+/**
+ * Every receiver double back to "nothing decoded".
+ *
+ * Catch2 runs the cases in random order (since 3.8 the default is
+ * `--order rand`), so a case must not inherit the stub another one left
+ * synced: with the two cases in the other order, the NXDN double stayed
+ * "locked, RAN not decoded" and the searching case read SYNC where it wanted
+ * silence. Each case starts from the same radio, whatever ran before it.
+ */
+/*
+ * Every receiver double back to "nothing decoded", whatever the case that ran
+ * before left behind: the cases of this file share one process and Catch2
+ * chooses their order, and these blocks are global state with no clock.
+ */
+void clearStatusDoubles()
+{
+    dmr_sim_clear();
+    tetra_sim_clearCell();
+    tetra_sim_setRegistration(false, 0, 0);
+    p25Status_simSet(false, false, -1, -1, -1, -1, 0, 0, 0);
+    nxdnStatus_simSet(false, -1, false, 0, false, 0, 0, 0, 0);
+    dstarStatus_simSet(false, false, "", "", "", 0, "");
+    dpmrStatus_clear();
+}
+
 } /* namespace */
 
 /* ======================================================================== */
@@ -132,29 +157,9 @@ TEST_CASE("Nothing decoded reads as searching, never as a zero",
          */
         state.settings.dmr_id = 1234567;
 
-        /*
-         * Every receiver double back to "nothing decoded". All of them, every
-         * iteration: the test cases of this file share the process, the order
-         * they run in is Catch2's, and the "not decoded yet" case below fills
-         * these same blocks -- a loop that cleared only two of them said
-         * "NXDN SYNC" instead of "NXDN SRCH" whenever it ran second.
-         */
-        dmr_sim_clear();
-        nxdnStatus_clear();
-        dpmrStatus_clear();
-        p25Status_clear();
-        dstarStatus_clear();
-        tetra_sim_clearCell();
-        /*
-         * The other three are the same trap: a case further down this file
-         * locks an NXDN, a P25 and a D-STAR receiver to look at their state
-         * blocks, and those blocks are global state with no clock behind them.
-         * Clearing only DMR and TETRA made this case depend on whether it ran
-         * before or after them - it failed whenever Catch2 put it after.
-         */
-        nxdnStatus_clear();
-        p25Status_clear();
-        dstarStatus_clear();
+        /* Every receiver double back to "nothing decoded", whatever the case
+           that ran before this one left behind */
+        clearStatusDoubles();
 
         ui_mode_state_t st;
         ui_mode_state_read(&st);
@@ -184,6 +189,9 @@ TEST_CASE("An identifier that has not been decoded reads '-', never 0",
           "[ui][state][empty]")
 {
     ui_mode_state_t st;
+
+    /* Whatever the case that ran before this one left synced */
+    clearStatusDoubles();
 
     /* DMR: sync and timeslot, colour code not decoded yet */
     ui_walk::resetUi(OPMODE_DMR, 145500000);

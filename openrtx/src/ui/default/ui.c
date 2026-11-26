@@ -2262,6 +2262,27 @@ void ui_updateFSM(bool *sync_rtx)
             return;
         }
 
+        /*
+         * Channel list and editor consume every key while they are open.
+         *
+         * This block used to sit after the macro grid below, which meant the
+         * two keys the grid claims -- MONI and a long P2 -- never reached the
+         * module: a long P2 in the list armed the macro grid behind a screen
+         * drawn on top of it, so the delete confirmation of docs/CHANNELS.md
+         * could not be reached from the keypad at all and the operator's next
+         * key went to a menu he could not see. Every other overlay (the tools
+         * menu, the messages screens, the contacts, the zones) is dispatched
+         * before the grid for the same reason; the list is no different.
+         */
+        if (ui_channels_isOpen())
+        {
+            ui_channels_handleEvent(&msg, sync_rtx);
+            _ui_syncTxDisable(sync_rtx);
+
+            KEY_CLAIM(UI_CLAIM_CHANNELS);
+            return;
+        }
+
         // If MONI is pressed, activate MACRO functions; P2 long keeps the
         // legacy 3x3 grid as its shortcut everywhere APRS does not claim it
         bool moniPressed = (msg.keys & KEY_MONI)
@@ -2334,16 +2355,6 @@ void ui_updateFSM(bool *sync_rtx)
             }
             redraw_needed = true;
             KEY_CLAIM(UI_CLAIM_TOOLS_OPEN);
-            return;
-        }
-
-        /* Channel list and editor consume every key while they are open. */
-        if (ui_channels_isOpen())
-        {
-            ui_channels_handleEvent(&msg, sync_rtx);
-            _ui_syncTxDisable(sync_rtx);
-
-            KEY_CLAIM(UI_CLAIM_CHANNELS);
             return;
         }
 

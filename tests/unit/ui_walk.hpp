@@ -321,6 +321,19 @@ inline void seedStores()
     injectAprs("EA5XYZ", text);
 }
 
+/**
+ * Power-cycle the channel bank: bind the port again so that chstore_init()
+ * re-reads the two slots, as it does on the radio at boot. seedStores() uses
+ * the same RAM area, so what was committed is what comes back.
+ */
+inline void rebootBank()
+{
+    static chstorePort portCopy;
+    portCopy = port();
+    chstore_bind(&portCopy);
+    chstore_init();
+}
+
 /** A clean radio: every module closed, no popup, a known screen and mode. */
 inline void resetUi(uint8_t mode = OPMODE_FM, freq_t freq = 145500000)
 {
@@ -394,24 +407,32 @@ struct Snapshot
     std::vector<Line> lines;
 };
 
+/**
+ * Draw the screen the FSM has reached and return what was recorded.
+ *
+ * A state written by hand (resetUi, an injected packet) has not asked for a
+ * redraw, and ui_updateGUI() would leave the previous frame in place; and the
+ * screens draw from `last_state`, the copy ui_updateFSM() publishes at the end
+ * of every pass, so a state written by hand has to be published too or the
+ * frequency and the mode on the screen are the previous ones.
+ */
+inline void drawNow(gfx_capture_frame_t *frame)
+{
+    ui_requestRedraw();
+    ui_saveState();
+    ui_updateGUI();
+
+    memset(frame, 0, sizeof(*frame));
+    gfx_capture_last(frame);
+}
+
 inline Snapshot observe()
 {
     Snapshot s;
     char buf[256];
 
-    /* Draw the screen the FSM has just reached, then read it back. A state
-       written by hand (resetUi, an injected packet) has not asked for a
-       redraw, and ui_updateGUI() would leave the previous frame in place. */
-    ui_requestRedraw();
-    /* The screens draw from `last_state`, the copy ui_updateFSM() publishes at
-       the end of every pass: a state written by hand has to be published too,
-       or the frequency and the mode on the screen are the previous ones. */
-    ui_saveState();
-    ui_updateGUI();
-
     gfx_capture_frame_t frame;
-    memset(&frame, 0, sizeof(frame));
-    gfx_capture_last(&frame);
+    drawNow(&frame);
 
     snprintf(buf, sizeof(buf),
              "%u|%u|%u|%d|%u|%u|%d|%u|%u|%d|%d|%u|%d%d%d%d%d%d|%d|%d",
