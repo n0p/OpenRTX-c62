@@ -200,9 +200,17 @@ int nvm_writeSettings(const settings_t *settings);
 /**
  * Write OpenRTX settings and VFO channel configuration to storage.
  *
- * @param settings: pointer to the settings_t data structure to be written.
- * @param vfo: pointer to the VFO data structure to be written.
- * @return 0 on success, -1 on failure
+ * Either pointer may be NULL, and a NULL means "leave that record as it is":
+ * this is how a caller persists only the half that changed. The settings task
+ * of a platform with NVMEM_DEBOUNCED_WRITE passes NULL for the record that did
+ * not move (core/state.c) and the restore of a backup image writes the VFO on
+ * its own, after the settings (core/backup_image.c). Drivers skip the missing
+ * half -- never hand the NULL down to the medium, where it is a fault, not a
+ * no-op.
+ *
+ * @param settings: settings_t to be written, or NULL to leave them alone.
+ * @param vfo: VFO channel_t to be written, or NULL to leave it alone.
+ * @return 0 on success, a negative value on failure.
  */
 int nvm_writeSettingsAndVfo(const settings_t *settings, const channel_t *vfo);
 
