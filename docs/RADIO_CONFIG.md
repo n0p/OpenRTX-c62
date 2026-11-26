@@ -315,6 +315,15 @@ every mode**. `bk4819_setAudioMode()` clears it in both of its profiles and
 nothing in this firmware sets it back, so what an FM operator hears is the 1:2
 expander of the voice profile and not a compander.
 
+And one that is a defect in waiting: **only M17 and DMR set the TX deviation
+word**. NXDN, dPMR, P25, YSF and D-STAR enter the flat audio path without writing
+REG_40, so a transmission in one of those modes (CONFIG_NXDN_TX, CONFIG_DPMR_TX,
+CONFIG_P25_TX, CONFIG_YSF_TX exist) goes out with whatever the *previous* mode
+left in the register: M17's `0x582`, or FM's band-calibrated word, or the chip's
+default after a reset. NXDN's 4FSK wants the M17-like word and none of them wants
+FM's narrow one. It is not fixed here because that would be a new write; in the
+table it is one line per mode and one line in the test's baseline.
+
 ## Checking it, and changing it
 
 ```sh
