@@ -1425,6 +1425,22 @@ p25_fec_test = executable('p25_fec_test',
                                     ['tests/unit/p25_fec.cpp'],
                           kwargs  : unit_test_opts)
 
+# What the P25 mode publishes to the screen (tests/unit/p25_status.cpp).  The
+# host build compiles P25Status.c with CONFIG_P25 off, i.e. the simulator stub
+# the UI tests walk; this target compiles the translation unit the radio runs,
+# so the -1 identifiers and the bad-frame rules are the firmware's own.
+p25_status_test = executable('p25_status_test',
+                             sources : ['tests/unit/p25_status.cpp',
+                                        'openrtx/src/protocols/P25/P25Status.c',
+                                        'openrtx/src/protocols/P25/P25Defs.c',
+                                        'platform/mcu/x86_64/drivers/delays.c'],
+                             kwargs  : {'include_directories' : linux_inc,
+                                        'c_args' : linux_c_args + ['-DCONFIG_P25'],
+                                        'cpp_args' : linux_cpp_args,
+                                        'dependencies' : [catch2_dep,
+                                                          threads_dep],
+                                        'link_args' : linux_l_args})
+
 m17_viterbi_test = executable('m17_viterbi_test',
                                sources : unit_test_src + ['tests/unit/M17_viterbi.cpp'],
                                kwargs  : unit_test_opts)
@@ -2096,6 +2112,7 @@ m17_replay_test = executable('m17_replay_test',
 test('M17 Golay Unit Test',   m17_golay_test)
 test('P25 PHY Test',           p25_phy_test)
 test('P25 FEC Limits Test',    p25_fec_test)
+test('P25 Status Test',        p25_status_test, timeout : 60)
 test('M17 Viterbi Unit Test', m17_viterbi_test)
 test('M17 Demodulator Test',  m17_demodulator_test)
 test('M17 RRC Test',          m17_rrc_test)
