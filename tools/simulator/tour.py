@@ -1106,7 +1106,7 @@ class Tour:
         self.assert_alive("after the identity page")
 
     def phase_tools(self):
-        """P1 held down: the tools menu, its five rows and the mode submenu."""
+        """P1 held down: the tools menu, its rows and the mode submenu."""
         self.step_name = "tools"
         self.goto_mode("FM")
         self.home()
@@ -1116,21 +1116,24 @@ class Tour:
 
         d = self.capture("tools-list", screen="TOOLS_MENU",
                          need=["TOOLS", "Mode", "Scan", "VFO scan", "Spectrum",
-                               "Channels"])
+                               "Channels", "Puerto"])
         self.check(d["radio"]["tx_disable"],
                    "the tools menu does not disable the transmitter")
         self.check(d["tools"]["selected"] == 0,
                    "the tools menu does not open on the first row")
 
         rows = [r["label"] for r in d["tools"]["rows"]]
-        self.check(rows == ["Mode", "Scan", "VFO scan", "Spectrum", "Channels"],
-                   "the rows of the tools menu are %s, not the five of the "
+        # The accessory port is one row of this menu and of no other screen
+        # (docs/ACCESSORY.md): the list is the five doors plus that row, last.
+        self.check(rows == ["Mode", "Scan", "VFO scan", "Spectrum", "Channels",
+                            "Puerto"],
+                   "the rows of the tools menu are %s, not the six of the "
                    "design" % rows)
         self.check(d["tools"]["rows"][0]["value"] == "FM",
                    "the Mode row does not show the mode in use: %r"
                    % d["tools"]["rows"][0]["value"])
 
-        # Walk the five rows: each one selectable, in order
+        # Walk the rows: each one selectable, in order
         for index, label in enumerate(rows):
             if not self.tools_to(label):
                 return
@@ -1156,6 +1159,18 @@ class Tour:
         self.check(d["tools"]["selected"] == len(rows) - 1,
                    "P1 does not move the cursor up")
         self.capture("tools-rows-walked")
+
+        # The port row toggles the setting in place and stays in the menu
+        self.tools_to("Puerto")
+        before = self.dump()["tools"]["rows"][len(rows) - 1]["value"]
+        self.key("GREEN")
+        d = self.dump()
+        after = d["tools"]["rows"][len(rows) - 1]["value"]
+        self.check(after != before,
+                   "green on Puerto does not change the value (%s)" % before)
+        self.check(d["tools"]["open"], "green on Puerto closes the menu")
+        self.key("GREEN")           # back to where it was
+        self.capture("tools-port")
 
         # The mode submenu: opens on the mode in use, marks every mode TX or RX
         # as this build really is, and red goes back to the list
