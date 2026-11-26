@@ -9,6 +9,7 @@
 
 #include "core/datatypes.h"
 #include <stdbool.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -308,6 +309,20 @@ bool vp_isPlaying();
  * @return true if the voice prompt sequence is empty.
  */
 bool vp_sequenceNotEmpty();
+
+/**
+ * Read back the prompts queued and not yet played.
+ *
+ * The queued sequence is what a caller asked the radio to say, before the
+ * player has had a chance to touch it: it is the read-back the host tests use
+ * to check an announcement without a speaker (tests/unit/fm_ctcss.cpp), and the
+ * same one a diagnostic needs to say what the radio is about to say.
+ *
+ * @param out: array receiving the prompt identifiers, in the order queued.
+ * @param max: capacity of @p out.
+ * @return how many identifiers were written.
+ */
+size_t vp_pendingSequence(uint16_t *out, size_t max);
 
 /**
  * play a beep at a given frequency for a given duration.

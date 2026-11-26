@@ -8,6 +8,7 @@
 #include "core/audio_codec.h"
 #include <pthread.h>
 #include "core/threads.h"
+#include "interfaces/delays.h"
 // codec2 system library has a weird include prefix
 #if defined(PLATFORM_LINUX)
 #include <codec2/codec2.h>
@@ -19,6 +20,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include "core/dsp.h"
+#include "core/utils.h"
 #include "hwconfig.h"
 
 #define BUF_SIZE 4
@@ -49,6 +51,12 @@ static uint8_t readPos;
 static uint8_t writePos;
 static uint8_t numElements;
 static uint64_t dataBuffer[BUF_SIZE];
+
+/* Stream the running thread reads or writes, so another thread can cancel it */
+static volatile streamId activeStream = -1;
+
+/* Wait for the codec thread to leave, in milliseconds, before giving up */
+#define CODEC_STOP_TIMEOUT_MS 300
 
 static void *encodeFunc(void *arg);
 static void *decodeFunc(void *arg);
@@ -104,9 +112,26 @@ void codec_stop(const pathId path)
     stopThread();
 }
 
+void codec_abort()
+{
+    reqStop = true;
+
+    const streamId id = activeStream;
+    if (id >= 0)
+        audioStream_terminate(id);
+}
+
 bool codec_running()
 {
     return running;
+}
+
+bool codec_queueEmpty(const pathId path)
+{
+    if ((running == false) || (audioPath != path))
+        return true;
+
+    return numElements == 0;
 }
 
 int codec_popFrame(uint8_t *frame, const bool blocking)
@@ -189,6 +214,8 @@ static void *encodeFunc(void *arg)
     if (iStream < 0)
         goto exit;
 
+    activeStream = iStream;
+
     dsp_resetState(dcBlock);
     dsp_resetState(decimator);
     codec2 = codec2_create(CODEC2_MODE_3200);
@@ -216,7 +243,7 @@ static void *encodeFunc(void *arg)
 #endif
 
             sample = dsp_dcBlockFilter(&dcBlock, sample);
-            audio.data[outIdx++] = sample * CONFIG_MIC_GAIN;
+            audio.data[outIdx++] = s16_mulSat(sample, CONFIG_MIC_GAIN);
         }
 
         // CODEC2 encodes 160 speech samples (20 ms), into 8 bytes: here we
@@ -249,12 +276,12 @@ static void *encodeFunc(void *arg)
     codec2_destroy(codec2);
 
 exit:
+    activeStream = -1;
     free(adcBuf);
 
-    // In case thread terminates due to invalid path or stream error, detach it
-    // to ensure that its memory gets freed by the OS.
-    if (reqStop == false)
-        pthread_detach(pthread_self());
+    // A thread left behind by a bounded codec_stop() has nobody to join it:
+    // detach it so its stack is recovered when it finally exits.
+    pthread_detach(pthread_self());
 
     running = false;
     return NULL;
@@ -276,6 +303,8 @@ static void *decodeFunc(void *arg)
         running = false;
         return NULL;
     }
+
+    activeStream = oStream;
 
     codec2 = codec2_create(CODEC2_MODE_3200);
 
@@ -329,13 +358,13 @@ static void *decodeFunc(void *arg)
     }
 
     // Stop stream and wait until its effective termination
+    activeStream = -1;
     audioStream_stop(oStream);
     codec2_destroy(codec2);
 
-    // In case thread terminates due to invalid path or stream error, detach it
-    // to ensure that its memory gets freed by the OS.
-    if (reqStop == false)
-        pthread_detach(pthread_self());
+    // A thread left behind by a bounded codec_stop() has nobody to join it:
+    // detach it so its stack is recovered when it finally exits.
+    pthread_detach(pthread_self());
 
     running = false;
     return NULL;
@@ -403,12 +432,40 @@ static bool startThread(const pathId path, void *(*func)(void *))
     return running;
 }
 
+/**
+ * Stop the codec thread, with a bound.
+ *
+ * pthread_join() has no timeout on this kernel, and the thread can be blocked
+ * in an audio stream read or in a DSP call: joining it for ever is how the RTX
+ * thread used to hang with the PA keyed. The stream is cancelled first, which
+ * is what releases the thread in the normal case, then it is given
+ * CODEC_STOP_TIMEOUT_MS to unwind. A thread that does not come back is left
+ * detached: its 16 KiB stack is not recovered, which is a bounded price for not
+ * hanging the radio.
+ */
 static void stopThread()
 {
     reqStop = true;
-    pthread_join(codecThread, NULL);
-    running = false;
+    codec_abort();
 
+    for (unsigned int i = 0; (i < CODEC_STOP_TIMEOUT_MS) && running; i++)
+        sleepFor(0, 1);
+
+    if (running) {
+        /*
+         * Still inside the stream or the DSP. Nobody will join it: detach it,
+         * and let the caller go on. running goes false here so a new operation
+         * can be started; the stuck thread only sets it to false again.
+         */
+        pthread_detach(codecThread);
+        running = false;
+        return;
+    }
+
+    /*
+     * It exited on its own, and every exit path detaches the thread: there is
+     * nothing left to join, and the stack is ours again.
+     */
 #ifdef __ZEPHYR__
     void *addr;
     size_t size;

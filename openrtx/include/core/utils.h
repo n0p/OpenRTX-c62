@@ -23,6 +23,28 @@ extern "C" {
  */
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 
+#ifndef MIN
+/**
+ * Get the smaller of two values.
+ *
+ * @param a: first value.
+ * @param b: second value.
+ * @return the smaller value.
+ */
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
+#endif
+
+#ifndef MAX
+/**
+ * Get the larger of two values.
+ *
+ * @param a: first value.
+ * @param b: second value.
+ * @return the larger value.
+ */
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
+#endif
+
 /**
  * Perform division of two integer numbers, with rounding up of the result.
  *
@@ -79,6 +101,19 @@ void stripTrailingZeroes(char *str);
 uint8_t rssiToSlevel(const rssi_t rssi);
 
 /**
+ * Highest S-level: S9 + 20 dB, the last mark of the S-meter.
+ */
+#define SLEVEL_MAX 11
+
+/**
+ * Get the lowest RSSI value of an S-level, the inverse of rssiToSlevel().
+ *
+ * @param slevel: S level, from S0 to SLEVEL_MAX.
+ * @return RSSI in dBm; for S0, the bottom of the scale (-127 dBm).
+ */
+rssi_t sLevelToRssi(const uint8_t slevel);
+
+/**
  * Retrieve the CTCSS tone index given its frequency in tenths of Hz.
  *
  * @param freq: CTCSS frequency
@@ -119,6 +154,24 @@ static inline int32_t fixedPointToCoord(const int32_t value, const uint8_t unit)
     return tmp;
 }
 
+/**
+ * Multiply two signed 16-bit values without wrap around.
+ *
+ * @param a: first value
+ * @param b: second value
+ * @return product of input parameters
+ */
+static inline int16_t s16_mulSat(int16_t a, int16_t b)
+{
+    int32_t result = (int32_t)a * (int32_t)b;
+
+    if (result > INT16_MAX)
+        return INT16_MAX;
+    if (result < INT16_MIN)
+        return INT16_MIN;
+
+    return (int16_t)result;
+}
 #ifdef __cplusplus
 }
 #endif

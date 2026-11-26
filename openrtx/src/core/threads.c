@@ -9,6 +9,10 @@
 #include "core/ui.h"
 #include "core/state.h"
 #include "core/threads.h"
+
+#ifdef __ZEPHYR__
+#include <zephyr/kernel.h>
+#endif
 #include "core/graphics.h"
 #include "interfaces/platform.h"
 #include "interfaces/delays.h"
@@ -21,6 +25,8 @@
 #include "core/backup.h"
 #include "core/gps.h"
 #include "core/voicePrompts.h"
+#include "core/blackbox.h"
+#include "core/ui_watchdog.h"
 
 #if defined(PLATFORM_TTWRPLUS)
 #include "pmu.h"
@@ -28,6 +34,22 @@
 
 /* Mutex for concurrent access to RTX state variable */
 pthread_mutex_t rtx_mutex;
+
+/*
+ * Liveness of the UI thread.
+ *
+ * The RTX thread, the audio worker and the protocol thread can all be working
+ * while the UI thread is stuck: that is what the aeronautical-AM freeze looked
+ * like from outside (receiver working, protocol answering, keyboard and screen
+ * dead). The main thread feeds the watchdog, so a UI thread that never comes
+ * back used to leave the radio like that until the battery was pulled. It is
+ * stamped here, once per pass, and the main loop stops feeding the watchdog
+ * when the stamps stop: the reset is the safe state, because the PA enable
+ * lines are off until a transmission keys them.
+ */
+static volatile uint32_t uiThreadBeat;
+/* The rule itself: core/ui_watchdog.h, tested on the host. */
+static struct uiWatchdog uiWatchdog;
 
 /**
  * \internal Thread managing user input and UI
@@ -52,6 +74,15 @@ void *ui_threadFunc(void *arg)
     while(state.devStatus != SHUTDOWN)
     {
         time = getTick();
+        uiThreadBeat++;
+
+        /*
+         * Liveness for the post-mortem recorder (docs/BLACKBOX.md): this is
+         * the thread whose freeze used to leave a radio that still received
+         * and still answered the cable, so it is the one the supervisor has to
+         * be able to see stop.
+         */
+        bb_beat(BB_BEAT_UI);
 
         if(input_scanKeyboard(&kbd_msg))
         {
@@ -65,6 +96,14 @@ void *ui_threadFunc(void *arg)
 
         vp_tick();                           // continue playing voice prompts in progress if any.
 
+        // A quick menu setter, the remote control or any other code outside
+        // the FSM may need the new configuration to reach the radio.
+        if(ui_rtxSyncRequest)
+        {
+            ui_rtxSyncRequest = false;
+            sync_rtx = true;
+        }
+
         // If synchronization needed take mutex and update RTX configuration
         if(sync_rtx)
         {
@@ -72,13 +111,19 @@ void *ui_threadFunc(void *arg)
             rtx_cfg.opMode      = state.channel.mode;
             rtx_cfg.bandwidth   = state.channel.bandwidth;
             rtx_cfg.rxFrequency = state.channel.rx_frequency;
-            rtx_cfg.txFrequency = state.channel.tx_frequency;
-            rtx_cfg.txPower     = state.channel.power;
+            /*
+             * Transmit frequency and power come from state.c, not from the
+             * channel directly: on a VFO the channel carries neither, and a
+             * driver handed 0 Hz refuses to key without saying so and one
+             * handed 0 mW keys the PA into nothing (docs/TX_SAFETY.md).
+             */
+            rtx_cfg.txFrequency = state_txFrequency();
+            rtx_cfg.txPower     = state_txPowerMw();
             rtx_cfg.sqlLevel    = state.settings.sqlLevel;
             rtx_cfg.rxToneEn    = state.channel.fm.rxToneEn;
-            rtx_cfg.rxTone      = ctcss_tone[state.channel.fm.rxTone];
+            rtx_cfg.rxTone      = ctcssFreqFromIndex(state.channel.fm.rxTone);
             rtx_cfg.txToneEn    = state.channel.fm.txToneEn;
-            rtx_cfg.txTone      = ctcss_tone[state.channel.fm.txTone];
+            rtx_cfg.txTone      = ctcssFreqFromIndex(state.channel.fm.txTone);
             rtx_cfg.toneEn      = state.tone_enabled;
 
             // Enable Tx if channel allows it and we are in UI main screen
@@ -89,6 +134,33 @@ void *ui_threadFunc(void *arg)
             rtx_cfg.canRxEn = state.settings.m17_can_rx;
             strncpy(rtx_cfg.source_address,      state.settings.callsign, 10);
             strncpy(rtx_cfg.destination_address, state.settings.m17_dest, 10);
+
+            /*
+             * DMR identity and call destination.  The radio ID goes in the
+             * source field of every link control and data header, so it comes
+             * from the settings and not from the channel; the destination is
+             * the settings' default, which a stored channel overrides through
+             * chstore_applyRtx().  Colour code and timeslot are per channel and
+             * live in the same union as the FM tones, so they are only read
+             * when the channel really is a DMR one.
+             */
+            rtx_cfg.dmrSourceId = settings_dmrIdValid(state.settings.dmr_id)
+                                ? state.settings.dmr_id : 0;
+            rtx_cfg.dmrDestType = state.settings.dmr_dest_type;
+            rtx_cfg.dmrDestId = state.settings.dmr_dest_id;
+            rtx_cfg.dmrTimeslot = settings_dmrTimeslotValid(
+                                      state.settings.dmr_timeslot)
+                                ? state.settings.dmr_timeslot : 1;
+
+            /*
+             * The colour code is a channel property and the UI shows it read
+             * only.  The timeslot is not: it comes from the settings (the
+             * quick menu changes it), and a stored channel's own slot reaches
+             * there through chstore_applySettings() when the channel is
+             * selected.  One source of truth, so the menu always wins.
+             */
+            if (state.channel.mode == OPMODE_DMR)
+                rtx_cfg.dmrColourCode = state.channel.dmr.rxColorCode;
 
             pthread_mutex_unlock(&rtx_mutex);
 
@@ -132,6 +204,8 @@ void *main_thread(void *arg)
     {
         time = getTick();
 
+        bb_beat(BB_BEAT_MAIN);
+
         #if defined(PLATFORM_TTWRPLUS)
         pmu_handleIRQ();
         #endif
@@ -150,10 +224,61 @@ void *main_thread(void *arg)
         // Run state update task
         state_task();
 
+        /*
+         * Supervise the transmitter: unkey a PA whose owning thread is stuck in
+         * a stream or in the DSP. It runs here, and not in the RTX thread, for
+         * the same reason a watchdog does not live in the task it watches.
+         */
+        rtx_supervise();
+
+        #if defined(PLATFORM_C62)
+        /*
+         * The watchdog is refreshed by this thread and nobody else: if the main
+         * thread stops running, the radio is not usable and a reset is the safe
+         * state (the PA enable lines are off until a transmission keys them).
+         *
+         * And it is refreshed only while the UI thread is alive. A UI thread
+         * parked for ever leaves a radio that still receives and still answers
+         * the cable, which looks like a working radio to everything except the
+         * operator: no key does anything and there is no way back. Stopping the
+         * feed turns that into a reset, and the reset comes up in receive.
+         */
+        bool wasStalled = uiw_stalled(&uiWatchdog);
+        bool feed = uiw_service(&uiWatchdog, (uint32_t)getTick(),
+                                uiThreadBeat);
+        if (feed && wasStalled) {
+            /* It came back: the pass was slow, not lost. */
+            printf("UI: thread advanced again, watchdog fed\r\n");
+        } else if (!feed && !wasStalled) {
+            printf("UI: thread stalled %u ms, watchdog left to reset\r\n",
+                   (unsigned)UIW_STALL_MS);
+        }
+
+        if (feed)
+            platform_wdtFeed();
+
+#ifdef C62_PC_PROTO
+        /* The accessory-port necklace, in platform/targets/c62/pc_proto_c62.c.
+           It only exists with the protocol: a build without it links the same
+           main loop and has no port to report. */
+        void c62_portNecklace(void);
+        c62_portNecklace();
+#endif
+        #else
+        (void)uiWatchdog;
+        #endif
+
         // Run this loop once every 5ms
         time += 5;
         sleepUntil(time);
     }
+
+    /*
+     * Shutdown, not a hang: the threads this supervisor watches are about to
+     * stop on purpose, so stop watching before they do.
+     */
+    bb_suspend();
+    bb_mark(BB_M_TERM);
 
     return NULL;
 }
@@ -170,6 +295,17 @@ void *rtx_threadFunc(void *arg)
     while(state.devStatus == RUNNING)
     {
         rtx_task();
+
+#ifdef __ZEPHYR__
+        /*
+         * The RTX loop has no sleep of its own: it yields only when something
+         * inside blocks, and a mode whose update() never blocks keeps the CPU
+         * for as long as it is the running thread at its priority.  Yielding
+         * here costs nothing when nothing else of the same priority is ready
+         * and hands the CPU to the UI when something is (docs/BLACKBOX.md).
+         */
+        k_yield();
+#endif
     }
 
     rtx_terminate();

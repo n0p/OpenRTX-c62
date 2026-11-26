@@ -88,6 +88,14 @@ typedef enum {
 } textAlign_t;
 
 /**
+ * Read back the framebuffer, for the host tests and the diagnostics.
+ *
+ * @return pointer to the framebuffer, CONFIG_SCREEN_WIDTH * CONFIG_SCREEN_HEIGHT
+ *         pixels in the format of the panel driver.
+ */
+const void *gfx_framebuffer(void);
+
+/**
  * This function calls the correspondent method of the low level interface display.h
  * It initializes the display.
  */
@@ -297,8 +305,23 @@ point_t gfx_printBufferClipped(point_t start, fontSize_t size,
                                int16_t clip_top_y, int16_t clip_bot_y);
 
 /**
+ * Start point of right-aligned text, from a point that carries a left margin.
+ *
+ * The layout points (layout.top_pos, layout.line1_pos, ...) keep the left
+ * margin in x, while TEXT_ALIGN_RIGHT reads x as the right edge the text must
+ * end at. Mirroring the margin gives the matching right edge, so a value keeps
+ * on the right the same distance its row keeps on the left.
+ *
+ * @param start: point whose x is the left margin to mirror.
+ * @return the same point with x at the symmetric right edge.
+ */
+point_t gfx_right_edge(point_t start);
+
+/**
  * Prints text on the screen at the specified coordinates.
- * @param start: text line start point, in pixel coordinates.
+ * @param start: text line start point, in pixel coordinates. For
+ *               TEXT_ALIGN_RIGHT its x is the right edge the text ends at;
+ *               gfx_right_edge() derives it from a layout point.
  * @param size: text font size, defined as enum.
  * @param alignment: text alignment type, defined as enum.
  * @param color: text color, in color_t format.

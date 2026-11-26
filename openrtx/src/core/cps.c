@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include <string.h>
+
 #include "interfaces/platform.h"
 #include "core/cps.h"
 
@@ -17,7 +19,15 @@ const uint16_t ctcss_tone[CTCSS_FREQ_NUM] =
 
 channel_t cps_getDefaultChannel()
 {
+    /*
+     * Zeroed first: every field this function does not set is a field the rest
+     * of the firmware will read. It used to be returned uninitialised, so a
+     * radio whose NVM had no VFO record booted on a channel whose name was
+     * whatever was on the stack -- the `ch#0 "<garbage>"` the simulator's dump
+     * showed (docs/SIMULATOR.md).
+     */
     channel_t channel;
+    memset(&channel, 0x00, sizeof(channel));
 
     #ifdef PLATFORM_MOD17
     channel.mode      = OPMODE_M17;

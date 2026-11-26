@@ -58,6 +58,14 @@ bool ui_updateGUI();
 bool ui_pushEvent(const uint8_t type, const uint32_t data);
 
 /**
+ * Request an RTX resynchronisation from outside the UI FSM: the UI thread
+ * copies the state into a new configuration on its next cycle. Used by the
+ * quick menu setters, which do not get the FSM's sync flag, and by the remote
+ * control.
+ */
+extern volatile bool ui_rtxSyncRequest;
+
+/**
  * This function terminates the User Interface.
  */
 void ui_terminate();

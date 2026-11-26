@@ -26,8 +26,12 @@ uint16_t crc_m17(const void *data, const size_t len)
 
 uint16_t crc_ccitt(const void *data, const size_t len)
 {
+    return crc_ccitt_update(0, data, len);
+}
+
+uint16_t crc_ccitt_update(uint16_t crc, const void *data, const size_t len)
+{
     uint16_t x = 0;
-    uint16_t crc = 0;
     const uint8_t *buf = ((const uint8_t *)data);
 
     for (size_t i = 0; i < len; i++) {

@@ -22,6 +22,16 @@
 
 #include "qrcode.h"
 
+/*
+ * The simulator's frame recorder (docs/SIMULATOR.md): the text a screen draws,
+ * kept as text so that a script can read a screen without the framebuffer. The
+ * call below compiles to nothing in every firmware build, which does not define
+ * UI_CAPTURE.
+ */
+#ifdef UI_CAPTURE
+#include "core/gfx_capture.h"
+#endif
+
 #include "fonts/adafruit/gfxfont.h"
 #include "fonts/adafruit/TomThumb.h"
 #include "fonts/adafruit/FreeSans6pt7b.h"
@@ -49,7 +59,6 @@
 #define DEG_RAD 0.017453292519943295769236907684886
 #define SIN(x) sinf((x) * DEG_RAD)
 #define COS(x) cosf((x) * DEG_RAD)
-#define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
 
 /**
  * Fonts, ordered by the fontSize_t enum.
@@ -141,6 +150,20 @@ static PIXEL_T framebuffer[FB_SIZE];
 static PIXEL_T __attribute__((section(".bss.fb"))) framebuffer[FB_SIZE];
 #endif
 static char text[32];
+
+/**
+ * Read back the framebuffer.
+ *
+ * The panel path never needs this: the firmware only writes. It exists for the
+ * host tests and the diagnostics, which check what a screen really drew instead
+ * of trusting the call that drew it (the spectrum analyser's plot is the first
+ * consumer). Unused it costs nothing: it is a single function and --gc-sections
+ * drops it.
+ */
+const void *gfx_framebuffer(void)
+{
+    return framebuffer;
+}
 
 void gfx_init()
 {
@@ -406,7 +429,8 @@ static inline uint16_t get_line_size(GFXfont f, const char *text,
  * Compute the start x coordinate of a new line of given pixel size
  * @param alignment: enum representing the text alignment
  * @param line_size: the size of the current text line in pixels
- * @param startx: left-edge x position of the text block
+ * @param startx: x position of the text block: its left edge, except for
+ *                TEXT_ALIGN_RIGHT, where it is the right edge
  * @param max_width: right-edge pixel limit (width of the text region)
  */
 static inline uint16_t get_reset_x(textAlign_t alignment, uint16_t line_size,
@@ -418,7 +442,10 @@ static inline uint16_t get_reset_x(textAlign_t alignment, uint16_t line_size,
         case TEXT_ALIGN_CENTER:
             return (max_width - line_size) / 2;
         case TEXT_ALIGN_RIGHT:
-            return max_width - line_size - startx;
+            /* The block ends at startx. Subtracting the width gives its left
+               edge; clamping keeps a string wider than the margin inside the
+               screen instead of wrapping the unsigned subtraction. */
+            return (startx > line_size) ? (uint16_t)(startx - line_size) : 0;
     }
 
     return 0;
@@ -504,6 +531,12 @@ point_t gfx_printBufferClipped(point_t start, fontSize_t size,
                                int16_t clip_top_y, int16_t clip_bot_y)
 {
     GFXfont f = fonts[size];
+
+#ifdef UI_CAPTURE
+    /* Recorded before the clipping walk: the dump wants the string the screen
+       asked for, not the part of it that fitted on the panel. */
+    gfx_capture_text(start, size, alignment, color, buf);
+#endif
 
     size_t len = strlen(buf);
 
@@ -593,6 +626,12 @@ point_t gfx_printBufferClipped(point_t start, fontSize_t size,
     text_size.x = max_line_size;
     text_size.y = (start.y - saved_start_y) + line_h;
     return text_size;
+}
+
+point_t gfx_right_edge(point_t start)
+{
+    start.x = (uint16_t)(CONFIG_SCREEN_WIDTH - start.x);
+    return start;
 }
 
 point_t gfx_print(point_t start, fontSize_t size, textAlign_t alignment,
@@ -823,7 +862,9 @@ void gfx_drawSmeter(point_t start, uint16_t width, uint16_t height, rssi_t rssi,
 
     // Squelch bar
     uint16_t squelch_height = bar_height * 2 / bar_height_divider;
-    uint16_t squelch_width = (width * squelch) / 15;
+    if (squelch > SLEVEL_MAX)
+        squelch = SLEVEL_MAX;
+    uint16_t squelch_width = (squelch * (width - 1)) / SLEVEL_MAX;
     point_t squelch_pos = { start.x, (uint8_t)(start.y + 2 + volume_height) };
     gfx_drawRect(squelch_pos, squelch_width, squelch_height, color, true);
 

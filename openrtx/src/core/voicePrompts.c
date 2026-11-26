@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "core/beeps.h"
+#include "core/psram_state.h"
 #include <errno.h>
 
 static const uint32_t VOICE_PROMPTS_DATA_MAGIC = 0x5056;   //'VP'
@@ -75,11 +76,11 @@ static vpSequence_t vpCurrentSequence = {
     .c2DataLength = 0,
 };
 
-static uint32_t tableOfContents[VOICE_PROMPTS_TOC_SIZE];
+static uint32_t tableOfContents[VOICE_PROMPTS_TOC_SIZE] PSRAM_STATE;
 static bool vpDataLoaded = false;
 static bool voicePromptActive = false;
 
-static beepData_t beepSeriesBuffer[BEEP_SEQ_BUF_SIZE];
+static beepData_t beepSeriesBuffer[BEEP_SEQ_BUF_SIZE] PSRAM_STATE;
 static uint16_t currentBeepDuration = 0;
 static uint8_t beepSeriesIndex = 0;
 static bool delayBeepUntilTick = false;
@@ -584,6 +585,20 @@ bool vp_isPlaying()
 bool vp_sequenceNotEmpty()
 {
     return (vpCurrentSequence.length > 0);
+}
+
+size_t vp_pendingSequence(uint16_t *out, size_t max)
+{
+    if ((out == NULL) || (max == 0))
+        return 0;
+
+    size_t n = ((size_t)vpCurrentSequence.length < max)
+             ? (size_t)vpCurrentSequence.length : max;
+
+    for (size_t i = 0; i < n; i++)
+        out[i] = vpCurrentSequence.buffer[i];
+
+    return n;
 }
 
 void vp_beep(uint16_t freq, uint16_t duration)

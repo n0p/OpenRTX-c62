@@ -124,6 +124,39 @@ void vp_announceRadioMode(const uint8_t mode, const enum vpQueueFlags flags)
         case OPMODE_M17:
             vp_queueStringTableEntry(&currentLanguage->m17);
             break;
+
+        case OPMODE_TETRA:
+            vp_queueString("TETRA", (enum vpFlags)0);
+            break;
+
+        case OPMODE_NXDN:
+            vp_queueString("NXDN", (enum vpFlags)0);
+            break;
+
+        case OPMODE_DPMR:
+            vp_queueString("dPMR", (enum vpFlags)0);
+            break;
+
+        case OPMODE_P25:
+            vp_queueString("P25", (enum vpFlags)0);
+            break;
+
+        case OPMODE_YSF:
+            vp_queueString("YSF", (enum vpFlags)0);
+            break;
+
+        case OPMODE_DSTAR:
+            vp_queueString("D STAR", (enum vpFlags)0);
+            break;
+
+        case OPMODE_AIRBAND:
+            /* Spelled out: "AM" read as a word is not what the band is called */
+            vp_queueString("A M", (enum vpFlags)0);
+            break;
+
+        case OPMODE_WFM_BC:
+            vp_queueString("F M", (enum vpFlags)0);
+            break;
     }
 
     playIfNeeded(flags);
@@ -138,8 +171,18 @@ void vp_announceBandwidth(const uint8_t bandwidth,
         vp_queuePrompt(PROMPT_BANDWIDTH);
     }
 
-    char *bandwidths[] = { "12.5", "25" };
-    vp_queueString(bandwidths[bandwidth], vpAnnounceCommonSymbols);
+    /*
+     * One entry per enum bandwidth, in the enum's order: BW_12_5 = 0,
+     * BW_25 = 1, BW_6_25 = 2. The table used to have two entries, so choosing
+     * 6.25 kHz read one past it and handed a wild pointer to the voice prompt
+     * (AddressSanitizer: stack-buffer-overflow, from the FM bandwidth row and
+     * from the FM settings page).
+     */
+    static const char *const bandwidths[] = { "12.5", "25", "6.25" };
+    const size_t count = sizeof(bandwidths) / sizeof(bandwidths[0]);
+
+    vp_queueString(bandwidths[(bandwidth < count) ? bandwidth : BW_12_5],
+                   vpAnnounceCommonSymbols);
     vp_queuePrompt(PROMPT_KILOHERTZ);
     playIfNeeded(flags);
 }
@@ -331,7 +374,7 @@ void vp_announceCTCSS(const bool rxToneEnabled, const uint8_t rxTone,
         if (flags & vpqIncludeDescriptions)
             vp_queuePrompt(PROMPT_TONE);
 
-        uint16_t tone = ctcss_tone[rxTone];
+        uint16_t tone = ctcssFreqFromIndex(rxTone);
         sniprintf(buffer, sizeof(buffer), "%d.%d", (tone / 10), (tone % 10));
 
         vp_queueString(buffer, vpAnnounceCommonSymbols);
@@ -348,7 +391,7 @@ void vp_announceCTCSS(const bool rxToneEnabled, const uint8_t rxTone,
             vp_queuePrompt(PROMPT_TONE);
         }
 
-        uint16_t tone = ctcss_tone[rxTone];
+        uint16_t tone = ctcssFreqFromIndex(rxTone);
         sniprintf(buffer, sizeof(buffer), "%d.%d", (tone / 10), (tone % 10));
 
         vp_queueString(buffer, vpAnnounceCommonSymbols);
@@ -360,7 +403,7 @@ void vp_announceCTCSS(const bool rxToneEnabled, const uint8_t rxTone,
             vp_queuePrompt(PROMPT_TONE);
         }
 
-        uint16_t tone = ctcss_tone[txTone];
+        uint16_t tone = ctcssFreqFromIndex(txTone);
         sniprintf(buffer, sizeof(buffer), "%d.%d", (tone / 10), (tone % 10));
 
         vp_queueString(buffer, vpAnnounceCommonSymbols);
@@ -673,13 +716,15 @@ void vp_announceAboutScreen()
 
 void vp_announceBackupScreen()
 {
+    /*
+     * Only the title: the screen no longer asks the operator to plug the radio
+     * into a computer and press PTT (it takes its own backup now, see
+     * docs/BACKUP.md), and a voice prompt that describes an action the screen
+     * does not take is worse than a short one.
+     */
     vp_flush();
 
     vp_queueStringTableEntry(&currentLanguage->flashBackup);
-
-    vp_queueStringTableEntry(&currentLanguage->connectToRTXTool);
-    vp_queueStringTableEntry(&currentLanguage->toBackupFlashAnd);
-    vp_queueStringTableEntry(&currentLanguage->pressPTTToStart);
     vp_queuePrompt(PROMPT_VP_UNAVAILABLE);
 
     vp_play();
@@ -687,13 +732,10 @@ void vp_announceBackupScreen()
 
 void vp_announceRestoreScreen()
 {
+    /* Title only, for the same reason as the backup screen above */
     vp_flush();
 
     vp_queueStringTableEntry(&currentLanguage->flashRestore);
-
-    vp_queueStringTableEntry(&currentLanguage->connectToRTXTool);
-    vp_queueStringTableEntry(&currentLanguage->toRestoreFlashAnd);
-    vp_queueStringTableEntry(&currentLanguage->pressPTTToStart);
     vp_queuePrompt(PROMPT_VP_UNAVAILABLE);
 
     vp_play();
