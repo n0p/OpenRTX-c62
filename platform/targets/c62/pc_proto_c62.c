@@ -972,7 +972,22 @@ static void pcProtoMain(void *a, void *b, void *c)
          */
         bool up = false;
         if (plan.useDetector) {
-            const bool changed = port_ptt_update(ptt, held > 0,
+            /*
+             * "Low" has two witnesses, and the second one is the one that
+             * matters with the cable plugged in.  A press held down stops the
+             * line at zero: the UART frames one break and then has nothing
+             * left to hand over, so a detector fed only by characters sees a
+             * single millisecond of low and never the 30 ms a press needs --
+             * which is a radio that does not transmit while the client is
+             * connected.  The break and framing flags latch on the line
+             * itself, so reading the status register each pass catches a
+             * press that lasts as long as the operator holds the button.
+             */
+            const uint32_t lsrNow = sys_read32(UART_BASE + UART_LSR);
+            const bool lineLow = (held > 0)
+                              || ((lsrNow & (LSR_BI | LSR_FE)) != 0);
+
+            const bool changed = port_ptt_update(ptt, lineLow,
                                                  k_uptime_get_32());
 
             up = port_ptt_pressed(ptt);
