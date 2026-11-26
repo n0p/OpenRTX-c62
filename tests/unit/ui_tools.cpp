@@ -346,8 +346,11 @@ TEST_CASE("the list walks its rows and wraps at both ends", "[ui][tools]")
 #elif defined(CONFIG_VFO_SEARCH)
     REQUIRE(labels[1] == "VFO scan");
 #endif
-    REQUIRE(labels[labels.size() - 2] == "Spectrum");
-    REQUIRE(labels.back() == "Channels");
+    /* The accessory port is one row of this menu, after the two screens
+       (docs/ACCESSORY.md): it used to be a row of every mode's table */
+    REQUIRE(labels[labels.size() - 3] == "Spectrum");
+    REQUIRE(labels[labels.size() - 2] == "Channels");
+    REQUIRE(labels.back() == "Puerto");
 
     /* No row without the thing it starts, no row that does nothing */
     REQUIRE(ui_tools_rowCount() >= 3);
