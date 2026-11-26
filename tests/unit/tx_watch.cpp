@@ -8,14 +8,21 @@
 
 #include <cstdint>
 
+#include "core/ui_watchdog.h"
 #include "rtx/TxWatch.h"
 
 /*
- * The absolute transmit clock, walked time by time.
+ * Two watchdog rules live here, because they are the same kind of rule and they
+ * failed the same way -- written, correct, and in a place no test could reach:
  *
- * This is the whole answer to "the radio transmitted until the battery died"
- * (docs/TX_SAFETY.md): the clock counts the air the PA has put out since it was
- * last released, and nothing else. The cases below are the ones that matter:
+ *  - the transmit clock below (rtx/TxWatch.h): 90 s of air and the supervisor
+ *    unkeys, whatever the mode believes;
+ *  - the application watchdog (core/ui_watchdog.h): the main thread feeds the
+ *    hardware watchdog only while the UI thread's beat is moving, so a UI that
+ *    is parked turns into a reset instead of a radio that answers the cable and
+ *    does nothing else.
+ *
+ * The cases for the transmit clock are the ones that matter for it:
  *
  *  - 89 s are still transmitting, 90 s are not;
  *  - the count is of the *air*: a chain of unattended messages, a mode that
@@ -228,4 +235,110 @@ TEST_CASE("a driver barrier with the margin refuses at its own limit",
     run(&w, 90005, 95005, true);
     REQUIRE(txw_tick(&w, 95005) == TXW_ACTION_CUT);
     REQUIRE(!txw_keyAllowed(&w, 95005));
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * The application watchdog: fed only while the UI thread advances
+ * ---------------------------------------------------------------------------
+ */
+
+TEST_CASE("the watchdog is fed while the UI thread advances", "[watchdog][ui]")
+{
+    struct uiWatchdog w;
+    uiw_init(&w, 0, 0);
+
+    /* The UI thread turns at 40 Hz; the main loop feeds at 200 Hz. */
+    for (uint32_t now = 5; now <= 2000; now += 5)
+        REQUIRE(uiw_service(&w, now, now / 25));
+
+    REQUIRE(!uiw_stalled(&w));
+    REQUIRE(w.stalls == 0);
+}
+
+TEST_CASE("a UI thread that stops advancing stops the feed", "[watchdog][ui]")
+{
+    struct uiWatchdog w;
+    uiw_init(&w, 0, 0);
+
+    /* It was alive and stopped at 1 s: the beat stays where it was. */
+    for (uint32_t now = 5; now <= 1000; now += 5)
+        REQUIRE(uiw_service(&w, now, now / 25));
+
+    const uint32_t frozen = 1000 / 25;
+
+    /* Under three seconds without a new beat is a slow pass, not a hang: the
+     * feed goes on, which is what keeps a heavy screen from resetting the
+     * radio. */
+    for (uint32_t now = 1005; now <= 1000 + UIW_STALL_MS; now += 5)
+        REQUIRE(uiw_service(&w, now, frozen));
+
+    REQUIRE(!uiw_stalled(&w));
+
+    /* One tick past the bar: the feed stops, and it stays stopped while the
+     * UI does not come back. The watchdog is now the only thing left that can
+     * bring the radio back. */
+    REQUIRE(!uiw_service(&w, 1000 + UIW_STALL_MS + 5, frozen));
+    REQUIRE(uiw_stalled(&w));
+    REQUIRE(w.stalls == 1);
+
+    for (uint32_t now = 1010 + UIW_STALL_MS; now <= 20000; now += 5)
+        REQUIRE(!uiw_service(&w, now, frozen));
+
+    REQUIRE(w.stalls == 1); /* one stall, not one per pass */
+}
+
+TEST_CASE("a UI thread that comes back is fed again", "[watchdog][ui]")
+{
+    struct uiWatchdog w;
+    uiw_init(&w, 0, 0);
+
+    uiw_service(&w, 5, 0);
+    REQUIRE(!uiw_service(&w, 5000, 0));
+    REQUIRE(uiw_stalled(&w));
+
+    /* The pass that was very slow ends: the beat moves and the feed returns
+     * before the 2 s hardware window closes.  A reset for a slow pass would be
+     * a bug of its own. */
+    REQUIRE(uiw_service(&w, 5010, 1));
+    REQUIRE(!uiw_stalled(&w));
+    REQUIRE(w.stalls == 1);
+
+    for (uint32_t now = 5015; now <= 8000; now += 5)
+        REQUIRE(uiw_service(&w, now, 1 + now / 25));
+}
+
+TEST_CASE("the stall deadline is three seconds, and it is the one in the loop",
+          "[watchdog][ui]")
+{
+    /* Two seconds of a busy screen: fed.  The number is the promise the mode
+     * switch and the display deadline were sized against. */
+    REQUIRE(UIW_STALL_MS == 3000);
+
+    struct uiWatchdog w;
+    uiw_init(&w, 0, 0);
+    REQUIRE(uiw_service(&w, 2999, 0));
+    REQUIRE(!uiw_service(&w, 3001, 0));
+}
+
+TEST_CASE("two instances of the watchdog rule do not share state",
+          "[watchdog][ui]")
+{
+    /*
+     * The wiring itself (that the C62 main loop calls this and only this) is
+     * checked in the source by tests/unit/platform_wiring.cpp.  What can be
+     * said here is that the rule holds no static state of its own: an instance
+     * fed with one thread's beat knows nothing about another's, so a caller
+     * cannot accidentally inherit a feed it did not earn.
+     */
+    struct uiWatchdog a, b;
+    uiw_init(&a, 0, 0);
+    uiw_init(&b, 0, 0);
+
+    REQUIRE(uiw_service(&a, 5, 1));   /* a sees the UI advance     */
+    REQUIRE(uiw_service(&b, 5, 0));   /* b does not, but it is new */
+    REQUIRE(!uiw_service(&b, 5000, 0));
+    REQUIRE(uiw_stalled(&b));
+    REQUIRE(!uiw_stalled(&a));
+    REQUIRE(a.stalls == 0);
 }
