@@ -36,6 +36,9 @@
 #include "ui_walk.hpp"
 
 extern "C" {
+#include "protocols/DSTAR/DStarStatus.h"
+#include "protocols/NXDN/NxdnStatus.h"
+#include "protocols/P25/P25Status.h"
 #include "ui/ui_mode_state.h"
 }
 
@@ -128,8 +131,17 @@ TEST_CASE("Nothing decoded reads as searching, never as a zero",
          */
         state.settings.dmr_id = 1234567;
 
-        /* Every receiver double back to "nothing decoded" */
+        /*
+         * Every receiver double back to "nothing decoded". All of them, every
+         * iteration: the test cases of this file share the process, the order
+         * they run in is Catch2's, and the "not decoded yet" case below fills
+         * these same blocks -- a loop that cleared only two of them said
+         * "NXDN SYNC" instead of "NXDN SRCH" whenever it ran second.
+         */
         dmr_sim_clear();
+        nxdnStatus_clear();
+        p25Status_clear();
+        dstarStatus_clear();
         tetra_sim_clearCell();
 
         ui_mode_state_t st;
