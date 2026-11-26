@@ -27,7 +27,7 @@ Leyenda: ✅ cubierto por tests automáticos · ⚠️ cubierto a medias · ❌ 
 |---|---|---|---|
 | **FM** | squelch y su histéresis; tonos CTCSS TX/RX y su anuncio; paso de frecuencia y límites; TX/RX de voz; APRS sobre FM | ⚠️ | `unit/spectrum`, `unit/slevel`, `unit/audio_path`, `host/pc_proto_host` (pty), APRS sólo por `unit/aprs_config` |
 | **AM / Airband** | canal, raster, profundidad de modulación, TX de AM, cambio de modo sin clavear | ✅/⚠️ | `unit/am_tx`, `unit/airband`, `unit/mode_switch_am`, `unit/agc` |
-| **DMR** | sincronismo, CC/TS, CACH, BPTC, LC con origen>destino, calidad; vocoder AMBE+2 (decodifica y sintetiza); SMS (formato, cola, ACK); TX (ráfaga, terminador, gate) | ⚠️ | `host/dmr_tx_host` (modulador→demod, bit-exacto), `host/dmr_pkg_host`, `unit/dmr_glue`, `unit/dmr_lc_dest`, `unit/dmr_sms_format`, `unit/imbe_*`; **la cadena RX en la radio no tiene doble** |
+| **DMR** | sincronismo, CC/TS, CACH, BPTC, LC con origen>destino, calidad; vocoder AMBE+2 (decodifica y sintetiza); SMS (formato, cola, ACK); TX (ráfaga, terminador, gate) | ✅/⚠️ | `unit/dmr_rx_status` (**doble del receptor**: basebanda de repetidor del modulador propio → `dmr_getStatus()`: CC/TS/CACH/LC/calidad, y las negativas —silencio, LC con checksum roto, CC mal corregido, CRC-32 roto—), `host/dmr_tx_host` (modulador→demod, bit-exacto), `host/dmr_pkg_host`, `unit/dmr_glue`, `unit/dmr_lc_dest`, `unit/dmr_sms_format`, `unit/imbe_*`; quedan fuera el camino BK4819 (REG_7E/REG_43), la pila de 7 KiB y el flujo MS/simplex: `reports/dmr_rx_standin.md` |
 | **NXDN** | 4FSK 2400 Bd, FEC, RAN, SACCH (origen>destino), TX | ⚠️ | `unit/nxdn_rx`, `unit/nxdn_tx` |
 | **dPMR** | 4FSK 2400 Bd, CCH, permutación de voz, TX | ⚠️ | `unit/dpmr_rx`, `unit/dpmr_tx` |
 | **P25** | C4FM, sync por sub-fase, TSBK, HDU/TDU, IMBE 7200, NAC | ✅/⚠️ | `unit/p25_phy`, `host/p25_phy_host`, `host/p25_tx`, `unit/imbe_robust` |
@@ -41,6 +41,17 @@ Leyenda: ✅ cubierto por tests automáticos · ⚠️ cubierto a medias · ❌ 
 que alimente `OpMode_*::update()` con muestras sintéticas y compruebe el estado
 que se publica (sync, identificadores, calidad). Es exactamente la clase de
 hueco por la que un CC inestable se ve en la radio y no en los tests.
+
+**DMR ya lo tiene** (`unit/dmr_rx_status`, `reports/dmr_rx_standin.md`): genera
+las franjas de un repetidor con el modulador propio, las mete por
+`dmr_demod_feed_disc()` en el tamaño de bloque de `OpMode_DMR::feed()` y afirma
+lo que sale por `dmr_getStatus()`, incluidas las negativas. Ya encontró dos
+cosas: un CC que sólo salía de una corrección se publicaba (corregido en
+`dmr_proto.c`), y con el otro timeslot ocupado los identificadores de la
+llamada parpadean en pantalla porque `DmrStatus.c` los toma de la última
+ráfaga y no del último LC. El resto de los digitales sigue sin doble, y el
+mismo molde sirve: NXDN, dPMR, P25, YSF, D-STAR y TETRA tienen su demodulador y
+su estado como los de DMR.
 
 ## 2. Menús y ajustes
 
