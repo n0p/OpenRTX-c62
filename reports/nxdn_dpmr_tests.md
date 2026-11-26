@@ -62,9 +62,13 @@ single group can be run on its own, e.g. `./build_linux/nxdn_tx_test "[ran]"`.
   `ui_mode_state.c` says so in a comment). Making that provable means giving
   dPMR a status module like `NxdnStatus` — a product change, not a test.
 - **RF behaviour**: deviation, occupied bandwidth, sensitivity, BER against a
-  real signal, and the transmitter's spectral mask after the PA. `docs/TX_NXDN.md`,
-  `docs/RX_DPMR.md` and the bench tools (`c62_nxdn_bench`, `c62_dpmr_host`) are
-  where those numbers live; they need the bench.
+  real signal, and the transmitter's spectral mask after the PA. `docs/TX_NXDN.md`
+  and `docs/RX_DPMR.md` are where those numbers live; they need the bench.
+  (What the shipped captures give is already asserted in the suite: NXDN's
+  18-frame asset in `nxdn_rx.cpp`, and dPMR's 7 s asset with floors on frames,
+  CCH, voice, header and both addresses in `dPMR Host Harness`. The 30 s DSDcc
+  capture behind `DPMR_CAPTURE` is the optional deeper check and stays out of
+  the repository.)
 - **A real second clock**: the timing tests resample in software (exact, and
   repeatable). Two crystals a few ppm apart, and the audio path's own drift, are
   a bench measurement.
