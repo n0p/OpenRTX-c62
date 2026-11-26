@@ -105,6 +105,25 @@ std::string drawnText()
     return text;
 }
 
+/**
+ * Every receiver double back to "nothing decoded".
+ *
+ * Catch2 runs the cases in random order (since 3.8 the default is
+ * `--order rand`), so a case must not inherit the stub another one left
+ * synced: with the two cases in the other order, the NXDN double stayed
+ * "locked, RAN not decoded" and the searching case read SYNC where it wanted
+ * silence. Each case starts from the same radio, whatever ran before it.
+ */
+void clearStatusDoubles()
+{
+    dmr_sim_clear();
+    tetra_sim_clearCell();
+    tetra_sim_setRegistration(false, 0, 0);
+    p25Status_simSet(false, false, -1, -1, -1, -1, 0, 0, 0);
+    nxdnStatus_simSet(false, -1, false, 0, false, 0, 0, 0, 0);
+    dstarStatus_simSet(false, false, "", "", "", 0, "");
+}
+
 } /* namespace */
 
 /* ======================================================================== */
@@ -128,9 +147,9 @@ TEST_CASE("Nothing decoded reads as searching, never as a zero",
          */
         state.settings.dmr_id = 1234567;
 
-        /* Every receiver double back to "nothing decoded" */
-        dmr_sim_clear();
-        tetra_sim_clearCell();
+        /* Every receiver double back to "nothing decoded", whatever the case
+           that ran before this one left behind */
+        clearStatusDoubles();
 
         ui_mode_state_t st;
         ui_mode_state_read(&st);
@@ -160,6 +179,9 @@ TEST_CASE("An identifier that has not been decoded reads '-', never 0",
           "[ui][state][empty]")
 {
     ui_mode_state_t st;
+
+    /* Whatever the case that ran before this one left synced */
+    clearStatusDoubles();
 
     /* DMR: sync and timeslot, colour code not decoded yet */
     ui_walk::resetUi(OPMODE_DMR, 145500000);
