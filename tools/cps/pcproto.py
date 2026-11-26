@@ -616,8 +616,16 @@ class Link:
         return resp
 
     def pump(self, seconds):
-        """Collect events for a while, including those queued behind a
-        response, and return them in order."""
+        """Collect events for a while and return them in order.
+
+        The queue holds what has not been handed out yet: an event arrives in
+        it when it lands behind a response (`read_frame`), and `pump` is what
+        takes it out.  An event returned here is not put back, so two
+        consecutive calls can never return the same line twice -- re-queueing
+        the batch that was just delivered made `cps log` print every line
+        twice and report negative losses, and it is what the log stream test
+        caught as a sequence of [6, 7, 6, 7, 8].
+        """
         got = list(self.events)
         self.events.clear()
         deadline = time.time() + seconds
@@ -625,7 +633,6 @@ class Link:
             for f in self._feed(self.port.read(0.05)):
                 if f.type == TYPE_EVENT:
                     got.append(f)
-                    self.events.append(f)
         return got
 
     # -- session -----------------------------------------------------------

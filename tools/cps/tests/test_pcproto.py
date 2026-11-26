@@ -258,8 +258,14 @@ class ProtocolTest(RadioTest):
         f = self.link.log_subscribe(level=2, rate=50, module="")
         self.assertEqual(f.u16(P.T_RATE), 50)
         lines = []
+        # Two rounds minimum, however fast the first one fills up: a client
+        # that hands the same event out twice only shows it when a second
+        # poll follows the first, which is why this test used to pass or fail
+        # depending on how many lines the first 300 ms happened to carry.
+        rounds = 0
         deadline = time.time() + 3
-        while time.time() < deadline and len(lines) < 4:
+        while time.time() < deadline and (len(lines) < 4 or rounds < 2):
+            rounds += 1
             for ev in self.link.pump(0.3):
                 if ev.msg_id == P.EVT_LOG:
                     lines.append(ev)
@@ -267,6 +273,10 @@ class ProtocolTest(RadioTest):
         # Timestamped, numbered, and the numbers only go up.
         seqs = [ev.u32(P.T_LOG_SEQ) for ev in lines]
         self.assertEqual(seqs, sorted(seqs))
+        # A number that arrives twice is one line delivered twice: the ring
+        # numbers every line once and the client queue hands it out once.
+        self.assertEqual(len(seqs), len(set(seqs)),
+                         "log lines delivered twice: %r" % (seqs,))
         self.assertTrue(all(ev.u32(P.T_UPTIME_MS) >= 0 for ev in lines))
         self.assertTrue(any(ev.s(P.T_TEXT).startswith("tick")
                             for ev in lines))
