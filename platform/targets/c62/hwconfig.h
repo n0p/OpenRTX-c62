@@ -181,6 +181,7 @@ void platform_pttOverride(int state);
 
 /** The port mode in force: settings.pc_port, or Auto when it is not valid. */
 uint8_t c62_portMode(void);
+void c62_portNecklace(void);
 
 /** The one detector instance: the transport and the key scan share it. */
 portPttState_t *c62_portPttState(void);

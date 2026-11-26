@@ -190,6 +190,8 @@ void *main_thread(void *arg)
 {
     (void) arg;
 
+    printf("main: thread up, cc=%lu\r\n", (unsigned long)getTick());
+
     long long time = 0;
 
     #if defined(CONFIG_GPS)
@@ -259,6 +261,10 @@ void *main_thread(void *arg)
 
         if (!stalled)
             platform_wdtFeed();
+
+        /* The accessory-port necklace, defined in platform/targets/c62/pc_proto_c62.c */
+        void c62_portNecklace(void);
+        c62_portNecklace();
         #else
         (void)UI_THREAD_STALL_MS;
         #endif

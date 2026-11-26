@@ -1222,6 +1222,36 @@ static void pcProtoMain(void *a, void *b, void *c)
  *
  * Throttled to one line every five seconds, because the log shares the cable.
  */
+
+/**
+ * The effective port state, once every two seconds.
+ *
+ * Called from the main thread next to the watchdog feed, which is a context
+ * known to run: the supervisor below can only report a transport that stopped
+ * because it is called from the same place, and it returns early when the
+ * transport was never started.  This one answers a different question -- which
+ * owner the pad has, whether the transport turned its loop and whether the
+ * cable delivered a byte -- and it goes straight out of the UART so a transport
+ * that stopped cannot swallow the line that says so.
+ */
+void c62_portNecklace(void)
+{
+    static uint32_t necklaceMs;
+    const uint32_t now = k_uptime_get_32();
+
+    if ((now - necklaceMs) < 2000)
+        return;
+    necklaceMs = now;
+
+    const portPttState_t *neckPtt = c62_portPttState();
+    printk("necklace: started=%d mode=%s applied=%d loop=%lu rx=%lu "
+           "linked=%u ptt=%d/%d pad=%d\n",
+           (int)started, settings_portModeName(c62_portMode()), appliedMode,
+           (unsigned long)loopSeq, (unsigned long)rxBytes,
+           (unsigned)pc_proto_linked(&proto), (int)port_ptt_pressed(neckPtt),
+           (int)neckPtt->glitches, (int)c62_portPadLevel());
+}
+
 void pc_proto_c62_supervise(void)
 {
     if (!started)

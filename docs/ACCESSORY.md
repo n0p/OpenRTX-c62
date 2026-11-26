@@ -3,7 +3,7 @@
 **Ámbito:** firmware de la C62 (OpenRTX, Zephyr, Cortex-M33). Este documento
 cuenta por qué el pulsador del microaltavoz y el cable del PC no pueden convivir
 como estaban, qué se comparte exactamente, y qué hacen los tres modos que el
-operador elige en **Ajustes ▸ Radio ▸ Puerto PC** (`Auto` / `Always` / `Never`).
+operador elige en la última fila del menú **P2** de cualquier pantalla principal (`Serie` / `PTT`).
 El registro de ajustes que lo guarda está en `docs/SETTINGS.md`; los campos que
 lo enseñan al PC, en `docs/PC_PROTO.md`.
 
@@ -100,13 +100,16 @@ normal y una trama reintentada en el caso raro.
 
 ## 2. Los tres modos
 
-Se eligen en **Ajustes ▸ Radio ▸ Puerto PC** (la fila va detrás de `TX Power`),
+Se eligen en la **última fila del menú P2**, la misma en todos los modos, y en
+ningún otro sitio: la fila vivió un tiempo también en Ajustes ▸ Radio y tenerla
+en dos menús dejaba al operador sin saber cuál de los dos obedecía el firmware.
+Se descartó la de Ajustes, que está a tres pantallas de la principal.
 se guardan en `settings_t.pc_port` (`enum portMode`,
 `openrtx/include/core/settings.h`) y **se aplican al instante**: el transporte del
 protocolo lee el ajuste en cada pasada de su bucle (1 ms) y remuxa el pad, sin
 reiniciar. El valor por defecto es `Never`.
 
-**`Auto` no está en el menú.** La fila de `Puerto PC` ofrece sólo `Always` y
+**`Auto` no está en el menú.** La fila `PUERTO` ofrece sólo `SERIE` y
 `Never`: `Auto` se selecciona desde el CPS (`PC_TAG_SET_PC_PORT`, o el campo
 `pc_port` de `SETTINGS_SET`) y se aplica en la pasada siguiente, así que una
 sesión de banco puede probarlo sin menú. Y no sobrevive a un reinicio: un

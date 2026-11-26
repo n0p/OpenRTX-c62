@@ -67,7 +67,9 @@ static volatile bool stopRequest;
 static volatile bool playing; /* Speech on the speaker */
 
 static uint32_t lateBursts;   /* Halves refilled after they started playing */
+#ifdef CONFIG_C62_VOICE_STATS
 static long long nextStats;
+#endif
 
 /**
  * Vocoder sink: one 20 ms frame, +-1.0 float, to 16-bit samples.
@@ -109,7 +111,7 @@ static bool fillBurst(stream_sample_t *out)
 }
 
 #if defined(__ZEPHYR__) && defined(CONFIG_THREAD_MONITOR) \
-    && defined(CONFIG_THREAD_RUNTIME_STATS)
+    && defined(CONFIG_THREAD_RUNTIME_STATS) && defined(CONFIG_C62_VOICE_STATS)
 #include <zephyr/kernel.h>
 /*
  * CPU use of every thread over the last period, on the console: which
@@ -192,6 +194,7 @@ static void printCpu(void)
  */
 static void printStats(void)
 {
+#ifdef CONFIG_C62_VOICE_STATS
     long long now = getTick();
     if (now < nextStats)
         return;
@@ -222,6 +225,7 @@ static void printStats(void)
                 (unsigned long)(ber / 100u), (unsigned long)(ber % 100u),
                 (unsigned long)dFrames, (unsigned long)ownAvg,
                 (unsigned long)ownMax);
+#endif /* CONFIG_C62_VOICE_STATS */
 }
 
 /**

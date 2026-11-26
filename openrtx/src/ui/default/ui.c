@@ -219,9 +219,13 @@ const char *settings_radio_items[] =
     "Step",
     "Squelch",
     "TX Power",
-    /* Who owns the accessory jack's pad: UART2 RXD, the speaker-mic PTT, or
-     * both (docs/ACCESSORY.md). */
-    "PC Port",
+    /*
+     * The accessory jack's pad is not here any more.  It is the last row of the
+     * P2 popup, reachable from every main screen, and having it in two menus
+     * was worse than having it in the wrong one: the operator sets one, sees
+     * the other say something else and cannot tell which one the firmware
+     * obeyed (docs/ACCESSORY.md).
+     */
 };
 
 const char *settings_audio_items[] =

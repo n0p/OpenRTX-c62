@@ -29,6 +29,18 @@ endmenu
 
 menu "Packet"
 
+config C62_VOICE_STATS
+	bool "DMR voice timing and per-thread CPU on the console"
+	default n
+	select THREAD_MONITOR
+	select THREAD_RUNTIME_STATS
+	help
+	  Every ten seconds, print the vocoder's per-frame timing, the bit error
+	  rate and the CPU share of every thread.  Bring-up instrumentation: the
+	  per-thread pass walks all threads with the scheduler held, which on this
+	  SoC parks the receiver and the PC protocol for about 1.7 s every time it
+	  runs.  Off in every image that is not being measured.
+
 config C62_KISS
 	bool "Packet modem (KISS TNC)"
 	default y
