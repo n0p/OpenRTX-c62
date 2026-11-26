@@ -1,3 +1,9 @@
 option('asan', type : 'boolean', value : false, description : 'Compile the software with AddressSanitizer')
 option('ubsan', type : 'boolean', value : false, description : 'Compile the software with Undefined Behaviour Sanitizer')
 option('test', type: 'string', description: 'Replace the main OpenRTX source file with a specialized test')
+# The TETRA receive chain's host tests (tests/unit/tetra_*.cpp) link libtetra,
+# which arrives as a west module and is not vendored (docs/TETRA_LIB.md). In a
+# west workspace the module is at modules/lib/libtetra and nothing needs to be
+# said here; outside one, point this at any checkout of the module at the
+# revision west.yml pins, e.g. a fork used to read the decoders.
+option('tetra_lib_dir', type : 'string', value : '', description : 'libtetra source tree for the TETRA host tests (default: modules/lib/libtetra)')

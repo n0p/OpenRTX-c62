@@ -44,7 +44,7 @@ Leyenda: ✅ cubierto por tests automáticos · ⚠️ cubierto a medias · ❌ 
 | **YSF** | 4FSK, FICH/DGID, modo V/D, voz AMBE+2, TX | ✅ | `unit/ysf_frame` (FICH roto, bloque DCH roto, voz FR no soportada, bit fijo de V/D 2, DG-ID), `unit/ysf_phy` (sync: encuentra y no inventa), `host/ysf_host`, `host/ysf_tx` |
 | **D-STAR** | GMSK 4800, AMBE 3600x2400 propio, header, TX | ✅/⚠️ | `unit/dstar_header` (P_FCS, cabecera codificada y su rechazo, MY/UR/RPT, oídos, texto), `unit/dstar_phy` (transmisión completa, cortada en cabecera o en tramas, ruido, recuentos de error por palabra AMBE), `host/dstar`, `unit/` (vocoder por `lib/dstar_vocoder`); sin decodificador AMBE 2400: el modo calla |
 | **M17** | Golay, Viterbi, RRC, demodulador, callsign, packet mode | ✅ | `unit/M17_*`, `unit/m17_replay` |
-| **TETRA** | demodulación, CRC de bloques, SDS (U-SDS/UDD), uplink y registro, celda/MCC-MNC | ✅/⚠️ | `unit/tetra_demod`, `unit/tetra_uplink`; sin doble para la capa MM |
+| **TETRA** | demodulación, CRC de bloques, SDS (D-SDS/U-SDS/UDD) de PDU a texto, uplink y registro, celda/MCC-MNC/LA, vecinas y reloj de red, ACC/REJ tal como se dibujan | ✅/⚠️ | `unit/tetra_demod`, `unit/tetra_uplink`, `unit/tetra_status` (doble de `TetraStatus.c` con PDUs reales), `unit/tetra_sds` (encoder → receptor real); la voz y los píxeles, no |
 | **WFM (BK1080)** | init del chip, tune, mute del BK4819, conmutación de fuente de audio, coste | ✅/⚠️ | `unit/wfm`, `unit/wfm` + `tests/platform/c62_wfm_cost.c` |
 
 **Lo que queda del analógico para el banco:** el host demuestra la lógica (histéresis,
@@ -57,7 +57,13 @@ oído— y la profundidad de AM realmente radiada.
 **El hueco común a los digitales:** ningún modo tiene un *doble del receptor*
 que alimente `OpMode_*::update()` con muestras sintéticas y compruebe el estado
 que se publica (sync, identificadores, calidad). Es exactamente la clase de
-hueco por la que un CC inestable se ve en la radio y no en los tests.
+hueco por la que un CC inestable se ve en la radio y no en los tests. TETRA es
+la excepción desde `unit/tetra_status`, y no por el `OpMode` sino por su estado:
+un `tetra_tmo_rx` de verdad recibe PDUs de verdad (la grabación de bajada que
+trae libtetra, sus PDUs de MM capturados, un D-NWRK-BROADCAST y una ráfaga de
+uplink del propio encoder) y lo que se comprueba es `TetraStatus.c` y el texto
+que `ui_mode_state.c` le da a la pantalla principal. Queda para los demás modos
+el mismo molde.
 
 **DMR ya lo tiene** (`unit/dmr_rx_status`, `reports/dmr_rx_standin.md`): genera
 las franjas de un repetidor con el modulador propio, las mete por
