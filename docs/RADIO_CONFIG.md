@@ -315,14 +315,21 @@ every mode**. `bk4819_setAudioMode()` clears it in both of its profiles and
 nothing in this firmware sets it back, so what an FM operator hears is the 1:2
 expander of the voice profile and not a compander.
 
-And one that is a defect in waiting: **only M17 and DMR set the TX deviation
-word**. NXDN, dPMR, P25, YSF and D-STAR enter the flat audio path without writing
-REG_40, so a transmission in one of those modes (CONFIG_NXDN_TX, CONFIG_DPMR_TX,
-CONFIG_P25_TX, CONFIG_YSF_TX exist) goes out with whatever the *previous* mode
-left in the register: M17's `0x582`, or FM's band-calibrated word, or the chip's
-default after a reset. NXDN's 4FSK wants the M17-like word and none of them wants
-FM's narrow one. It is not fixed here because that would be a new write; in the
-table it is one line per mode and one line in the test's baseline.
+And one that was a defect in waiting and is now closed: **only M17 and DMR set
+the TX deviation word**.  NXDN, dPMR, P25, YSF and D-STAR entered the flat audio
+path without writing `REG_40`, so a transmission in one of those modes
+(`CONFIG_NXDN_TX`, `CONFIG_DPMR_TX`, `CONFIG_P25_TX`, `CONFIG_YSF_TX` exist) went
+out with whatever the *previous* mode left in the register: M17's `0x582`, FM's
+band-calibrated word, or the chip's default after a reset -- a transmission whose
+deviation depended on what the operator had done before.
+
+Every transmitting mode now writes it: the 4FSK and GMSK modes take the wide
+digital word M17 uses (`0x582`), DMR keeps its own (`0x476`, a M17-scaled
+estimate until the bench calibrates it), and FM keeps the band-calibrated pair.
+`tests/unit/regplan.cpp` asserts that every digital transmitter writes the
+enabled word and that airband never touches `REG_40`.  What is *not* proven is
+the number itself for NXDN, dPMR, P25, YSF and D-STAR: none of them has been
+measured on the air, and a bench run is what would tune each one.
 
 ## Checking it, and changing it
 

@@ -409,6 +409,15 @@ static void buildModeProfile(struct radioPlan *plan, enum opmode mode,
              * spacing; the demodulator's matched filter does the selection.
              */
             emitAudioMode(plan, true);
+            /*
+             * The deviation word used to be inherited: only M17 and DMR wrote
+             * it, so an NXDN transmission carried whatever the previous mode
+             * left in REG_40 -- M17's word, FM's band-calibrated one or the
+             * chip's reset value.  The 4FSK modes want the wide digital word,
+             * the same one M17 uses; a bench run is what would tune it per
+             * mode, and until then at least it is the same on every boot.
+             */
+            emitTxDeviation(plan, M17_TX_DEVIATION);
             emitBandwidth(plan, BW_12_5);
             if (bandwidth == BW_6_25)
                 emitRfFilter(plan, 3, 3); /* about 2.9 kHz */
@@ -428,6 +437,7 @@ static void buildModeProfile(struct radioPlan *plan, enum opmode mode,
              * channel selection.  No transmitter.
              */
             emitAudioMode(plan, true);
+            emitTxDeviation(plan, M17_TX_DEVIATION); /* see NXDN */
             emitBandwidth(plan, BW_12_5);
             emitRfFilter(plan, 7, 7);
             emitTxAudioFilter(plan, DMR_TX_LPF2_BW);
@@ -446,6 +456,7 @@ static void buildModeProfile(struct radioPlan *plan, enum opmode mode,
              * 12.5 kHz channel mode with the stock firmware's digital word.
              */
             emitAudioMode(plan, true);
+            emitTxDeviation(plan, M17_TX_DEVIATION); /* see NXDN */
             emitBandwidth(plan, BW_12_5);
             emitRfFilter(plan, 7, 7);
             plan->knobs.rxReg43 = REG43_DIGI_12K5;

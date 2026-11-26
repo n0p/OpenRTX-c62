@@ -256,6 +256,9 @@ static void baselineMode(enum opmode mode, enum bandwidth bw,
         bk4819_setMicGain(&g_chip, 0);
     } else if (mode == OPMODE_NXDN) {
         bk4819_setAudioMode(&g_chip, BK4819_AUDIO_BYPASS);
+        /* Added after the refactor on purpose (docs/RADIO_CONFIG.md): the 4FSK
+         * modes used to inherit REG_40 from whichever mode ran before. */
+        bk4819_setTxDeviation(&g_chip, true, M17_TX_DEVIATION);
         bk4819_setBandwidth(&g_chip, BK4819_BW_12K5);
         if (bw == BW_6_25)
             bk4819_setRfFilter(&g_chip, 3, 3);
@@ -266,6 +269,7 @@ static void baselineMode(enum opmode mode, enum bandwidth bw,
         bk4819_setMicGain(&g_chip, 0);
     } else if (mode == OPMODE_DPMR) {
         bk4819_setAudioMode(&g_chip, BK4819_AUDIO_BYPASS);
+        bk4819_setTxDeviation(&g_chip, true, M17_TX_DEVIATION); /* intended */ 
         bk4819_setBandwidth(&g_chip, BK4819_BW_12K5);
         bk4819_setRfFilter(&g_chip, 7, 7);
         bk4819_setTxAudioFilter(&g_chip, 0);
@@ -274,6 +278,7 @@ static void baselineMode(enum opmode mode, enum bandwidth bw,
     } else if ((mode == OPMODE_P25) || (mode == OPMODE_YSF)
                || (mode == OPMODE_DSTAR)) {
         bk4819_setAudioMode(&g_chip, BK4819_AUDIO_BYPASS);
+        bk4819_setTxDeviation(&g_chip, true, M17_TX_DEVIATION); /* intended */
         bk4819_setBandwidth(&g_chip, BK4819_BW_12K5);
         bk4819_setRfFilter(&g_chip, 7, 7);
         bk4819_setTxAudioFilter(&g_chip, 0);
@@ -1075,4 +1080,59 @@ TEST_CASE("Plan enumerations match the driver's", "[regplan]")
     REQUIRE((int)RADIO_PLAN_AF_FM == (int)BK4819_AF_FM);
     REQUIRE((int)RADIO_PLAN_AF_AM == (int)BK4819_AF_AM);
     REQUIRE((int)RADIO_PLAN_AF_BYPASS == (int)BK4819_AF_BYPASS);
+}
+
+/*
+ * Every transmitting mode writes the deviation word.  It used to be only M17
+ * and DMR: NXDN, dPMR, P25, YSF and D-STAR keyed the PA with whatever the
+ * previous mode had left in REG_40 -- M17's word, FM's band-calibrated one or
+ * the chip's reset value -- which is a transmission whose deviation depends on
+ * what the operator did before, and no test could see it.
+ */
+TEST_CASE("Every digital transmitter writes its deviation word", "[regplan]")
+{
+    struct radioPlanOptions opt;
+    radioPlan_defaultOptions(&opt);
+
+    const enum opmode modes[] = { OPMODE_M17, OPMODE_DMR, OPMODE_NXDN,
+                                  OPMODE_DPMR, OPMODE_P25, OPMODE_YSF,
+                                  OPMODE_DSTAR };
+    for (enum opmode mode : modes) {
+        struct radioPlan plan = planOf(RADIO_PLAN_STAGE_MODE, mode, BW_12_5,
+                                       RADIO_PLAN_BOTH, &opt);
+        const std::string text = planText(plan);
+        INFO(text);
+
+        bool found = false;
+        for (uint8_t i = 0; i < plan.count; i++) {
+            /*
+             * 0x40 with the deviation enable set (bit 12) and a non-zero word:
+             * the enabled form, not the one that leaves the chip's own value.
+             */
+            if ((plan.write[i].reg == 0x40)
+                && ((plan.write[i].value & 0x1000u) != 0)
+                && ((plan.write[i].value & 0x0fffu) != 0)) {
+                found = true;
+            }
+        }
+        INFO("mode " << radioPlan_modeName(mode));
+        REQUIRE(found);
+    }
+}
+
+/*
+ * AM has no deviation to set: airband's plan must not touch the word, so an AM
+ * reception cannot inherit a digital mode's deviation and start limiting.
+ */
+TEST_CASE("Airband does not write the deviation word", "[regplan]")
+{
+    struct radioPlanOptions opt;
+    radioPlan_defaultOptions(&opt);
+
+    struct radioPlan plan = planOf(RADIO_PLAN_STAGE_MODE, OPMODE_AIRBAND,
+                                   BW_12_5, RADIO_PLAN_RX, &opt);
+    for (uint8_t i = 0; i < plan.count; i++) {
+        INFO(planText(plan));
+        REQUIRE(plan.write[i].reg != 0x40);
+    }
 }
