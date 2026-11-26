@@ -54,6 +54,7 @@ typedef struct {
     int16_t y;     /**< baseline y passed to gfx_print() */
     uint8_t font;  /**< enum fontSize_t                  */
     uint8_t align; /**< enum textAlign_t                 */
+    uint16_t width; /**< width of the text in that font, px */
     uint32_t rgb;  /**< 0x00RRGGBB of the text colour    */
     char text[GFX_CAPTURE_TEXT];
 } gfx_capture_line_t;

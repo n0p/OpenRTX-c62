@@ -280,8 +280,8 @@ size_t ui_dump_text(char *buf, size_t len)
     if (have) {
         for (uint16_t i = 0; i < f.lines; i++) {
             const gfx_capture_line_t *l = &f.line[i];
-            append(buf, len, &pos, "  y%3d x%3d f%u %c %s%s\n", l->y, l->x,
-                   l->font,
+            append(buf, len, &pos, "  y%3d x%3d f%u w%3u %c %s%s\n", l->y,
+                   l->x, l->font, l->width,
                    (l->align == TEXT_ALIGN_LEFT)   ? 'L' :
                    (l->align == TEXT_ALIGN_CENTER) ? 'C' :
                                                      'R',
@@ -410,8 +410,9 @@ size_t ui_dump_json(char *buf, size_t len)
             const gfx_capture_line_t *l = &f.line[i];
             append(buf, len, &pos,
                    "%s{\"y\":%d,\"x\":%d,\"font\":%u,\"align\":%u,"
-                   "\"rgb\":\"%06lx\",\"selected\":%s,\"text\":",
+                   "\"w\":%u,\"rgb\":\"%06lx\",\"selected\":%s,\"text\":",
                    (i == 0) ? "" : ",", l->y, l->x, l->font, l->align,
+                   l->width,
                    (unsigned long)l->rgb, line_selected(l) ? "true" : "false");
             append_json_string(buf, len, &pos, l->text);
             append(buf, len, &pos, "}");

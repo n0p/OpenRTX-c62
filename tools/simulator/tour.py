@@ -70,34 +70,31 @@ MODES = {
         "SQL", "PWR", "CTCSS", "TONE", "BW", "SHIFT", "1750", "BKL",
         "KEYLIT", "LOCK", "MSGS", "ESPECTRO", "MSG", "APRS", "PKT"]},
     "M17": {"tx": True, "page": "SETTINGS_M17", "rows": [
-        "CALL", "CAN", "CANRX", "SRC", "META", "PWR", "BKL", "KEYLIT",
+        "CALL", "CAN", "CANRX", "META", "PWR", "BKL", "KEYLIT",
         "LOCK", "MSGS", "MSG"]},
     "TETRA": {"tx": False, "page": "SETTINGS_TETRA", "rows": [
-        "AFC", "FINE", "CELL UL", "CELL", "LA/CC", "REG", "NET", "UL", "CALL",
-        "BKL", "KEYLIT", "LOCK", "MSGS", "MSG"]},
+        "AFC", "FINE", "CELL UL", "BKL", "KEYLIT", "LOCK", "MSGS", "MSG"]},
     # DMR transmits in the C62 image and in the simulator (CONFIG_DMR_TX on the
     # simulator target only, see meson.build); its page is the generic one.
+    # The rows are what can be *changed*: the colour code, the timeslot and the
+    # sync state are on the main screen (docs/UI.md, "El estado del modo").
     "DMR": {"tx": True, "page": "SETTINGS_MODE", "rows": [
-        "CC", "TS", "SYNC", "CALL", "DEST", "FINE", "BKL", "KEYLIT", "LOCK",
-        "MSGS", "MSG"]},
+        "CALL", "DEST", "FINE", "BKL", "KEYLIT", "LOCK", "MSGS", "MSG"]},
     "NXDN": {"tx": False, "page": "SETTINGS_MODE", "rows": [
-        "RAN", "BW", "SYNC", "CALL", "TYPE", "FINE", "BKL", "KEYLIT", "LOCK",
-        "MSGS", "MSG"]},
+        "RAN", "BW", "FINE", "BKL", "KEYLIT", "LOCK", "MSGS", "MSG"]},
     "dPMR": {"tx": False, "page": "SETTINGS_MODE", "rows": [
-        "SYNC", "FINE", "BKL", "KEYLIT", "LOCK", "MSGS", "MSG"]},
+        "FINE", "BKL", "KEYLIT", "LOCK", "MSGS", "MSG"]},
     "P25": {"tx": False, "page": "SETTINGS_MODE", "rows": [
-        "SYNC", "NAC", "TYPE", "CALL", "FINE", "BKL", "KEYLIT", "LOCK",
-        "MSGS", "MSG"]},
+        "FINE", "BKL", "KEYLIT", "LOCK", "MSGS", "MSG"]},
     "YSF": {"tx": False, "page": "SETTINGS_MODE", "rows": [
-        "SYNC", "FINE", "BKL", "KEYLIT", "LOCK", "MSGS", "MSG"]},
+        "FINE", "BKL", "KEYLIT", "LOCK", "MSGS", "MSG"]},
     "DSTAR": {"tx": False, "page": "SETTINGS_MODE", "rows": [
-        "SYNC", "MY", "UR", "RPT", "TXT", "FINE", "BKL", "KEYLIT", "LOCK",
-        "MSGS", "MSG"]},
+        "FINE", "BKL", "KEYLIT", "LOCK", "MSGS", "MSG"]},
     "AM": {"tx": False, "page": "SETTINGS_MODE", "rows": [
-        "SQL", "AGC", "STEP", "SNAP", "CH", "IF", "FINE", "BKL", "KEYLIT",
+        "SQL", "AGC", "STEP", "SNAP", "IF", "FINE", "BKL", "KEYLIT",
         "LOCK", "MSGS", "ESPECTRO", "MSG"]},
     "WFM": {"tx": False, "page": "SETTINGS_MODE", "rows": [
-        "ST", "LVL", "SNR", "CH", "BKL", "KEYLIT", "LOCK", "MSGS", "MSG"]},
+        "BKL", "KEYLIT", "LOCK", "MSGS", "MSG"]},
 }
 
 MODE_ORDER = ["FM", "M17", "TETRA", "DMR", "NXDN", "dPMR", "P25", "YSF",
@@ -1106,7 +1103,7 @@ class Tour:
         self.assert_alive("after the identity page")
 
     def phase_tools(self):
-        """P1 held down: the tools menu, its rows and the mode submenu."""
+        """P1 held down: the tools menu, its six rows and the mode submenu."""
         self.step_name = "tools"
         self.goto_mode("FM")
         self.home()
@@ -1124,7 +1121,9 @@ class Tour:
 
         rows = [r["label"] for r in d["tools"]["rows"]]
         # The accessory port is one row of this menu and of no other screen
-        # (docs/ACCESSORY.md): the list is the five doors plus that row, last.
+        # (docs/ACCESSORY.md): the five doors plus that row, last.  It used to
+        # be the last row of every mode's table, which is also every mode's
+        # Settings page.
         self.check(rows == ["Mode", "Scan", "VFO scan", "Spectrum", "Channels",
                             "Puerto"],
                    "the rows of the tools menu are %s, not the six of the "

@@ -91,6 +91,18 @@ void dmrStatus_update(void)
 
     s_status.evm = linkQuality(&st);
 
+    /*
+     * The call's source and destination, when the last link control on that
+     * slot announced them: the main screen shows who is calling whom for as
+     * long as the call lasts (the slot keeps ids_valid until the next call).
+     */
+    s_status.idsValid = last->ids_valid;
+    s_status.group = last->group;
+    if (last->ids_valid) {
+        s_status.src = last->src;
+        s_status.dst = last->dst;
+    }
+
     uint32_t fecBits, fecFrames;
     dmr_voice_get_fec(&fecBits, &fecFrames);
     (void)fecBits;

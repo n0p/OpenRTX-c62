@@ -46,6 +46,7 @@
 #include "core/state.h"
 #include "core/ui.h"
 #include "protocols/APRS/ax25.h"
+#include "protocols/DSTAR/DStarDefs.h"
 #include "ui/ui_default.h"
 #include "ui/ui_dump.h"
 
@@ -260,6 +261,19 @@ static void cmd_help(void)
     say("                     a TETRA cell the host never decoded; UL_HZ 0 = none");
     say("inject tetra-cell clear");
     say("                     back to \"nothing decoded\"");
+    say("inject dmr <CC> <TS> [evm <N>] [voice|data <TYPE>] [call <SRC> <DST> [P]]");
+    say("                     a DMR burst decoded: colour code, slot, call, quality");
+    say("inject dmr clear     nothing decoded (\"DMR searching\")");
+    say("inject nxdn <RAN> [evm <N>] [frames <N>] [call <SRC> <DST> <TYPE>]");
+    say("inject nxdn clear");
+    say("inject p25 <NAC> [duid <N>] [frames <N>] [bad <N>] [talkgroup <SRC> <TG>]");
+    say("inject p25 clear");
+    say("inject dstar <MY> <UR> <RPT> [viterbi <N>] [text <WORDS...>]");
+    say("inject dstar clear");
+    say("inject tetra-registration <0|1> <GROUPS> <CAUSE>");
+    say("inject tetra-call <0|1> <GROUP> <DST> <TALKER> <ID> <VOICE> [<ENC>]");
+    say("inject identity <DMR_ID>     the station's own DMR ID");
+    say("inject mode-state clear   every mode above, back to nothing decoded");
     say("quit                 power the radio off");
 }
 
@@ -311,6 +325,136 @@ static bool injectFrame(const char *call, const char *info)
     }
 
     say("#inject %s %s", call, info);
+    return true;
+}
+
+
+/*
+ * The digital modes' receiver state, for the state block of the main screen
+ * (ui_mode_state.h). Each command fills what the mode's own decoder would have
+ * written: they exist because a screen that only ever shows "SRCH" is a screen
+ * whose layout nobody has looked at.
+ */
+
+static bool injectDmr(int argc, char **argv)
+{
+    if (argc < 4)
+        return false;
+
+    int cc = atoi(argv[2]);
+    int ts = atoi(argv[3]);
+    unsigned evm = 0;
+    int lastType = -1;
+    bool voice = true;
+    bool ids = false, group = true;
+    unsigned long src = 0, dst = 0;
+
+    for (int i = 4; i < argc; i++) {
+        if ((strcmp(argv[i], "evm") == 0) && (i + 1 < argc))
+            evm = (unsigned)strtoul(argv[++i], NULL, 0);
+        else if ((strcmp(argv[i], "voice") == 0) && (i + 1 < argc)) {
+            voice = true;
+            lastType = -1;
+            i++;
+        } else if ((strcmp(argv[i], "data") == 0) && (i + 1 < argc)) {
+            voice = false;
+            lastType = atoi(argv[++i]);
+        } else if ((strcmp(argv[i], "call") == 0) && (i + 2 < argc)) {
+            src = strtoul(argv[++i], NULL, 0);
+            dst = strtoul(argv[++i], NULL, 0);
+            ids = true;
+            group = true;
+            if ((i + 1 < argc) && (strcmp(argv[i + 1], "P") == 0)) {
+                group = false;
+                i++;
+            }
+        }
+    }
+
+    dmr_sim_setStatus(true, cc, ts, voice, evm, ids, group, (uint32_t)src,
+                      (uint32_t)dst, lastType);
+    say("#inject dmr CC%d TS%d evm=%u call=%s", cc, ts, evm,
+        ids ? "yes" : "no");
+    return true;
+}
+
+static bool injectNxdn(int argc, char **argv)
+{
+    if (argc < 3)
+        return false;
+
+    int ran = atoi(argv[2]);
+    unsigned evm = 0, frames = 0, type = 1;
+    unsigned long src = 0, dst = 0;
+    bool msg = false;
+
+    for (int i = 3; i < argc; i++) {
+        if ((strcmp(argv[i], "evm") == 0) && (i + 1 < argc))
+            evm = (unsigned)strtoul(argv[++i], NULL, 0);
+        else if ((strcmp(argv[i], "frames") == 0) && (i + 1 < argc))
+            frames = (unsigned)strtoul(argv[++i], NULL, 0);
+        else if ((strcmp(argv[i], "call") == 0) && (i + 3 < argc)) {
+            src = strtoul(argv[++i], NULL, 0);
+            dst = strtoul(argv[++i], NULL, 0);
+            type = (unsigned)strtoul(argv[++i], NULL, 0);
+            msg = true;
+        }
+    }
+
+    nxdnStatus_simSet(true, ran, true, evm, msg, (unsigned)src,
+                      (unsigned)dst, type, frames);
+    say("#inject nxdn RAN%d evm=%u frames=%u", ran, evm, frames);
+    return true;
+}
+
+static bool injectP25(int argc, char **argv)
+{
+    if (argc < 3)
+        return false;
+
+    int nac = (int)strtol(argv[2], NULL, 0);
+    int duid = -1, tg = -1;
+    long src = -1;
+    unsigned frames = 0, bad = 0;
+
+    for (int i = 3; i < argc; i++) {
+        if ((strcmp(argv[i], "duid") == 0) && (i + 1 < argc))
+            duid = (int)strtol(argv[++i], NULL, 0);
+        else if ((strcmp(argv[i], "frames") == 0) && (i + 1 < argc))
+            frames = (unsigned)strtoul(argv[++i], NULL, 0);
+        else if ((strcmp(argv[i], "bad") == 0) && (i + 1 < argc))
+            bad = (unsigned)strtoul(argv[++i], NULL, 0);
+        else if ((strcmp(argv[i], "talkgroup") == 0) && (i + 2 < argc)) {
+            src = strtol(argv[++i], NULL, 0);
+            tg = (int)strtol(argv[++i], NULL, 0);
+        }
+    }
+
+    p25Status_simSet(true, true, nac, duid, src, tg, frames ? frames : 1,
+                     bad, frames);
+    say("#inject p25 NAC%03X", (unsigned)nac);
+    return true;
+}
+
+static bool injectDstar(int argc, char **argv)
+{
+    if (argc < 5)
+        return false;
+
+    int viterbi = 0;
+    char text[DSTAR_TEXT_LEN + 1] = "";
+
+    for (int i = 5; i < argc; i++) {
+        if ((strcmp(argv[i], "viterbi") == 0) && (i + 1 < argc))
+            viterbi = atoi(argv[++i]);
+        else if (strcmp(argv[i], "text") == 0) {
+            joinFrom(text, sizeof(text), i + 1, argc, argv);
+            break;
+        }
+    }
+
+    dstarStatus_simSet(true, true, argv[2], argv[3], argv[4], viterbi, text);
+    say("#inject dstar %s>%s rpt=%s", argv[2], argv[3], argv[4]);
     return true;
 }
 
@@ -402,6 +546,96 @@ static bool cmd_inject(int argc, char **argv)
                 dl, ul);
             return true;
         }
+    }
+
+    if (strcmp(argv[1], "tetra-registration") == 0 && argc > 4) {
+        bool accepted = atoi(argv[2]) != 0;
+        uint8_t groups = (uint8_t)strtoul(argv[3], NULL, 0);
+        uint8_t cause = (uint8_t)strtoul(argv[4], NULL, 0);
+
+        tetra_sim_setRegistration(accepted, groups, cause);
+        say("#inject tetra-registration %s G%u cause=%u",
+            accepted ? "accepted" : "rejected", (unsigned)groups,
+            (unsigned)cause);
+        return true;
+    }
+
+    if (strcmp(argv[1], "tetra-call") == 0 && argc > 7) {
+        bool call = atoi(argv[2]) != 0;
+        bool group = atoi(argv[3]) != 0;
+        uint32_t dst = (uint32_t)strtoul(argv[4], NULL, 0);
+        uint32_t talker = (uint32_t)strtoul(argv[5], NULL, 0);
+        uint16_t id = (uint16_t)strtoul(argv[6], NULL, 0);
+        bool voice = atoi(argv[7]) != 0;
+        bool enc = (argc > 8) && (atoi(argv[8]) != 0);
+
+        tetra_sim_setCall(call, group, dst, talker, id, voice, enc);
+        say("#inject tetra-call %s %s%lu %lu id=%u", call ? "on" : "off",
+            group ? "G" : "", (unsigned long)dst, (unsigned long)talker,
+            (unsigned)id);
+        return true;
+    }
+
+    /*
+     * The station's own identifiers, so a screen that refuses to transmit for
+     * lack of one (DMR: "NO TX: DMR ID 0") can be looked at with one set. It
+     * writes the settings record the Identity page writes, nothing else.
+     */
+    if (strcmp(argv[1], "identity") == 0 && argc > 2) {
+#ifdef UI_MODE_DMR
+        state.settings.dmr_id = (uint32_t)strtoul(argv[2], NULL, 0);
+        say("#inject identity dmr_id=%lu",
+            (unsigned long)state.settings.dmr_id);
+#else
+        say("#error this build has no DMR identity");
+#endif
+        return true;
+    }
+
+    if (strcmp(argv[1], "dmr") == 0) {
+        if ((argc == 3) && (strcmp(argv[2], "clear") == 0)) {
+            dmr_sim_clear();
+            say("#inject dmr clear");
+            return true;
+        }
+        return injectDmr(argc, argv);
+    }
+
+    if (strcmp(argv[1], "nxdn") == 0) {
+        if ((argc == 3) && (strcmp(argv[2], "clear") == 0)) {
+            nxdnStatus_simSet(false, -1, false, 0, false, 0, 0, 0, 0);
+            say("#inject nxdn clear");
+            return true;
+        }
+        return injectNxdn(argc, argv);
+    }
+
+    if (strcmp(argv[1], "p25") == 0) {
+        if ((argc == 3) && (strcmp(argv[2], "clear") == 0)) {
+            p25Status_simSet(false, false, -1, -1, -1, -1, 0, 0, 0);
+            say("#inject p25 clear");
+            return true;
+        }
+        return injectP25(argc, argv);
+    }
+
+    if (strcmp(argv[1], "dstar") == 0) {
+        if ((argc == 3) && (strcmp(argv[2], "clear") == 0)) {
+            dstarStatus_simSet(false, false, "", "", "", 0, "");
+            say("#inject dstar clear");
+            return true;
+        }
+        return injectDstar(argc, argv);
+    }
+
+    if (strcmp(argv[1], "mode-state") == 0) {
+        dmr_sim_clear();
+        nxdnStatus_simSet(false, -1, false, 0, false, 0, 0, 0, 0);
+        p25Status_simSet(false, false, -1, -1, -1, -1, 0, 0, 0);
+        dstarStatus_simSet(false, false, "", "", "", 0, "");
+        tetra_sim_clearCell();
+        say("#inject mode-state clear");
+        return true;
     }
 
     say("#error inject needs a station, a message and their arguments");

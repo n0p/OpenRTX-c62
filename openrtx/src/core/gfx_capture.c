@@ -18,6 +18,7 @@
 #include <string.h>
 
 #include "core/gfx_capture.h"
+#include "core/graphics.h"
 
 static gfx_capture_frame_t frames[2];
 static gfx_capture_frame_t *building = &frames[0];
@@ -80,6 +81,12 @@ void gfx_capture_text(point_t start, fontSize_t size, textAlign_t align,
     l->align = (uint8_t)align;
     l->rgb = ((uint32_t)color.r << 16) | ((uint32_t)color.g << 8) | color.b;
     copy_text(l->text, sizeof(l->text), text);
+    /*
+     * The width in pixels, measured in the font it was drawn with: the dump is
+     * how a test checks that a line fits the panel and that two lines on one
+     * baseline do not draw over each other (tools/simulator/mode_state_shots.py).
+     */
+    l->width = gfx_getTextWidth(size, l->text);
 }
 
 void gfx_capture_header(const char *title, const char *right)

@@ -166,7 +166,11 @@ TEST_CASE("Quick menu has a table per operating mode", "[ui][quickmenu]")
 #ifdef CONFIG_DMR
     const qm_menu_t *dmr = qm_findMenu(OPMODE_DMR);
     REQUIRE(dmr->mode == OPMODE_DMR);
-    REQUIRE(rowOf(dmr, "CC") == 0);
+    /* The colour code and the timeslot are state (main screen), so the first
+       row that can be changed is the call destination */
+    REQUIRE(rowOf(dmr, "CALL") == 0);
+    REQUIRE(rowOf(dmr, "CC") == -1);
+    REQUIRE(rowOf(dmr, "TS") == -1);
 #endif
 
 #ifdef UI_MODE_NXDN

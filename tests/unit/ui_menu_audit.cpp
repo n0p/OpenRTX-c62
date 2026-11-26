@@ -61,9 +61,15 @@ extern "C" {
 #include "core/vfo_search_service.h"
 #include "interfaces/cps_io.h"
 #include "interfaces/nvmem.h"
+#include "protocols/DMR/DmrStatus.h"
+#include "protocols/DSTAR/DStarStatus.h"
+#include "protocols/NXDN/NxdnStatus.h"
+#include "protocols/P25/P25Status.h"
+#include "protocols/TETRA/TetraStatus.h"
 #include "protocols/TETRA/TetraUplink.h"
 #include "rtx/rtx.h"
 #include "ui/ui_default.h"
+#include "ui/ui_mode_state.h"
 #include "ui/ui_tools.h"
 #include "ui/ui_quickmenu.h"
 #include "ui/ui_messages.h"
@@ -1286,6 +1292,150 @@ TEST_CASE("Every editable row writes settings or the channel, and survives the N
             (void)atMax;
         }
     }
+}
+
+/* =================================== state in the menus vs main screen === */
+
+/*
+ * Requirement: a mode's quick menu carries configurations and options, and what
+ * the radio has decoded is on the main screen.
+ *
+ * The row table of a mode is drawn twice - as the popup on the main screen and
+ * as that mode's page under Settings - so a read-only row in it is state inside
+ * a menu: the operator has to open Settings to see whether the radio has
+ * locked, and the page offers rows that beep and do nothing when a value key is
+ * pressed. It happened one row at a time (CC, TS, SYNC, RAN, NAC, CELL, LA/CC,
+ * REG, NET, UL, CALL, MY, UR, RPT, TXT, ST, LVL, SNR, CH, SRC), which is why the
+ * rule is checked mechanically rather than the rows being reviewed.
+ *
+ * The analyser's own table is not a mode's: it belongs to the spectrum screen,
+ * which has no status area to move its PICO and MS/PTO read-outs to.
+ */
+TEST_CASE("A mode's menu is configurations and options, never decoded state",
+          "[ui][audit][rows]")
+{
+    for (uint8_t i = 0; i < ui_mode_count(); i++) {
+        const ui_mode_t *m = ui_mode_at(i);
+
+        for (uint8_t r = 0; r < m->count; r++) {
+            const qm_item_t &row = m->items[r];
+
+            INFO("mode " << m->title << ", row " << row.label);
+            REQUIRE(row.type != QM_INFO);
+
+            /* And every row that is left either changes something or opens a
+               screen/acts: a row with neither is dead in both screens */
+            if ((row.type == QM_INT) || (row.type == QM_ENUM)
+                || (row.type == QM_TOGGLE)) {
+                REQUIRE(row.get != NULL);
+                REQUIRE(row.set != NULL);
+            } else {
+                const bool goes = (row.type == QM_GOTO)
+                                && (row.goto_screen != 0);
+                const bool acts = (row.type == QM_ACTION)
+                                && (row.act != NULL);
+                REQUIRE((goes || acts));
+            }
+        }
+    }
+}
+
+/*
+ * Requirement: the state of every digital mode is readable from the main screen
+ * with no menu open, and says "nothing decoded" instead of a zero.
+ *
+ * The check is on the same block the main screen draws (ui/ui_mode_state.h), so
+ * it fails when a protocol changes what it publishes or when a mode is added to
+ * the registry without a state: the strings are the contract the operator reads
+ * on line 1, 2 and line 4 of the main screen.
+ */
+TEST_CASE("Every digital mode tells its state on the main screen",
+          "[ui][audit][state]")
+{
+    struct Expect
+    {
+        uint8_t mode;
+        const char *nothing;    /* what the block says with no signal */
+    };
+
+    const Expect modes[] = {
+        { OPMODE_DMR,   "DMR searching" },
+        { OPMODE_NXDN,  "NXDN SRCH" },
+        { OPMODE_DPMR,  "SRCH" },
+        { OPMODE_P25,   "P25 SRCH" },
+        { OPMODE_YSF,   "SRCH" },
+        { OPMODE_DSTAR, "DSTAR SRCH" },
+        { OPMODE_TETRA, "T searching" },
+    };
+
+    for (const Expect &e : modes) {
+        ui_mode_state_t st;
+
+        resetUi(e.mode);
+        dmrStatus_clear();
+        p25Status_clear();
+        nxdnStatus_clear();
+        dstarStatus_clear();
+        tetra_sim_clearCell();
+
+        ui_mode_state_read(&st);
+
+        INFO("mode " << ui_mode_title(e.mode) << " says \"" << st.id << "\"");
+        REQUIRE(strcmp(st.id, e.nothing) == 0);
+        REQUIRE_FALSE(st.sync);
+        REQUIRE_FALSE(st.call);
+        /* No call, no quality and no secondary state when nothing decodes: the
+           block draws line 1 and line 4 only when there is something to say */
+        REQUIRE(st.callTxt[0] == '\0');
+        REQUIRE(st.qual[0] == '\0');
+        REQUIRE(st.note[0] == '\0');
+        /* And never a zero where an identifier is unknown */
+        REQUIRE(strchr(st.id, '0') == NULL);
+    }
+
+    /*
+     * With a receiver locked, the identifiers the old read-only rows carried
+     * are in the block: colour code and timeslot, the call, the link quality.
+     */
+    resetUi(OPMODE_DMR);
+    dmr_sim_setStatus(true, 1, 2, true, 980, true, true, 2317, 9, -1);
+    ui_mode_state_t dmr;
+    ui_mode_state_read(&dmr);
+    REQUIRE(dmr.sync);
+    REQUIRE(strcmp(dmr.id, "CC1 TS2") == 0);
+    REQUIRE(strcmp(dmr.callTxt, "2317>9") == 0);
+    REQUIRE(strcmp(dmr.qual, "LC98%") == 0);
+    dmr_sim_clear();
+
+    /* Unknown colour code and slot read as "-", not as a zero */
+    resetUi(OPMODE_DMR);
+    dmr_sim_setStatus(true, -1, 0, true, 0, false, false, 0, 0, -1);
+    ui_mode_state_read(&dmr);
+    REQUIRE(strcmp(dmr.id, "CC- TS-") == 0);
+    dmr_sim_clear();
+
+    /* TETRA: the cell and the registration */
+    resetUi(OPMODE_TETRA);
+    tetra_sim_setCell(228, 8889, 1, 430500000u, 0);
+    tetra_sim_setRegistration(true, 3, 0);
+    ui_mode_state_t tetra;
+    ui_mode_state_read(&tetra);
+    REQUIRE(tetra.sync);
+    REQUIRE(strcmp(tetra.id, "228-8889") == 0);
+    /* Both halves when they fit, the registration alone when they do not */
+    REQUIRE(strcmp(tetra.note, "LA1 ACC G3") == 0);
+    REQUIRE(strcmp(tetra.noteShort, "ACC G3") == 0);
+
+    /* A refused location update is said too, and no zero when there is no
+       network broadcast at all */
+    tetra_sim_clearCell();
+    tetra_sim_setCell(228, 8889, 1, 430500000u, 0);
+    tetra_sim_setRegistration(false, 0, 7);
+    ui_mode_state_read(&tetra);
+    REQUIRE(strcmp(tetra.note, "LA1 REJ 7") == 0);
+    REQUIRE(strcmp(tetra.noteShort, "REJ 7") == 0);
+
+    tetra_sim_clearCell();
 }
 
 /* ================================================ receive-only modes ===== */
