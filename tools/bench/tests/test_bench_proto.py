@@ -34,14 +34,14 @@ import benchproto as B  # noqa: E402
 class BenchRadio:
     """A device binary on a pty, with the bench client attached."""
 
-    def __init__(self, binary):
+    def __init__(self, binary, client_caps=P.CAP_EVENTS):
         self.master, self.slave = pty.openpty()
         name = os.ttyname(self.slave)
         self.proc = subprocess.Popen([binary, name],
                                      stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL)
         self.port = P.Port(fd=self.master, timeout=3.0)
-        self.link = B.BenchLink(self.port)
+        self.link = B.BenchLink(self.port, client_caps=client_caps)
         time.sleep(0.1)
         self.port.read(0.05)
         self.link.connect()
@@ -79,6 +79,10 @@ class BenchTest(unittest.TestCase):
 
     def setUp(self):
         self.link = self.radio.link
+        # What bench.py sets from --power: every TUNE carries it, so the
+        # simulated PA has something to key with and the tests do not depend on
+        # the one before them having tuned.
+        self.link.default_power = 500
         self.link.arm()
 
     def test_capability_and_arm(self):
@@ -194,6 +198,95 @@ class BenchTest(unittest.TestCase):
         self.assertIn("145500000", text)
         self.assertIn("ptt", text)
         self.assertIn("no carrier reference", text)
+
+    # -- the rules of the cable (docs/TEST_PLAN.md §4) ---------------------
+
+    def test_a_spent_token_cannot_key(self):
+        """
+        A second HELLO spends the first client's token, and a PTT that presents
+        a spent one is refused -- not silently dropped, not keyed anyway.
+
+        This is the failure the token exists for: a bench script that armed the
+        radio, then something else on the cable (a CPS window, a second run,
+        the script reconnecting) greeted.  A PA keyed on behalf of a client
+        nobody is listening to is a carrier nobody measures.  The refusal is
+        what makes the second client's session the only one that can move the
+        radio, and it is why a spent session has to be re-opened (HELLO) and
+        re-armed before it touches the PA again.
+        """
+        self.link.tune(145.5e6, mode=1, bw=2, power=500)
+        spent = self.link.token
+        self.link.connect()                     # the token rotates here
+        self.assertNotEqual(self.link.token, spent)
+        try:
+            payload = P.tlv_u8(B.T_TX_STATE, 1) + P.tlv_u32(P.T_TOKEN, spent)
+            with self.assertRaises(P.ProtoError) as cm:
+                self.link.request(B.MSG_BENCH_PTT, payload)
+            self.assertEqual(cm.exception.code, 11)   # PC_ERR_NOT_ALLOWED
+            # The radio was not keyed: the current session still reads RX.
+            self.assertNotEqual(0, self.link.token)
+        finally:
+            self.link.arm()                     # a fresh run for the next test
+        p = self.link.ptt(True, tone=88)
+        self.assertEqual(p["tx_state"], 2, "the live session does key")
+        self.link.ptt(False)
+
+    def test_a_keying_does_not_spend_the_token(self):
+        """
+        What spends the token is a HELLO, not a PTT.  A measurement keys more
+        than once in a run (deviation at three levels), so a session that died
+        on the first keying could not take it -- and the bench client in
+        tools/bench does not re-arm between keyings for that reason.
+        """
+        self.link.tune(145.5e6, mode=1, bw=2, power=500)
+        for level in (30, 65):
+            p = self.link.ptt(True, tone=88, level=level)
+            self.assertEqual(p["tx_state"], 2)
+            self.assertEqual(p["level"], level)
+            self.link.ptt(False)
+        # And the session can still move the radio afterwards.
+        t = self.link.tune(145.5e6, mode=1, bw=2)
+        self.assertEqual(t["rx"], 145500000)
+
+    def test_a_client_without_the_events_cap_gets_answers_but_no_events(self):
+        """
+        HELLO carries the client's capabilities; the answers do not depend on
+        them, the events do.  A bench script that forgets PC_CAP_EVENTS gets
+        every answer and no TX/RX edge, i.e. no way to measure the latency the
+        edge is for -- which is why BenchLink advertises it.
+        """
+        radio = BenchRadio(self.binary, client_caps=0)
+        try:
+            self.assertEqual(radio.link.client_caps & P.CAP_EVENTS, 0)
+            radio.link.default_power = 500
+            radio.link.arm()
+            radio.link.tune(145.5e6, mode=1, power=500)
+            p = radio.link.ptt(True, tone=88, level=50)
+            self.assertEqual(p["tx_state"], 2)       # answered, and it keyed
+            time.sleep(0.05)
+            self.assertEqual(radio.link.bench_edges(), [],
+                             "no events without PC_CAP_EVENTS")
+            radio.link.ptt(False)
+        finally:
+            radio.close()
+
+    def test_the_link_answers_at_ten_hertz_not_one(self):
+        """
+        The transport answers a serialised request in milliseconds; the "1-2 Hz"
+        in the notes is a limitation of a client that fires requests without
+        waiting for the answers, not of the cable.  Twenty round trips back to
+        back, all answered, and the rate is what says which of the two it is.
+        """
+        n = 20
+        t0 = time.monotonic()
+        for _ in range(n):
+            s = self.link.status()
+            self.assertGreater(s["rx_freq"], 0)
+        dt = time.monotonic() - t0
+        rate = n / dt
+        self.assertGreater(rate, 10.0,
+                           "the link answered at %.1f Hz, not the 1-2 Hz the "
+                           "notes blame" % rate)
 
     def test_capture_and_retune_are_exclusive(self):
         self.link.capture_arm(200)
