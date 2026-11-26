@@ -112,12 +112,13 @@ void nxdn_getStatus(struct nxdnStatus *out)
  */
 void nxdnStatus_simSet(bool sync, int ran, bool voice, unsigned evm,
                        bool msgValid, unsigned source, unsigned dest,
-                       unsigned type)
+                       unsigned type, unsigned frames)
 {
     status.sync = sync;
     status.voice = voice;
     status.ran = (int8_t)ran;
     status.evm = (uint16_t)evm;
+    status.frames = frames;
     status.message.valid = msgValid;
     status.message.source = (uint16_t)source;
     status.message.dest = (uint16_t)dest;

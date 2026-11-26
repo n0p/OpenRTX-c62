@@ -109,7 +109,7 @@ void dmr_sim_setLan(bool sync, int cc, int ts);
  */
 void nxdnStatus_simSet(bool sync, int ran, bool voice, unsigned evm,
                        bool msgValid, unsigned source, unsigned dest,
-                       unsigned type);
+                       unsigned type, unsigned frames);
 
 void p25Status_simSet(bool sync, bool voice, int nac, int duid, long source,
                       int talkgroup, unsigned imbe, unsigned imbeBad,

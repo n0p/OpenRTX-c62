@@ -402,7 +402,7 @@ static bool injectNxdn(int argc, char **argv)
     }
 
     nxdnStatus_simSet(true, ran, true, evm, msg, (unsigned)src,
-                      (unsigned)dst, type);
+                      (unsigned)dst, type, frames);
     say("#inject nxdn RAN%d evm=%u frames=%u", ran, evm, frames);
     return true;
 }
@@ -603,7 +603,7 @@ static bool cmd_inject(int argc, char **argv)
 
     if (strcmp(argv[1], "nxdn") == 0) {
         if ((argc == 3) && (strcmp(argv[2], "clear") == 0)) {
-            nxdnStatus_simSet(false, -1, false, 0, false, 0, 0, 0);
+            nxdnStatus_simSet(false, -1, false, 0, false, 0, 0, 0, 0);
             say("#inject nxdn clear");
             return true;
         }
@@ -630,7 +630,7 @@ static bool cmd_inject(int argc, char **argv)
 
     if (strcmp(argv[1], "mode-state") == 0) {
         dmr_sim_clear();
-        nxdnStatus_simSet(false, -1, false, 0, false, 0, 0, 0);
+        nxdnStatus_simSet(false, -1, false, 0, false, 0, 0, 0, 0);
         p25Status_simSet(false, false, -1, -1, -1, -1, 0, 0, 0);
         dstarStatus_simSet(false, false, "", "", "", 0, "");
         tetra_sim_clearCell();
