@@ -1455,6 +1455,22 @@ ysf_frame_src = ['openrtx/src/protocols/YSF/YsfFrame.c',
                  'lib/dmr_vocoder/dmr_golay_table.c',
                  'lib/dmr_vocoder/dmr_fft.c']
 
+# The System Fusion synchroniser (tests/unit/ysf_phy.cpp): a frame placed
+# anywhere in the sample stream must be found, a frame whose sync is wrong, cut
+# short or absent must not be, and a lost frame must not take the next one with
+# it.
+ysf_phy_test = executable('ysf_phy_test',
+                          sources : ysf_frame_src +
+                                    ['openrtx/src/protocols/YSF/YsfPhy.c',
+                                     'tests/unit/ysf_phy.cpp'],
+                          kwargs  : {'include_directories' : linux_inc +
+                                                            ['lib/dmr_vocoder'],
+                                     'c_args' : linux_c_args + ['-DCONFIG_YSF'],
+                                     'cpp_args' : linux_cpp_args +
+                                                  ['-DCONFIG_YSF'],
+                                     'dependencies' : [catch2_dep],
+                                     'link_args' : linux_l_args + ['-lm']})
+
 ysf_frame_test = executable('ysf_frame_test',
                             sources : ysf_frame_src +
                                       ['tests/unit/ysf_frame.cpp'],
@@ -2139,6 +2155,7 @@ test('P25 PHY Test',           p25_phy_test)
 test('P25 FEC Limits Test',    p25_fec_test)
 test('P25 Status Test',        p25_status_test, timeout : 60)
 test('YSF Frame Test',         ysf_frame_test)
+test('YSF PHY Test',           ysf_phy_test)
 test('M17 Viterbi Unit Test', m17_viterbi_test)
 test('M17 Demodulator Test',  m17_demodulator_test)
 test('M17 RRC Test',          m17_rrc_test)
