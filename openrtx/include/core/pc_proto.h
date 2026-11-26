@@ -435,6 +435,20 @@ enum pcProtoTag
     PC_TAG_MEM_REGION   = 0x00F2, /**< bytes: pcProtoRegion_t             */
 
     /*
+     * The screen path (core/display_flush.h, docs/RX_AIRBAND.md §9).  Always
+     * present: a radio whose display never dropped a frame says so with a zero
+     * drop count, and a radio whose screen froze with the rest of the firmware
+     * alive says it with a non-zero one plus the transfer that was lost.
+     */
+    PC_TAG_DISP_FRAMES  = 0x00F3, /**< u32 frames that reached the panel  */
+    PC_TAG_DISP_DROPS   = 0x00F4, /**< u32 frames dropped on the deadline */
+    PC_TAG_DISP_MS      = 0x00F5, /**< u32 ms the last complete frame took */
+    PC_TAG_DISP_MAX_MS  = 0x00F6, /**< u32 ms the longest frame took      */
+    PC_TAG_DISP_FAIL    = 0x00F7, /**< bytes: u16 len, u8 chunk, u8 data:
+                                   *   the transfer that was lost, if any
+                                   *   (docs/RX_AIRBAND.md)                */
+
+    /*
      * Bench namespace, 0x0100-0x011F.  A separate block because these are not
      * debug telemetry but measurement scaffolding: every one of them is
      * stamped with a radio tick (milliseconds since boot, the same base as
@@ -566,6 +580,23 @@ typedef struct
     uint8_t  psramKnown;
     uint8_t  regionCount;
     pcProtoRegion_t regions[PC_DIAG_REGIONS];
+    /**
+     * The screen path (docs/RX_AIRBAND.md §9, core/display_flush.h): frames
+     * that reached the panel, frames that missed their deadline and were
+     * dropped, and how long the last frame took.  A non-zero drop count is the
+     * answer to "why is the screen frozen and the radio alive": the panel lost
+     * a transfer, the UI did not wait for it.
+     *
+     * Appended after the region table for the same reason as everything else
+     * here: what came before keeps its offset.
+     */
+    uint32_t dispFrames;
+    uint32_t dispDrops;
+    uint32_t dispLastMs;
+    uint32_t dispMaxMs;
+    uint16_t dispFailLen;  /**< bytes of the transfer that was lost          */
+    uint8_t  dispFailChunk;/**< its position in the frame                     */
+    uint8_t  dispFailData; /**< 1 when it was pixel data, 0 a command         */
 }
 __attribute__((packed)) pcProtoDiag_t;
 

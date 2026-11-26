@@ -474,7 +474,24 @@ int platform_wdtStart(uint32_t windowMs)
     if (channel < 0)
         return channel;
 
-    int ret = wdt_setup(wdt_dev, WDT_OPT_PAUSE_IN_SLEEP);
+    /*
+     * No WDT_OPT_PAUSE_IN_SLEEP, on purpose.
+     *
+     * This watchdog is the last resort of the recovery paths: the device
+     * thread stops feeding it when the UI thread stops, the black box stops
+     * feeding it when it has written a post-mortem and asked for a reset, and
+     * both of those are cases where the firmware may spend the rest of its
+     * life *idle* rather than spinning.  A watchdog that pauses in sleep is
+     * blind to exactly those: the counter only advances during the few
+     * microseconds the core stays awake per tick, so a two-second window
+     * becomes minutes of wall time.
+     *
+     * The vendor driver of this SoC (csk/drivers/watchdog/ap_wdt_csk6.c)
+     * ignores the options word today -- its setup() only enables the timer --
+     * so this is the contract and not the fix for that driver: whoever honours
+     * the flag next must not be able to hide the reset behind it.
+     */
+    int ret = wdt_setup(wdt_dev, 0);
     if (ret < 0)
         return ret;
 

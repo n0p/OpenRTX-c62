@@ -16,6 +16,12 @@ CONFIG_BOARD_C62=y
 CONFIG_DISPLAY=y
 CONFIG_ST7735R=y
 
+# The panel's frames are sent with a deadline (core/display_flush.h): each
+# transfer is submitted asynchronously and the thread that draws waits for it
+# with a timeout, so a DMA transfer that never completes costs a frame and not
+# the user interface thread (docs/RX_AIRBAND.md §9).
+CONFIG_SPI_ASYNC=y
+
 CONFIG_SPI_BITBANG=y
 
 

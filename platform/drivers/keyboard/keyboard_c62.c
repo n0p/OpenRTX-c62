@@ -9,6 +9,7 @@
 #include <interfaces/delays.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/util.h>
+#include <core/blackbox.h>
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(keyboard, LOG_LEVEL_DBG);
@@ -80,16 +81,38 @@ static const uint32_t keyMap[] = { KEY_ENTER, KEY_F1, KEY_3,   KEY_7, KEY_0,
 
 #define KEYMAP_SIZE (sizeof(keyMap) / sizeof(keyMap[0]))
 
+/*
+ * The matrix is scanned by a thread of its own, and that is a change of
+ * behaviour with a reason.
+ *
+ * It used to be scanned by whoever asked for the keys: the UI thread forty
+ * times a second, the device thread for the power button, the RTX thread for
+ * the PTT.  Three threads driving the same four row lines and reading the same
+ * five columns is a race with a hardware symptom -- one thread drives a row
+ * while another reads it as pressed -- and it also tied the keypad's liveness
+ * to the UI thread's: when the UI parked in the screen flush, the PTT and the
+ * power button went deaf with it and nothing in the firmware could tell.
+ *
+ * Now one thread owns the GPIOs, the rest read what it last saw, and the
+ * scanner stamps a beat of its own so the post-mortem recorder (core/blackbox)
+ * can see the keypad stop on its own, independently of the screen.
+ */
+#define KBD_SCAN_PERIOD_MS 20
+#define KBD_PRIO           10
+#define KBD_STACK          1024
 
-void kbd_init()
-{
-}
+static volatile keyboard_t kbdCache;
+static volatile bool kbdLive; /* the scanner has produced its first pass */
 
-void kbd_terminate()
-{
-}
-
-keyboard_t kbd_getKeys()
+/**
+ * Scan the matrix once and return the keys that are down.
+ *
+ * Runs the whole 4 x 5 sweep: rows driven one at a time, columns read with
+ * their pull-ups.  Both groups are active low in the device tree, so
+ * gpio_pin_get_dt() returns 1 for a column connected to the driven row through
+ * a pressed switch.
+ */
+static keyboard_t kbdScan(void)
 {
     uint32_t keys = 0;
 
@@ -104,9 +127,7 @@ keyboard_t kbd_getKeys()
         gpio_pin_configure_dt(cols[i], GPIO_INPUT | GPIO_PULL_UP);
     }
 
-    // Drive one row low at a time and read the columns. Both groups are
-    // active low in the device tree, so gpio_pin_get_dt() returns 1 for a
-    // column connected to the driven row through a pressed switch.
+    // Drive one row low at a time and read the columns
     for (size_t r = 0; r < ARRAY_SIZE(rows); r++) {
         gpio_pin_set_dt(rows[r], 1);
 
@@ -146,4 +167,51 @@ keyboard_t kbd_getKeys()
     }
 
     return result;
+}
+
+static void kbdScanner(void *p1, void *p2, void *p3)
+{
+    (void)p1;
+    (void)p2;
+    (void)p3;
+
+    for (;;) {
+        kbdCache = kbdScan();
+        kbdLive = true;
+
+        /*
+         * The keypad's own liveness (docs/BLACKBOX.md): a scanner that stops
+         * means no key reaches the UI, no PTT reaches the radio and the power
+         * button does nothing, whatever the other threads are doing.
+         */
+        bb_beat(BB_BEAT_KBD);
+
+        k_sleep(K_MSEC(KBD_SCAN_PERIOD_MS));
+    }
+}
+
+K_THREAD_DEFINE(kbd_thread, KBD_STACK, kbdScanner, NULL, NULL, NULL, KBD_PRIO,
+                0, 300);
+
+void kbd_init()
+{
+}
+
+void kbd_terminate()
+{
+}
+
+keyboard_t kbd_getKeys()
+{
+    /*
+     * After the scanner has run, this is its last pass: one thread owns the
+     * matrix's GPIOs, so a reader can never catch a row driven by somebody
+     * else.  Before it has run -- the boot-time checks in platform_init_csk6()
+     * ask for the keys before the kernel has started threads -- the matrix is
+     * scanned here, which is the old behaviour and the only moment it is safe.
+     */
+    if (kbdLive)
+        return kbdCache;
+
+    return kbdScan();
 }

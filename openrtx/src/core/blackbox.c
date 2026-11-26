@@ -233,6 +233,17 @@ bool bb_supervise(uint32_t nowMs)
     if (mask == 0)
         return false;
 
+    /*
+     * One hang, one record.  The hook is expected to reset the radio and not
+     * to return; if it does return -- a platform that cannot reset, a test --
+     * the detector has to stay quiet: coming back here every 100 ms would
+     * erase and rewrite the record's flash sector ten times a second and the
+     * record would describe the rewrite, not the hang.  The fallback for a
+     * reset that does not take is the hardware watchdog, which the platform
+     * stops feeding when it sees this return true.
+     */
+    bbArmed = false;
+
     bb_platformHang(mask, nowMs);
     return true;
 }
@@ -529,6 +540,8 @@ const char *bb_beatName(uint8_t beat)
             return "proto";
         case BB_BEAT_MAIN:
             return "main";
+        case BB_BEAT_KBD:
+            return "kbd";
         default:
             return "?";
     }
@@ -583,6 +596,8 @@ const char *bb_markName(uint8_t mark)
             return "RESTORE";
         case BB_M_HANG:
             return "HANG";
+        case BB_M_DISP_DROP:
+            return "DISP_DROP";
         default:
             return "?";
     }

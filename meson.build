@@ -51,6 +51,10 @@ openrtx_src = ['openrtx/src/core/state.c',
                # record. Portable C, built into the host tests as well as the
                # firmware. See docs/BLACKBOX.md.
                'openrtx/src/core/blackbox.c',
+               # Panel transfers with a deadline: a frame the screen cannot
+               # send is dropped and counted instead of parking the UI thread
+               # in an endless wait. See docs/RX_AIRBAND.md.
+               'openrtx/src/core/display_flush.c',
                'openrtx/src/core/audio_codec.c',
                'openrtx/src/core/audio_stream.c',
                'openrtx/src/core/audio_path.cpp',
@@ -1729,6 +1733,24 @@ blackbox_test = executable('blackbox_test',
                            sources : unit_test_src + ['tests/unit/blackbox.cpp'],
                            kwargs  : unit_test_opts)
 
+# La reacción por defecto al atasco (core/blackbox.c, bb_platformHang()): el
+# registro se escribe y DESPUÉS se pide el reinicio, se pide aunque la escritura
+# falle, y un atasco se informa una sola vez en lugar de reescribir el sector
+# cada 100 ms.  En su propio binario porque el test de arriba sustituye el hook
+# para no reiniciar, y con él sustituido este camino no se ejecuta nunca.
+blackbox_hang_test = executable('blackbox_hang_test',
+                                sources : unit_test_src +
+                                          ['tests/unit/blackbox_hang.cpp'],
+                                kwargs  : unit_test_opts)
+
+# El volcado de pantalla con plazo (core/display_flush.h): con un bus que no
+# completa, el frame se descarta, se cuenta y el hilo que dibuja sigue; sin el
+# plazo, el hilo de UI se queda en el semáforo del driver (docs/RX_AIRBAND.md).
+display_flush_test = executable('display_flush_test',
+                                sources : unit_test_src +
+                                          ['tests/unit/display_flush.cpp'],
+                                kwargs  : unit_test_opts)
+
 # APRS: validacion de indicativo, SSID y path antes de emitir
 aprs_config_test = executable('aprs_config_test',
                               sources : unit_test_src + [
@@ -2107,6 +2129,8 @@ test('UI Spectrum Test',     ui_spectrum_test)
 test('Settings Record Test', settings_record_test)
 test('Accessory Port Test',  port_mode_test)
 test('Blackbox Test',        blackbox_test)
+test('Blackbox Hang Test',   blackbox_hang_test)
+test('Display Flush Test',   display_flush_test)
 test('P25 IMBE Vocoder Test', imbe_vocoder_test)
 test('P25 IMBE Robustness Test', imbe_robust_test)
 test('APRS Config Test',     aprs_config_test)

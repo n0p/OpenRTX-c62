@@ -257,6 +257,13 @@ T_BB_STATE = 0x00ED
 T_BLACKBOX = 0x00F0
 T_BLACKBOX_LEN = 0x00F1
 
+# The screen path (core/display_flush.h, docs/RX_AIRBAND.md §9).
+T_DISP_FRAMES = 0x00F3
+T_DISP_DROPS = 0x00F4
+T_DISP_MS = 0x00F5
+T_DISP_MAX_MS = 0x00F6
+T_DISP_FAIL = 0x00F7
+
 # --- records ---------------------------------------------------------------
 
 # chstore_channel_t: 37 bytes, packed (see core/channel_store.h).
@@ -808,7 +815,21 @@ class Link:
             regions.append({"name": name.split(b"\0")[0].decode(),
                             "used": used, "total": total,
                             "known": bool(known)})
+        # The screen path: frames that made it, frames dropped on the deadline,
+        # and which transfer was lost when one was.
+        fail = f.get(T_DISP_FAIL, b"")
+        disp = {
+            "frames": f.u32(T_DISP_FRAMES),
+            "drops": f.u32(T_DISP_DROPS),
+            "last_ms": f.u32(T_DISP_MS),
+            "max_ms": f.u32(T_DISP_MAX_MS),
+        }
+        if len(fail) >= 4:
+            lost_len, chunk, data = struct.unpack("<HBB", fail[:4])
+            disp.update({"fail_len": lost_len, "fail_chunk": chunk,
+                         "fail_data": bool(data)})
         return {
+            "disp": disp,
             "protocol": f.u16(T_VERSION), "protocol_min": f.u16(T_VERSION_MIN),
             "firmware": f.s(T_FIRMWARE), "hardware": f.s(T_HARDWARE),
             "model": f.s(T_MODEL), "uptime_ms": f.u32(T_UPTIME_MS),

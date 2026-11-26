@@ -41,6 +41,7 @@
 
 #include "core/openrtx.h"
 #include "core/blackbox.h"
+#include "core/display_flush.h"
 #include "core/pc_proto.h"
 #include "core/port_ptt.h"
 #include "core/psram_state.h"
@@ -506,6 +507,24 @@ int pc_proto_platformDiag(pcProtoDiag_t *out)
 
     addRegion(out, "FLASH", __rom_region_start, __rom_region_end,
               CONFIG_FLASH_SIZE * 1024u);
+
+    /*
+     * The screen path.  A panel that loses a transfer freezes while the rest of
+     * the firmware keeps running (docs/RX_AIRBAND.md §9); these are the numbers
+     * that say it happened and which transfer it was, without opening the
+     * radio: `diag` from the cable.
+     */
+    {
+        const displayFlushStats_t *sc = display_flush_stats();
+
+        out->dispFrames = sc->frames;
+        out->dispDrops = sc->dropped;
+        out->dispLastMs = sc->lastMs;
+        out->dispMaxMs = sc->maxMs;
+        out->dispFailLen = sc->failLen;
+        out->dispFailChunk = sc->failChunk;
+        out->dispFailData = sc->failData ? 1 : 0;
+    }
 
 
     /* Stack high-water marks.  k_thread_stack_space_get() needs
