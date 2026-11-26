@@ -7,6 +7,37 @@ PSRAM, BK4819 transceiver, BK1080 broadcast tuner, 160×128 ST7735R panel).
 Read this before touching anything. The rest of the file is the upstream
 OpenRTX guide and still applies: code style, C99/C++14, 80 columns, clang-format.
 
+## Start here
+
+Before writing code, read these four, in this order. They are short and they
+answer most of what you would otherwise guess:
+
+1. **`docs/HACKING.md`** — the map: repository layout, the threads and why they
+   matter, the receive and transmit data flows, where every subsystem lives, how
+   to build and test, and the recipes for adding a mode, a screen, a setting or
+   a protocol message.
+2. **`openrtx/include/rtx/OpMode.hpp`** — the interface every mode implements.
+   If your change touches the air, it ends up here.
+3. **`openrtx/src/rtx/rtx.cpp`** — the radio thread and the mode table: how a
+   mode is selected, configured and keyed, and where the keying gate sits.
+4. **The `docs/` file of the subsystem you are about to touch** — `UI.md` for the
+   interface, `SETTINGS.md` for the settings, `PC_PROTO.md` for the protocol,
+   `TX_SAFETY.md` for anything that transmits, `RX_<MODE>.md`/`TX_<MODE>.md` for
+   a mode, `MEMORY.md` before adding a buffer.
+
+Then, depending on the task, the first file to open is usually one of these:
+
+| Task | First file |
+|---|---|
+| A screen, a menu row, the quick menu | `openrtx/src/ui/default/ui.c` |
+| A key's behaviour | `ui.c` (`ui_updateFSM`) + `ui_hints.c` |
+| A mode's receive or transmit chain | `openrtx/src/rtx/OpMode_<MODE>.cpp` |
+| Settings reaching the radio | `openrtx/src/core/threads.c`, the `sync_rtx` block |
+| Channels, zones, contacts, messages | `openrtx/src/core/channel_store.c` and friends |
+| The PC protocol or the bench | `platform/targets/c62/pc_proto_c62.c` |
+| A board detail (pin, bus, panel, codec) | `platform/targets/c62/c62.dts` + `hwconfig.h` |
+| Why the radio froze | `docs/BLACKBOX.md` |
+
 ## What this fork is, and is not
 
 - **Private.** The firmware is not published and neither are the factory dumps
