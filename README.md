@@ -11,7 +11,7 @@ Hardware: SoC **ListenAI CSK6011B** (Cortex-M33 a 300 MHz + HiFi4 + NPU), transc
 ```
 Estado: uso diario en FM, M17, DMR (RX y TX) y TETRA de recepción; el resto de
         modos digitales recibe, y transmiten los que tienen cadena propia
-Imagen: 815.852 B de 1 MiB (77,8 %), RAM al 72,1 %
+Imagen: 815.848 B de 1 MiB (77,8 %), RAM al 72,1 %
 Pruebas: 112 suites en el host, todas en verde
 Licencia: GPLv3 (ver LICENSE)
 ```
@@ -83,6 +83,26 @@ no solo los caracteres. Un vigilante corta la transmisión a los 90 s sin rekey,
 clave del PTT nunca se arma sola desde el menú y el AM aéreo pide confirmación
 explícita. Todo ello está en [`docs/TX_SAFETY.md`](docs/TX_SAFETY.md).
 
+## Descargas
+
+Las versiones se publican como **etiquetas del repositorio** (`v0.9-20261127` y
+siguientes), y la release adjunta el **árbol de fuentes** de esa etiqueta con el
+que se puede construir la imagen bit a bit:
+
+```sh
+git clone --branch v0.9-20261127 https://github.com/n0p/OpenRTX-c62
+```
+
+**El binario no se distribuye**: se compila con el comando de *Compilación*, que
+es el único camino que garantiza que la imagen corresponde a las fuentes que
+estás leyendo. La de esta versión, con las opciones documentadas, ocupa
+**815.848 B (77,8 %) con RAM al 72,1 %**; su `md5` es
+`e3246649 2b8f76f5 9faa78e8 305c1a8f`, y está para comprobar que la build propia
+coincide, no para flashear la de otro.
+
+`dsp_firmware.bin` no se incluye en ningún caso: es la imagen del DSP de fábrica
+y su licencia no es nuestra.
+
 ## Instalación
 
 1. Apaga la radio.
@@ -129,7 +149,7 @@ Los binarios quedan en `build_c62/zephyr/`:
 
 | Fichero | Destino | Tamaño con las opciones de arriba |
 |---|---|---|
-| `zephyr.bin` | `0x000000` | 815.852 B (77,8 % de la partición de 1 MiB), RAM 72,1 %, DTCM 95,9 % |
+| `zephyr.bin` | `0x000000` | 815.848 B (77,8 % de la partición de 1 MiB), RAM 72,1 %, DTCM 95,9 % |
 | `dsp_firmware.bin` | `0x100000` | 466.832 B (la de fábrica) |
 
 Opciones de compilación relevantes (todas apagadas por defecto salvo que se diga lo
