@@ -99,6 +99,7 @@ void resetUi(uint8_t screen, uint8_t mode, freq_t freq)
     state.ui_screen             = screen;
     state.tuner_mode            = VFO;
     state.txDisable             = false;
+    state.unattendedTxDisable = false;
     state.charge                = 100;
     state.emergency             = false;
     state.step_index            = 4;            /* 12.5 kHz */

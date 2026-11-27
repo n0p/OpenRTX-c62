@@ -128,6 +128,14 @@ void *ui_threadFunc(void *arg)
 
             // Enable Tx if channel allows it and we are in UI main screen
             rtx_cfg.txDisable = state.channel.rx_only || state.txDisable;
+            /*
+             * The unattended gate has its own flag: a screen that owns the
+             * keypad keeps the PTT off but still lets the message the operator
+             * queued go out (core/state.h, rtx.h).  A receive-only channel
+             * closes both, whatever screen is up.
+             */
+            rtx_cfg.unattendedTxDisable = state.channel.rx_only
+                                       || state.unattendedTxDisable;
 
             // Copy new M17 CAN, source and destination addresses
             rtx_cfg.can = state.settings.m17_can;

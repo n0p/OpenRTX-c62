@@ -715,9 +715,23 @@ bool ui_aprs_fsm(kbd_msg_t msg, bool *sync_rtx)
             {
                 if (strlen(uia.editText) > 0)
                 {
-                    aprs_sendMessage(uia.editTo, uia.editText,
-                                     (uint32_t)getTick());
-                    state.ui_screen = APRS_MSGS;
+                    /*
+                     * The mailbox can refuse the message (a full outbox, an
+                     * address the AX.25 layer will not take).  Leaving the
+                     * editor as if it had been sent threw the text away and
+                     * said nothing.
+                     */
+                    if (aprs_sendMessage(uia.editTo, uia.editText,
+                                         (uint32_t)getTick()))
+                    {
+                        state.ui_screen = APRS_MSGS;
+                    }
+                    else
+                    {
+                        snprintf(uia.note, sizeof(uia.note), "%s",
+                                 "SEND FAILED");
+                        uia.noteUntil = (uint32_t)getTick() + 2000u;
+                    }
                 }
                 return true;
             }

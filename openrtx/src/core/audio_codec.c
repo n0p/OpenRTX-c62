@@ -62,6 +62,26 @@ static uint64_t dataBuffer[BUF_SIZE];
 /* Stream the running thread reads or writes, so another thread can cancel it */
 static volatile streamId activeStream = -1;
 
+/**
+ * One codec thread's own record: what it drives, whether it has finished, and
+ * the stack it was given on this target.
+ *
+ * It exists because a thread cannot free the stack it is running on, and
+ * because a codec thread can outlive its bounded stop: the stack of a thread
+ * that is still inside an audio stream belongs to it, whatever the supervisor
+ * does next.  The pointer is also the identity: a thread that comes back after
+ * its stop timed out must not touch the `running` flag of the run that replaced
+ * it, or the next codec_stop() would believe a live thread had exited.
+ */
+struct codecRun
+{
+    pathId path;          ///< Audio path the thread drives
+    void *stack;          ///< Zephyr: the stack handed to the thread, else NULL
+    volatile bool exited; ///< Set by the thread just before it returns
+};
+
+static struct codecRun *run;  ///< The run that owns the codec thread, or NULL
+
 /* Wait for the codec thread to leave, in milliseconds, before giving up */
 #define CODEC_STOP_TIMEOUT_MS 300
 
@@ -69,6 +89,8 @@ static void *encodeFunc(void *arg);
 static void *decodeFunc(void *arg);
 static bool startThread(const pathId path, void *(*func)(void *));
 static void stopThread();
+static void runExit(struct codecRun *self);
+static void runReclaim(void);
 
 void codec_init()
 {
@@ -96,6 +118,8 @@ void codec_terminate()
 
     if (running)
         stopThread();
+    else
+        runReclaim();
 }
 
 bool codec_startEncode(const pathId path)
@@ -110,8 +134,17 @@ bool codec_startDecode(const pathId path)
 
 void codec_stop(const pathId path)
 {
-    if (running == false)
+    if (running == false) {
+        /*
+         * The thread can have ended on its own -- a stream that would not open,
+         * a driver timeout -- and it cannot free the stack it was running on.
+         * This is where the caller comes to say it is done with the codec, so
+         * this is where that stack goes back: it used to stay allocated for
+         * ever, 16 KiB of a 40 KiB heap per failed start.
+         */
+        runReclaim();
         return;
+    }
 
     if (audioPath != path)
         return;
@@ -201,8 +234,9 @@ int codec_pushFrame(const uint8_t *frame, const bool blocking)
 
 static void *encodeFunc(void *arg)
 {
+    struct codecRun *self = (struct codecRun *)arg;
+    const pathId iPath = self->path;
     streamId iStream;
-    pathId iPath = *((pathId *)arg);
     struct CODEC2 *codec2;
     struct dcBlock dcBlock;
     struct decimatorState decimator;
@@ -231,10 +265,8 @@ static void *encodeFunc(void *arg)
          * caller is told instead of the radio taking a fault in codec2_encode */
         printk("codec: codec2_create() failed, no encoder\n");
         audioStream_terminate(iStream);
-        activeStream = -1;
         free(adcBuf);
-        running = false;
-        pthread_detach(pthread_self());
+        runExit(self);
         return NULL;
     }
 
@@ -294,21 +326,16 @@ static void *encodeFunc(void *arg)
     codec2_destroy(codec2);
 
 exit:
-    activeStream = -1;
     free(adcBuf);
-
-    // A thread left behind by a bounded codec_stop() has nobody to join it:
-    // detach it so its stack is recovered when it finally exits.
-    pthread_detach(pthread_self());
-
-    running = false;
+    runExit(self);
     return NULL;
 }
 
 static void *decodeFunc(void *arg)
 {
+    struct codecRun *self = (struct codecRun *)arg;
+    const pathId oPath = self->path;
     streamId oStream;
-    pathId oPath = *((pathId *)arg);
     int16_t audioBuf[DMA_BUF_SAMPLES];
     struct CODEC2 *codec2;
 
@@ -317,14 +344,21 @@ static void *decodeFunc(void *arg)
     oStream = audioStream_start(oPath, audioBuf, DMA_BUF_SAMPLES, 8000,
                                 STREAM_OUTPUT | BUF_CIRC_DOUBLE);
     if (oStream < 0) {
-        pthread_detach(pthread_self());
-        running = false;
+        runExit(self);
         return NULL;
     }
 
     activeStream = oStream;
 
     codec2 = codec2_create(CODEC2_MODE_3200);
+    if (codec2 == NULL) {
+        /* The encoder branch has always answered this; the decoder did not, and
+         * codec2_decode(NULL) is a fault in the middle of a voice prompt. */
+        printk("codec: codec2_create() failed, no decoder\n");
+        audioStream_stop(oStream);
+        runExit(self);
+        return NULL;
+    }
 
     // Ensure that thread start is correctly synchronized with the output
     // stream to avoid having the decode function writing in a memory area
@@ -376,15 +410,10 @@ static void *decodeFunc(void *arg)
     }
 
     // Stop stream and wait until its effective termination
-    activeStream = -1;
     audioStream_stop(oStream);
     codec2_destroy(codec2);
 
-    // A thread left behind by a bounded codec_stop() has nobody to join it:
-    // detach it so its stack is recovered when it finally exits.
-    pthread_detach(pthread_self());
-
-    running = false;
+    runExit(self);
     return NULL;
 }
 
@@ -420,12 +449,23 @@ static bool startThread(const pathId path, void *(*func)(void *))
     audioPath = path;
     pthread_mutex_unlock(&init_mutex);
 
+    /*
+     * A previous thread can have ended on its own -- the stream refused to open,
+     * the driver timed it out -- and codec_stop() returned before it could free
+     * that thread's stack, because the thread had already cleared the running
+     * flag.  Give it back here: a thread cannot free the stack it is running on,
+     * so somebody else has to, and this is the moment the previous run is over.
+     */
+    runReclaim();
+
     readPos = 0;
     writePos = 0;
     numElements = 0;
     reqStop = false;
 
     pthread_attr_init(&codecAttr);
+
+    void *stack = NULL;
 
 #if defined(_MIOSIX)
     // Set stack size of CODEC2 thread to 16kB.
@@ -445,24 +485,96 @@ static bool startThread(const pathId path, void *(*func)(void *))
      * codec that cannot run, not a reason to lose the radio: the caller is told
      * and refuses the transmission.
      */
-    void *codec_thread_stack = malloc(CODEC2_THREAD_STKSIZE * sizeof(uint8_t));
-    if (codec_thread_stack == NULL) {
+    stack = malloc(CODEC2_THREAD_STKSIZE);
+    if (stack == NULL) {
         printk("codec: no stack for the codec thread (%u B)\n",
                (unsigned)CODEC2_THREAD_STKSIZE);
         running = false;
         audioPath = -1;
         return false;
     }
-    pthread_attr_setstack(&codecAttr, codec_thread_stack,
-                          CODEC2_THREAD_STKSIZE);
+    pthread_attr_setstack(&codecAttr, stack, CODEC2_THREAD_STKSIZE);
 #endif
 
-    // Start thread
-    int ret = pthread_create(&codecThread, &codecAttr, func, &audioPath);
-    if (ret < 0)
+    struct codecRun *self = malloc(sizeof(struct codecRun));
+    if (self == NULL) {
+        free(stack);
         running = false;
+        audioPath = -1;
+        return false;
+    }
+    self->path   = path;
+    self->stack  = stack;
+    self->exited = false;
 
-    return running;
+    /* Before the create: the thread can report its exit before it returns here */
+    run = self;
+
+    // Start thread
+    int ret = pthread_create(&codecThread, &codecAttr, func, self);
+    if (ret != 0) {
+        /*
+         * POSIX returns the error number itself, not -1 with errno set: tested
+         * against zero, the refusal used to leave the caller believing a codec
+         * thread existed.  The stack and the run go back with it.
+         */
+        printk("codec: cannot start the codec thread (%d)\n", ret);
+        run = NULL;
+        free(self->stack);
+        free(self);
+        running = false;
+        audioPath = -1;
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * The thread says it is done, and stops touching the run if it is still the
+ * one in charge.
+ *
+ * @param self: the run this thread was started with.
+ */
+static void runExit(struct codecRun *self)
+{
+    self->exited = true;
+
+    /*
+     * A thread whose bounded stop timed out comes back after another run has
+     * taken over: its flags are not the radio's any more.  Writing them anyway
+     * is how a zombie made a live codec thread look stopped -- and then its
+     * stack would be freed under it.
+     */
+    if (run != self)
+        return;
+
+    activeStream = -1;
+    running = false;
+}
+
+/**
+ * Give back the stack of a codec thread that has finished.
+ *
+ * A thread cannot free the stack it is running on, so the one that supervises
+ * it does, and only once the thread is gone: pthread_join() is what says so,
+ * and it cannot block for longer than the few instructions the thread has left
+ * (it has already set exited).  A run whose thread never came back is not
+ * touched: it is detached, nobody can join it, and its stack stays with it --
+ * the bounded price of a bounded stop.
+ */
+static void runReclaim(void)
+{
+    struct codecRun *self = run;
+
+    if ((self == NULL) || (self->exited == false))
+        return;
+
+    pthread_join(codecThread, NULL);
+
+    free(self->stack);
+    free(self);
+    run = NULL;
 }
 
 /**
@@ -488,22 +600,15 @@ static void stopThread()
         /*
          * Still inside the stream or the DSP. Nobody will join it: detach it,
          * and let the caller go on. running goes false here so a new operation
-         * can be started; the stuck thread only sets it to false again.
+         * can be started, and the run is forgotten with it: the thread still
+         * owns its stack, and a later run must not be mistaken for this one.
          */
         pthread_detach(codecThread);
         running = false;
+        run = NULL;
         return;
     }
 
-    /*
-     * It exited on its own, and every exit path detaches the thread: there is
-     * nothing left to join, and the stack is ours again.
-     */
-#ifdef __ZEPHYR__
-    void *addr;
-    size_t size;
-
-    pthread_attr_getstack(&codecAttr, &addr, &size);
-    free(addr);
-#endif
+    /* It exited on its own: join it and give the stack back */
+    runReclaim();
 }

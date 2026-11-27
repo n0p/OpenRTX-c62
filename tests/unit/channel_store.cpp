@@ -857,3 +857,45 @@ TEST_CASE("A write that lands short is caught by the payload read-back",
     REQUIRE(nameOf(1) == "BRAVO");
     REQUIRE(nameOf(2) == "CHARLIE");
 }
+
+/*
+ * A write that fails after the rollback must leave nothing pending.
+ *
+ * chstore_set(), chstore_add() and chstore_delete() undo their change in RAM
+ * when the write fails, which leaves RAM describing exactly the bank that is
+ * on flash.  The pending flag used to stay up anyway, so chstore_task() erased
+ * and rewrote a slot a second later to store what was already there -- one more
+ * erase of a 4 KiB sector per failed attempt, for nothing, and "WRITE FAILED"
+ * on screen followed by a write that the operator never asked for.
+ */
+TEST_CASE("A failed write leaves nothing pending", "[chstore]")
+{
+    TestBank tb;
+    fillThree(tb);
+
+    /* The erase that a commit starts with never happens, so every one of the
+     * three fails with its change already made in RAM */
+    tb.flash.cutAfter(0);
+    REQUIRE(addChannel("DELTA", 145600000, 145600000) < 0);
+    REQUIRE(chstore_delete(1) != 0);
+
+    chstore_channel_t edit = makeChannel("ALPHA-2", 145500000, 145500000);
+    REQUIRE(chstore_set(0, &edit) != 0);
+
+    /* RAM is the bank that is on flash, and the flash answers again */
+    REQUIRE(chstore_count() == 3);
+    REQUIRE(nameOf(0) == "ALPHA");
+    REQUIRE(nameOf(1) == "BRAVO");
+    tb.flash.clearFault();
+
+    const int erases = tb.flash.eraseCount();
+
+    /* chstore_commit() is the shutdown flush: with nothing pending it must not
+       touch the flash at all (commitLocked() returns before bankWrite()) */
+    REQUIRE(chstore_commit() == 0);
+    REQUIRE(tb.flash.eraseCount() == erases);
+
+    tb.boot();
+    REQUIRE(chstore_count() == 3);
+    REQUIRE(nameOf(1) == "BRAVO");
+}

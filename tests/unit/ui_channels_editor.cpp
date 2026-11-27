@@ -436,6 +436,55 @@ TEST_CASE("delete asks first: NO keeps the channel, YES removes it",
     REQUIRE(chstore_count() == 0);
 }
 
+/*
+ * The keypad delivers a held key as two events: the press at once and the long
+ * press 700 ms later.  The list used to act on the press edge (it opened the
+ * editor), so the long press arrived in the editor and saved the channel there:
+ * the confirmation that deletes a channel could not be reached, and every
+ * attempt rewrote the 8 KiB slot instead.  This walks the two events in the
+ * order keyboard_c62.c produces them.
+ */
+TEST_CASE("a held P2 asks to delete instead of opening the editor",
+          "[ui][channels][editor]")
+{
+    boot();
+    openList();
+
+    /* The press: nothing has happened yet, the list is still on screen */
+    ui_walk::pressEvent(KEY_F2, false);
+
+    gfx_capture_frame_t f = frame();
+
+    INFO(frameText(f));
+    REQUIRE(std::string(f.title) == "CHANNELS 1/128");
+    REQUIRE(chstore_count() == 1);
+
+    /* 700 ms later, still held: the delete confirmation */
+    ui_walk::pressEvent(KEY_F2, true);
+
+    f = frame();
+    INFO(frameText(f));
+    REQUIRE(std::string(f.title) == "DELETE");
+    REQUIRE(hasLine(f, "Delete 1?"));
+
+    /* And letting go decides nothing else: no editor, no save */
+    ui_walk::pressEvent(0u, false);
+
+    f = frame();
+    INFO(frameText(f));
+    REQUIRE(std::string(f.title) == "DELETE");
+    REQUIRE(chstore_count() == 1);
+
+    /* The release of a plain tap is what opens the editor */
+    ui_walk::pressKey(KEY_ESC);          /* NO: back to the list */
+    REQUIRE(std::string(frame().title) == "CHANNELS 1/128");
+
+    ui_walk::pressEvent(KEY_F2, false);
+    REQUIRE(std::string(frame().title) == "CHANNELS 1/128");
+    ui_walk::pressEvent(0u, false);
+    REQUIRE(std::string(frame().title) == "EDIT 1/1");
+}
+
 TEST_CASE("the list opens on the channel that was in use at power-off",
           "[ui][channels][editor]")
 {

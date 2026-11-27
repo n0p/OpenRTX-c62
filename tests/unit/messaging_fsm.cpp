@@ -196,6 +196,46 @@ TEST_CASE("a confirmation that never comes is given up on by the task",
     REQUIRE(stateOf(id) == MSG_STATE_FAILED);
 }
 
+TEST_CASE("APRS keeps its own retries: the store does not queue it twice",
+          "[messaging][fsm][aprs]")
+{
+    resetStore();
+
+    /*
+     * APRS hands the text to its mailbox and the mailbox retries it (12 s, then
+     * 24 s, three attempts).  The store used to time the same wait out after
+     * 30 s and put the entry back in the queue, so aprs_pumpMessaging() sent a
+     * second copy while the first was still being retried: the peer saw the
+     * message up to six times for the three the protocol allows.
+     */
+    int aprs = messaging_sendToText(MSG_TRANSPORT_APRS, "EA5ABC", "hola", true,
+                                    1000u);
+
+    REQUIRE(aprs > 0);
+    REQUIRE(messaging_begin(MSG_TRANSPORT_APRS) == aprs);
+    messaging_done(aprs, true, 0u, 1100u);      /* on the air, waiting the ack */
+    REQUIRE(stateOf(aprs) == MSG_STATE_SENDING);
+
+    /* Well past MSG_CONFIRM_TIMEOUT_MS: no second copy leaves the queue */
+    messaging_task(120000u);
+    REQUIRE(stateOf(aprs) == MSG_STATE_SENDING);
+    REQUIRE(messaging_pending(MSG_TRANSPORT_APRS) == 0);
+    REQUIRE(messaging_head(MSG_TRANSPORT_APRS) == NULL);
+
+    /* The mailbox outcome is what ends it, as msg_service's aprsSync() does */
+    messaging_fail(aprs, 121000u);
+    REQUIRE(stateOf(aprs) == MSG_STATE_FAILED);
+
+    /* A transport without a retry schedule of its own still times out here */
+    int sds = messaging_send(MSG_TRANSPORT_TETRA, 99u, "sds", true, 200000u);
+
+    REQUIRE(sds > 0);
+    REQUIRE(messaging_begin(MSG_TRANSPORT_TETRA) == sds);
+    messaging_done(sds, true, 0u, 201000u);
+    messaging_task(232000u);
+    REQUIRE(stateOf(sds) == MSG_STATE_QUEUED);
+}
+
 TEST_CASE("fail gives an entry up whatever its attempt count", "[messaging][fsm]")
 {
     resetStore();
@@ -456,6 +496,46 @@ TEST_CASE("the outbox, the inbox and the draft round-trip through the record",
     REQUIRE(messaging_deserialise(again, (size_t)n) == 4);
     REQUIRE(messaging_serialise(third, sizeof(third)) == n);
     REQUIRE(memcmp(again, third, (size_t)n) == 0);
+}
+
+TEST_CASE("an id restored from flash is not handed out again", "[messaging][fsm][store]")
+{
+    resetStore();
+
+    /*
+     * The ids of the entries that come back from flash are the ones they had
+     * when the radio lost power, and the counter starts again at 1 on every
+     * boot.  A new message that took an id already in the outbox made
+     * messaging_done() -- a delivery report, a cancellation from the screen or
+     * from the PC -- land on the restored entry: the new one stayed SENDING,
+     * was retried every 30 s and went out three times, while the restored one
+     * was marked as sent.
+     */
+    int first = messaging_send(MSG_TRANSPORT_DMR, 111u, "viejo", true, 1000u);
+
+    REQUIRE(first == 1);
+
+    uint8_t record[MSG_STORE_MAX];
+    int n = messaging_serialise(record, sizeof(record));
+
+    REQUIRE(n > 0);
+
+    /* A power cycle (nextId back to 1), then a message composed before going
+       back on the air */
+    messaging_init();
+    REQUIRE(messaging_deserialise(record, (size_t)n) == 1);
+
+    int second = messaging_send(MSG_TRANSPORT_DMR, 222u, "nuevo", true, 2000u);
+
+    REQUIRE(second > 0);
+    REQUIRE(second != first);
+
+    /* And the delivery report of the new one does not touch the old one */
+    REQUIRE(messaging_begin(MSG_TRANSPORT_DMR) == first);
+    messaging_done(first, true, 9u, 3000u);
+
+    REQUIRE(stateOf(first) == MSG_STATE_SENDING);   /* its own confirmation */
+    REQUIRE(messaging_find(second)->state == MSG_STATE_QUEUED);
 }
 
 TEST_CASE("a record that does not check out restores nothing", "[messaging][fsm][store]")

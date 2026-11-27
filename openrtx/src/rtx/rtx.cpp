@@ -1177,7 +1177,16 @@ const char *rtx_keyingVetoReason(void)
 
 bool rtx_unattendedTxAllowed(const rtxStatus_t *status)
 {
-    if (status != NULL && status->txDisable != 0)
+    /*
+     * The unattended gate is not the PTT's: `txDisable` says the keypad must
+     * not key the radio (it is set on every screen that is not a main one, the
+     * messaging and APRS screens included), while this one says nobody may
+     * transmit without an operator.  Reading `txDisable` here is why a message
+     * queued from the composer, or a beacon asked for from the APRS mailbox,
+     * was held until the operator went back to the main screen -- and the
+     * screen kept saying it had been sent.
+     */
+    if (status != NULL && status->unattendedTxDisable != 0)
         return false;
 
     const uint32_t now = (uint32_t)getTick();

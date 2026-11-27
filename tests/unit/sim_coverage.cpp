@@ -443,6 +443,7 @@ void resetUi(uint8_t mode = OPMODE_FM, freq_t freq = 145500000)
     state.ui_screen             = MAIN_VFO;
     state.tuner_mode            = VFO;
     state.txDisable             = false;
+    state.unattendedTxDisable = false;
     state.charge                = 100;
     state.emergency             = false;
     state.step_index            = 4;            /* 12.5 kHz */

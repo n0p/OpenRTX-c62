@@ -906,6 +906,17 @@ void messaging_task(uint32_t now)
 
         if (m->state != MSG_STATE_SENDING)
             continue;
+        /*
+         * APRS is not timed out here.  Its mailbox keeps the retry schedule
+         * (APRS_RETRY_BASE_MS doubling, APRS_MAX_ATTEMPTS attempts) and
+         * msg_service's aprsSync() moves the entry to delivered or failed from
+         * the mailbox flags.  Timing the same wait out in this loop queued a
+         * second copy of the message while the first was still being retried:
+         * up to six transmissions where the protocol asks for three, and a
+         * peer that sees duplicates its message number cannot filter.
+         */
+        if (m->transport == MSG_TRANSPORT_APRS)
+            continue;
         if ((now - m->time) < MSG_CONFIRM_TIMEOUT_MS)
             continue;
         m->state = (m->attempts >= MSG_MAX_ATTEMPTS) ? MSG_STATE_FAILED

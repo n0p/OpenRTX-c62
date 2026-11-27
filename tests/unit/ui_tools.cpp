@@ -187,6 +187,7 @@ void resetUi(uint8_t screen = MAIN_VFO)
     state.ui_screen             = screen;
     state.tuner_mode            = (screen == MAIN_MEM) ? CH : VFO;
     state.txDisable             = false;
+    state.unattendedTxDisable = false;
     state.charge                = 100;
     state.emergency             = false;
     state.step_index            = 4;

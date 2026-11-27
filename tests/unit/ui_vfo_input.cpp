@@ -36,6 +36,23 @@ static void press(uint32_t key)
     ui_saveState();
 }
 
+/**
+ * The same key, 700 ms later, as the keypad reports a key that is still down.
+ *
+ * The press edge has already been delivered by press(); this is the repeat.
+ */
+static void pressLong(uint32_t key)
+{
+    kbd_msg_t msg;
+    msg.value = 0;
+    msg.keys = key;
+    msg.long_press = 1;
+    ui_pushEvent(EVENT_KBD, msg.value);
+    bool sync = false;
+    ui_updateFSM(&sync);
+    ui_saveState();
+}
+
 static void resetUi(uint8_t mode, freq_t freq)
 {
     state.channel.mode = mode;
@@ -46,6 +63,7 @@ static void resetUi(uint8_t mode, freq_t freq)
     state.ui_screen = MAIN_VFO;
     state.tuner_mode = VFO;
     state.txDisable = false;
+    state.unattendedTxDisable = false;
     state.charge = 100;
     state.emergency = false;
     state.settings = default_settings;
@@ -136,4 +154,33 @@ TEST_CASE("VFO entry rejects a frequency outside the tuning range", "[ui]")
     press(KEY_ESC);
     REQUIRE(state.ui_screen == MAIN_VFO);
     REQUIRE(state.channel.rx_frequency == 430000000);
+}
+
+TEST_CASE("a digit held down enters one digit, not two", "[ui][input]")
+{
+    resetUi(OPMODE_FM, 430000000);
+
+    /*
+     * input_scanKeyboard() reports the press and, 700 ms later, the same key
+     * with long_press set.  Holding a key is not rare on a keypad this size,
+     * and the frequency entry counted both events: the digit went in twice and
+     * every digit typed after it landed one place further along, so the
+     * frequency that was applied was not the one on screen.
+     */
+    press(KEY_4);                     /* 4: opens the input screen */
+    press(KEY_4);
+    press(KEY_6);
+    pressLong(KEY_6);                 /* the same 6, still held */
+    press(KEY_0);
+    press(KEY_0);
+    press(KEY_6);
+    press(KEY_2);
+    press(KEY_5);
+
+    /* ENTER closes the TX field with nothing typed, copying RX */
+    press(KEY_ENTER);
+
+    INFO("screen " << state.ui_screen << " rx " << state.channel.rx_frequency);
+    REQUIRE(state.ui_screen == MAIN_VFO);
+    REQUIRE(state.channel.rx_frequency == 446006250);
 }

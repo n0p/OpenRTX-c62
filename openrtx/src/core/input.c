@@ -63,11 +63,24 @@ bool input_scanKeyboard(kbd_msg_t *msg)
 
 bool input_isNumberPressed(kbd_msg_t msg)
 {
+    /*
+     * The long-press event repeats a key that has already been delivered on its
+     * press edge: counting it again typed every digit twice on the screens
+     * that read the keypad (the VFO input, the offset, the DMR ID, the clock),
+     * because 700 ms is a normal length for a press on this keypad.
+     */
+    if (msg.long_press)
+        return false;
+
     return msg.keys & KBD_NUM_MASK;
 }
 
 bool input_isCharPressed(kbd_msg_t msg)
 {
+    /* Same rule as the numbers above: the repeat is not a second keystroke */
+    if (msg.long_press)
+        return false;
+
     return msg.keys & KBD_CHAR_MASK;
 }
 

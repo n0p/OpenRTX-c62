@@ -72,6 +72,7 @@ void resetUi(uint8_t mode = OPMODE_FM, freq_t freq = FREQ)
     state.ui_screen             = MAIN_VFO;
     state.tuner_mode            = VFO;
     state.txDisable             = false;
+    state.unattendedTxDisable = false;
     state.charge                = 100;
     state.emergency             = false;
     state.settings              = default_settings;

@@ -196,6 +196,7 @@ void resetUi(uint8_t mode = OPMODE_FM, freq_t freq = FREQ)
     state.ui_screen             = MAIN_VFO;
     state.tuner_mode            = VFO;
     state.txDisable             = false;
+    state.unattendedTxDisable = false;
     state.charge                = 100;
     state.emergency             = false;
     state.step_index            = 4;            /* 12.5 kHz */
@@ -650,6 +651,7 @@ TEST_CASE("The tool screens open, answer every key and give the radio back",
     REQUIRE_FALSE(ui_contacts_isOpen());
     REQUIRE(state.ui_screen == MENU_TOP);
     REQUIRE(state.txDisable);            /* the menu never keys the PA */
+    REQUIRE(state.unattendedTxDisable);  /* nor a queued message from here */
 
     /* ---- messages: inbox, sent, view, compose, status ---- */
     resetUi();
@@ -658,6 +660,14 @@ TEST_CASE("The tool screens open, answer every key and give the radio back",
     openMenuRow((uint8_t)menuRowOf("Messages"));
     REQUIRE(state.ui_screen == MENU_MESSAGES);
     REQUIRE(state.txDisable);
+    /*
+     * The PTT stays off here -- a key pressed while typing must not key the
+     * radio -- but the unattended gate stays open: this is the screen from
+     * which the operator sends.  When it was the same flag, a message queued
+     * from the composer did not leave until the radio was back on a main
+     * screen, and the screen said it had been sent anyway.
+     */
+    REQUIRE_FALSE(state.unattendedTxDisable);
 
     for (const KeyName &k : KEYS) {
         pressKey(k.key, k.longPress);
