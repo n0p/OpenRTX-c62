@@ -474,6 +474,20 @@ bool OpMode_DPMR::txSlot(const rtxStatus_t *status)
 void OpMode_DPMR::update(rtxStatus_t *const rtx, const bool newCfg)
 {
     if (newCfg || (rtx->opStatus == OFF)) {
+        /*
+         * A new configuration can arrive in the middle of a call: the RTX
+         * thread keeps opStatus as it is when it copies one.  This branch then
+         * says RX, and without closing the transmission first the PA stays
+         * keyed with the last half of a buffer looping in the stream, nobody
+         * calling txSlot() again, and the guard left in RUNNING with no
+         * deadline -- a modulated carrier with no owner until the 90 s cut.
+         * Closing it here also frees txPath/txId, which the next PTT would
+         * otherwise overwrite, leaking both.
+         */
+#ifdef CONFIG_DPMR_TX
+        if (txRunning)
+            stopTx();
+#endif
         reset();
         if (startRx) {
             rtx->opStatus = RX;
