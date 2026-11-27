@@ -46,6 +46,13 @@ extern "C" {
 struct sds_tx {
     uint8_t buf[400];
     unsigned nbits;
+    /**
+     * Set when a writer was asked for more bits than buf holds.  Every
+     * function that reports success or failure returns -1 once it is set, so
+     * a too long text is refused instead of written past the end of the
+     * writer -- which, in tetraSds_encodeText(), is a stack object.
+     */
+    bool overflow;
 };
 
 /**
