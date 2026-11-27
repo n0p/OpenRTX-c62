@@ -44,6 +44,9 @@ extern "C" {
  */
 void ui_tools_open(void);
 
+/** Close it, back to the screen it was opened from. */
+void ui_tools_close(void);
+
 /** True while the list or the mode submenu is on screen. */
 bool ui_tools_isOpen(void);
 

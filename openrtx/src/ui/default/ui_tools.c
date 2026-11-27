@@ -234,6 +234,25 @@ static void closeMenu(bool *sync_rtx)
         *sync_rtx = true;
 }
 
+/**
+ * Close the tools menu from outside.
+ *
+ * Same effect as ESC on the list (or the red key): back to the screen it was
+ * opened from.  It exists for the callers that have to put the UI in a known
+ * state without pressing keys -- the test harness does, and so does anything
+ * that has to leave the menu after a mode change.
+ */
+void ui_tools_close(void)
+{
+    bool sync = false;
+
+    if (ts.screen == TS_CLOSED)
+        return;
+
+    closeMenu(&sync);
+    state.txDisable = false;
+}
+
 /** Apply a mode chosen in the submenu, the way the side key does. */
 static void applyMode(uint8_t id, bool *sync_rtx)
 {

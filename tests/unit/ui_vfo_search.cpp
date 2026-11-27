@@ -37,6 +37,7 @@ extern "C" {
 #include "core/voicePrompts.h"
 #include "core/vfo_search.h"
 #include "core/vfo_search_service.h"
+#include "ui/ui_tools.h"
 #include "interfaces/cps_io.h"
 #include "rtx/rtx.h"
 #include "ui/ui_default.h"
@@ -81,6 +82,14 @@ void hold(uint32_t ms)
 
 void resetUi(uint8_t screen, uint8_t mode, freq_t freq)
 {
+    /*
+     * The menu is a state of its own and owns the keypad while it is open: a
+     * case that presses P1 (any of them may, the order is random) would leave
+     * it up and the arrows of the next case would move its cursor instead of
+     * the frequency.
+     */
+    ui_tools_close();
+
     state.channel.mode          = mode;
     state.channel.rx_frequency  = freq;
     state.channel.tx_frequency  = freq;
