@@ -823,6 +823,51 @@ TEST_CASE("Bench: PTT keys, stamps the edge and emits the event", "[bench]")
     REQUIRE(text.find("off 2600 ms") != std::string::npos);
 }
 
+TEST_CASE("Bench: closing the session releases the transmitter it keyed",
+          "[bench]")
+{
+    /*
+     * A client that keys the PA and closes the session without `PTT off` -- the
+     * cleanup of a script that hit an exception -- must not leave the radio
+     * transmitting.  Only pc_proto_reset() released the bench, and the
+     * transport's inactivity timer (platform/targets/c62/pc_proto_c62.c) only
+     * runs while the session is linked, so after SESSION_CLOSE nothing did: the
+     * PA stayed keyed until the 90 s air-time cut, which re-keys a second later
+     * (FINDINGS-RADIO.md).
+     */
+    Device d;
+    d.hello();
+    d.request(PC_MSG_BENCH_ARM, 2, d.tok());
+
+    std::vector<uint8_t> p;
+    putU8(p, PC_TAG_TX_STATE, 1);
+    auto tok = d.tok();
+    p.insert(p.end(), tok.begin(), tok.end());
+
+    Frame on = d.request(PC_MSG_BENCH_PTT, 3, p);
+    REQUIRE(on.id == PC_MSG_BENCH_PTT);
+    REQUIRE(sim.ptt == 1);
+
+    Frame c = d.request(PC_MSG_SESSION_CLOSE, 4);
+    REQUIRE(c.id == PC_MSG_SESSION_CLOSE);
+    REQUIRE(u8(c.payload, PC_TAG_STATUS) == PC_OK);
+
+    /* The link is down and the transmitter is not */
+    REQUIRE_FALSE(pc_proto_linked(&d.proto));
+    REQUIRE(sim.ptt == 0);
+    REQUIRE(sim.releases >= 1);
+
+    /* The token died with the session: it cannot key anything any more */
+    auto old = d.tok();
+    std::vector<uint8_t> q;
+    putU8(q, PC_TAG_TX_STATE, 1);
+    q.insert(q.end(), old.begin(), old.end());
+    Frame again = d.request(PC_MSG_BENCH_PTT, 5, q);
+    REQUIRE(again.id == PC_MSG_ERROR);
+    REQUIRE(u8(again.payload, PC_TAG_ERROR) == PC_ERR_NOT_ALLOWED);
+    REQUIRE(sim.ptt == 0);
+}
+
 TEST_CASE("Bench: a capture is armed, filled and read back with its t0",
           "[bench]")
 {

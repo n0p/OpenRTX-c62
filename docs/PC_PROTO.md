@@ -180,7 +180,7 @@ Los rangos están asignados para que dos features no elijan el mismo número:
 |---|---|---|---|
 | 0x0001 | `HELLO` | version, caps | identidad, tamaños, caps, token |
 | 0x0002 | `PING` | – | uptime, status |
-| 0x0003 | `SESSION_CLOSE` | – | status; el firmware suelta el enlace y devuelve el log al cable |
+| 0x0003 | `SESSION_CLOSE` | – | status; el firmware suelta el enlace, suelta el PTT del banco y devuelve el log al cable |
 | 0x0004 | `COUNTERS` | – | `pcProtoStats_t` (32 B) en `PC_TAG_STATS` |
 | 0x00FF | `ERROR` | – | `PC_TAG_ERROR`, `PC_TAG_MSG_ID` |
 
@@ -653,6 +653,18 @@ volcado si se armó con A/B. En cuanto llega una trama válida:
 Al cerrar con `SESSION_CLOSE`, o tras 15 s sin una trama válida, el enlace se
 suelta, el volcado se reanuda y el log vuelve al UART. La radio no se queda
 muda porque el PC se haya ido.
+
+El cierre se lleva por delante **todo el estado de la sesión**, igual que el
+tiempo agotado por inactividad (`pc_proto_reset()`): el nombre del banco de
+medidas se reinicia (con él, el PTT sintético y cualquier captura armada), y el
+testigo de depuración y el ritmo de log se borran. Un cliente que clavea con
+`BENCH_PTT` y cierra sin `PTT off` —la limpieza de un script que falló— dejaba
+la PA clavada: el temporizador de inactividad del transporte solo corre mientras
+la sesión está enlazada (`pc_proto_c62.c`), así que después del cierre ya no
+saltaba y solo quedaba el corte de 90 s de aire, que vuelve a clavear 1 s
+después. Y hasta esta revisión el mensaje ni siquiera llegaba a ejecutarse: su
+respuesta se construía en un búfer de 4 B para un TLV de 5, así que contestaba
+`TOO_LARGE` y el enlace solo caía por inactividad.
 
 El UART va a 115200 8N1, el mismo que el resto del firmware. El protocolo toma
 la línea RX del pad del PTT (GPIOA_15), que es **también el pulsador del

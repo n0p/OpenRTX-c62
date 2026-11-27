@@ -559,7 +559,13 @@ int pc_core_ping(struct pcReq *r)
 
 int pc_core_sessionClose(struct pcReq *r)
 {
-    uint8_t buf[4];
+    /*
+     * One TLV of one byte is five bytes: a four-byte tag/length header and the
+     * value.  With a four-byte buffer pc_tlv_u8() refused every time and the
+     * answer was PC_ERR_TOO_LARGE, so this message never closed anything -- the
+     * link only fell after the transport's idle timeout.
+     */
+    uint8_t buf[8];
     size_t off = pc_tlv_u8(buf, sizeof(buf), 0, PC_TAG_STATUS, PC_OK);
     if (off == 0) {
         r->err = PC_ERR_TOO_LARGE;
@@ -569,9 +575,30 @@ int pc_core_sessionClose(struct pcReq *r)
      * and gives the UART back to the log.  A positive return tells the
      * dispatcher the response has already been sent. */
     pc_proto_sendResponse(r->p, r->seq, r->id, 0, buf, off);
+
     r->p->linked = false;
     r->p->events = false;
     r->p->subPeriodMs = 0;
+
+    /*
+     * The rest of the session goes with it, exactly as when the transport times
+     * a silent client out (pc_proto_reset()): the bench namespace belongs to the
+     * session, so its PTT override and any armed capture are released here.  A
+     * client that raises BENCH_PTT and then closes -- or dies before sending
+     * `PTT off` -- used to leave the PA keyed: the idle timer in
+     * platform/targets/c62/pc_proto_c62.c only runs while the session is
+     * linked, so after this point nothing released it, and the 90 s air-time
+     * cut re-keys a second later (FINDINGS-RADIO.md).  The debug token and the
+     * log throttle are per session for the same reason: the next HELLO issues
+     * a new token, and a rate a closed client asked for must not throttle the
+     * log of the next one.
+     */
+    r->p->dbgToken = 0;
+    r->p->logRate = 0;
+    r->p->logCount = 0;
+    r->p->logHead = 0;
+    pc_proto_benchReset();
+
     return 1;
 }
 
