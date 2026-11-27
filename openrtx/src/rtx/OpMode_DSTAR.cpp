@@ -366,7 +366,19 @@ bool OpMode_DSTAR::rxSquelchOpen()
 
 void OpMode_DSTAR::abortTx()
 {
-    stopTx();
+    /*
+     * The supervisor unkeyed from another thread and left the status at OFF.
+     * The streams are cancelled without waiting for the sink (this runs in the
+     * main thread), the guard is closed so it stops asking for an abort that
+     * has already happened, and startRx is what asks for the receiver on the
+     * next pass.  txBlocked keeps a PTT that is still held from keying again
+     * the moment the abort lands.
+     */
+#ifdef CONFIG_DSTAR_TX
+    stopTx(false);
+#endif
+    txBlocked = true;
+    startRx = true;
 }
 
 void OpMode_DSTAR::update(rtxStatus_t *const rtx, const bool newCfg)

@@ -422,7 +422,19 @@ bool OpMode_YSF::txSlot()
 void OpMode_YSF::abortTx()
 {
 #ifdef CONFIG_YSF_TX
-    stopTx();
+    /*
+     * The supervisor unkeyed from another thread and left the status at OFF.
+     * The streams are cancelled without waiting for the sink (this runs in the
+     * main thread), the guard is closed so it stops asking for an abort that
+     * has already happened, and startRx is what asks for the receiver on the
+     * next pass: the OFF branch of update() only re-enters receive with it
+     * set, and this mode used to wait there for ever.  txBlocked keeps a PTT
+     * that is still held from keying again the moment the abort lands.
+     */
+    stopTx(false);
+
+    txBlocked = true;
+    startRx = true;
 #endif
 }
 

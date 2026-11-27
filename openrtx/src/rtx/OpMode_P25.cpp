@@ -325,7 +325,18 @@ bool OpMode_P25::txSlot()
 void OpMode_P25::abortTx()
 {
 #ifdef CONFIG_P25_TX
-    stopTx();
+    /*
+     * The supervisor unkeyed from another thread and left the status at OFF.
+     * The streams are cancelled without waiting for the sink (this runs in the
+     * main thread), the guard is closed so it stops asking for an abort that
+     * has already happened, and startRx is what asks for the receiver on the
+     * next pass.  txBlocked keeps a PTT that is still held from keying again
+     * the moment the abort lands.
+     */
+    stopTx(false);
+
+    txBlocked = true;
+    startRx = true;
 #endif
 }
 
