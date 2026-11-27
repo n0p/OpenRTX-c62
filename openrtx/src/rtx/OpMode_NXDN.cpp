@@ -112,7 +112,7 @@ OpMode_NXDN::OpMode_NXDN()
 #ifdef CONFIG_NXDN_TX
     , frameHead(0), frameCount(0), txStage(0), txHalf(0), txPreamble(0),
       txReleaseFrames(0), txTail(0), txRunning(false), txFirstBlock(false),
-      txPath(-1), txId(-1), micPath(-1), micId(-1)
+      txBlocked(false), txPath(-1), txId(-1), micPath(-1), micId(-1)
 #endif
 {
 }
@@ -234,14 +234,25 @@ bool OpMode_NXDN::startTx(const rtxStatus_t *status)
     return true;
 }
 
-void OpMode_NXDN::stopTx()
+void OpMode_NXDN::stopTx(bool drain)
 {
     const bool wasRunning = txRunning;
 
     txRunning = false;
+    txFirstBlock = false;
 
-    if (txId >= 0)
-        audioStream_stop(txId);
+    if (txId >= 0) {
+        /*
+         * drain: let the sink finish the half it has (audioStream_stop()),
+         * which is what puts the tail on the air.  Otherwise cancel at once
+         * (audioStream_terminate()): that is the abort path, which runs in the
+         * main thread and must not wait.
+         */
+        if (drain)
+            audioStream_stop(txId);
+        else
+            audioStream_terminate(txId);
+    }
     if (micId >= 0)
         audioStream_terminate(micId);
     if (txPath >= 0)
@@ -382,8 +393,33 @@ bool OpMode_NXDN::txSlot(const rtxStatus_t *status)
 
 #endif /* CONFIG_NXDN_TX */
 
+void OpMode_NXDN::abortTx()
+{
+    /*
+     * The supervisor unkeyed from another thread and left the status at OFF.
+     * The streams are cancelled without waiting for the sink (this runs in the
+     * main thread) and the guard is closed, or it keeps asking for an abort
+     * that has already happened; startRx is what asks for the receiver on the
+     * next pass, because the OFF branch of update() only re-enters receive with
+     * it set and this mode used to sit there -- mute, with the chip receiving,
+     * and the abort repeated every 20 ms -- until the operator changed mode.
+     * txBlocked keeps a PTT that is still held from keying again.
+     */
+#ifdef CONFIG_NXDN_TX
+    stopTx(false);
+    txBlocked = true;
+#endif
+    startRx = true;
+}
+
 void OpMode_NXDN::update(rtxStatus_t *const rtx, const bool newCfg)
 {
+#ifdef CONFIG_NXDN_TX
+    /* A new press retries the key-up even if the last one failed */
+    if (platform_getPttStatus() == false)
+        txBlocked = false;
+#endif
+
     switch (rtx->opStatus) {
     case OFF:
         radio_disableRtx();
@@ -440,13 +476,14 @@ void OpMode_NXDN::update(rtxStatus_t *const rtx, const bool newCfg)
      * destination and a frequency the platform can tune to.  The RAN is the
      * one the receiver filters on, so the two ends of a round trip agree.
      */
-    if (rtx_keyingAllowed(rtx)) {
+    if (rtx_keyingAllowed(rtx) && (txBlocked == false)) {
         stopSampling();
         radio_disableRtx();
         if (startTx(rtx)) {
             rtx->opStatus = TX;
             return;
         }
+        txBlocked = true;
         startRx = true;
     }
 #endif

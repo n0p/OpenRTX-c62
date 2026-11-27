@@ -59,6 +59,14 @@ public:
     void update(rtxStatus_t *const status, const bool newCfg) override;
     bool rxSquelchOpen() override;
 
+    /**
+     * The supervisor cut a transmission (stuck PTT, a stream that stopped, the
+     * five-minute cap): drop the streams, close the guard and ask for the
+     * receiver again -- the OFF branch of update() only re-enters receive with
+     * startRx set, and without it this mode stayed mute for ever.
+     */
+    void abortTx() override;
+
 private:
     static void frameTrampoline(const struct nxdnFrame *frame, void *user);
     void onFrame(const struct nxdnFrame *frame);
@@ -68,7 +76,7 @@ private:
 #ifdef CONFIG_NXDN_TX
     bool startBaseband(const rtxStatus_t *status);
     bool startTx(const rtxStatus_t *status);
-    void stopTx();
+    void stopTx(bool drain = true);
     bool fillMic(unsigned frames);
     bool putHalf();
     bool txSlot(const rtxStatus_t *status);
@@ -86,6 +94,7 @@ private:
     int txTail;         ///< Halves of tail sent
     bool txRunning;
     bool txFirstBlock;
+    bool txBlocked;     ///< PTT was pressed and the chain refused to start
     int txPath, txId, micPath, micId;
     stream_sample_t txSamples[2 * NXDN_TX_HALF_SAMPLES];
     int16_t micPcm[2 * 160];
