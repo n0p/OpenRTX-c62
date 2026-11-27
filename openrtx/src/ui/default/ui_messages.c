@@ -263,9 +263,23 @@ static void tapKeyPress(uint8_t digit, bool literal, long long now)
 
     if (literal) {
         char c = (char)('0' + digit % 10);
-        if (digit == 0)
-            c = '0';
-        /* A long press inserts the digit itself, not the letter group */
+        char *buf = activeBuf();
+        size_t len = strlen(buf);
+
+        /*
+         * A held key means the digit itself, not the letter group -- and the
+         * long press arrives after the press edge has already inserted the
+         * first character of the group.  Adding the digit after it made a held
+         * key type two characters ("A4" for 2).  The digit replaces the
+         * character that same press just inserted.
+         */
+        if ((mg.tapKey == digit) && ((size_t)mg.tapPos + 1 == len)) {
+            buf[mg.tapPos] = c;
+            mg.tapKey = 0xFF;
+            textChanged();
+            return;
+        }
+
         textAppend(c);
         mg.tapKey = 0xFF;
         return;
