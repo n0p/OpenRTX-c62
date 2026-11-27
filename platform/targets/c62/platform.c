@@ -299,6 +299,14 @@ void platform_init_csk6()
     if (ret == 0)
         audio_init();
 
+    /*
+     * The consequence, in the words of the boot: a codec that did not start
+     * leaves a radio that transmits and receives nothing, with a UI that says
+     * otherwise (audio_init() itself logs the error code).
+     */
+    if ((ret == 0) && !audio_ready())
+        printk("C62: no audio path, receive and transmit audio are silent\n");
+
     restore_dsp_overwrites();
 
 #ifdef C62_BASEBAND_DUMP

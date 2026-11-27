@@ -130,6 +130,18 @@ bool c62Bk1080Lock(void);
  */
 void c62Bk1080Unlock(void);
 
+/**
+ * Whether the audio path came up (audio_c62.c).
+ *
+ * audio_init() is a void interface call, so the one failure that leaves a
+ * radio with a working UI and no audio at all had no way out of the driver.
+ * This is that way out: platform_init_csk6() reports the consequence, and a
+ * screen can ask the same question.
+ *
+ * @return true when the codec answered and the audio routes can be applied.
+ */
+bool audio_ready(void);
+
 /* BK4819 GPIOs */
 #define LNA_VHF_EN &c62_bk4819_gpio, 0
 #define LNA_UHF_EN &c62_bk4819_gpio, 1
