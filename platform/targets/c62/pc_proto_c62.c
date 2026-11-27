@@ -1196,11 +1196,19 @@ static void pcProtoMain(void *a, void *b, void *c)
          * it now, instead of holding a key at power on.
          */
 #ifdef C62_BASEBAND_DUMP
-        bool up = pc_proto_linked(&proto);
-        if (up && !dumpPaused) {
+        /*
+         * Its own name: `up` above is the accessory switch, and this file has
+         * to compile with the dump and the protocol both enabled -- the
+         * combination a bench session uses, where the dump is paused while a
+         * client is linked.  Redeclaring `up` here is a compile error in
+         * exactly that build, which is why the only build that can pause the
+         * dump did not exist.
+         */
+        const bool linked = pc_proto_linked(&proto);
+        if (linked && !dumpPaused) {
             baseband_dump_pause(true);
             dumpPaused = true;
-        } else if (!up && dumpPaused) {
+        } else if (!linked && dumpPaused) {
             baseband_dump_pause(false);
             dumpPaused = false;
         }
