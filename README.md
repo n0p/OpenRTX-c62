@@ -108,8 +108,10 @@ git clone --branch v0.11-20261127 https://github.com/n0p/OpenRTX-c62
 ```
 
 La imagen de esta versión, con las opciones de *Compilación*, ocupa **828.212 B
-(79,0 %) con RAM al 73,8 %** y su `md5` es `7527c12a 4730c5f3 eb85a025 ee8427a6`:
-compruébalo después de descomprimir y antes de flashear.
+(79,0 %) con RAM al 73,8 %**. El `md5` exacto de lo que publica cada release está
+en el `FLASHEO.md` y en el `SHA256SUMS` que van dentro del zip: la huella cambia
+con cada commit porque la imagen lleva su versión dentro, así que no se escribe
+aquí. Compruébala después de descomprimir y antes de flashear.
 
 `dsp_firmware.bin` es la imagen del DSP que el build fija por hash y descarga de
 [lsf-zephyr-sdk](https://github.com/OpenRTX/lsf-zephyr-sdk) (sha256
