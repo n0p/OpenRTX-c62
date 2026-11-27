@@ -90,6 +90,8 @@ scripts/get_demod_log
 # direwolf are rebuilt by tests/host/kiss_loop/run.sh
 /tests/host/kiss_loop/build/
 /build-qemu-kiss/
+# Codec cost harnesses (scripts/codec_cost.sh)
+/build-qemu-codec/
 
 # dPMR working material: the ETSI PDFs, the DSDcc and dsd-neo checkouts used as
 # references and the captures the receiver was developed against.  Sources and
