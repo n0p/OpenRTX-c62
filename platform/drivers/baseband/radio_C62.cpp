@@ -930,7 +930,28 @@ void radio_enableTx()
 
         const uint32_t freq = airband_snap(config->txFrequency);
         if ((freq < AIRBAND_FREQ_MIN) || (freq > AIRBAND_FREQ_MAX))
+        {
+            /*
+             * Same rule as the generic path below: a keying this driver does
+             * not do has to say so.  A bare return here left the operator (and
+             * the CPS) with the state of the last keying, which is "none", and
+             * a PTT that does nothing at all.
+             */
+            static uint32_t refusedAt = 0;
+            const uint32_t nowMs = k_uptime_get_32();
+
+            txRefusedReason = "tx out of airband";
+            if ((uint32_t)(nowMs - refusedAt) >= 1000)
+            {
+                refusedAt = nowMs;
+                printk("PA: keying refused, TX %lu Hz outside the airband "
+                       "%lu-%lu Hz\n",
+                       (unsigned long)config->txFrequency,
+                       (unsigned long)AIRBAND_FREQ_MIN,
+                       (unsigned long)AIRBAND_FREQ_MAX);
+            }
             return;
+        }
 
         /* The carrier level, from the band calibration at the TX frequency */
         const uint32_t pwr = (config->txPower < RADIO_PLAN_AM_CARRIER_MW)
