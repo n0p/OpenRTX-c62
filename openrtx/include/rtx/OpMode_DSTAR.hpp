@@ -57,7 +57,7 @@ private:
     void startSampling();
     void stopSampling();
     bool startTx(const rtxStatus_t *status);
-    void stopTx();
+    void stopTx(bool drain = true);
     bool txSlot();
 
     int basebandPath;
@@ -68,6 +68,7 @@ private:
     bool startRx;
     bool txBlocked;
     bool txEnded;
+    bool txFirstBlock;  ///< A block of this over has reached the sink
     uint32_t txFrames;
 
     /*
