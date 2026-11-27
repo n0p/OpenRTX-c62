@@ -22,21 +22,29 @@
 
 /*
  * Where the instance lives.  In the C62 firmware the C62 CMake sets
- * DMR_VOCODER_STATE_ATTR to .psram_section: 8 540 B written and read once per
- * 20 ms frame, never inside a sample loop, which the 256 KB of SRAM cannot
- * spare (the D-STAR decoder's own 14 KB state lives there too).  Everywhere
- * else -- the host tests that link this file directly -- it stays in .bss.
+ * DMR_VOCODER_STATE_ATTR to .psram_section: the 4.5 KiB of state that is
+ * carried between frames, plus the 4 KiB per-frame scratch below, written and
+ * read once per 20 ms frame and never inside a sample loop, which the 16 KiB
+ * of DTCM cannot spare.  Everywhere else -- the host tests that link this file
+ * directly -- both stay in .bss.
  *
  * The section is NOLOAD and nothing zeroes it, so the instance is initialised
  * on first use: `dmr_ready` stays in ordinary .bss, which the kernel does
- * zero, and no state is read before that flag says so.
+ * zero, and no state is read before that flag says so.  The scratch needs no
+ * initial value: every field is written before it is read.
  */
 #ifndef DMR_VOCODER_STATE_ATTR
 #define DMR_VOCODER_STATE_ATTR
 #endif
+#ifndef DMR_VOCODER_SCRATCH_ATTR
+#define DMR_VOCODER_SCRATCH_ATTR DMR_VOCODER_STATE_ATTR
+#endif
 
-/** The one decoder instance of the firmware, ~8.5 KiB, no initialisers. */
+/** The one decoder instance of the firmware, ~4.5 KiB, no initialisers. */
 static dmr_vocoder_t dmr_instance DMR_VOCODER_STATE_ATTR;
+
+/** Its per-frame working set, ~4 KiB, written every frame, no initialisers. */
+static dmr_scratch_t dmr_scratch DMR_VOCODER_SCRATCH_ATTR;
 
 static unsigned int dmr_last_errors;
 static int dmr_ready;
@@ -51,7 +59,7 @@ int dmr_vocoder_decode(const uint8_t frame[DMR_VOCODER_FRAME_BYTES],
         return -1;
 
     if (dmr_ready == 0) {
-        dmr_vocoder_init(&dmr_instance);
+        dmr_vocoder_init(&dmr_instance, &dmr_scratch);
         dmr_ready = 1;
     }
 
@@ -63,7 +71,7 @@ int dmr_vocoder_decode(const uint8_t frame[DMR_VOCODER_FRAME_BYTES],
 
 void dmr_vocoder_reset(void)
 {
-    dmr_vocoder_init(&dmr_instance);
+    dmr_vocoder_init(&dmr_instance, &dmr_scratch);
     dmr_ready = 1;
     dmr_last_errors = 0;
 }
@@ -82,7 +90,7 @@ int dmr_vocoder_decode_ambe(const uint8_t d[49], int16_t pcm[DMR_VOCODER_PCM_SAM
         return -1;
 
     if (dmr_ready == 0) {
-        dmr_vocoder_init(&dmr_instance);
+        dmr_vocoder_init(&dmr_instance, &dmr_scratch);
         dmr_ready = 1;
     }
 
@@ -94,7 +102,7 @@ int dmr_vocoder_decode_ambe(const uint8_t d[49], int16_t pcm[DMR_VOCODER_PCM_SAM
 
 size_t dmr_vocoder_state_bytes(void)
 {
-    return dmr_vocoder_state_size();
+    return dmr_vocoder_state_size() + dmr_vocoder_scratch_size();
 }
 
 size_t dmr_vocoder_arena_used(void)

@@ -4,8 +4,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # RNNoise v0.1.1 (xiph/rnnoise, tag v0.1.1, commit 6cbfd53), vendored unchanged
-# except for one local patch that moves the per-frame working set out of the C
-# stack (see PATCHES.md).  BSD-3-Clause, see COPYING; attribution in README.
+# except for two local patches: the per-frame working set moved out of the C
+# stack and the double arithmetic of the frame path turned into float (see
+# PATCHES.md).  BSD-3-Clause, see COPYING; attribution in README.
 #
 #   denoise.c    the denoiser: features, gains, synthesis (BSD-3)
 #   rnn.c        GRU/dense inference on int8 weights (BSD-3)

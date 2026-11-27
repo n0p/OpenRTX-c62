@@ -626,10 +626,11 @@ if(CONFIG_C62_DMR_RX)
     message(STATUS "C62: DMR voice: mbelib (reference, 9.36 M instr/frame)")
   else()
     # Ours: lib/dmr_vocoder, 113 k instructions per 20 ms frame.  Its state
-    # (8 540 B) goes to DTCM from dmr_voice.c (DMR_FAST_BSS), so only the
-    # per-instance header is used; dmr_vocoder.c stays in the library for
-    # the host tests.  The library itself is built once by the shared block
-    # near the top of this file (NXDN, YSF and dPMR link the same one).
+    # (4 484 B) goes to DTCM from dmr_voice.c (DMR_FAST_BSS) and its per-frame
+    # scratch (4 056 B) to PSRAM (DMR_SLOW_BSS), so only the per-instance
+    # header is used; dmr_vocoder.c stays in the library for the host tests.
+    # The library itself is built once by the shared block near the top of
+    # this file (NXDN, YSF and dPMR link the same one).
     target_compile_definitions(app PRIVATE DMR_VOICE_OWN)
     message(STATUS "C62: DMR voice: lib/dmr_vocoder (ours, 113 k instr/frame)")
   endif()

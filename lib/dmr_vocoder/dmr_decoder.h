@@ -10,13 +10,16 @@
  * (the host tests decode two streams side by side) and so that the QEMU
  * harnesses can reach the per-instance state.
  *
- * Pure C, no libm, no libstdc++, no TLS, no dynamic allocation.  The whole
- * decoder state lives in one instance structure that the caller allocates
- * (static or on the stack), so there is nothing to malloc and nothing that
- * touches .data at start-up: every table is const, in flash.
+ * Pure C, no libm, no libstdc++, no TLS, no dynamic allocation.  The
+ * frame-to-frame state lives in one instance structure that the caller
+ * allocates (static or on the stack) and the per-frame working set in a
+ * second one whose storage the caller also owns and may place in slower
+ * memory, so there is nothing to malloc and nothing that touches .data at
+ * start-up: every table is const, in flash.
  *
  *   static dmr_vocoder_t voc;
- *   dmr_vocoder_init(&voc);
+ *   static dmr_scratch_t scratch;   // may live in slower memory
+ *   dmr_vocoder_init(&voc, &scratch);
  *   ...
  *   dmr_vocoder_decode_frame(&voc, frame9, pcm160, &errs);
  *
@@ -60,6 +63,30 @@ typedef struct {
     float PSIl[DMR_MAX_BANDS + 2]; /* phase accumulator */
 } dmr_parms_t;
 
+/*
+ * Per-frame working set (4 056 B): filled and consumed inside one call to
+ * dmr_vocoder_decode_frame()/decode_data(), never carried between frames.
+ *
+ * It is a separate object so that a target can put it where the cheapest
+ * memory is.  On the C62 the frame-to-frame state below is in DTCM (zero wait
+ * states, 16 KB, the region that limits the whole firmware) but this scratch
+ * goes to PSRAM: it is written and read once or twice per 20 ms frame, never
+ * inside a sample loop, so the slower memory costs nothing measurable.  That
+ * takes 4 056 B off DTCM and is what makes two decoder instances (the two DMR
+ * slots) fit there.
+ *
+ * The caller owns the storage and must keep it alive for as long as the
+ * instance: dmr_vocoder_init() only stores the pointer.
+ */
+typedef struct {
+    float noise[256];
+    float uw[256];
+    float fft_re[129], fft_im[129];
+    float bin_scale[129];
+    float cos_tab[DMR_MAX_BANDS + 1];
+    int16_t a_min[DMR_MAX_BANDS + 1], b_max[DMR_MAX_BANDS + 1];
+} dmr_scratch_t;
+
 typedef struct {
     dmr_parms_t cur, prev, enh;
 
@@ -67,19 +94,22 @@ typedef struct {
     float noise_overlap[96]; /* LCG noise overlap between frames */
     float noise_seed;
 
-    /* per-instance scratch (keeps the stack shallow and the frame small) */
-    float noise[256];
-    float uw[256];
-    float fft_re[129], fft_im[129];
-    float bin_scale[129];
-    float cos_tab[DMR_MAX_BANDS + 1];
-    int16_t a_min[DMR_MAX_BANDS + 1], b_max[DMR_MAX_BANDS + 1];
-
     uint32_t cn_seed; /* comfort-noise RNG */
+
+    /* Per-frame working set, owned by the caller (see dmr_scratch_t).  Kept
+     * out of this structure so that the hot state stays compact and can live
+     * in fast memory on its own.  Last, so the 8-byte alignment of the pointer
+     * leaves no padding in the middle. */
+    dmr_scratch_t *scratch;
 } dmr_vocoder_t;
 
-/* Reset an instance to the decoder's initial state (no allocation). */
-void dmr_vocoder_init(dmr_vocoder_t *v);
+/* Size of the per-frame scratch, in bytes. */
+size_t dmr_vocoder_scratch_size(void);
+
+/* Reset an instance to the decoder's initial state (no allocation).  The
+ * scratch storage is caller-owned and only referenced, not cleared: every
+ * field is written before it is read, once per frame. */
+void dmr_vocoder_init(dmr_vocoder_t *v, dmr_scratch_t *scratch);
 
 /* Decode one 72-bit frame to 160 PCM samples.
  * Returns 0 on success, -1 on bad arguments.  *errs (optional) receives the

@@ -389,7 +389,8 @@ typedef struct {
 #ifdef DMR_VOICE_ENABLED
     mbe_parms cur, prev, prev_enh;
 #else
-    dmr_vocoder_t voc; /* lib/dmr_vocoder, 8 540 B */
+    dmr_vocoder_t voc; /* lib/dmr_vocoder state, 4 484 B; its 4 056 B
+                        * of per-frame scratch is in PSRAM (s_scratch) */
 #endif
     float level; /* running rms of recent error-free frames (concealment reference) */
 } vdec_t;
@@ -450,13 +451,20 @@ static uint32_t s_bp_decoder_epoch;
  * On the C62 in DTCM (dmr_port.h).
  *
  * ONE state, not one per slot: DTCM is 16 KB and the speech thread's stack
- * (8 KB) is in it too, so two vdec_t (2 x 7.6 KB) do not fit and the link
- * fails.  Only one slot is decoded at a time (AUTO contrast: the slot being
+ * (8 KB) is in it too, so two vdec_t (2 x 7.6 KB) did not fit and the link
+ * failed.  Only one slot is decoded at a time (AUTO contrast: the slot being
  * heard), so the state belongs to whichever slot was decoded last; switching
  * slot resets it, which costs one corrupt frame at the switch.  Measured:
- * the TX build's .dtcm_bss was 23 848 B with two, 16 020 B with one.
+ * the TX build's .dtcm_bss was 23 848 B with two.
+ *
+ * The decoder's per-frame FFT/WOLA scratch (dmr_scratch_t, 4 056 B) is no
+ * longer part of this object: it lives in PSRAM (DMR_SLOW_BSS) because it is
+ * touched once or twice per 20 ms frame, never per sample.  With it out,
+ * .dtcm_bss is 11 656 B (state 4 488 + stack 7 168) of the 16 384 B region,
+ * 71 %, against 15 712 B (96 %) before.
  */
 static DMR_FAST_BSS vdec_t s_dec[1];
+static DMR_SLOW_BSS dmr_scratch_t s_scratch;
 static int s_dec_slot = -1;
 
 static void dec_init(int slot);
@@ -557,7 +565,7 @@ static void dec_init(int slot)
 #ifdef DMR_VOICE_ENABLED
     mbe_initMbeParms(&s_dec[0].cur, &s_dec[0].prev, &s_dec[0].prev_enh);
 #else
-    dmr_vocoder_init(&s_dec[0].voc);
+    dmr_vocoder_init(&s_dec[0].voc, &s_scratch);
 #endif
     s_dec_slot = slot;
 }

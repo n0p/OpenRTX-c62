@@ -7,8 +7,9 @@ firmware only when `CONFIG_C62_DMR_VOCODER=y`.
 This directory is the **backend**: the DMR receive mode calls the two functions
 below and knows nothing else.  The implementation is a pure C reimplementation of
 the decoder half of [OpenDMR](../opendmr) (mbelib-neo, GPL-2.0-or-later): no
-C++, no heap, no thread-local storage, no libm, every table in flash and the
-whole decoder state in one 8.5 KiB object.
+C++, no heap, no thread-local storage, no libm, every table in flash, 4 492 B of
+frame-to-frame state and a 4 052 B per-frame scratch that the caller can put in
+slower memory.
 
 ## API
 
@@ -73,7 +74,8 @@ they land after the firmware-wide `-Os`:
 
 ## Measured on the C62
 
-+39.5 KiB of code and tables, 8.5 KiB of static RAM, and ~114 000 instructions
++39.5 KiB of code and tables, 8.5 KiB of static RAM (4 492 B of state in DTCM
+and 4 052 B of per-frame scratch in PSRAM on the C62), and ~114 000 instructions
 per frame on the emulated Cortex-M33 (0.46–0.61 ms of a 20 ms frame at 300 MHz,
 2.2–3.0 % of one core).  See `docs/DMR_VOCODER.md` for the breakdown and for the
 verification procedure (`tests/qemu/run_qemu.sh`).

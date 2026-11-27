@@ -8,7 +8,8 @@ codec already delivers, so the stage needs no re‑blocking of its own.
 
 Measured headline: **RNNoise improves PESQ‑WB by +0.10…+0.43 and STOI by up to
 +0.08 on noisy speech, removes 23 dB of engine noise and 16 dB of airband hiss,
-adds 10 ms of latency — and costs 66–73 % of the M33 at 300 MHz**, so it ships
+adds 10 ms of latency — and costs 54 % of the M33 at 300 MHz** (66–73 % before
+the `double` arithmetic was removed from the frame path), so it ships
 **off** and off by default. The DSP (HiFi4) route that would make it affordable
 is designed in [The HiFi4 route](#the-hifi4-route) with the kernel measured on
 the DSP core; it is not implemented in this branch.
@@ -21,7 +22,7 @@ the DSP core; it is not implemented in this branch.
 | Where it runs | `core/noise_suppress.c`, called from the CSK6 codec capture path |
 | Switch | Settings ▸ **Audio** ▸ *RX Noise* (`settings.noiseSuppression`) |
 | Build option | `-DCONFIG_C62_NOISE_SUPPRESS=y`, **default n** |
-| Measured cost | 1.60–1.91 M instructions per 10 ms frame (66–73 % of the M33); 62 KiB of state in PSRAM |
+| Measured cost | 1.35–1.37 M instructions per 10 ms frame (54 % of the M33); 1.60–1.91 M (66–73 %) before the `float` patch; 62 KiB of state in PSRAM |
 | Added latency | 10 ms (one block), measured |
 
 ## Enabling it
@@ -69,7 +70,7 @@ paths come from the vocoder as `SOURCE_MCU`, not from the discriminator.
 receive only, because (a) the TX chain's deviation and limiter are calibrated
 against the current waveform and a non‑linear spectral gate would invalidate
 that calibration, (b) RNNoise's VAD/gain model is trained on noisy *receive*
-material, and (c) at 66–73 % of the M33 the stage cannot be afforded twice.
+material, and (c) at 54 % of the M33 the stage cannot be afforded twice.
 
 ## Cost on the Cortex‑M33 (measured)
 
@@ -87,12 +88,18 @@ are exact and deterministic.
 | `-O3 -funroll-loops` | 1 699 284 | 1 673 733…1 709 000 | 2 098 147 (CPI 1.24) | 69.9 % |
 | `-O3 -funroll-loops -fsingle-precision-constant` | **1 599 912** | 1 575 182…1 609 769 | 1 993 630 | **66.5 %** |
 | `-Os` | 2 192 946 | 2 166 919…2 207 305 | 2 606 676 | 86.9 % |
+| `-O2 -fsingle-precision-constant`, **no `double` in the frame path** | **1 360 819** | 1 350 221…1 368 164 | 1 620 918 | **54.0 %** |
+
+The last row is the current library: the per-frame `double` arithmetic is gone
+(§ "No `double` in the frame path" below). The other rows are the upstream
+algorithm and are kept as the reference the change is compared against.
 
 The firmware therefore builds the library at `-O2` (per source file: the
 `zephyr_interface` `-Os` is appended after a target's options and would win),
 which is 13 % cheaper than the firmware‑wide `-Os`.
 
-Profile at `-O2` (steady state, per function):
+The upstream profile (before the local `float` patch) is kept here because it
+says where the money was:
 
 | instructions | share | function |
 |---|---|---|
@@ -106,13 +113,72 @@ Profile at `-O2` (steady state, per function):
 | 65 946 | 3.5 % | `__divdf3` |
 | 51 870 | 2.7 % | `rnn_fft_c` |
 
-**~21 % of the instructions are double‑precision libgcc calls.** They come from
-`biquad()` (whose coefficients are `double` by an explicit cast) and from
-`sqrt()`/`log10()` promotions in the gain computation. Demoting those to `float`
-is the single biggest available optimisation — `-fsingle-precision-constant`
-recovers part of it (5 %), and rewriting `biquad()` in `float` should recover
-most of the rest. It is left alone here so that the measurements describe the
-upstream algorithm exactly.
+**~21 % of the instructions were double‑precision library calls** (~380 k of
+1.80 M). They came from `biquad()` (whose coefficients are `double` by an
+explicit cast) and from `sqrt()`/`log10()`/`floor()` promotions in the gain,
+pitch and activation paths. They are gone; see the next section.
+
+### No `double` in the frame path
+
+The C62's M33 is FPv5-SP: a `double` add, multiply or divide is a libgcc call
+(`__aeabi_dadd`, `__muldf3`, `__divdf3`) and `sqrt`/`log10`/`floor` are newlib
+calls in double precision. The local patch (the only one besides moving the
+scratch out of the stack, `PATCHES.md`) keeps the algorithm but does every
+per‑frame operation in `float`:
+
+| change | why it was double | saving |
+|---|---|---:|
+| `biquad()`: drop the `(double)` casts, accumulate in `float` | the casts promoted both taps and the state | ~200 k |
+| `sqrt()` → `sqrtf()` in `compute_frame_features`, `pitch_filter`, `compute_pitch_gain` | no `f` suffix | ~90 k |
+| `log10()` → `log10f()` for the band log‑energies | no `f` suffix | ~4 k |
+| `floor()` → `floorf()` in `tansig_approx` | no `f` suffix | ~19 k |
+| `sqrt(2/22)` → a `float` literal in the DCT | the compiler folded the root but kept the product in double | ~1 k |
+
+Measured on QEMU `mps2‑an505` with the firmware's own flags (`-O2
+-fsingle-precision-constant -fno-math-errno`), 20 frames after 10 warm‑up, same
+payload as the table above:
+
+| | before | after |
+|---|---:|---:|
+| instructions/frame, median | 1 807 180 | **1 360 819** (−24.7 %) |
+| instructions/frame, min…max | 1 782 846…1 818 817 | 1 350 221…1 368 164 |
+| estimated cycles/frame (CPI 1.19) | 2 091 122 | **1 620 918** (−22.5 %) |
+| share of a 300 MHz M33 | 69.7 % | **54.0 %** |
+| double/libm symbols in the steady state | 11 (`__aeabi_dadd`, `__muldf3`, `__ieee754_sqrt`, …) | **0** (`logf`/`log10f` remain, float) |
+
+Quality and equivalence. PESQ‑WB and STOI were run with `pesq`/`pystoi` on two
+real recordings (the material in `scripts/rnnoise/` is not in the tree: one
+10 s FM‑broadcast capture at 48 kHz and a 14 s 8 kHz radio call resampled to
+48 kHz), mixed with engine‑like noise at 10 and 5 dB SNR, output realigned by
+the 480‑sample delay:
+
+| material | SNR | PESQ‑WB in → old → new | STOI in → old → new |
+|---|---:|---|---|
+| radio call, 8 kHz voice | 10 dB | 1.208 → 1.795 → **1.795** | 0.892 → 0.903 → **0.903** |
+| radio call, 8 kHz voice | 5 dB | 1.091 → 1.523 → **1.523** | 0.825 → 0.848 → **0.848** |
+| FM broadcast, 48 kHz | 10 dB | 3.127 → 1.137 → **1.137** | 0.962 → 0.382 → **0.382** |
+| FM broadcast, 48 kHz | 5 dB | 2.168 → 1.063 → **1.063** | 0.897 → 0.431 → **0.431** |
+
+The old/new difference is ≤ 0.0002 PESQ and ≤ 0.0001 STOI, inside the ±0.02
+criterion with three orders of magnitude to spare.  (The broadcast row is low
+because the v0.1.1 model is trained on speech and the capture is music; it is
+there to show the *delta*, not the absolute score.)
+
+Sample by sample, 10 s of speech‑like material plus noise, `rn_demo` old
+against new:
+
+| metric | value |
+|---|---|
+| identical samples | 349 998 / 480 000 (72.9 %) |
+| max \\|Δ\\| | **29 LSB** (0.09 % of full scale, −61 dBFS) |
+| RMS Δ | **1.08 LSB** |
+| samples within ±2 LSB | 95.7 % |
+| SNR old → new | **72.3 dB** |
+| noise attenuation (noise‑only, 10 s) | −16.7 dB both |
+
+The difference is the biquad's rounding: in `double` the state kept 53 bits
+between taps, in `float` it keeps 24. It is a noise floor 72 dB below the
+signal, inaudible, and the filter is stable in both.
 
 Memory: **62 312 bytes** of state (18 492 B unmodified; the local patch moves the
 per‑frame scratch in) and **2 856 bytes** of stack (35 400 B unmodified). The
@@ -122,11 +188,12 @@ is built in.
 
 ### Why the M33 is not viable
 
-7.3 ms of CPU per 10 ms of audio in a worker thread that also has to feed the
+5.4 ms of CPU per 10 ms of audio in a worker thread that also has to feed the
 DAC, next to the `rtx`, UI and messaging threads on a 300 MHz core without
-cache: enabling it produces dropouts. It is kept as a measured, switchable path
-(and as the reference implementation the DSP port must match bit‑for‑bit), and
-the production route is the HiFi4.
+cache: enabling it produces dropouts.  The `float` patch takes it from 69.7 %
+to 54.0 % but does not make it fit.  It is kept as a measured, switchable path
+(and as the reference implementation the DSP port must match), and the
+production route is the HiFi4.
 
 ## Quality (measured, real audio)
 
@@ -135,6 +202,9 @@ directory): 30 s of speech from
 LibriSpeech `dev‑clean` (6 utterances, resampled to 48 kHz, −20 dBFS), mixed
 with two noises; the mixture goes through **the same library build the firmware
 uses**; the output is realigned by the measured 480‑sample delay before scoring.
+The table predates the `float` patch; running both builds on the material
+available here gives the same PESQ‑WB and STOI to ±0.0002
+(§ "No `double` in the frame path").
 
 * **engine**: Freesound `idle_engine` (CC0), looped with 30 ms crossfades —
   a real recording.
@@ -275,9 +345,11 @@ must reproduce.
 
 ## Repository notes
 
-* `lib/rnnoise/` — vendored v0.1.1 with `COPYING` (BSD‑3), `PATCHES.md` and the
-  single local patch in `src/denoise.c` (per‑frame scratch moved out of the
-  stack; output bit‑identical on 7 146 frames). Not a submodule: the build runs
+* `lib/rnnoise/` — vendored v0.1.1 with `COPYING` (BSD‑3), `PATCHES.md` and
+  two local patches in `src/denoise.c`, `src/pitch.c` and `src/rnn.c`: the
+  per-frame scratch moved out of the stack (output bit‑identical on 7 146
+  frames) and the `double` arithmetic of the frame path turned into `float`
+  (stats in § "No `double` in the frame path"). Not a submodule: the build runs
   offline in a container.
 * `scripts/rnnoise/` — the host driver and the evaluation that produce the
   quality table, plus the `quality.json` quoted here.
