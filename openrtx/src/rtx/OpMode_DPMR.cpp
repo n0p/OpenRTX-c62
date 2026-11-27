@@ -157,7 +157,7 @@ void OpMode_DPMR::onFrame(const struct dpmrFrame *frame)
 OpMode_DPMR::OpMode_DPMR()
 #ifdef CONFIG_DPMR_TX
     : frameHead(0), frameCount(0), txStage(0), txHalf(0), txTail(0),
-      txFrames(0), txRunning(false), txFirstBlock(false),
+      txFrames(0), txRunning(false), txFirstBlock(false), txBlocked(false),
       txPath(-1), txId(-1), micPath(-1), micId(-1)
 #endif
 {
@@ -319,6 +319,14 @@ bool OpMode_DPMR::startTx(const rtxStatus_t *status)
     txHalf = 0;
     txTail = 0;
     txRunning = true;
+    /*
+     * A new transmission waits for its own first block: putHalf() reports
+     * txg_firstBlock() only when this is false, and a flag left set by the
+     * previous over made the guard -- already in WAIT_FIRST -- take txg_block()
+     * for this one, which that phase ignores, until TXG_FIRST_MS expired and
+     * the supervisor aborted the second press 300 ms in (see OpMode_NXDN).
+     */
+    txFirstBlock = false;
 
     txg_streamsOpen(guard, (uint32_t)getTick());
     radio_enableTx();
@@ -326,14 +334,25 @@ bool OpMode_DPMR::startTx(const rtxStatus_t *status)
     return true;
 }
 
-void OpMode_DPMR::stopTx()
+void OpMode_DPMR::stopTx(bool drain)
 {
     const bool wasRunning = txRunning;
 
     txRunning = false;
+    txFirstBlock = false;
 
-    if (txId >= 0)
-        audioStream_stop(txId);
+    if (txId >= 0) {
+        /*
+         * drain: let the sink finish the half it has (audioStream_stop()),
+         * which is what puts the END frame and the tail on the air.  Otherwise
+         * cancel at once (audioStream_terminate()): that is the abort path,
+         * which runs in the main thread and must not wait.
+         */
+        if (drain)
+            audioStream_stop(txId);
+        else
+            audioStream_terminate(txId);
+    }
     if (micId >= 0)
         audioStream_terminate(micId);
     if (txPath >= 0)
@@ -471,8 +490,31 @@ bool OpMode_DPMR::txSlot(const rtxStatus_t *status)
 
 #endif /* CONFIG_DPMR_TX */
 
+void OpMode_DPMR::abortTx()
+{
+    /*
+     * The supervisor unkeyed from another thread and left the status at OFF.
+     * The streams are cancelled without waiting for the sink (this runs in the
+     * main thread) and the guard is closed, or it keeps asking for an abort
+     * that has already happened; the next pass sees OFF and asks for the
+     * receiver again.  txBlocked keeps a PTT that is still held from keying
+     * again the moment the abort lands.
+     */
+#ifdef CONFIG_DPMR_TX
+    stopTx(false);
+    txBlocked = true;
+#endif
+    startRx = true;
+}
+
 void OpMode_DPMR::update(rtxStatus_t *const rtx, const bool newCfg)
 {
+#ifdef CONFIG_DPMR_TX
+    /* A new press retries the key-up even if the last one failed */
+    if (platform_getPttStatus() == false)
+        txBlocked = false;
+#endif
+
     if (newCfg || (rtx->opStatus == OFF)) {
         /*
          * A new configuration can arrive in the middle of a call: the RTX
@@ -482,7 +524,8 @@ void OpMode_DPMR::update(rtxStatus_t *const rtx, const bool newCfg)
          * calling txSlot() again, and the guard left in RUNNING with no
          * deadline -- a modulated carrier with no owner until the 90 s cut.
          * Closing it here also frees txPath/txId, which the next PTT would
-         * otherwise overwrite, leaking both.
+         * otherwise overwrite, leaking both.  reset() then goes back to
+         * receive with nothing keyed.
          */
 #ifdef CONFIG_DPMR_TX
         if (txRunning)
@@ -490,6 +533,15 @@ void OpMode_DPMR::update(rtxStatus_t *const rtx, const bool newCfg)
 #endif
         reset();
         if (startRx) {
+            /*
+             * The receiver is asked for here: without it the chip stayed as
+             * radio_disableRtx() left it (OFF, LNA off, audio path closed), so
+             * this mode never received anything -- it could not even be
+             * selected, because switchMode() takes the radio back to the
+             * previous mode when the driver is not in RX after 300 ms
+             * (rtx.cpp, modeStarted()).
+             */
+            radio_enableRx();
             rtx->opStatus = RX;
             return;
         }
@@ -508,21 +560,29 @@ void OpMode_DPMR::update(rtxStatus_t *const rtx, const bool newCfg)
 
         if (finished) {
             stopTx();
-            rtx->opStatus = RX;
+            /*
+             * Back to receive through OFF, which is where the receiver is
+             * started (the block at the top of update()): setting RX here left
+             * the chip as stopTx() had put it -- off -- with the mode believing
+             * it was receiving.
+             */
+            rtx->opStatus = OFF;
             startRx = true;
-            settle = SETTLE_SAMPLES;
         }
         return;
     }
 
     /* PTT: only with the mode selected, a frequency and a destination */
-    if (rtx_keyingAllowed(rtx) && startRx && (rtx->opStatus == RX)) {
+    if (rtx_keyingAllowed(rtx) && (txBlocked == false) && startRx
+        && (rtx->opStatus == RX)) {
         stopSampling();
         radio_disableRtx();
         if (startTx(rtx)) {
             rtx->opStatus = TX;
             return;
         }
+        txBlocked = true;
+        startRx = true;
     }
 #else
     /* dPMR is receive only without CONFIG_DPMR_TX: the PTT does nothing */

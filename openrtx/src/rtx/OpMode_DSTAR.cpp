@@ -28,6 +28,7 @@
 #include "protocols/DSTAR/DStarStatus.h"
 #ifdef CONFIG_DSTAR_TX
 #include "protocols/DSTAR/DStarTx.h"
+#include "rtx/TxGuard.h"
 #endif
 #include "rtx/OpMode_DSTAR.hpp"
 
@@ -56,6 +57,7 @@ OpMode_DSTAR::OpMode_DSTAR() :
     startRx(false),
     txBlocked(false),
     txEnded(false),
+    txFirstBlock(false),
     txFrames(0),
     audioBuffer()
 {
@@ -127,8 +129,19 @@ void OpMode_DSTAR::stopSampling()
 
 bool OpMode_DSTAR::startTx(const rtxStatus_t *status)
 {
+    struct txGuard *guard = rtx_getTxGuard();
     struct dstarTxConfig cfg;
     memset(&cfg, 0, sizeof(cfg));
+
+    /*
+     * The transmit supervisor covers this over from here on: a PTT that never
+     * comes back, a stream that stops taking blocks or an over that outlives
+     * the cap is cut from the main thread, and the driver's own 95 s barrier
+     * has a guard to ask.  Until this existed the mode put TX on the screen,
+     * built the waveform into an audio path nobody had keyed and left the
+     * radio in receive.
+     */
+    txg_enter(guard, (uint32_t)getTick());
 
     /* Flag 1: voice, and "via repeater" only when a repeater is configured. */
     cfg.hdr.flags[0] = 0;
@@ -163,10 +176,19 @@ bool OpMode_DSTAR::startTx(const rtxStatus_t *status)
     dstarTx_begin(&cfg);
     txEnded = false;
     txFrames = 0;
+    txFirstBlock = false;
 
     txPath = audioPath_request(SOURCE_MCU, SINK_RTX, PRIO_TX);
     if (txPath < 0)
         return false;
+
+    /*
+     * One buffer for both directions, and the sink starts playing its first
+     * half as soon as the stream is attached: zeroing it here keeps the first
+     * 30 ms of the transmission from being the last thing received.
+     */
+    memset(audioBuffer, 0, sizeof(audioBuffer));
+
     txId = audioStream_start(txPath, audioBuffer, 2 * HALF_SAMPLES, 48000,
                              STREAM_OUTPUT | BUF_CIRC_DOUBLE);
     if (txId < 0) {
@@ -174,31 +196,106 @@ bool OpMode_DSTAR::startTx(const rtxStatus_t *status)
         txPath = -1;
         return false;
     }
+
+    /*
+     * Everything the modulator needs is open: key the PA through the driver's
+     * own gate (rtx_txPermitted() is what the driver checks, and the gate this
+     * mode has just passed is what it asks) and treat a refusal as a failed
+     * key-up, not as a transmission with no carrier.
+     */
+    txg_streamsOpen(guard, (uint32_t)getTick());
+    radio_enableTx();
+    if (radio_getStatus() != TX) {
+        /* Nothing was keyed and nothing played: close without waiting for the
+         * sink (stopTx(false)). */
+        stopTx(false);
+        return false;
+    }
+    txg_note(guard, TXG_EV_KEYED, (uint32_t)getTick());
     return true;
 }
 
-void OpMode_DSTAR::stopTx()
+void OpMode_DSTAR::stopTx(bool drain)
 {
-    if (txEnded == false) {
-        /* One last block so the end pattern and the pulse tail leave the
-         * shaper, then close the stream. */
-        dstarTx_samples(audioBuffer, 2 * HALF_SAMPLES, DSTAR_TX_AMPLITUDE);
-        txEnded = true;
+    if ((txEnded == false) && drain) {
+        /*
+         * The end pattern and the pulse tail: two halves, each one rendered
+         * into the half the sink is not playing.  This used to be a single
+         * write of the whole buffer followed by audioStream_terminate(), which
+         * discards whatever the codec has not played yet, so the pattern never
+         * left the radio.  An abort (drain = false) skips it: the supervisor
+         * has already dropped the PA and this runs in the main thread.
+         */
+        for (unsigned i = 0; (i < 2) && (txId >= 0); i++) {
+            stream_sample_t *idle = outputStream_getIdleBuffer(txId);
+
+            if (idle == NULL)
+                break;
+            dstarTx_samples(idle, HALF_SAMPLES, DSTAR_TX_AMPLITUDE);
+            if (!outputStream_sync(txId, true))
+                break;
+        }
     }
-    if (txId >= 0)
-        audioStream_terminate(txId);
+    txEnded = true;
+
+    if (txId >= 0) {
+        /*
+         * drain: let the sink finish the half it has (audioStream_stop()),
+         * which is what puts the end pattern on the air.  Otherwise cancel at
+         * once (audioStream_terminate()): that is the abort path, which runs in
+         * the main thread and must not wait.
+         */
+        if (drain)
+            audioStream_stop(txId);
+        else
+            audioStream_terminate(txId);
+    }
     if (txPath >= 0)
         audioPath_release(txPath);
     txId = -1;
     txPath = -1;
+    txFirstBlock = false;
+
+    /* The over is over: close the guard here, or the supervisor keeps asking
+     * for an abort that already happened. */
+    txg_exit(rtx_getTxGuard(), (uint32_t)getTick(), TXG_REASON_MODE);
 }
 
 bool OpMode_DSTAR::txSlot()
 {
-    /* Fill one half buffer (30 ms) of modulating waveform. */
-    dstarTx_samples(audioBuffer, HALF_SAMPLES, DSTAR_TX_AMPLITUDE);
-    outputStream_sync(txId, false);
+    struct txGuard *guard = rtx_getTxGuard();
+    stream_sample_t *idle = outputStream_getIdleBuffer(txId);
+
+    /*
+     * One half buffer (30 ms) of modulating waveform, into the half the sink is
+     * *not* playing: with a double buffered stream, writing the same half every
+     * time and syncing with "nothing changed" (what this did) overwrites what
+     * is on the air and leaves the other half playing stale memory for ever.
+     */
+    if (idle == NULL) {
+        txBlocked = true;
+        return true;
+    }
+
+    dstarTx_samples(idle, HALF_SAMPLES, DSTAR_TX_AMPLITUDE);
+    if (!outputStream_sync(txId, true)) {
+        /* The sink is not consuming: this is the end of the over, not a block
+         * to retry.  The PTT stays blocked until it is released. */
+        txBlocked = true;
+        return true;
+    }
     txFrames++;
+
+    /*
+     * One block reached the sink: the first one starts the supervisor's
+     * cadence clock, the rest keep it and flag a block that arrived late.
+     */
+    if (!txFirstBlock) {
+        txFirstBlock = true;
+        txg_firstBlock(guard, (uint32_t)getTick());
+    } else {
+        txg_block(guard, (uint32_t)getTick());
+    }
 
     if (dstarTx_done() && txEnded == false) {
         txEnded = true;
@@ -215,8 +312,9 @@ bool OpMode_DSTAR::startTx(const rtxStatus_t *status)
     return false;
 }
 
-void OpMode_DSTAR::stopTx()
+void OpMode_DSTAR::stopTx(bool drain)
 {
+    (void)drain;
     if (txId >= 0)
         audioStream_terminate(txId);
     if (txPath >= 0)
@@ -268,7 +366,19 @@ bool OpMode_DSTAR::rxSquelchOpen()
 
 void OpMode_DSTAR::abortTx()
 {
-    stopTx();
+    /*
+     * The supervisor unkeyed from another thread and left the status at OFF.
+     * The streams are cancelled without waiting for the sink (this runs in the
+     * main thread), the guard is closed so it stops asking for an abort that
+     * has already happened, and startRx is what asks for the receiver on the
+     * next pass.  txBlocked keeps a PTT that is still held from keying again
+     * the moment the abort lands.
+     */
+#ifdef CONFIG_DSTAR_TX
+    stopTx(false);
+#endif
+    txBlocked = true;
+    startRx = true;
 }
 
 void OpMode_DSTAR::update(rtxStatus_t *const rtx, const bool newCfg)
@@ -290,6 +400,15 @@ void OpMode_DSTAR::update(rtxStatus_t *const rtx, const bool newCfg)
         stopTx();
         radio_disableRtx();
         if (startRx) {
+            /*
+             * Entering the mode, or coming back from a transmission: the
+             * receiver is asked for here.  Without this the chip stayed as
+             * radio_disableRtx() left it (OFF, LNA off, audio path closed), so
+             * the mode never received anything and switchMode() took the radio
+             * back to the previous mode after its 300 ms wait
+             * (rtx.cpp, modeStarted()).
+             */
+            radio_enableRx();
             rtx->opStatus = RX;
             return;
         }

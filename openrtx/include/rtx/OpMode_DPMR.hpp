@@ -109,6 +109,14 @@ public:
      */
     virtual bool rxSquelchOpen() override;
 
+    /**
+     * The supervisor cut a transmission (stuck PTT, a stream that stopped, the
+     * five-minute cap): drop the streams, close the guard and go back through
+     * OFF, which is where the receiver is started.  Without it the mode stayed
+     * with the transmitter's state and the guard asking for an abort for ever.
+     */
+    virtual void abortTx() override;
+
 private:
     static void frameTrampoline(const struct dpmrFrame *frame, void *user);
     void onFrame(const struct dpmrFrame *frame);
@@ -120,7 +128,7 @@ private:
 #ifdef CONFIG_DPMR_TX
     bool startBaseband(const rtxStatus_t *status);
     bool startTx(const rtxStatus_t *status);
-    void stopTx();
+    void stopTx(bool drain = true);
     bool fillMic(unsigned frames);
     bool putHalf();
     bool txSlot(const rtxStatus_t *status);
@@ -137,6 +145,7 @@ private:
     int txFrames;     ///< Preamble frames sent
     bool txRunning;
     bool txFirstBlock;
+    bool txBlocked;   ///< PTT was pressed and the chain refused to start
     int txPath, txId, micPath, micId;
     stream_sample_t txSamples[2 * DPMR_TX_HALF_SAMPLES];
     int16_t micPcm[2 * 160];

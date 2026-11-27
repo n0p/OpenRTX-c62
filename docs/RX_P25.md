@@ -5,8 +5,9 @@ demodulation of the radio's discriminator output, frame sync, the NID with its
 NAC and DUID, IMBE channel decoding, the link control of an LDU1 and the
 trunking blocks of a control channel.
 
-Receive only. There is no transmitter and no trunking follow: entering a
-frequency and decoding what is there is the whole feature.
+Transmit with `CONFIG_P25_TX` (`protocols/P25/P25Tx.c`, `docs/TX_P25.md`). No
+trunking follow: entering a frequency and decoding what is there is the whole
+receive feature.
 
 The mode is a port of the host prototype in `work/p25-rx`, which validated the
 chain against dsd-neo and op25 on real captures before any of it was written

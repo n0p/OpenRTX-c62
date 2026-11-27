@@ -9,8 +9,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
 dPMR (ETSI TS 102 490 V1.9.1) receiver for the Retevis C62: 4FSK at 2400
 symbols/s on a 6,25 kHz channel, 80 ms frames of 384 bits, header and END
 frames, the control channel of every frame and voice through the AMBE+2
-3600x2450 decoder the DMR mode already links. Receive only: there is no dPMR
-transmitter and PTT in this mode does nothing.
+3600x2450 decoder the DMR mode already links. Transmit with `CONFIG_DPMR_TX`:
+`protocols/DPMR/DpmrTx.c` builds the same frames this receiver decodes
+(`docs/TX_DPMR.md`).
 
 The mode is on by default only when it is asked for (`CONFIG_C62_DPMR_RX`), and
 it is a Kconfig symbol in `platform/targets/c62/Kconfig.board`, because that is
