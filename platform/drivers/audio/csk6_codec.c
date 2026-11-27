@@ -16,6 +16,7 @@
 #include <zephyr/sys/sys_io.h>
 #include <hwconfig.h>
 #include "csk6_codec.h"
+#include "csk6_resample.h"
 #include "AudioSystem.h"
 #include "AudioTrack.h"
 #include "AudioRecord.h"
@@ -33,7 +34,11 @@
 /* One worker services the DSP's 48 kHz stereo transport:
  *   capture: microphone left, radio right -> application buffers or FM queues
  *   playback: application buffers or FM queues -> speaker left, radio right
- * Application rates use sample selection/repetition without filtering.
+ * Application streams at 8 kHz go through the polyphase resampler of
+ * csk6_resample.h; the other rates the driver accepts (16, 24 and 48 kHz) use
+ * sample selection and repetition without filtering, which is what the review
+ * scoped: the eight voice modes of the radio are the 8 kHz ones, and filtering
+ * 16 and 24 kHz would need a prototype and a tap set of their own.
  * Circular streams run continuously; callers process the idle half between
  * boundary notifications. FM routes have no application buffer and use queues.
  * The worker sleeps while nothing is captured or played.
@@ -139,6 +144,7 @@ struct endpoint {
 
 struct inputState {
     struct endpoint endpoint; ///< Stream state
+    struct csk6Decimator decim; ///< 48 -> 8 kHz filter history (8 kHz streams)
     unsigned int phase;       ///< 48 kHz samples since the last one kept
 };
 
@@ -146,6 +152,7 @@ struct outputState {
     int64_t deadline;           ///< Drain end, or 0 until it is estimated
     struct endpoint endpoint;   ///< Stream state
     struct sampleQueue fmQueue; ///< FM passthrough samples
+    struct csk6Interpolator interp; ///< 8 -> 48 kHz filter history
     unsigned int phase;         ///< Repeats of the current sample played
     bool draining;              ///< Last block sent, waiting for the DAC
 };
@@ -690,9 +697,13 @@ static void inputAdvance(struct endpoint *ep, size_t count)
 }
 
 /**
- * Hand 48 kHz samples to an input stream, keeping every divisor-th sample.
- * Copies a run up to each block boundary. The phase persists across DSP
- * frames.
+ * Hand 48 kHz samples to an input stream.
+ *
+ * At 8 kHz the samples go through the decimating filter: one output every six
+ * inputs, with the history and the group phase carried across DSP frames and
+ * application block boundaries. At the other rates it keeps every divisor-th
+ * sample, copying a run up to each block boundary, with the phase persisting
+ * across DSP frames.
  *
  * @param in: input stream.
  * @param src: first sample.
@@ -707,6 +718,36 @@ static void captureToStream(struct inputState *in, const int16_t *src,
         return;
 
     const unsigned int divisor = ep->divisor;
+
+    if (divisor == CSK6_RESAMPLE_PHASES) {
+        /*
+         * Filtered path. The decimator consumes every sample, so this cannot
+         * run in runs of a block like the selection below: it walks the input
+         * and writes the one output in six. The position is carried locally and
+         * handed to inputAdvance() only at a boundary, which keeps its modulo
+         * out of the per-sample path.
+         */
+        size_t pos = ep->position;
+        size_t boundary = pos + blockRemaining(ep);
+        for (size_t i = 0; i < count; i++) {
+            int16_t y;
+            if (!csk6Decim_push(&in->decim, src[i * stride], &y))
+                continue;
+
+            ep->ctx->buffer[pos++] = y;
+            if (pos == boundary) {
+                inputAdvance(ep, pos - ep->position);
+                pos = ep->position;
+                boundary = pos + blockRemaining(ep);
+                if (!endpointActive(ep))
+                    break;
+            }
+        }
+        if (pos != ep->position)
+            inputAdvance(ep, pos - ep->position);
+        return;
+    }
+
     size_t next = (divisor - in->phase) % divisor; /* First sample kept */
     in->phase = (in->phase + count) % divisor;
 
@@ -878,8 +919,11 @@ static void outputAdvance(struct outputState *out, size_t count)
 }
 
 /**
- * Play an application stream, repeating each sample to reach 48 kHz. Copies
- * a run up to each block boundary.
+ * Play an application stream.
+ *
+ * At 8 kHz each application sample becomes six 48 kHz samples, filtered by the
+ * interpolator so that the images of the hold are gone; at the other rates the
+ * sample is repeated divisor times. Copies a run up to each block boundary.
  *
  * @param out: output stream.
  * @param dst: first sample to write.
@@ -900,11 +944,30 @@ static size_t playStream(struct outputState *out, int16_t *dst, size_t stride,
         size_t run = MIN(count - done, left);
         const stream_sample_t *src = &ep->ctx->buffer[ep->position];
         unsigned int phase = out->phase;
-        for (size_t i = 0; i < run; i++) {
-            dst[(done + i) * stride] = *src;
-            if (++phase == divisor) {
-                phase = 0;
-                src++;
+
+        if (divisor == CSK6_RESAMPLE_PHASES) {
+            /*
+             * One application sample in, six filtered samples out. Push only
+             * when the first of its six is due: a block boundary can fall in
+             * the middle of the six, and pushing again would spend the next
+             * application sample on the same output.
+             */
+            for (size_t i = 0; i < run; i++) {
+                if (phase == 0)
+                    csk6Interp_push(&out->interp, *src);
+                dst[(done + i) * stride] = csk6Interp_out(&out->interp, phase);
+                if (++phase == divisor) {
+                    phase = 0;
+                    src++;
+                }
+            }
+        } else {
+            for (size_t i = 0; i < run; i++) {
+                dst[(done + i) * stride] = *src;
+                if (++phase == divisor) {
+                    phase = 0;
+                    src++;
+                }
             }
         }
 
@@ -1339,13 +1402,16 @@ static void attach(struct endpoint *ep, struct streamCtx *ctx, bool rearm)
     ep->divisor = DSP_SAMPLE_RATE / ctx->sampleRate;
 
     if (ep->input) {
-        if (!rearm)
+        if (!rearm) {
             inputs[ep->channel].phase = 0;
+            csk6Decim_reset(&inputs[ep->channel].decim);
+        }
     } else {
         struct outputState *out = &outputs[ep->channel];
         out->phase = 0;
         out->draining = false;
         out->deadline = 0;
+        csk6Interp_reset(&out->interp);
     }
 
     ctx->priv = ep;

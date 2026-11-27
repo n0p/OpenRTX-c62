@@ -10,8 +10,11 @@
 #   codec2   Codec2 3200, encode and decode (M17's vocoder)
 #   acelp    OpenACELP decoder, one 137-bit TETRA frame
 #   resample 48 kHz <-> 8 kHz polyphase decimator and interpolator, 10 ms block
+#            (the kernels of platform/drivers/audio/csk6_resample.h, i.e. the
+#            code the driver runs, not a copy of it)
+#   resample-tone  the alias and image attenuation of the same kernels
 #
-#   scripts/codec_cost.sh [O2|Os] [codec2|acelp|resample|all]
+#   scripts/codec_cost.sh [O2|Os] [codec2|acelp|resample|resample-tone|all]
 #
 # Method, the same one docs/DMR_VOCODER.md and docs/IMBE.md use: the same
 # harness runs on the host and on an emulated Cortex-M33 (QEMU mps2-an505,
@@ -196,6 +199,11 @@ EOF
 }
 
 # -------------------------------------------------------------- resample ----
+# The harness compiles the shipping kernels of csk6_resample.h, so these are
+# the instructions the driver pays, and the TONE build measures the alias and
+# image attenuation of the same code (reports/codecs.md section 3.1).
+RESAMPLE_INC="-I$ROOT/platform/drivers/audio"
+
 resample() {
     for v in dec int both; do
         case $v in
@@ -204,31 +212,56 @@ resample() {
             both) D="" ;;
         esac
         for n in 1 21; do
-            arm-none-eabi-gcc $ARM $COMMON $D -DFRAMES=$n \
+            arm-none-eabi-gcc $ARM $COMMON $RESAMPLE_INC $D -DFRAMES=$n \
                 -c "$ROOT/tests/qemu/resample_cost.c" -o "rs-$v-$n.o" || return 1
             arm-none-eabi-gcc $ARM -Wl,--gc-sections -T "$PROBE/common/mps2.ld" \
                 -specs=rdimon.specs -o "rs-$v-$n.elf" "$PROBE/common/startup.o" \
-                "rs-$v-$n.o" -lrdimon -lc 2>&1 | grep -E "error|undefined" | head -5
+                "rs-$v-$n.o" -lrdimon -lc -lm 2>&1 | grep -E "error|undefined" | head -5
         done
+        gcc $BASE $COMMON $RESAMPLE_INC $D -DFRAMES=21 \
+            -c "$ROOT/tests/qemu/resample_cost.c" -o "rsh-$v.o" && \
+            gcc $BASE -o "rs-$v-host" "rsh-$v.o" -lm && \
+            ./rs-$v-host >"rs-$v-host.log"
         c1=$(run_arm "rs-$v-1.elf" "rs-$v-1.log")
         c21=$(run_arm "rs-$v-21.elf" "rs-$v-21.log")
         per=$(( (c21 - c1) / 20 ))
-        python3 - "$v" "$per" <<'EOF'
+        h21=$(grep -o "hash=[0-9a-f]*" "rs-$v-21.log" | head -1)
+        hh=$(grep -o "hash=[0-9a-f]*" "rs-$v-host.log" | head -1)
+        python3 - "$v" "$per" "$h21" "$hh" <<'EOF'
 import sys
 v, per = sys.argv[1], int(sys.argv[2])
-print("  %-12s %10d per 10 ms block (%5.2f ms/s at 300 MHz, CPI 1.2)"
-      % ("resample " + v, per, per * 100 * 1.2 / 300e6 * 1e3))
+same = "host==target" if (sys.argv[3] and sys.argv[3] == sys.argv[4]) else \
+       "HOST/TARGET MISMATCH (%s vs %s)" % (sys.argv[3], sys.argv[4])
+print("  %-12s %10d per 10 ms block (%5.2f ms/s at 300 MHz, CPI 1.2)  %s"
+      % ("resample " + v, per, per * 100 * 1.2 / 300e6 * 1e3, same))
 EOF
     done
+}
+
+# resample-tone: alias and image attenuation, measured through the same kernels.
+resample_tone() {
+    arm-none-eabi-gcc $ARM $COMMON $RESAMPLE_INC -DTONE \
+        -c "$ROOT/tests/qemu/resample_cost.c" -o rs-tone.o || return 1
+    arm-none-eabi-gcc $ARM -Wl,--gc-sections -T "$PROBE/common/mps2.ld" \
+        -specs=rdimon.specs -o rs-tone.elf "$PROBE/common/startup.o" \
+        rs-tone.o -lrdimon -lc -lm 2>&1 | grep -E "error|undefined" | head -5
+    gcc $BASE $COMMON $RESAMPLE_INC -DTONE \
+        -c "$ROOT/tests/qemu/resample_cost.c" -o rs-tone-host.o && \
+        gcc $BASE -o rs-tone-host rs-tone-host.o -lm && ./rs-tone-host
+    timeout 900 qemu-system-arm -M mps2-an505 -nographic \
+        -semihosting-config enable=on,target=native \
+        -kernel rs-tone.elf 2>&1 | grep RESAMPLE-TONE
 }
 
 case "$WHAT" in
     codec2)   echo "== codec2 ($V)";   codec2 ;;
     acelp)    echo "== acelp ($V)";    acelp ;;
     resample) echo "== resample ($V)"; resample ;;
+    resample-tone) echo "== resample tone ($V)"; resample_tone ;;
     all)      echo "== codec2 ($V)";   codec2
               echo "== acelp ($V)";    acelp
-              echo "== resample ($V)"; resample ;;
-    *) echo "usage: $0 [O2|Os] [codec2|acelp|resample|all]"; exit 1 ;;
+              echo "== resample ($V)"; resample
+              echo "== resample tone ($V)"; resample_tone ;;
+    *) echo "usage: $0 [O2|Os] [codec2|acelp|resample|resample-tone|all]"; exit 1 ;;
 esac
 echo "logs and ELFs: $OUT"

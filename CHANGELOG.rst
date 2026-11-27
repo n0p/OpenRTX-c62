@@ -11,6 +11,10 @@ Unreleased
 ==========
 Fixed
 -----
+- C62: the 8 kHz audio path is filtered in both directions, so the microphone
+  no longer folds 4-24 kHz into the voice band at full level and the speaker no
+  longer plays each sample as a zero-order hold: a 48-tap polyphase resampler,
+  47 k instructions per 10 ms block with both directions
 - core: a transmit that blocks on its audio stream can no longer keep the PA
   keyed: the transmit lifecycle has deadlines and a supervisor that unkeys and
   cancels the streams from outside the blocked thread
