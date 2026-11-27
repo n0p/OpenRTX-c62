@@ -512,6 +512,24 @@ static int checkRecordLayout(const AudioRecord *rec)
                 (int)share->channelCount, (int)rec->mCblk->channels);
         return -EINVAL;
     }
+
+    /*
+     * And the channel map: captureFrame() reads &samples[mChannelOutIdx[i]]
+     * and then walks it with a stride of channelCount, so an index at or past
+     * the frame's channel count reads outside the DSP's frame -- audio from the
+     * next frame or a bus fault, depending on where the frame sits.  The SDK
+     * fills this map itself when the stream is opened, and a map it changes
+     * (or gets wrong) used to be accepted silently.
+     */
+    for (size_t i = 0; i < CODEC_CHANNELS; i++) {
+        if (rec->mChannelOutIdx[i] >= share->channelCount) {
+            LOG_ERR("DSP capture map %u -> channel %u of %d",
+                    (unsigned)i, (unsigned)rec->mChannelOutIdx[i],
+                    (int)share->channelCount);
+            return -EINVAL;
+        }
+    }
+
     return 0;
 }
 
