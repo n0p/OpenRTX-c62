@@ -31,6 +31,10 @@
 #include <zephyr/drivers/spi.h>
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
+/* dcache_clean_range(): the frame goes out by DMA from PSRAM, and PSRAM is
+ * cacheable for the application core (the DSP image loader cleans it for the
+ * same reason). */
+#include <csk6_cm33/include/cache.h>
 #include <interfaces/display.h>
 #include <core/blackbox.h>
 #include <core/display_flush.h>
@@ -187,6 +191,21 @@ static void panelWrite(uint16_t startRow, uint16_t rowCount,
      */
     if (panelDropping)
         panelBus = (panelBus == &panelBusA) ? &panelBusB : &panelBusA;
+
+    /*
+     * The pixels are handed to the DMA engine straight out of PSRAM, which is
+     * cacheable here: without the clean, a row written by the CPU can still be
+     * sitting in the data cache while the DMA reads the older copy from the
+     * memory, and the panel shows the previous frame's rows -- or half of each
+     * -- after a partial repaint.  The command bytes above live in SRAM and go
+     * out the same way every frame the driver has ever sent, so they are left
+     * alone; the cost of the clean is one pass over the frame (40 KB, a few
+     * tens of microseconds) on the UI thread.
+     */
+    const uintptr_t frameStart = (uintptr_t)pixels;
+    const size_t frameLen = (size_t)rowCount * CONFIG_SCREEN_WIDTH * 2;
+
+    dcache_clean_range(frameStart, frameStart + frameLen);
 
     const uint16_t lastCol = CONFIG_SCREEN_WIDTH - 1;
     const uint16_t lastRow = startRow + rowCount - 1;
