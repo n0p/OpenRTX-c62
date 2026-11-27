@@ -1,5 +1,13 @@
 # OpenRTX para la Retevis C62
 
+> **Calidad alfa.** Este firmware está en desarrollo. Es usable —hay unidades que
+> lo llevan a diario en FM, DMR y M17— pero tiene fallos conocidos, varios modos
+> todavía no se han medido en el aire, y una versión puede cambiar el
+> comportamiento de otra sin avisar. **Flashealo si sabes volver atrás**: guarda
+> tu dump de fábrica antes de empezar (está en *Instalación*), porque es lo único
+> que devuelve la radio a como estaba. No lo uses donde dependa de él una
+> comunicación de emergencia o un servicio.
+
 Firmware libre para la **Retevis C62** (también vendida como Chierda UV58N), basado en
 [OpenRTX](https://openrtx.org). Sustituye al firmware de fábrica, se flashea por el
 conector de accesorios y **no hace falta abrir la radio**.
@@ -9,10 +17,11 @@ Hardware: SoC **ListenAI CSK6011B** (Cortex-M33 a 300 MHz + HiFi4 + NPU), transc
 160x128 y códec de audio de 48 kHz servido por el DSP.
 
 ```
-Estado: uso diario en FM, M17, DMR (RX y TX) y TETRA de recepción; el resto de
-        modos digitales recibe, y transmiten los que tienen cadena propia
-Imagen: 815.848 B de 1 MiB (77,8 %), RAM al 72,1 %
-Pruebas: 112 suites en el host, todas en verde
+Estado: alfa. Uso diario en FM, M17, DMR (RX y TX) y TETRA de recepción; el
+        resto de modos digitales recibe, y transmiten los que tienen cadena
+        propia, algunos sin medir todavia en el aire
+Imagen: 828.212 B de 1 MiB (79,0 %), RAM al 73,8 %
+Pruebas: 114 pruebas en el host, todas en verde
 Licencia: GPLv3 (ver LICENSE)
 ```
 
@@ -85,25 +94,29 @@ explícita. Todo ello está en [`docs/TX_SAFETY.md`](docs/TX_SAFETY.md).
 
 ## Descargas
 
-Las versiones se publican como **etiquetas del repositorio** (`v0.9-20261127` y
+Las versiones se publican como **etiquetas del repositorio** (`v0.11-20261127` y
 siguientes) y la release adjunta dos cosas:
 
-- **la imagen compilada** (`zephyr.bin` + `.elf` + `SHA256SUMS`) con sus
-  instrucciones de flasheo en `FLASHEO.md`;
+- **la imagen compilada**: `zephyr.bin` (la aplicación), **`dsp_firmware.bin`**
+  (la imagen del núcleo DSP, que va en la partición `0x100000`), el `.elf` para
+  depurar, los `SHA256SUMS` y `FLASHEO.md` con los pasos;
 - **el árbol de fuentes** de la etiqueta, con el que se puede construir bit a
   bit:
 
 ```sh
-git clone --branch v0.9-20261127 https://github.com/n0p/OpenRTX-c62
+git clone --branch v0.11-20261127 https://github.com/n0p/OpenRTX-c62
 ```
 
-La imagen de esta versión, con las opciones de *Compilación*, ocupa **815.848 B
-(77,8 %) con RAM al 72,1 %** y su `md5` es `e3246649 2b8f76f5 9faa78e8
-305c1a8f`: compruébalo después de descomprimir y antes de flashear.
+La imagen de esta versión, con las opciones de *Compilación*, ocupa **828.212 B
+(79,0 %) con RAM al 73,8 %** y su `md5` es `7527c12a 4730c5f3 eb85a025 ee8427a6`:
+compruébalo después de descomprimir y antes de flashear.
 
-`dsp_firmware.bin` no se incluye en ningún caso: es la imagen del DSP de fábrica,
-su licencia no es nuestra, y la que ya tiene la radio sirve. No hay que tocar la
-partición `0x100000`.
+`dsp_firmware.bin` es la imagen del DSP que el build fija por hash y descarga de
+[lsf-zephyr-sdk](https://github.com/OpenRTX/lsf-zephyr-sdk) (sha256
+`9579b617…`). Se incluye aquí para que la radio se pueda poner al día entera sin
+depender de la red, y **no hay que flashearla si la radio ya funciona**: la
+partición sólo cambia cuando cambia el códec o el DSP, no con cada versión de la
+aplicación.
 
 ## Instalación
 
@@ -119,9 +132,10 @@ cskburn -s /dev/ttyUSB0 -C 6 -b 115200 0x100000 dsp_firmware.bin
 
 4. Apaga y enciende normalmente.
 
-`dsp_firmware.bin` es la imagen del DSP: mientras no haya una libre se usa la de
-fábrica, que es la que funciona con el resto del sistema. Si el flasheo falla con
-`E4001: Device did not respond after reset`, la radio no está en modo burn.
+La segunda línea es la partición del DSP: **sólo hace falta la primera vez, o
+cuando se cambie el códec**; si la radio ya arranca no la repitas. Las dos se
+escriben con la radio en modo *burn*, y si el flasheo falla con `E4001: Device
+did not respond after reset`, es que no entró en ese modo.
 
 **Volver al firmware de fábrica**
 
