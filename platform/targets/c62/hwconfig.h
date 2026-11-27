@@ -101,6 +101,35 @@ extern "C" {
 extern const struct BK4819 c62_bk4819;
 extern const struct gpioDev c62_bk4819_gpio;
 
+/*
+ * How long a bus access waits for another context to finish with the chip.
+ *
+ * A register access is a few hundred microseconds and the slowest sequence in
+ * the firmware is the tuner's power-up, so this is a hundred times the honest
+ * worst case: reaching it means the holder is stuck inside a transfer, and the
+ * waiting side has to report a failure instead of parking behind it.  The
+ * workqueue's PA cut (paCut()) is one of those waiters.
+ */
+#define C62_BUS_LOCK_TIMEOUT_MS 50
+
+/**
+ * Lock the broadcast receiver's bit-banged bus.
+ *
+ * The BK1080 driver carries the "bus held" state of a frame between calls, so
+ * two contexts interleaving calls corrupts the frame instead of merely
+ * delaying it: the RTX thread reads the tuner for the S-meter and the pcproto
+ * thread can reach it through the debug namespace.
+ *
+ * @return true when the bus was taken, false when another context held it for
+ *         longer than C62_BUS_LOCK_TIMEOUT_MS.
+ */
+bool c62Bk1080Lock(void);
+
+/**
+ * Release the broadcast receiver's bus, taken with c62Bk1080Lock().
+ */
+void c62Bk1080Unlock(void);
+
 /* BK4819 GPIOs */
 #define LNA_VHF_EN &c62_bk4819_gpio, 0
 #define LNA_UHF_EN &c62_bk4819_gpio, 1

@@ -410,7 +410,22 @@ static bool wfmEnter()
     gpioPin_setMode(&c62_bk1080.pwr, OUTPUT);
     gpioPin_set(&c62_bk1080.pwr);       // make sure it is off before powering
 
+    /*
+     * One lock around the whole power-up: the driver's frame state lives
+     * between calls, so a register access from the protocol thread in the
+     * middle of the init table would land in the wrong register (see
+     * c62Bk1080Lock()).  A second of polling holds it, which is why the lock
+     * is bounded and the other side reports a busy bus.
+     */
+    if (!c62Bk1080Lock())
+    {
+        printk("WFM: tuner bus busy, not powering up\n");
+        return false;
+    }
+
     if (!BK1080_Init(&c62_bk1080)) {
+        c62Bk1080Unlock();
+
         /*
          * A chip that does not answer costs a second of polling, so do not
          * retry it on every retune: three attempts per power cycle, then the
@@ -434,6 +449,8 @@ static bool wfmEnter()
     BK1080_SetSeekThreshold(&c62_bk1080, 8);    // dBuV, around S3
     BK1080_SetSeekQuality(&c62_bk1080, 2, 14);  // the factory table's values
 
+    c62Bk1080Unlock();
+
     wfmLastPoll = 0;
     return true;
 }
@@ -446,7 +463,12 @@ static void wfmLeave()
     if (!wfmReady)
         return;
 
-    BK1080_PowerOff(&c62_bk1080);
+    if (c62Bk1080Lock())
+    {
+        BK1080_PowerOff(&c62_bk1080);
+        c62Bk1080Unlock();
+    }
+
     wfmReady = false;
 }
 
@@ -466,7 +488,15 @@ static bool wfmUpdateStatus(const bool force)
     wfmLastPoll = now;
 
     struct bk1080Status hw;
-    if (!BK1080_ReadStatus(&c62_bk1080, &hw)) {
+    bool ok = false;
+
+    if (c62Bk1080Lock())
+    {
+        ok = BK1080_ReadStatus(&c62_bk1080, &hw);
+        c62Bk1080Unlock();
+    }
+
+    if (!ok) {
         wfmLastOk = false;
         return false;
     }
@@ -500,9 +530,13 @@ static void wfmTune(const uint32_t freq)
     freq_t target = wfm_snap(freq, (wfmSpacing == BK1080_SPACE_50K)
                                       ? WFM_STEP_FINE_HZ : WFM_STEP_HZ);
 
-    BK1080_SetMute(&c62_bk1080, true);
-    bool ok = BK1080_SetFrequency(&c62_bk1080, target, wfmSpacing);
-    BK1080_SetMute(&c62_bk1080, !ok);
+    if (c62Bk1080Lock())
+    {
+        BK1080_SetMute(&c62_bk1080, true);
+        bool ok = BK1080_SetFrequency(&c62_bk1080, target, wfmSpacing);
+        BK1080_SetMute(&c62_bk1080, !ok);
+        c62Bk1080Unlock();
+    }
 
     /* The previous status was another channel: do not carry it over */
     wfmLastPoll = 0;
@@ -1099,7 +1133,13 @@ void radio_disableRtx()
          * the pop-suppression sequence the stock firmware uses as well.
          */
         if (wfmReady)
-            BK1080_SetMute(&c62_bk1080, true);
+        {
+            if (c62Bk1080Lock())
+            {
+                BK1080_SetMute(&c62_bk1080, true);
+                c62Bk1080Unlock();
+            }
+        }
 
         audio_setExtSource(false);
     } else if (radioStatus == RX) {

@@ -623,7 +623,14 @@ int pc_proto_platformReg(int chip, uint8_t reg, uint16_t *value)
         return 0;
     }
     if (chip == 1) {
-        *value = BK1080_ReadRegister(&c62_bk1080, reg);
+        /* Same lock as the driver's own sequences: the tuner's frame state
+         * lives between calls, so a poke from the cable must not land in the
+         * middle of one (c62Bk1080Lock()). */
+        if (!c62Bk1080Lock())
+            return -1;
+        const uint16_t v = BK1080_ReadRegister(&c62_bk1080, reg);
+        c62Bk1080Unlock();
+        *value = v;
         return 0;
     }
     return -1;
@@ -636,7 +643,10 @@ int pc_proto_platformRegWrite(int chip, uint8_t reg, uint16_t value)
         return 0;
     }
     if (chip == 1) {
+        if (!c62Bk1080Lock())
+            return -1;
         BK1080_WriteRegister(&c62_bk1080, reg, value);
+        c62Bk1080Unlock();
         return 0;
     }
     return -1;

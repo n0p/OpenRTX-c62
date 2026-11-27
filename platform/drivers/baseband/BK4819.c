@@ -16,6 +16,67 @@
 #include "core/utils.h"
 
 /*
+ * Serialisation of the chip's serial bus.
+ *
+ * One register access is not one transfer: the command byte and the data share
+ * a chip-select window (readRegChecked()/writeRegOn()), and a read-modify-write
+ * is two accesses.  spi_acquire()/spi_release() only protect a single transfer,
+ * and only when the device was given a mutex -- and on this target the mutex
+ * cannot be the pthread_mutex_t of struct spiDevice, which is a plain uint32_t
+ * under the C62's newlib.  So the exclusion lives here, around the whole
+ * sequence, and the bus mutex of the SPI device stays NULL.
+ *
+ * Three contexts reach the chip on the radio: the RTX thread (everything
+ * radio_*), the pcproto thread (the debug namespace's register read/write) and
+ * the system workqueue (paCut() -> radio_disableRtx() -> REG_33).  Without
+ * this, one context can slip its own transfer between the command and the data
+ * of another, and the read comes from a different register than the one asked
+ * for -- REG_30 and REG_33, the PA path, included.
+ *
+ * Two properties are deliberate:
+ *  - recursive, because bk4819_maskSetRegister() takes it and then calls the
+ *    two halves that take it again;
+ *  - bounded, because what can hold it is a transfer that never completes
+ *    (zephyrSpiBus_transfer() waits inside the driver), and the workqueue's
+ *    cut must not park behind that: the access fails after
+ *    BK4819_LOCK_TIMEOUT_MS and the teardown continues.
+ *
+ * Not built for the host tests, which drive the driver from one thread against
+ * a fake bus.
+ */
+#ifdef __ZEPHYR__
+#include <zephyr/kernel.h>
+
+#define BK4819_LOCK_TIMEOUT_MS 50
+
+static K_MUTEX_DEFINE(bk4819BusMutex);
+static bool busLock(void)
+{
+    /* Nothing here is called from an interrupt today, and a mutex may not be
+     * taken from one: skip the lock instead of faulting if that ever changes. */
+    if (k_is_in_isr())
+        return true;
+
+    return k_mutex_lock(&bk4819BusMutex, K_MSEC(BK4819_LOCK_TIMEOUT_MS)) == 0;
+}
+
+static void busUnlock(void)
+{
+    if (!k_is_in_isr())
+        k_mutex_unlock(&bk4819BusMutex);
+}
+#else
+static bool busLock(void)
+{
+    return true;
+}
+
+static void busUnlock(void)
+{
+}
+#endif
+
+/*
  * Audio processing fields, with their values by enum bk4819_audioMode: voice
  * (the values bk4819_init() sets), then bypass, as the application note's
  * RF_EnterBypass() sets it.
@@ -143,8 +204,13 @@ static int readRegChecked(const struct BK4819 *dev, const struct spiDevice *spi,
     uint8_t rx[2] = { 0, 0 };
     int ret;
 
-    if (spi_acquire(spi) < 0)
+    if (!busLock())
         return -EBUSY;
+
+    if (spi_acquire(spi) < 0) {
+        busUnlock();
+        return -EBUSY;
+    }
 
     gpioPin_clear(&dev->scn);
     delayUs(1);
@@ -158,6 +224,7 @@ static int readRegChecked(const struct BK4819 *dev, const struct spiDevice *spi,
     delayUs(1);
     gpioPin_set(&dev->scn);
     spi_release(spi);
+    busUnlock();
 
     if (ret < 0)
         return ret;
@@ -186,25 +253,37 @@ static uint16_t readRegOn(const struct BK4819 *dev, const struct spiDevice *spi,
     return value;
 }
 
-static void writeRegOn(const struct BK4819 *dev, const struct spiDevice *spi,
-                       uint8_t reg, uint16_t data)
+static int writeRegOn(const struct BK4819 *dev, const struct spiDevice *spi,
+                      uint8_t reg, uint16_t data)
 {
     const uint8_t cmd = reg | BK4819_REG_WRITE;
     const uint8_t tx[2] = {
         (data >> 8) & 0xFF,
         data & 0xFF,
     };
+    int ret;
 
-    spi_acquire(spi);
+    if (!busLock())
+        return -EBUSY;
+
+    if (spi_acquire(spi) < 0) {
+        busUnlock();
+        return -EBUSY;
+    }
+
     gpioPin_clear(&dev->scn);
     delayUs(1);
 
-    spi_send(spi, &cmd, 1);
-    spi_send(spi, tx, sizeof(tx));
+    ret = spi_send(spi, &cmd, 1);
+    if (ret == 0)
+        ret = spi_send(spi, tx, sizeof(tx));
 
     delayUs(1);
     gpioPin_set(&dev->scn);
     spi_release(spi);
+    busUnlock();
+
+    return ret;
 }
 
 uint16_t bk4819_readReg(const struct BK4819 *dev, uint8_t reg)
@@ -219,14 +298,25 @@ int bk4819_readRegChecked(const struct BK4819 *dev, uint8_t reg, uint16_t *out)
 
 void bk4819_writeReg(const struct BK4819 *dev, uint8_t reg, uint16_t data)
 {
-    writeRegOn(dev, dev->spi, reg, data);
+    (void)writeRegOn(dev, dev->spi, reg, data);
 }
 
 int bk4819_maskSetRegister(const struct BK4819 *dev, uint8_t reg,
                            uint16_t mask, uint16_t value)
 {
     uint16_t current = 0;
-    int ret = readRegChecked(dev, dev->spi, reg, &current);
+    int ret;
+
+    /*
+     * The whole read-modify-write is one transaction on the bus: without this
+     * outer lock another context could write the register between this side's
+     * read and its write, and the other context's bits would be thrown away.
+     * Recursive, so the two accesses below take the same mutex again.
+     */
+    if (!busLock())
+        return -EBUSY;
+
+    ret = readRegChecked(dev, dev->spi, reg, &current);
 
     /*
      * A failed read still writes, with the unread bits taken as zero.
@@ -240,9 +330,11 @@ int bk4819_maskSetRegister(const struct BK4819 *dev, uint8_t reg,
      * mask carries.  The error still reaches the caller, which is what decides
      * whether the result counts as proof.
      */
-    writeRegOn(dev, dev->spi, reg, (current & ~mask) | (value & mask));
+    int wr = writeRegOn(dev, dev->spi, reg, (current & ~mask) | (value & mask));
 
-    return ret;
+    busUnlock();
+
+    return (ret < 0) ? ret : wr;
 }
 
 void bk4819_init(const struct BK4819 *dev)

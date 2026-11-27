@@ -376,8 +376,25 @@ void platform_terminate()
 
 /**
  * Read battery voltage using ADC2 on pin B08
- * @return: Battery voltage in millivolts (mV), or 0 on error
+ *
+ * Three contexts ask for this -- the UI thread for the icon, the state thread
+ * that decides the power-off and the main thread next to the watchdog -- and
+ * they used to share one static raw buffer and one static adc_sequence: two
+ * concurrent adc_read()s return -EBUSY or fill the buffer with the other
+ * channel's samples, so a level could come out of the charging input or a
+ * failed read could be taken for a flat battery.  The read is serialised here
+ * (it takes about a millisecond) and the last good level is cached, so a
+ * failure degrades to the previous measurement instead of to zero.
+ *
+ * @return: Battery voltage in millivolts (mV), the last good one if this read
+ *          failed, or 0 when no read has ever succeeded
+ *          (platform_vbatMeasured()).
  */
+static K_MUTEX_DEFINE(vbatMutex);
+static uint16_t vbatLastMv;      /* Last good level, mV */
+static bool vbatMeasured;        /* A read has succeeded at least once */
+static uint32_t vbatErrorMs;     /* Uptime of the last error line, throttling */
+
 uint16_t platform_getVbat()
 {
 #define ADC_NUM_CHANNELS 2
@@ -392,14 +409,30 @@ uint16_t platform_getVbat()
         .resolution = 11, // 11-bit resolution
     };
 
+    /*
+     * Another context is in the middle of a read: its result is one
+     * millisecond old at most, which is the same value to every caller.
+     */
+    if (k_mutex_lock(&vbatMutex, K_MSEC(50)) != 0)
+        return vbatLastMv;
+
     // Reset ADC channels to read
     sequence.channels = BIT(1) | BIT(2);
 
     // Read ADC value
     int ret = adc_read(adc_dev, &sequence);
     if (ret < 0) {
-        printk("Failed to read ADC: %d\n", ret);
-        return 0;
+        const uint32_t now = k_uptime_get_32();
+
+        /* One line a second: the boot loop asks every 10 ms, and with the
+         * protocol on the log ring is four lines deep. */
+        if ((uint32_t)(now - vbatErrorMs) >= 1000) {
+            vbatErrorMs = now;
+            printk("Failed to read ADC: %d\n", ret);
+        }
+
+        k_mutex_unlock(&vbatMutex);
+        return vbatLastMv;
     }
 
     if (adc_raw_buffer[0] > ADC_RAW_CHARGING_THRESHOLD) {
@@ -423,7 +456,22 @@ uint16_t platform_getVbat()
     // Adapt for voltage divider 200K and 100K
     uint32_t battery_voltage_mv = bat_det_value * 3;
 
-    return (uint16_t)battery_voltage_mv;
+    vbatLastMv = (uint16_t)battery_voltage_mv;
+    vbatMeasured = true;
+
+    k_mutex_unlock(&vbatMutex);
+
+    return vbatLastMv;
+}
+
+/**
+ * Whether the battery level has ever been read.
+ *
+ * @return true once a reading has succeeded.
+ */
+static bool platform_vbatMeasured()
+{
+    return vbatMeasured;
 }
 
 uint8_t platform_getMicLevel()
@@ -786,7 +834,21 @@ bool platform_pwrButtonStatus()
      * If a voltage lower than 3V would be used for comparison,
      * the radio would take longer to detect the power off when
      * the charger is connected.
-    */
+     *
+     * "No measurement" is not "flat battery": with the ADC failing, answering
+     * false made the boot loop in platform_init_csk6() never exit and made the
+     * state thread power the radio off for ever, both with no explanation
+     * beyond a line every 10 ms.  The fault is reported where it happens
+     * (platform_getVbat(), once a second) and the radio keeps running; a
+     * measured level below 3 V still turns it off.
+     */
+    if (!platform_vbatMeasured()) {
+        /* Nothing has been read yet: this answer has to come from one. */
+        (void)platform_getVbat();
+        if (!platform_vbatMeasured())
+            return true;
+    }
+
     return platform_getVbat() > 3000;
 }
 
