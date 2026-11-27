@@ -86,22 +86,24 @@ explícita. Todo ello está en [`docs/TX_SAFETY.md`](docs/TX_SAFETY.md).
 ## Descargas
 
 Las versiones se publican como **etiquetas del repositorio** (`v0.9-20261127` y
-siguientes), y la release adjunta el **árbol de fuentes** de esa etiqueta con el
-que se puede construir la imagen bit a bit:
+siguientes) y la release adjunta dos cosas:
+
+- **la imagen compilada** (`zephyr.bin` + `.elf` + `SHA256SUMS`) con sus
+  instrucciones de flasheo en `FLASHEO.md`;
+- **el árbol de fuentes** de la etiqueta, con el que se puede construir bit a
+  bit:
 
 ```sh
 git clone --branch v0.9-20261127 https://github.com/n0p/OpenRTX-c62
 ```
 
-**El binario no se distribuye**: se compila con el comando de *Compilación*, que
-es el único camino que garantiza que la imagen corresponde a las fuentes que
-estás leyendo. La de esta versión, con las opciones documentadas, ocupa
-**815.848 B (77,8 %) con RAM al 72,1 %**; su `md5` es
-`e3246649 2b8f76f5 9faa78e8 305c1a8f`, y está para comprobar que la build propia
-coincide, no para flashear la de otro.
+La imagen de esta versión, con las opciones de *Compilación*, ocupa **815.848 B
+(77,8 %) con RAM al 72,1 %** y su `md5` es `e3246649 2b8f76f5 9faa78e8
+305c1a8f`: compruébalo después de descomprimir y antes de flashear.
 
-`dsp_firmware.bin` no se incluye en ningún caso: es la imagen del DSP de fábrica
-y su licencia no es nuestra.
+`dsp_firmware.bin` no se incluye en ningún caso: es la imagen del DSP de fábrica,
+su licencia no es nuestra, y la que ya tiene la radio sirve. No hay que tocar la
+partición `0x100000`.
 
 ## Instalación
 
