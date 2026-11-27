@@ -18,6 +18,10 @@
 #include "core/utils.h"
 #include "rtx/rtx.h"
 
+#ifdef __ZEPHYR__
+#include <zephyr/sys/printk.h>
+#endif
+
 #ifdef PLATFORM_MOD17
 #include "calibration/calibInfo_Mod17.h"
 #include "interfaces/platform.h"
@@ -488,6 +492,35 @@ void OpMode_M17::txState(rtxStatus_t *const status)
         txg_streamsOpen(tx, (uint32_t)getTick());
 
         radio_enableTx();
+        if (radio_getStatus() != TX)
+        {
+            /*
+             * The driver refused to key (a frequency outside the bands, no
+             * APC duty, no calibration): it says why, and it says it in
+             * radio_txRefusedReason().  Going on from here is what rebooted
+             * the radio: the modulator had streams open and the preamble
+             * queued, nobody was draining them, and the RTX thread ended up
+             * waiting for a block that had nowhere to go until the watchdog
+             * took the whole radio down.  Close what was opened and go back.
+             */
+            const char *why = radio_txRefusedReason();
+
+            codec_stop(txAudioPath);
+            audioPath_release(txAudioPath);
+            txAudioPath = -1;
+            modulator.abort();
+            radio_disableRtx();
+            txg_streamsFailed(tx, (uint32_t)getTick());
+#ifdef __ZEPHYR__
+            printk("M17: PA refused to key (%s), the transmission is off\n",
+                   (why != NULL) ? why : "no reason given");
+#else
+            (void)why;
+#endif
+            startRx = true;
+            status->opStatus = OFF;
+            return;
+        }
         txg_note(tx, TXG_EV_KEYED, (uint32_t)getTick());
 
         modulator.invertPhase(invertTxPhase);
