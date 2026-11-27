@@ -49,6 +49,13 @@ static struct ysfText text YSF_EXT_RAM;
 /** Has the state below been cleared since power-on?  In SRAM, zeroed at boot */
 static bool stateReady;
 
+/**
+ * Is the transmission on a voice data type this build can decode?  Set by
+ * every frame whose FICH verifies and cleared by a terminator: it is what a
+ * frame whose FICH does *not* verify falls back on (see ysfFrame_decode()).
+ */
+static bool voiceLayout;
+
 static void text_reset(void);
 
 /**
@@ -64,6 +71,7 @@ static void ensure_ready(void)
     memset(&out, 0, sizeof(out));
     memset(&call, 0, sizeof(call));
     text_reset();
+    voiceLayout = false;
     stateReady = true;
 }
 
@@ -467,11 +475,37 @@ static bool voice49(const uint8_t *dibits, struct ysfVoiceSlot *slot)
 /* Frame                                                              */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Fill the voice slots of a frame from its payload.
+ *
+ * V/D mode 1 (DT 0) carries five 72-dibit AMBE+2 frames after the five CSD
+ * blocks; V/D mode 2 (DT 2) five 52-dibit ones.  DT 1 (data) and DT 3 (voice
+ * FR, IMBE) have nothing this build can decode.
+ */
+static void decodeVoiceSlots(uint8_t dt, const uint8_t *payload)
+{
+    if (dt == 0) {
+        for (int i = 0; i < YSF_VOICE_SLOTS; i++)
+            voice72(&payload[i * 72 + 36], &out.voice[i]);
+
+        out.voiceCount = YSF_VOICE_SLOTS;
+        call.voices += YSF_VOICE_SLOTS;
+    } else if (dt == 2) {
+        for (int i = 0; i < YSF_VOICE_SLOTS; i++) {
+            if (voice49(&payload[i * 72 + 20], &out.voice[out.voiceCount])) {
+                out.voiceCount++;
+                call.voices++;
+            }
+        }
+    }
+}
+
 void ysfFrame_reset(void)
 {
     memset(&out, 0, sizeof(out));
     memset(&call, 0, sizeof(call));
     text_reset();
+    voiceLayout = false;
     stateReady = true;
 }
 
@@ -517,13 +551,25 @@ const struct ysfDecoded *ysfFrame_decode(const struct ysfFrame *frame)
     if (frame == NULL)
         return NULL;
 
+    const uint8_t *payload = &frame->dibits[YSF_SYNC_SYMBOLS + 100];
+
     if (!fich_decode(&frame->dibits[YSF_SYNC_SYMBOLS], &fich)) {
         call.badFich++;
         /*
          * A frame whose FICH did not verify still carries voice, and the
          * previous frame's layout is the best guess for it, but the frame
-         * does not update what the transmission says.
+         * does not update what the transmission says (fi, fn, the callsigns
+         * and the text).  This used to return the frame with no voice at all,
+         * which silenced 100 ms of audio -- a hole in the speech timeline,
+         * audible as a clip -- on every FICH that failed Golay or its CRC-16.
+         *
+         * Only inside a voice call: after a terminator there is nothing left
+         * to continue, and decoding a terminator's data channel as voice
+         * would be a squawk at the end of every call.
          */
+        if (voiceLayout)
+            decodeVoiceSlots(call.dt, payload);
+
         return snapshot();
     }
 
@@ -536,6 +582,8 @@ const struct ysfDecoded *ysfFrame_decode(const struct ysfFrame *frame)
     call.fn = fich.fn;
     call.ft = fich.ft;
     call.dt = fich.dt;
+    /* A terminator ends the call: nothing after it inherits this layout */
+    voiceLayout = (fich.fi != 2) && ((fich.dt == 0) || (fich.dt == 2));
     call.dgidValid = (fich.st == 0) && (fich.sc <= 99);
     call.dgid = fich.sc;
 
@@ -547,8 +595,6 @@ const struct ysfDecoded *ysfFrame_decode(const struct ysfFrame *frame)
         memset(call.downlink, 0, sizeof(call.downlink));
         text_reset();
     }
-
-    const uint8_t *payload = &frame->dibits[YSF_SYNC_SYMBOLS + 100];
 
     if ((fich.fi == 0) || (fich.fi == 2) || (fich.dt == 1)) {
         /*
@@ -593,13 +639,10 @@ const struct ysfDecoded *ysfFrame_decode(const struct ysfFrame *frame)
         uint8_t csd[180];
         uint8_t info[192];
 
-        for (int i = 0; i < YSF_VOICE_SLOTS; i++) {
+        for (int i = 0; i < YSF_VOICE_SLOTS; i++)
             memcpy(&csd[i * 36], &payload[i * 72], 36);
-            voice72(&payload[i * 72 + 36], &out.voice[i]);
-        }
 
-        out.voiceCount = YSF_VOICE_SLOTS;
-        call.voices += YSF_VOICE_SLOTS;
+        decodeVoiceSlots(fich.dt, payload);
 
         int n = dch_decode(csd, 180, 20, 9, info);
         if (n == 160) {
@@ -627,14 +670,10 @@ const struct ysfDecoded *ysfFrame_decode(const struct ysfFrame *frame)
         uint8_t dch[100];
         uint8_t info[96];
 
-        for (int i = 0; i < YSF_VOICE_SLOTS; i++) {
+        for (int i = 0; i < YSF_VOICE_SLOTS; i++)
             memcpy(&dch[i * 20], &payload[i * 72], 20);
 
-            if (voice49(&payload[i * 72 + 20], &out.voice[out.voiceCount])) {
-                out.voiceCount++;
-                call.voices++;
-            }
-        }
+        decodeVoiceSlots(fich.dt, payload);
 
         int n = dch_decode(dch, 100, 20, 5, info);
         if (n == 80) {
