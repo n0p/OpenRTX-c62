@@ -55,6 +55,11 @@
 
 #define NB_BANDS 22
 
+/* [C62 patch] sqrt(2/22) as a float literal.  Written as sqrt(2./22) the
+ * compiler folded the square root but kept the product in double, which cost a
+ * __aeabi_dmul per band per DCT (about 116 instructions per frame). */
+#define DCT_SCALE 0.30151134457776363f
+
 #define CEPS_MEM 8
 #define NB_DELTA_CEPS 6
 
@@ -207,7 +212,7 @@ static void dct(float *out, const float *in) {
     for (j=0;j<NB_BANDS;j++) {
       sum += in[j] * common.dct_table[j*NB_BANDS + i];
     }
-    out[i] = sum*sqrt(2./22);
+    out[i] = sum*DCT_SCALE;
   }
 }
 
@@ -221,7 +226,7 @@ static void idct(float *out, const float *in) {
     for (j=0;j<NB_BANDS;j++) {
       sum += in[j] * common.dct_table[i*NB_BANDS + j];
     }
-    out[i] = sum*sqrt(2./22);
+    out[i] = sum*DCT_SCALE;
   }
 }
 #endif
@@ -357,7 +362,7 @@ static int compute_frame_features(DenoiseState *st, kiss_fft_cpx *X, kiss_fft_cp
   forward_transform(st, P, p);
   compute_band_energy(Ep, P);
   compute_band_corr(Exp, X, P);
-  for (i=0;i<NB_BANDS;i++) Exp[i] = Exp[i]/sqrt(.001+Ex[i]*Ep[i]);
+  for (i=0;i<NB_BANDS;i++) Exp[i] = Exp[i]/sqrtf(.001f+Ex[i]*Ep[i]);
   dct(tmp, Exp);
   for (i=0;i<NB_DELTA_CEPS;i++) features[NB_BANDS+2*NB_DELTA_CEPS+i] = tmp[i];
   features[NB_BANDS+2*NB_DELTA_CEPS] -= 1.3;
@@ -366,7 +371,7 @@ static int compute_frame_features(DenoiseState *st, kiss_fft_cpx *X, kiss_fft_cp
   logMax = -2;
   follow = -2;
   for (i=0;i<NB_BANDS;i++) {
-    Ly[i] = log10(1e-2+Ex[i]);
+    Ly[i] = log10f(1e-2f+Ex[i]);
     Ly[i] = MAX16(logMax-7, MAX16(follow-1.5, Ly[i]));
     logMax = MAX16(logMax, Ly[i]);
     follow = MAX16(follow-1.5, Ly[i]);
@@ -424,14 +429,20 @@ static void frame_synthesis(DenoiseState *st, float *out, const kiss_fft_cpx *y)
   RNN_COPY(st->synthesis_mem, &x[FRAME_SIZE], FRAME_SIZE);
 }
 
+/* [C62 patch] float, not double: the coefficients and the state are float, and
+ * the casts to double sent every tap through libgcc's __muldf3/__aeabi_dadd.
+ * On the M33 that was the single largest block of the stage's cost (about
+ * 200 k of 1.80 M instructions per 10 ms frame).  The filter is a stable IIR in
+ * float either way; against the double build the output differs by at most
+ * 29 LSB on a 10 s test (SNR 72 dB), see PATCHES.md. */
 static void biquad(float *y, float mem[2], const float *x, const float *b, const float *a, int N) {
   int i;
   for (i=0;i<N;i++) {
     float xi, yi;
     xi = x[i];
     yi = x[i] + mem[0];
-    mem[0] = mem[1] + (b[0]*(double)xi - a[0]*(double)yi);
-    mem[1] = (b[1]*(double)xi - a[1]*(double)yi);
+    mem[0] = mem[1] + (b[0]*xi - a[0]*yi);
+    mem[1] = (b[1]*xi - a[1]*yi);
     y[i] = yi;
   }
 }
@@ -449,9 +460,9 @@ static void pitch_filter(DenoiseState *st, kiss_fft_cpx *X, const kiss_fft_cpx *
 #else
     if (Exp[i]>g[i]) r[i] = 1;
     else r[i] = SQUARE(Exp[i])*(1-SQUARE(g[i]))/(.001 + SQUARE(g[i])*(1-SQUARE(Exp[i])));
-    r[i] = sqrt(MIN16(1, MAX16(0, r[i])));
+    r[i] = sqrtf(MIN16(1, MAX16(0, r[i])));
 #endif
-    r[i] *= sqrt(Ex[i]/(1e-8+Ep[i]));
+    r[i] *= sqrtf(Ex[i]/(1e-8f+Ep[i]));
   }
   memset(rf, 0, FREQ_SIZE*sizeof(*rf));
   interp_band_gain(rf, r);
@@ -464,7 +475,7 @@ static void pitch_filter(DenoiseState *st, kiss_fft_cpx *X, const kiss_fft_cpx *
   float norm[NB_BANDS];
   float *normf = st->scratch_band2;
   for (i=0;i<NB_BANDS;i++) {
-    norm[i] = sqrt(Ex[i]/(1e-8+newE[i]));
+    norm[i] = sqrtf(Ex[i]/(1e-8f+newE[i]));
   }
   memset(normf, 0, FREQ_SIZE*sizeof(*normf));
   interp_band_gain(normf, norm);
