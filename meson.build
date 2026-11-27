@@ -1694,6 +1694,25 @@ messaging_fsm_test = executable('messaging_fsm_test',
                                 sources : unit_test_src + ['tests/unit/messaging_fsm.cpp'],
                                 kwargs  : unit_test_opts)
 
+# The store that keeps the messages between power cycles, against a flash that
+# can lose the power in the middle of a write (tests/unit/messaging_store.cpp).
+# The Zephyr backend is compiled here with a RAM partition standing in for the
+# real one: what is under test is which of the two sectors the reader believes,
+# and that is the same code the radio runs.
+fake_flash_opts = unit_test_opts
+fake_flash_opts += {'include_directories' :
+                        unit_test_opts['include_directories']
+                        + [include_directories('tests/unit'),
+                           include_directories('tests/unit/fake_zephyr')]}
+messaging_store_test = executable('messaging_store_test',
+                                  sources : unit_test_src + [
+                                    'openrtx/src/core/messaging_store_zephyr.c',
+                                    'tests/unit/fake_flash.cpp',
+                                    'tests/unit/messaging_store.cpp'],
+                                  kwargs  : fake_flash_opts)
+
+test('Messaging Store Test', messaging_store_test)
+
 ui_layout_test = executable('ui_layout_test',
                             sources : unit_test_src + ['tests/unit/ui_layout.cpp'],
                             kwargs : unit_test_opts)

@@ -29,6 +29,7 @@
 
 #include <zephyr/storage/flash_map.h>
 
+#include "core/messaging.h"
 #include "core/messaging_store.h"
 
 #define MSG_AREA_A 0x4000
@@ -107,6 +108,30 @@ size_t messaging_store_size(void)
     return ok ? len : 0;
 }
 
+/**
+ * Read one sector's record and tell whether it is a record at all.
+ *
+ * A sector whose write a power cut interrupted has a header that may well
+ * check out -- the header went first -- and a payload that does not: the CRC
+ * at the end of the record is the only thing that separates the two, so it is
+ * asked here and not three layers up, where answering "no" means throwing the
+ * whole store away instead of reading the other sector.
+ */
+static bool loadSector(const struct flash_area *area, uint32_t off,
+                       const struct storeHeader *hdr, uint8_t *buf, size_t cap,
+                       size_t *got)
+{
+    if ((hdr->length == 0) || (hdr->length > cap))
+        return false;
+    if (flash_area_read(area, off + sizeof(*hdr), buf, hdr->length) < 0)
+        return false;
+    if (!messaging_recordValid(buf, hdr->length))
+        return false;
+
+    *got = hdr->length;
+    return true;
+}
+
 size_t messaging_store_read(uint8_t *buf, size_t cap)
 {
     const struct flash_area *area;
@@ -119,26 +144,31 @@ size_t messaging_store_read(uint8_t *buf, size_t cap)
         return 0;
 
     /*
-     * The payload goes straight into the caller's buffer: the record carries
-     * its own CRC, so a torn sector is rejected there, not here.  A read error
-     * on the newest sector falls back to the other one, which is what the
-     * alternation is for.
+     * The newest sector wins only if it holds a record that verifies; a torn
+     * one -- the power cut off in the middle of the payload, which is the way
+     * this radio is switched off -- is skipped and the other sector answers.
+     * That is the whole point of keeping two: without this check the alternation
+     * protected nothing, because the torn header was newer and the record it
+     * pointed at was rejected far above, where rejection means wiping the store.
      */
+    struct storeHeader a;
+    struct storeHeader b;
+    bool haveA = readHeader(area, MSG_AREA_A, &a);
+    bool haveB = readHeader(area, MSG_AREA_B, &b);
+    bool aNewer = haveA && (!haveB || ((int32_t)(a.sequence - b.sequence) > 0));
+
     size_t got = 0;
 
-    if (newestRecord(area, &off, &len) && (len <= cap)) {
-        uint32_t other = (off == MSG_AREA_A) ? MSG_AREA_B : MSG_AREA_A;
-        struct storeHeader hdr;
-
-        if (flash_area_read(area, off + sizeof(hdr), buf, len) == 0) {
-            got = len;
-        } else if (readHeader(area, other, &hdr) && (hdr.length <= cap)
-                   && (flash_area_read(area, other + sizeof(hdr), buf,
-                                       hdr.length) == 0)) {
-            got = hdr.length;
-        }
+    if (aNewer) {
+        if (!loadSector(area, MSG_AREA_A, &a, buf, cap, &got) && haveB)
+            (void)loadSector(area, MSG_AREA_B, &b, buf, cap, &got);
+    } else if (haveB) {
+        if (!loadSector(area, MSG_AREA_B, &b, buf, cap, &got) && haveA)
+            (void)loadSector(area, MSG_AREA_A, &a, buf, cap, &got);
     }
 
+    (void)off;
+    (void)len;
     flash_area_close(area);
     return got;
 }
@@ -186,9 +216,33 @@ bool messaging_store_write(const uint8_t *buf, size_t len)
     hdr.length = (uint16_t)len;
     hdr.sequence = seq;
 
+    /*
+     * Payload first, header last: the header is what makes a sector count, so
+     * it goes into the flash once the bytes it describes are there.  A write
+     * cut short leaves a sector with no header at all -- the erase took it --
+     * which the reader skips, instead of a header pointing at half a record.
+     */
     bool ok = (flash_area_erase(area, off, MSG_SECTOR_SIZE) == 0)
-              && (flash_area_write(area, off, &hdr, sizeof(hdr)) == 0)
-              && (flash_area_write(area, off + sizeof(hdr), buf, len) == 0);
+              && (flash_area_write(area, off + sizeof(hdr), buf, len) == 0)
+              && (flash_area_write(area, off, &hdr, sizeof(hdr)) == 0);
+
+    /*
+     * And read it back: a flash that answered ok and did not keep the bytes is
+     * the one failure the alternation cannot catch by itself, because the next
+     * write would go to the other sector believing this one is good.
+     */
+    if (ok) {
+        static uint8_t check[64];
+        size_t done = 0;
+
+        while (ok && (done < len)) {
+            size_t n = (len - done < sizeof(check)) ? (len - done) : sizeof(check);
+
+            ok = (flash_area_read(area, off + sizeof(hdr) + done, check, n) == 0)
+                 && (memcmp(check, buf + done, n) == 0);
+            done += n;
+        }
+    }
 
     flash_area_close(area);
     return ok;
