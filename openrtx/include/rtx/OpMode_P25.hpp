@@ -54,7 +54,7 @@ private:
 
 #ifdef CONFIG_P25_TX
     bool startTx(const rtxStatus_t *status);
-    void stopTx();
+    void stopTx(bool drain = true);
     bool txSlot();
 #endif
 
@@ -69,6 +69,7 @@ private:
     streamId txId;
     bool txBlocked;     ///< PTT was pressed and the chain refused to start
     bool txEnded;       ///< The terminator has been asked for
+    bool txFirstBlock;  ///< A slot of this over has reached the sink
 #endif
 };
 

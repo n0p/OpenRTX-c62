@@ -28,6 +28,7 @@
 #include "protocols/P25/P25Vocoder.h"
 #ifdef CONFIG_P25_TX
 #include "protocols/P25/P25Tx.h"
+#include "rtx/TxGuard.h"
 #endif
 #include "rtx/OpMode_P25.hpp"
 
@@ -68,12 +69,20 @@ static int16_t baseband[2 * BLOCK_SAMPLES];
 #endif
 
 #ifdef CONFIG_P25_TX
-/** The modulating waveform of the transmission in progress. */
+/**
+ * The stream's own buffer: two halves of one 30 ms slot.
+ *
+ * audioStream_start() is given the length of the whole buffer and a
+ * double-buffered stream plays one half while the mode renders into the other
+ * (outputStream_getIdleBuffer()).  This used to be declared as a single slot
+ * while the stream was told it held two, so the sink read 2.9 kB of PSRAM past
+ * the end of the array on every slot.
+ */
 #ifdef __ZEPHYR__
-static int16_t txSamples[TX_SLOT_SAMPLES]
+static stream_sample_t txBaseband[2 * TX_SLOT_SAMPLES]
     __attribute__((section(".psram_section")));
 #else
-static int16_t txSamples[TX_SLOT_SAMPLES];
+static stream_sample_t txBaseband[2 * TX_SLOT_SAMPLES];
 #endif
 #endif
 
@@ -102,6 +111,7 @@ OpMode_P25::OpMode_P25()
     , txId(-1)
     , txBlocked(false)
     , txEnded(false)
+    , txFirstBlock(false)
 #endif
 {
 }
@@ -167,7 +177,18 @@ void OpMode_P25::stopSampling()
  */
 bool OpMode_P25::startTx(const rtxStatus_t *status)
 {
+    struct txGuard *guard = rtx_getTxGuard();
     struct p25TxConfig cfg;
+
+    /*
+     * The transmit supervisor covers this over from here on: a PTT that never
+     * comes back, a stream that stops taking slots or an over that outlives the
+     * cap is cut from the main thread, and the driver's own 95 s barrier has a
+     * guard to ask.  Until this existed the mode put TX on the screen, built
+     * the waveform into an audio path nobody had keyed and left the radio in
+     * receive.
+     */
+    txg_enter(guard, (uint32_t)getTick());
 
     /*
      * The NAC, the talkgroup and the subscriber address have no field in the
@@ -186,30 +207,69 @@ bool OpMode_P25::startTx(const rtxStatus_t *status)
 
     p25Tx_begin(&cfg);
     txEnded = false;
+    txFirstBlock = false;
 
     txPath = audioPath_request(SOURCE_MCU, SINK_RTX, PRIO_TX);
     if (txPath < 0)
         return false;
 
-    txId = audioStream_start(txPath, txSamples, 2 * TX_SLOT_SAMPLES, 48000,
+    /*
+     * The buffer is NOLOAD PSRAM and the sink starts playing its first half as
+     * soon as the stream is attached, so it is zeroed here: the alternative is
+     * that the first 30 ms of a transmission is whatever was left there.
+     */
+    memset(txBaseband, 0, sizeof(txBaseband));
+
+    txId = audioStream_start(txPath, txBaseband, 2 * TX_SLOT_SAMPLES, 48000,
                              STREAM_OUTPUT | BUF_CIRC_DOUBLE);
     if (txId < 0) {
         audioPath_release(txPath);
         txPath = -1;
         return false;
     }
+
+    /*
+     * Everything the modulator needs is open: key the PA through the driver's
+     * own gate (rtx_txPermitted() is what the driver checks, and the gate this
+     * mode has just passed is what it asks) and treat a refusal as a failed
+     * key-up, not as a transmission with no carrier.
+     */
+    txg_streamsOpen(guard, (uint32_t)getTick());
+    radio_enableTx();
+    if (radio_getStatus() != TX) {
+        /* Nothing was keyed and nothing played: close without waiting for the
+         * sink (stopTx(false)). */
+        stopTx(false);
+        return false;
+    }
+    txg_note(guard, TXG_EV_KEYED, (uint32_t)getTick());
     return true;
 }
 
-void OpMode_P25::stopTx()
+void OpMode_P25::stopTx(bool drain)
 {
     p25Tx_end();
-    if (txId >= 0)
-        audioStream_terminate(txId);
+    if (txId >= 0) {
+        /*
+         * drain: let the sink finish the slot it has (audioStream_stop()),
+         * which is what puts the terminator on the air.  Otherwise cancel at
+         * once (audioStream_terminate()): that is the abort path, which runs in
+         * the main thread and must not wait.
+         */
+        if (drain)
+            audioStream_stop(txId);
+        else
+            audioStream_terminate(txId);
+    }
     if (txPath >= 0)
         audioPath_release(txPath);
     txId = -1;
     txPath = -1;
+    txFirstBlock = false;
+
+    /* The over is over: close the guard here, or the supervisor keeps asking
+     * for an abort that already happened. */
+    txg_exit(rtx_getTxGuard(), (uint32_t)getTick(), TXG_REASON_MODE);
 }
 
 /**
@@ -220,8 +280,38 @@ void OpMode_P25::stopTx()
  */
 bool OpMode_P25::txSlot()
 {
-    p25Tx_samples(txSamples, TX_SLOT_SAMPLES, P25_TX_LEVEL);
-    outputStream_sync(txId, false);
+    struct txGuard *guard = rtx_getTxGuard();
+    stream_sample_t *idle = outputStream_getIdleBuffer(txId);
+
+    /*
+     * The half the sink is *not* playing is the one to write: with a double
+     * buffered stream, writing the same half every time and syncing with
+     * "nothing changed" (what this did) overwrites what is on the air and
+     * leaves the other half playing stale memory for ever.
+     */
+    if (idle == NULL) {
+        txBlocked = true;
+        return true;
+    }
+
+    p25Tx_samples(idle, TX_SLOT_SAMPLES, P25_TX_LEVEL);
+    if (!outputStream_sync(txId, true)) {
+        /* The sink is not consuming: this is the end of the over, not a slot
+         * to retry.  The PTT stays blocked until it is released. */
+        txBlocked = true;
+        return true;
+    }
+
+    /*
+     * One block reached the sink: the first one starts the supervisor's
+     * cadence clock, the rest keep it and flag a slot that arrived late.
+     */
+    if (!txFirstBlock) {
+        txFirstBlock = true;
+        txg_firstBlock(guard, (uint32_t)getTick());
+    } else {
+        txg_block(guard, (uint32_t)getTick());
+    }
 
     if (p25Tx_done() && !txEnded) {
         txEnded = true;
