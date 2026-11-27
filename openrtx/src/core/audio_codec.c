@@ -484,6 +484,9 @@ static bool startThread(const pathId path, void *(*func)(void *))
      * M17, the only mode that starts this thread.  A codec with no stack is a
      * codec that cannot run, not a reason to lose the radio: the caller is told
      * and refuses the transmission.
+     *
+     * The size cannot go down to 8 KiB: the decoder's real high-water mark is
+     * 15 484 B of this 16 384 (tests/qemu/codec2_stack.c, see threads.h).
      */
     stack = malloc(CODEC2_THREAD_STKSIZE);
     if (stack == NULL) {

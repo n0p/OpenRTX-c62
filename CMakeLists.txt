@@ -216,3 +216,36 @@ target_sources(app
     lib/minmea/minmea.c
     lib/QRCode/qrcode.c
 )
+
+#
+# Codec2 (M17's vocoder) is built with -O2 instead of the firmware-wide -Os.
+# Measured on the M33 with scripts/codec_cost.sh, per 20 ms frame: 930 830
+# instructions decoding against 951 194 (-2,2 %) and 722 464 encoding against
+# 752 120 (-4,1 %).  Per source, not on the target: the -Os of zephyr_interface
+# is appended after a target's own options and would win, being last on the
+# command line -- the same reason lib/dmr_vocoder and lib/imbe_vocoder set
+# their hot files this way.  Keep this list in step with the codec2 block of
+# target_sources above.
+#
+set_source_files_properties(
+    subprojects/codec2/src/dump.c
+    subprojects/codec2/src/lpc.c
+    subprojects/codec2/src/nlp.c
+    subprojects/codec2/src/phase.c
+    subprojects/codec2/src/quantise.c
+    subprojects/codec2/src/postfilter.c
+    subprojects/codec2/src/codec2.c
+    subprojects/codec2/src/codec2_fft.c
+    subprojects/codec2/src/lsp.c
+    subprojects/codec2/src/sine.c
+    subprojects/codec2/src/interp.c
+    subprojects/codec2/src/kiss_fft.c
+    subprojects/codec2/src/kiss_fftr.c
+    subprojects/codec2/src/newamp1.c
+    subprojects/codec2/src/codebook.c
+    subprojects/codec2/src/codebookd.c
+    subprojects/codec2/src/pack.c
+    subprojects/codec2/src/codebooknewamp1.c
+    subprojects/codec2/src/codebooknewamp1_energy.c
+    PROPERTIES COMPILE_OPTIONS "-O2"
+)

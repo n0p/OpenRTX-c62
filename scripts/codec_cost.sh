@@ -13,8 +13,11 @@
 #            (the kernels of platform/drivers/audio/csk6_resample.h, i.e. the
 #            code the driver runs, not a copy of it)
 #   resample-tone  the alias and image attenuation of the same kernels
+#   codec2-stack   high-water mark of the codec thread's stack, painted and
+#                  measured on a stack of CODEC2_THREAD_STKSIZE bytes
 #
-#   scripts/codec_cost.sh [O2|Os] [codec2|acelp|resample|resample-tone|all]
+#   scripts/codec_cost.sh [O2|Os] [codec2|codec2-stack|acelp|resample|
+#                                    resample-tone|all]
 #
 # Method, the same one docs/DMR_VOCODER.md and docs/IMBE.md use: the same
 # harness runs on the host and on an emulated Cortex-M33 (QEMU mps2-an505,
@@ -105,11 +108,13 @@ EOF
 }
 
 # ---------------------------------------------------------------- codec2 ----
-codec2() {
+# Compile codec2 for the host and for the target once; C2_OBJS is what the cost
+# and the stack harnesses link against.
+codec2_build() {
     C2=$ROOT/subprojects/codec2
     if [ ! -f "$C2/src/codec2.c" ]; then
         echo "codec2: subprojects/codec2 not present (west update / meson subprojects download)"
-        return
+        return 1
     fi
     if [ ! -f data_codec2.c ]; then
         python3 - "$C2/raw/hts1a.raw" <<'EOF'
@@ -132,14 +137,19 @@ EOF
     SKIP="c2enc c2dec resample insert_errors ldpc_dec_test ldpc_enc_test modem_probe freedv_api c2sim cohpsk_ch cohpsk_demod cohpsk_get_test_bits cohpsk_mod cohpsk_put_test_bits deframer fdmdv_channel fdmdv_demod fdmdv_get_test_bits fdmdv_mod fdmdv_put_test_bits fm_demod fmfsk_demod fmfsk_mod framer freedv_data_raw_rx freedv_data_raw_tx freedv_data_rx freedv_data_tx freedv_mixed_rx freedv_mixed_tx freedv_rx freedv_tx fsk_demod fsk_get_test_bits fsk_mod_ext_vco fsk_mod fsk_put_test_bits generate_codebook ldpc_dec ldpc_enc ldpc_noise ofdm_demod ofdm_get_test_bits ofdm_mod ofdm_put_test_bits tollr vhf_deframe_c2 vhf_frame_c2"
     arm-none-eabi-gcc $ARM $COMMON -c data_codec2.c -o c2-data_codec2.o || return 1
     gcc $BASE $COMMON -c data_codec2.c -o c2h-data_codec2.o || return 1
-    OBJS=""
+    C2_OBJS=""
     for f in "$C2"/src/*.c; do
         b=$(basename "$f" .c)
         case " $SKIP " in *" $b "*) continue ;; esac
         arm-none-eabi-gcc $ARM $COMMON -I"$C2" -I"$C2/src" -c "$f" -o "c2-$b.o" || return 1
         gcc $BASE $COMMON -I"$C2" -I"$C2/src" -c "$f" -o "c2h-$b.o" || return 1
-        OBJS="$OBJS c2-$b.o"
+        C2_OBJS="$C2_OBJS c2-$b.o"
     done
+    return 0
+}
+
+codec2() {
+    codec2_build || return
     for m in enc dec; do
         arm-none-eabi-gcc $ARM $COMMON -I"$C2" -I"$C2/src" -DMODE_${m^^} \
             -DFRAMES=21 -c "$ROOT/tests/qemu/codec2_cost.c" -o "c2m-$m-21.o" || return 1
@@ -150,13 +160,34 @@ EOF
         for n in 1 21; do
             arm-none-eabi-gcc $ARM -Wl,--gc-sections -T "$PROBE/common/mps2.ld" \
                 -specs=rdimon.specs -o "codec2-$m-$n.elf" "$PROBE/common/startup.o" \
-                "c2m-$m-$n.o" "c2-data_codec2.o" $OBJS -lrdimon -lm -lc \
+                "c2m-$m-$n.o" "c2-data_codec2.o" $C2_OBJS -lrdimon -lm -lc \
                 2>&1 | grep -E "error|undefined" | head -5
         done
         gcc $BASE -Wl,--gc-sections -o "codec2-$m-host" "c2hm-$m.o" c2h-data_codec2.o \
-            $(echo "$OBJS" | sed 's/c2-/c2h-/g') -lm && \
+            $(echo "$C2_OBJS" | sed 's/c2-/c2h-/g') -lm && \
             ./codec2-$m-host >"codec2-$m-host.log"
         measure "codec2-$m"
+    done
+}
+
+# codec2-stack: high-water mark of the codec thread's stack, on a painted stack
+# of CODEC2_THREAD_STKSIZE bytes (reports/codecs.md section 3.3).  The call runs
+# through an explicit stack switch, so the harness's own frames do not count.
+codec2_stack() {
+    codec2_build || return
+    # The size the firmware reserves, straight from threads.h.
+    STK=$(sed -n 's/^#define CODEC2_THREAD_STKSIZE *\([0-9]*\).*/\1/p' \
+          "$ROOT/openrtx/include/core/threads.h")
+    for m in ENC DEC; do
+        arm-none-eabi-gcc $ARM $COMMON -I"$C2" -I"$C2/src" -I"$ROOT/tests/qemu" \
+            -DMODE_$m -DSTACK_BYTES="$STK" \
+            -c "$ROOT/tests/qemu/codec2_stack.c" -o "cs-$m.o" || return 1
+        arm-none-eabi-gcc $ARM -Wl,--gc-sections -T "$PROBE/common/mps2.ld" \
+            -specs=rdimon.specs -o "cs-$m.elf" "$PROBE/common/startup.o" \
+            "cs-$m.o" $C2_OBJS -lrdimon -lm -lc 2>&1 | grep -E "error|undefined" | head -5
+        timeout 300 qemu-system-arm -M mps2-an505 -nographic \
+            -semihosting-config enable=on,target=native \
+            -kernel "cs-$m.elf" 2>&1 | grep CODEC2-STACK
     done
 }
 
@@ -255,13 +286,16 @@ resample_tone() {
 
 case "$WHAT" in
     codec2)   echo "== codec2 ($V)";   codec2 ;;
+    codec2-stack) echo "== codec2 stack ($V)"; codec2_stack ;;
     acelp)    echo "== acelp ($V)";    acelp ;;
     resample) echo "== resample ($V)"; resample ;;
     resample-tone) echo "== resample tone ($V)"; resample_tone ;;
     all)      echo "== codec2 ($V)";   codec2
               echo "== acelp ($V)";    acelp
               echo "== resample ($V)"; resample
-              echo "== resample tone ($V)"; resample_tone ;;
-    *) echo "usage: $0 [O2|Os] [codec2|acelp|resample|resample-tone|all]"; exit 1 ;;
+              echo "== resample tone ($V)"; resample_tone
+              echo "== codec2 stack ($V)"; codec2_stack ;;
+    *) echo "usage: $0 [O2|Os] [codec2|codec2-stack|acelp|resample|resample-tone|all]"
+       exit 1 ;;
 esac
 echo "logs and ELFs: $OUT"

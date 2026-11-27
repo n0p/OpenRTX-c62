@@ -60,6 +60,18 @@
 #else
 #define RTX_THREAD_STKSIZE    1024
 #endif
+/*
+ * Codec2's thread stack, allocated from the heap by audio_codec.c.  The review
+ * proposed 8 KiB (reports/codecs.md section 3.3) on a static frame chain of
+ * 7 016 B, but the chain is deeper than its largest frame: measured with
+ * tests/qemu/codec2_stack.c (painted stack, explicit stack switch, the same
+ * code and flags), the decoder uses 15 484 B and the encoder 10 716 B.  Built
+ * at -O2 instead of -Os the decode figure moves by 72 B, and on an 8 KiB stack
+ * the same harness never returns.  So the reserve stays at 16 KiB: 900 B of
+ * headroom is thin, but it is what this radio has been running with and the
+ * alternative takes the space from the heap codec2's 37 KiB of state also
+ * comes from.
+ */
 #define CODEC2_THREAD_STKSIZE 16384
 #define AUDIO_THREAD_STKSIZE  512
 
