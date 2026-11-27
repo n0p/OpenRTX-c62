@@ -210,6 +210,21 @@ class Audit:
                                % (name, self.d()["radio"]["mode"]))
         return self.d()
 
+
+    def open_tools(self):
+        """Leave whatever is on screen and open the tools menu with a P1 tap.
+
+        A tap opens it now (docs/UI.md), and a tap is one keypress instead of a
+        held one: it has to land when the main screen is already there, or the
+        UI swallows it -- which is what a key held for 400 ms used to hide.
+        """
+        for _ in range(4):
+            self.home()
+            self.key("P1")
+            if self.d()["tools"]["open"]:
+                return self.d()
+        raise RuntimeError("P1 does not open the tools menu")
+
     def tools_to(self, label):
         for _ in range(14):
             t = self.d()["tools"]
@@ -581,8 +596,7 @@ class Audit:
 
     def walk_tools(self):
         self.mode("FM")
-        self.home()
-        self.key("P1")
+        self.open_tools()
         d = self.d()
         rows = list(d["tools"]["rows"])
         screen = {"screen": "TOOLS_MENU", "title": "tools (P1)", "rows": [],
@@ -628,8 +642,7 @@ class Audit:
                                           a["modules"].items() if v})
             item["enter"] = ch or ["no change"]
             screen["rows"].append(item)
-            self.home()
-            self.key("P1")
+            self.open_tools()
 
         # the mode submenu, row by row: green applies and leaves
         self.tools_to("Mode")
@@ -651,8 +664,7 @@ class Audit:
                                              a["radio"]["mode"]))
             item["enter"] = ch or ["no change"]
             sub["rows"].append(item)
-            self.home()
-            self.key("P1")
+            self.open_tools()
             self.tools_to("Mode")
             self.key("GREEN")
         self.key("RED")
@@ -755,15 +767,14 @@ class Audit:
 
         # the in-radio channel bank, through the tools menu
         self.mode("FM")
-        self.home()
-        self.key("P1")
+        self.open_tools()
         self.tools_to("Channels")
         self.key("GREEN")
         self.module_screen("Channels (in-radio bank)",
-                           lambda: (self.home(), self.key("P1"),
+                           lambda: (self.open_tools(),
                                     self.tools_to("Channels"), self.key("GREEN")))
         self.module_screen("Channel editor",
-                           lambda: (self.home(), self.key("P1"),
+                           lambda: (self.open_tools(),
                                     self.tools_to("Channels"), self.key("GREEN"),
                                     self.key("P1")))
 

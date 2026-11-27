@@ -20,6 +20,13 @@
 #include <stdio.h>
 #include <errno.h>
 #include "core/dsp.h"
+
+#ifdef __ZEPHYR__
+#include <zephyr/sys/printk.h>
+#else
+/* The host build has no console: the two diagnostics below are for the radio */
+#define printk(...) do { } while (0)
+#endif
 #include "core/utils.h"
 #include "hwconfig.h"
 
@@ -219,6 +226,17 @@ static void *encodeFunc(void *arg)
     dsp_resetState(dcBlock);
     dsp_resetState(decimator);
     codec2 = codec2_create(CODEC2_MODE_3200);
+    if (codec2 == NULL) {
+        /* Same rule as the stack above: no vocoder, no encoding, and the
+         * caller is told instead of the radio taking a fault in codec2_encode */
+        printk("codec: codec2_create() failed, no encoder\n");
+        audioStream_terminate(iStream);
+        activeStream = -1;
+        free(adcBuf);
+        running = false;
+        pthread_detach(pthread_self());
+        return NULL;
+    }
 
     while (reqStop == false) {
         // Invalid audio path, quit
@@ -418,8 +436,23 @@ static bool startThread(const pathId path, void *(*func)(void *))
     param.sched_priority = THREAD_PRIO_HIGH;
     pthread_attr_setschedparam(&codecAttr, &param);
 #elif defined(__ZEPHYR__)
-    // Allocate and set the stack for CODEC2 thread
+    /*
+     * Allocate and set the stack for the CODEC2 thread.  The result is checked:
+     * handing a NULL stack to pthread_attr_setstack() puts the first context
+     * switch of the thread on address 0, which on this SoC is an immediate
+     * fault and a reboot -- the radio restarted the instant PTT was pressed in
+     * M17, the only mode that starts this thread.  A codec with no stack is a
+     * codec that cannot run, not a reason to lose the radio: the caller is told
+     * and refuses the transmission.
+     */
     void *codec_thread_stack = malloc(CODEC2_THREAD_STKSIZE * sizeof(uint8_t));
+    if (codec_thread_stack == NULL) {
+        printk("codec: no stack for the codec thread (%u B)\n",
+               (unsigned)CODEC2_THREAD_STKSIZE);
+        running = false;
+        audioPath = -1;
+        return false;
+    }
     pthread_attr_setstack(&codecAttr, codec_thread_stack,
                           CODEC2_THREAD_STKSIZE);
 #endif
