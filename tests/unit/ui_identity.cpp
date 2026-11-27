@@ -121,6 +121,7 @@ void resetUi(void)
     state.ui_screen                = MAIN_VFO;
     state.tuner_mode               = VFO;
     state.txDisable                = false;
+    state.unattendedTxDisable = false;
     state.settings                 = default_settings;
     state.settings.vpLevel         = vpNone;   /* silent in the harness */
 

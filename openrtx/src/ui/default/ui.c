@@ -1754,8 +1754,25 @@ void ui_open_screen(uint8_t screen, uint8_t item)
                  || ui_packet_isScreen(state.ui_screen)
 #endif
                  ;
+
+    /*
+     * The unattended gate follows the same rule with one exception: the
+     * messaging and APRS screens are where the operator asks for a
+     * transmission without a PTT, so a message has to be able to leave while
+     * one of them is up (core/state.h, _ui_syncTxDisable()).
+     */
+    bool unattendedOwned = ownsKeys && (ui_msgs_isScreen(state.ui_screen) == false);
+#ifdef CONFIG_APRS
+    unattendedOwned = unattendedOwned
+                   && (ui_aprs_isScreen(state.ui_screen) == false);
+#endif
+
     if (state.txDisable != ownsKeys) {
         state.txDisable = ownsKeys;
+        ui_rtxSyncRequest = true;
+    }
+    if (state.unattendedTxDisable != unattendedOwned) {
+        state.unattendedTxDisable = unattendedOwned;
         ui_rtxSyncRequest = true;
     }
 }
@@ -1888,6 +1905,14 @@ static void _ui_vfoSearchTick(long long now)
  * until the next key press. The rule is a property of the whole UI, not of a
  * screen: the PTT is armed on the two main screens only, and no overlay and no
  * menu is one of those.
+ *
+ * The unattended gate is a second, separate question. It is the same rule --
+ * an overlay means an operator is in a menu, not listening on a channel -- with
+ * one exception: the messaging and APRS screens are where the operator *asks*
+ * for a transmission without a PTT (a queued message, a beacon, an
+ * acknowledgement). Keeping it closed there held the message until he went back
+ * to the main screen, so the radio did not transmit when he sent a message and
+ * did when he left the screen; the screen said "SENT" either way.
  */
 static void _ui_syncTxDisable(bool *sync_rtx)
 {
@@ -1912,9 +1937,29 @@ static void _ui_syncTxDisable(bool *sync_rtx)
     /* txDisable is the opposite: true means "do not transmit" */
     const bool wantDisabled = !keyable;
 
+    /*
+     * The screens that send messages unattended keep their own gate open. They
+     * are only reachable as menus, so keyable is already false there; what
+     * changes is the second flag.
+     */
+    bool unattendedKeyable = keyable
+                          || ui_msgs_isScreen(state.ui_screen);
+#ifdef CONFIG_APRS
+    unattendedKeyable = unattendedKeyable
+                     || ui_aprs_isScreen(state.ui_screen);
+#endif
+
+    const bool wantUnattendedDisabled = !unattendedKeyable;
+
     if (state.txDisable != wantDisabled)
     {
         state.txDisable = wantDisabled;
+        *sync_rtx = true;
+    }
+
+    if (state.unattendedTxDisable != wantUnattendedDisabled)
+    {
+        state.unattendedTxDisable = wantUnattendedDisabled;
         *sync_rtx = true;
     }
 }

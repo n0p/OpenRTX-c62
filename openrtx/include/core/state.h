@@ -52,6 +52,16 @@ typedef struct {
     bool backup_eflash;
     bool restore_eflash;
     bool txDisable;
+
+    /**
+     * Disable transmitting without an operator (queued messages, APRS).
+     *
+     * Separate from txDisable, which is the PTT: the messaging and APRS
+     * screens keep the PTT blocked while they are open -- a key pressed while
+     * typing must not key the radio -- but the message or the beacon the
+     * operator has just asked for still has to go out from there.
+     */
+    bool unattendedTxDisable;
     uint8_t step_index;
 
     /**

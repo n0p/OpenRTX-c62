@@ -799,6 +799,9 @@ int chstore_applyRtx(uint16_t idx, rtxStatus_t *rtx)
     rtx->txPower = ch->power;
     rtx->bandwidth = ch->bandwidth;
     rtx->txDisable = (ch->flags & CHSTORE_FLAG_RX_ONLY) ? 1 : 0;
+    /* A receive-only channel closes the unattended gate too: no message may
+     * key it either, whatever screen is up. */
+    rtx->unattendedTxDisable = rtx->txDisable;
 
     rtx->rxToneEn = ch->rx_tone_en;
     rtx->rxTone = ch->rx_tone_en ? ctcssFreqFromIndex(ch->rx_tone) : 0;

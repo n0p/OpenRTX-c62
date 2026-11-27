@@ -90,6 +90,7 @@ void resetUi(void)
     state.ui_screen             = MAIN_VFO;
     state.tuner_mode            = VFO;
     state.txDisable             = false;
+    state.unattendedTxDisable = false;
     state.charge                = 100;
     state.emergency             = false;
     state.step_index            = 1;

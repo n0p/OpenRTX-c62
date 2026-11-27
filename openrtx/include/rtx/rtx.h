@@ -24,10 +24,11 @@ typedef struct
     uint8_t opMode;         /**< Operating mode (FM, DMR, ...) */
 
     uint8_t bandwidth : 2,  /**< Channel bandwidth             */
-            txDisable : 1,  /**< Disable TX operation          */
+            txDisable : 1,  /**< Disable TX operation (the PTT)  */
+            unattendedTxDisable : 1, /**< Disable TX without a PTT */
             scan      : 1,  /**< Scan enabled                  */
             opStatus  : 2,  /**< Operating status (OFF, ...)   */
-            _padding  : 2;  /**< Padding to 8 bits             */
+            _padding  : 1;  /**< Padding to 8 bits             */
 
     freq_t rxFrequency;     /**< RX frequency, in Hz           */
     freq_t txFrequency;     /**< TX frequency, in Hz           */
@@ -219,6 +220,11 @@ const char *rtx_keyingVetoReason(void);
  *
  * It waits for the mode change to end and settle, and never runs while the PTT
  * is down during it.
+ *
+ * The configuration flag it reads is not the PTT's txDisable: the screens that
+ * *send* the messages (the messaging ones, the APRS ones) keep the PTT blocked
+ * -- a key pressed while typing must not key the radio -- while still letting
+ * the message the operator queued go out.  A receive-only channel sets both.
  *
  * @param status: the configuration the caller is acting on, or NULL.
  * @return true only if the transmitter may be keyed without the PTT.

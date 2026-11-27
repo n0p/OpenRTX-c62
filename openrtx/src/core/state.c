@@ -196,6 +196,7 @@ void state_init()
     state.rtxStatus = RTX_OFF;
     state.emergency = false;
     state.txDisable = false;
+    state.unattendedTxDisable = false;
     state.step_index = 4; // Default frequency step 12.5kHz
 
     // Force brightness field to be in range 0 - 100

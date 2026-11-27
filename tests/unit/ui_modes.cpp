@@ -522,6 +522,7 @@ TEST_CASE("A mode page never leaves the screen or the popup in a bad state",
     /* Back to a clean state for the rest of the suite */
     state.ui_screen = MAIN_VFO;
     state.txDisable = false;
+    state.unattendedTxDisable = false;
     qm_close();
     qm_page_close();
 }
