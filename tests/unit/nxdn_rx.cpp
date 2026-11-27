@@ -450,3 +450,55 @@ TEST_CASE("NXDN VCH carries no coding of its own", "[nxdn][rx][fec]")
         REQUIRE(differences == 1);
     }
 }
+
+TEST_CASE("a slot with half its voice stolen keeps the half that is voice",
+          "[nxdn][lich]")
+{
+    /*
+     * The steal field of the LICH says which VCH pair carries FACCH1.  A
+     * receiver that has the two cases swapped feeds 36 Golay coded signalling
+     * dibits to the vocoder as AMBE+2 -- which always produces something, at
+     * speech volume -- and drops the two voice frames of the slot, and this
+     * happens on every call setup, DTMF, status and release of a real system.
+     * The names here are the enum's (NxdnDefs.h): FIRST is VCH1/VCH2, SECOND
+     * is VCH3/VCH4, so the surviving voice half is the other one.
+     */
+    struct nxdnLich lich;
+    int first = -1;
+    int count = -1;
+
+    std::memset(&lich, 0, sizeof(lich));
+    lich.rfType = NXDN_RF_RDCH;
+    lich.usc = NXDN_USC_SACCH_SF;
+
+    lich.steal = NXDN_STEAL_NONE;
+    nxdnLichVoice(&lich, &first, &count);
+    REQUIRE(first == 0);
+    REQUIRE(count == 4);
+
+    lich.steal = NXDN_STEAL_FIRST; /* VCH1/VCH2 are FACCH1 */
+    nxdnLichVoice(&lich, &first, &count);
+    REQUIRE(first == 2);
+    REQUIRE(count == 2);
+
+    lich.steal = NXDN_STEAL_SECOND; /* VCH3/VCH4 are FACCH1 */
+    nxdnLichVoice(&lich, &first, &count);
+    REQUIRE(first == 0);
+    REQUIRE(count == 2);
+
+    /* Both halves stolen: no voice, and the mode must not decode any */
+    lich.steal = NXDN_STEAL_BOTH;
+    first = 0;
+    count = 4;
+    nxdnLichVoice(&lich, &first, &count);
+    REQUIRE(count == 0);
+
+    /* The same thing through the wire format: the field is LICH bits 2:1 */
+    nxdnLichParse((uint8_t)((NXDN_RF_RDCH << 5) | (NXDN_USC_SACCH_SF << 3)
+                            | (NXDN_STEAL_FIRST << 1) | 1u),
+                  &lich);
+    REQUIRE(lich.steal == NXDN_STEAL_FIRST);
+    nxdnLichVoice(&lich, &first, &count);
+    REQUIRE(first == 2);
+    REQUIRE(count == 2);
+}
