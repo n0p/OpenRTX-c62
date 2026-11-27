@@ -290,6 +290,15 @@ void OpMode_DSTAR::update(rtxStatus_t *const rtx, const bool newCfg)
         stopTx();
         radio_disableRtx();
         if (startRx) {
+            /*
+             * Entering the mode, or coming back from a transmission: the
+             * receiver is asked for here.  Without this the chip stayed as
+             * radio_disableRtx() left it (OFF, LNA off, audio path closed), so
+             * the mode never received anything and switchMode() took the radio
+             * back to the previous mode after its 300 ms wait
+             * (rtx.cpp, modeStarted()).
+             */
+            radio_enableRx();
             rtx->opStatus = RX;
             return;
         }
