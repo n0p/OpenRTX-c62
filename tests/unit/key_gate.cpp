@@ -175,3 +175,43 @@ TEST_CASE("keying with the PTT up needs a grant from the unattended path",
     /* The grant is short: a stale one cannot key a later mode */
     REQUIRE_FALSE(keyGate_unattendedGranted(&g, 2100));
 }
+
+/*
+ * The transmit watchdog's cut.  When the bar is spent the radio cuts a
+ * transmission the operator is still asking for -- a stuck key, a PTT line
+ * held low by a cable -- and the press has to be treated as over: nothing may
+ * key again until the line has been seen up.  Without this the gate kept the
+ * `released` it saw when the press began, the driver's own bar expired a
+ * second later and the radio transmitted 90 s out of every 91, for ever.
+ */
+TEST_CASE("A press spent by the transmit watchdog has to be released and pressed again",
+          "[rtx][keygate]")
+{
+    struct keyGate g;
+
+    /* The radio comes up with the line up, then the operator presses */
+    keyGate_init(&g, 0);
+    keyGate_endTransition(&g, 10);
+    keyGate_sample(&g, 20, false);
+
+    for (uint32_t t = 30; t < 200; t += 5)
+        keyGate_sample(&g, t, true);
+
+    REQUIRE(keyGate_pttKey(&g, 200));
+
+    /* Ninety seconds later the watchdog cuts it and forgets the press */
+    keyGate_forgetPress(&g);
+
+    /* The line is still low: no more keying, however long it stays low */
+    for (uint32_t t = 201; t < 5000; t += 5) {
+        keyGate_sample(&g, t, true);
+        REQUIRE_FALSE(keyGate_pttKey(&g, t));
+    }
+
+    /* Released and pressed again: the radio keys, as it must */
+    keyGate_sample(&g, 5010, false);
+    for (uint32_t t = 5015; t < 5200; t += 5)
+        keyGate_sample(&g, t, true);
+
+    REQUIRE(keyGate_pttKey(&g, 5200));
+}

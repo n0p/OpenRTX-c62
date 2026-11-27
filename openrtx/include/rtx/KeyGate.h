@@ -91,6 +91,25 @@ static inline void keyGate_beginTransition(struct keyGate *g, uint32_t now)
 }
 
 /**
+ * Forget that the PTT was pressed, without starting a mode change.
+ *
+ * For the one case where the radio has just cut a transmission that is still
+ * being asked for -- the transmit watchdog --: the press is spent, so keying
+ * has to wait until the operator lets go and presses again.  Without it the
+ * gate keeps `released` and `ptt` from before the cut and the next pass grants
+ * the same stuck press, which is a transmitter that runs 90 s out of every 91
+ * for as long as the line stays low.
+ *
+ * @param g: gate.
+ */
+static inline void keyGate_forgetPress(struct keyGate *g)
+{
+    g->released = false;
+    g->ptt      = false;
+    g->pressAt  = 0;
+}
+
+/**
  * The mode change ended: keep the veto for the guard time and settle the
  * unattended path.
  *

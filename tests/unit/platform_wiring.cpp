@@ -272,3 +272,28 @@ TEST_CASE("the transmit clock is fed from the driver state, in the supervisor",
     REQUIRE_MSG(abortFn.find("abortTx()") != std::string::npos,
                 "before it asks the mode to unwind");
 }
+
+TEST_CASE("the cut forgets the press, or a stuck PTT transmits for ever",
+          "[wiring][txwatch]")
+{
+    /*
+     * tests/unit/key_gate.cpp proves the rule: a press spent by the watchdog
+     * has to be released before the radio keys again.  What it cannot see is
+     * whether the supervisor still tells the gate so -- and without that call
+     * the driver's own bar expires a second after the cut, the gate remembers
+     * the `released` it saw when the stuck press began, and the radio
+     * transmits 90 s of every 91 until the battery is gone.
+     */
+    const std::string src = readSource("openrtx/src/rtx/rtx.cpp");
+
+    REQUIRE_MSG(countOf(src, "keyGate_forgetPress(&keyGate)") == 1,
+                "the supervisor forgets the press when the clock cuts");
+
+    /* Inside the cut, not somewhere else in the file */
+    const size_t cutAt = src.find("if (clockCut)");
+    REQUIRE(cutAt != std::string::npos);
+    const std::string cutBlock = src.substr(cutAt, 900);
+    REQUIRE_MSG(cutBlock.find("keyGate_forgetPress(&keyGate)")
+                    != std::string::npos,
+                "and it does so on the clock cut itself");
+}

@@ -792,6 +792,15 @@ void rtx_supervise()
     {
         txWatchTimedOut = true;
         txWatchCutActive = true;
+        /*
+         * The bar was spent by a transmission somebody is still asking for:
+         * the press is over, and the gate must see the line released before it
+         * can key again.  Otherwise the driver's own bar expires a second
+         * later, the gate still remembers `released` and `ptt` from before the
+         * cut, and the radio transmits 90 s of every 91 for ever -- the exact
+         * failure the watchdog is here to prevent.
+         */
+        keyGate_forgetPress(&keyGate);
     }
 
     if (guardAbort || clockCut || clockStuck)
