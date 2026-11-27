@@ -2480,6 +2480,14 @@ test('AGC Test',             agc_test)
 test('AM TX Test',           am_tx_test)
 test('Airband Test',         airband_test)
 test('Radio Plan Test',      regplan_test)
+
+# The rule no host test can see: a callback registered for a timer, an interrupt
+# or the audio driver runs in interrupt context, where Zephyr forbids locking a
+# mutex and logging.  Doing either aborts the kernel and reboots the radio --
+# which is how M17 died on the first PTT -- and on Linux both are legal, so this
+# is a source check rather than a program under test.
+isr_rules = find_program('tools/check_isr_rules.py')
+test('Interrupt Context Rules', isr_rules)
 test('Broadcast FM Test',    wfm_test)
 
 test('Spectrum Test',        spectrum_test)
