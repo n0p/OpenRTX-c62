@@ -292,6 +292,16 @@ bool messaging_dirty(void);
 int messaging_serialise(uint8_t *buf, size_t cap);
 
 /**
+ * True when this is a record this build can use: the magic, the version, the
+ * counts inside and the CRC over everything before its last two bytes.
+ *
+ * It is what tells a sector whose write a power cut interrupted from one that
+ * was written whole, so it has to be usable without restoring anything: the
+ * store asks the question on the bytes it has read, and only then decides.
+ */
+bool messaging_recordValid(const uint8_t *buf, size_t len);
+
+/**
  * Restore the store from a record written by messaging_serialise().
  *
  * @return the number of messages restored, -1 if the record is not usable.

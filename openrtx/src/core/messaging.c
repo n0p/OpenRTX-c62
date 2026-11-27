@@ -731,18 +731,22 @@ tooBig:
     return -1;
 }
 
+bool messaging_recordValid(const uint8_t *buf, size_t len)
+{
+    if ((buf == NULL) || (len < 11))
+        return false;
+    if ((memcmp(buf, "MSG1", 4) != 0) || (buf[4] != MSG_RECORD_VERSION))
+        return false;
+
+    uint16_t want = (uint16_t)(((uint16_t)buf[len - 2] << 8) | buf[len - 1]);
+
+    return (crc16(buf, len - 2) == want)
+           && (buf[6] <= MSG_OUTBOX_LEN) && (buf[5] <= MSG_INBOX_LEN);
+}
+
 int messaging_deserialise(const uint8_t *buf, size_t len)
 {
-    bool usable = (buf != NULL) && (len >= 11)
-                  && (memcmp(buf, "MSG1", 4) == 0)
-                  && (buf[4] == MSG_RECORD_VERSION);
-
-    if (usable) {
-        uint16_t want = (uint16_t)(((uint16_t)buf[len - 2] << 8) | buf[len - 1]);
-
-        usable = (crc16(buf, len - 2) == want)
-                 && (buf[6] <= MSG_OUTBOX_LEN) && (buf[5] <= MSG_INBOX_LEN);
-    }
+    bool usable = messaging_recordValid(buf, len);
 
     if (!usable) {
         /* a record that does not check out must not leave stale entries */
