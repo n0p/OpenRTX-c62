@@ -562,7 +562,7 @@ int _ui_getFMValueName(char* buf, uint8_t max_len, uint8_t index)
 
     switch (index) {
         case CTCSS_Tone: {
-            uint16_t tone = ctcss_tone[last_state.channel.fm.txTone];
+            uint16_t tone = ctcssFreqFromIndex(last_state.channel.fm.txTone);
             sniprintf(buf, max_len, "%d.%d", (tone / 10), (tone % 10));
             break;
         }
@@ -975,14 +975,24 @@ void _ui_drawMenuAbout(ui_state_t* ui_state)
 
     point_t pos = {CONFIG_SCREEN_WIDTH / 7, CONFIG_SCREEN_HEIGHT - (layout.menu_h * 3) - 5};
     uint8_t entries_in_screen = (CONFIG_SCREEN_HEIGHT - 1 - pos.y) / layout.menu_h + 1;
-    uint8_t max_scroll = author_num - entries_in_screen;
 
-    if(ui_state->menu_selected >= max_scroll)
-        ui_state->menu_selected = max_scroll;
+    /*
+     * Signed, and floored at zero: with more rows on the panel than authors in
+     * the array the difference is negative, and in an unsigned it came out as
+     * a huge number -- the clamp then did nothing and authors[] was indexed out
+     * of bounds, with the "%s" printing whatever pointer was there.
+     */
+    int max_scroll = (author_num > entries_in_screen)
+                   ? (author_num - entries_in_screen) : 0;
+
+    if((int)ui_state->menu_selected > max_scroll)
+        ui_state->menu_selected = (uint8_t)max_scroll;
 
     for(uint8_t item = 0; item < entries_in_screen; item++)
     {
         uint8_t elem = ui_state->menu_selected + item;
+        if(elem >= author_num)
+            break;
         gfx_print(pos, layout.menu_font, TEXT_ALIGN_LEFT, color_white, authors[elem]);
         pos.y += layout.menu_h;
     }
@@ -1337,7 +1347,7 @@ bool _ui_drawMacroMenu(ui_state_t* ui_state)
 
             gfx_print(layout.line1_pos, layout.top_font, TEXT_ALIGN_LEFT,
                       color_white, encdec_str);
-            uint16_t tone = ctcss_tone[last_state.channel.fm.txTone];
+            uint16_t tone = ctcssFreqFromIndex(last_state.channel.fm.txTone);
             gfx_print(layout.line1_pos, layout.top_font, TEXT_ALIGN_LEFT,
                       color_white, "       %d.%d", (tone / 10), (tone % 10));
 #if defined(CONFIG_UI_NO_KEYBOARD)

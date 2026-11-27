@@ -197,6 +197,23 @@ void messaging_fail(int id, uint32_t now);
 /** @return the message with that id, NULL if it is gone. */
 struct message *messaging_find(int id);
 
+/**
+ * Copy a message by value.
+ *
+ * messaging_find() and messaging_head() hand out a pointer into the outbox and
+ * release the lock: the entry stays alive but it can change owner (a new
+ * message reuses a finished slot), so anything read through the pointer after
+ * another call into this module is a guess.  A caller that needs more than one
+ * field, or that acts on the message after calling something else, takes a
+ * copy with this and works from it.  That is the only way the text it reads is
+ * the text of the message it looked up.
+ *
+ * @param id: message id.
+ * @param out: destination, filled only when the message exists.
+ * @return 0 on success, -1 if there is no live message with that id.
+ */
+int messaging_copy(int id, struct message *out);
+
 /* ------------------------------------------------------------- inbound --- */
 
 /**

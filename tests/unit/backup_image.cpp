@@ -40,6 +40,7 @@ extern "C" {
 #include "core/state.h"
 #include "core/zones.h"
 #include "interfaces/nvmem.h"
+#include "core/nvmem_access.h"
 }
 
 extern state_t state;
@@ -710,4 +711,42 @@ TEST_CASE("An empty part is NO BACKUP, not a damaged record", "[backup][record]"
     CHECK_FALSE(info.valid);
     CHECK(bkp_restore() == BKP_ERR_NO_BACKUP);
     CHECK(std::string(bkp_lastResult()) == "NO BACKUP");
+}
+
+/*
+ * An NVM access whose offset and length overflow the 32-bit sum is refused,
+ * and so is any plain overrun of the partition.
+ *
+ * The bounds check was `offset + len > np.size`.  The offset comes from the
+ * caller -- the PC protocol can reach it -- and on the radio both operands are
+ * 32 bit, so a large offset wrapped the sum round, passed the check, and the
+ * access landed at baseAddr+offset: another partition of the same flash, the
+ * factory area or the DSP image, written through by a request that looked
+ * legal.
+ *
+ * A 64-bit host promotes the sum to size_t and does not wrap, so the three
+ * overflowing cases below only fail on a 32-bit build (the radio, and an armhf
+ * host running this suite); the subtraction form is what makes them fail
+ * everywhere.  The plain overruns after them are checked on every host.
+ */
+TEST_CASE("An NVM access past the partition is refused, overflow or not",
+          "[nvm]")
+{
+    uint8_t buf[32] = {0};
+
+    /* The host NVM has to be open for the "inside" case to mean anything */
+    scratch();
+
+    /* offset + len == 0x10, which used to look like "inside a 512 B partition" */
+    REQUIRE(nvm_read(0, 1, 0xFFFFFFF0u, buf, 0x20) == -EINVAL);
+    REQUIRE(nvm_write(0, 1, 0xFFFFFFF0u, buf, 0x20) == -EINVAL);
+    REQUIRE(nvm_erase(0, 1, 0xFFFFFFF0u, 0x20) == -EINVAL);
+
+    /* A plain overrun of the host partition (512 bytes) is refused too */
+    REQUIRE(nvm_read(0, 1, 0x1F0u, buf, 0x20) == -EINVAL);
+    REQUIRE(nvm_write(0, 1, 0x1F0u, buf, 0x20) == -EINVAL);
+    REQUIRE(nvm_erase(0, 1, 0x1F0u, 0x20) == -EINVAL);
+
+    /* And the last byte of it is still reachable */
+    REQUIRE(nvm_read(0, 1, 0x1FFu, buf, 1) == 0);
 }

@@ -11,6 +11,7 @@
 #include "core/datatypes.h"
 #include <stdbool.h>
 #include <stddef.h>
+#include <string.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -56,7 +57,44 @@ extern "C" {
  *       which is what makes a version 7 record a prefix of a version 8 one and
  *       lets settings_record.c migrate it instead of dropping it.
  */
-#define SETTINGS_VERSION 8
+/*
+ * Which of the optional blocks this build carries.
+ *
+ * CONFIG_APRS and CONFIG_KISS put fields in the middle of settings_t, not at
+ * its end: two builds that disagree about them write the same structure with
+ * different sizes *and* different offsets for everything behind the block, so
+ * a record of one is not a record of the other in any sense.  Folding the set
+ * of blocks into the version number makes the record say which build wrote it,
+ * and a record from the other build is then reported as "another version"
+ * instead of being dropped as corrupt -- which is what the operator needs to
+ * see so as not to go looking for a fault that is a rebuild.
+ *
+ * Version 8 with neither block is 8 exactly, so the records of a build without
+ * them keep the number they always had.
+ */
+/** Bits of the record version that describe the set of optional blocks. */
+#define SETTINGS_VERSION_BLOCKS_MASK 0x0300u
+
+#if defined(CONFIG_APRS)
+#define SETTINGS_BLOCK_APRS_BIT 0x0100u
+#else
+#define SETTINGS_BLOCK_APRS_BIT 0x0000u
+#endif
+
+#if defined(CONFIG_KISS)
+#define SETTINGS_BLOCK_KISS_BIT 0x0200u
+#else
+#define SETTINGS_BLOCK_KISS_BIT 0x0000u
+#endif
+
+/**
+ * Version this build writes in a settings record: the payload version in the
+ * low byte, the set of optional blocks above it.  A record is usable only when
+ * this number matches, which is what keeps a build from reading another
+ * build's layout.
+ */
+#define SETTINGS_VERSION \
+    (8u | SETTINGS_BLOCK_APRS_BIT | SETTINGS_BLOCK_KISS_BIT)
 
 typedef enum
 {
@@ -434,12 +472,32 @@ static inline bool settings_callsignValid(const char *cs)
                   (c == '/') || (c == '-') || (c == ' ');
         if (!ok)
             return false;
+        /*
+         * A field that arrives from another tool may have no terminator: stop
+         * at the end of the field instead of reading through what follows it.
+         */
+        if ((n + 1) >= SETTINGS_CALLSIGN_LEN)
+            return false;
     }
 
-    if ((n >= SETTINGS_CALLSIGN_LEN) || (cs[n - 1] == ' '))
+    if (cs[n - 1] == ' ')
         return false;
 
     return true;
+}
+
+/**
+ * Same check for a callsign as it sits in a settings record or a backup: the
+ * field is 10 bytes and may have lost (or never had) its terminator, which is
+ * exactly the case settings_callsignValid() cannot see on its own.
+ */
+static inline bool settings_callsignFieldValid(
+    const char field[SETTINGS_CALLSIGN_LEN])
+{
+    if (memchr(field, '\0', SETTINGS_CALLSIGN_LEN) == NULL)
+        return false;
+
+    return settings_callsignValid(field);
 }
 
 /**

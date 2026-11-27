@@ -27,8 +27,32 @@
 
 static const struct chstorePort *port = NULL;
 
+/*
+ * The bank is touched by two threads: the state task writes it back from
+ * chstore_task() and the UI edits it from the keypad.  The 4 KiB array, the
+ * count and the pending flag are not atomic, and bankWrite() computes the
+ * payload CRC before it writes the bytes: an edit landing between the two
+ * leaves a slot whose CRC does not describe its contents, which the next boot
+ * reads as a broken newest slot and replaces with the previous bank -- the
+ * operator's change disappears and the screen says "WRITE FAILED" without
+ * saying why.  A mutex of the store's own, like the one core/messaging.c uses;
+ * on the host build the store is driven from one thread at a time and this
+ * compiles away.
+ */
+#ifdef __ZEPHYR__
+#include <zephyr/kernel.h>
+static struct k_mutex bankLock;
+#define BANK_LOCK()   ((void)k_mutex_lock(&bankLock, K_FOREVER))
+#define BANK_UNLOCK() ((void)k_mutex_unlock(&bankLock))
+#else
+#define BANK_LOCK()   ((void)0)
+#define BANK_UNLOCK() ((void)0)
+#endif
+
 /* The bank itself: 4 KiB, the RAM cost of the whole feature. */
 static chstore_channel_t bank[CHSTORE_MAX_CHANNELS] PSRAM_STATE;
+
+static int commitLocked(void);
 
 static uint16_t nbChannels = 0;
 static uint16_t lastUsedIdx = CHSTORE_NONE;
@@ -172,6 +196,34 @@ static void slotAdopt(uint8_t slot, const chstore_hdr_t *hdr)
 }
 
 /*
+ * Read back a range and compare it with what was meant to be written.
+ *
+ * A device can report a successful write and have programmed less than it was
+ * given -- a page boundary, a busy chip that dropped the tail -- so the only
+ * confirmation worth anything is the bytes that come out of the flash.
+ */
+static int verifyBack(uint32_t off, const void *data, size_t len)
+{
+    uint8_t chunk[CHSTORE_VERIFY_CHUNK];
+    const uint8_t *want = (const uint8_t *)data;
+    size_t done = 0;
+
+    while (done < len) {
+        size_t n = len - done;
+
+        if (n > sizeof(chunk))
+            n = sizeof(chunk);
+        if (port->read(port->ctx, off + (uint32_t)done, chunk, n) != 0)
+            return -EIO;
+        if (memcmp(chunk, want + done, n) != 0)
+            return -EIO;
+        done += n;
+    }
+
+    return 0;
+}
+
+/*
  * Write the bank to the slot that is not active, then re-read the header to
  * confirm what landed. On success that slot becomes the active one; on failure
  * the previous slot is still the newest valid record.
@@ -218,6 +270,17 @@ static int bankWrite(void)
         check.pcrc != hdr.pcrc)
         return -EIO;
 
+    /*
+     * The header says what the payload should be; only the payload says
+     * whether it is there.  A write that stopped short leaves a header that
+     * validates -- it was written first and completely -- over a bank whose
+     * CRC does not match it.  Adopting that slot would make it the active one,
+     * so the next save would erase the only slot still holding a good bank,
+     * and the radio would boot without channels after a second failure.
+     */
+    if (verifyBack(off + sizeof(hdr), bank, len) != 0)
+        return -EIO;
+
     sequence = hdr.sequence;
     activeSlot = (int8_t)slot;
     pending = false;
@@ -225,11 +288,16 @@ static int bankWrite(void)
     return 0;
 }
 
-/* Mark the bank as changed in RAM and write it back at once. */
+/*
+ * Mark the bank as changed in RAM and write it back at once.
+ *
+ * The caller holds the bank lock: the CRC bankWrite() computes has to describe
+ * the bytes it writes, and only the lock can promise that.
+ */
 static int bankCommit(void)
 {
     pending = true;
-    return chstore_commit();
+    return commitLocked();
 }
 
 void chstore_bind(const struct chstorePort *p)
@@ -238,7 +306,20 @@ void chstore_bind(const struct chstorePort *p)
     ready = false;
 }
 
-int chstore_init(void)
+static void bankLockInit(void)
+{
+#ifdef __ZEPHYR__
+    static bool ready = false;
+
+    if (!ready) {
+        k_mutex_init(&bankLock);
+        ready = true;
+    }
+#endif
+}
+
+/* Body of chstore_init(), run by a caller that already holds the lock. */
+static int initLocked(void)
 {
     chstore_hdr_t ha, hb;
     int va, vb;
@@ -288,18 +369,44 @@ int chstore_init(void)
     return 0;
 }
 
+int chstore_init(void)
+{
+    int ret;
+
+    bankLockInit();
+    BANK_LOCK();
+    ret = initLocked();
+    BANK_UNLOCK();
+
+    return ret;
+}
+
 int chstore_count(void)
 {
-    return (int)nbChannels;
+    int n;
+
+    BANK_LOCK();
+    n = (int)nbChannels;
+    BANK_UNLOCK();
+
+    return n;
 }
 
 int chstore_get(uint16_t idx, chstore_channel_t *out)
 {
-    if (out == NULL || idx >= nbChannels)
+    int ret = 0;
+
+    if (out == NULL)
         return -EINVAL;
 
-    *out = bank[idx];
-    return 0;
+    BANK_LOCK();
+    if (idx >= nbChannels)
+        ret = -EINVAL;
+    else
+        *out = bank[idx];
+    BANK_UNLOCK();
+
+    return ret;
 }
 
 bool chstore_freqValid(freq_t f)
@@ -368,8 +475,15 @@ bool chstore_valid(const chstore_channel_t *ch)
 
 int chstore_set(uint16_t idx, const chstore_channel_t *ch)
 {
-    if (idx >= nbChannels || !chstore_valid(ch))
+    if (!chstore_valid(ch))
         return -EINVAL;
+
+    BANK_LOCK();
+
+    if (idx >= nbChannels) {
+        BANK_UNLOCK();
+        return -EINVAL;
+    }
 
     chstore_channel_t old = bank[idx];
     bank[idx] = *ch;
@@ -377,16 +491,25 @@ int chstore_set(uint16_t idx, const chstore_channel_t *ch)
     if (bankCommit() != 0) {
         /* Keep RAM describing what is on flash */
         bank[idx] = old;
+        BANK_UNLOCK();
         return -EIO;
     }
 
+    BANK_UNLOCK();
     return 0;
 }
 
 int chstore_add(const chstore_channel_t *ch)
 {
-    if (nbChannels >= CHSTORE_MAX_CHANNELS || !chstore_valid(ch))
+    if (!chstore_valid(ch))
         return -EINVAL;
+
+    BANK_LOCK();
+
+    if (nbChannels >= CHSTORE_MAX_CHANNELS) {
+        BANK_UNLOCK();
+        return -EINVAL;
+    }
 
     bank[nbChannels] = *ch;
     nbChannels++;
@@ -395,42 +518,69 @@ int chstore_add(const chstore_channel_t *ch)
         /* Keep RAM and flash consistent: the bank did not grow. */
         nbChannels--;
         memset(&bank[nbChannels], 0, sizeof(chstore_channel_t));
+        BANK_UNLOCK();
         return -EIO;
     }
 
-    return (int)(nbChannels - 1);
+    int idx = (int)(nbChannels - 1);
+
+    BANK_UNLOCK();
+    return idx;
 }
 
 bool chstore_skipped(uint16_t idx)
 {
-    if (idx >= nbChannels)
-        return false;
+    bool skip = false;
 
-    return (bank[idx].flags & CHSTORE_FLAG_SKIP) != 0;
+    BANK_LOCK();
+    if (idx < nbChannels)
+        skip = (bank[idx].flags & CHSTORE_FLAG_SKIP) != 0;
+    BANK_UNLOCK();
+
+    return skip;
 }
 
 int chstore_setSkipped(uint16_t idx, bool skip)
 {
-    if (idx >= nbChannels)
-        return -EINVAL;
+    chstore_channel_t ch;
+    int ret = 0;
 
-    chstore_channel_t ch = bank[idx];
+    BANK_LOCK();
+    if (idx >= nbChannels) {
+        BANK_UNLOCK();
+        return -EINVAL;
+    }
+    ch = bank[idx];
+    BANK_UNLOCK();
 
     if (skip)
         ch.flags |= (uint8_t)CHSTORE_FLAG_SKIP;
     else
         ch.flags &= (uint8_t)~CHSTORE_FLAG_SKIP;
 
-    return chstore_set(idx, &ch);
+    ret = chstore_set(idx, &ch);
+    return ret;
 }
 
 int chstore_delete(uint16_t idx)
 {
-    if (idx >= nbChannels)
+    BANK_LOCK();
+
+    if (idx >= nbChannels) {
+        BANK_UNLOCK();
         return -EINVAL;
+    }
 
     uint16_t oldCount = nbChannels;
     uint16_t oldLast = lastUsedIdx;
+
+    /*
+     * The deleted record is kept aside: the shift below overwrites it, so an
+     * undo that only moves the tail back one place would replicate the record
+     * that took its place (deleting "b" from [a,b,c,d] left [a,c,c,d]) and
+     * RAM would then say the opposite of what is on flash.
+     */
+    chstore_channel_t saved = bank[idx];
 
     if (idx + 1 < nbChannels)
         memmove(&bank[idx], &bank[idx + 1],
@@ -451,16 +601,21 @@ int chstore_delete(uint16_t idx)
         if (idx + 1 < oldCount)
             memmove(&bank[idx + 1], &bank[idx],
                     (size_t)(oldCount - idx - 1) * sizeof(chstore_channel_t));
+        bank[idx] = saved;
         nbChannels = oldCount;
         lastUsedIdx = oldLast;
+        BANK_UNLOCK();
         return -EIO;
     }
 
+    BANK_UNLOCK();
     return 0;
 }
 
 int chstore_loadDefaults(void)
 {
+    BANK_LOCK();
+
     /*
      * The factory codeplug channels are deliberately not copied here: the OEM
      * bank is not imported and the user adds the channels from the radio.
@@ -469,31 +624,40 @@ int chstore_loadDefaults(void)
     nbChannels = 0;
     lastUsedIdx = CHSTORE_NONE;
 
-    if (bankCommit() != 0)
+    if (bankCommit() != 0) {
+        BANK_UNLOCK();
         return -EIO;
+    }
 
+    BANK_UNLOCK();
     return 0;
 }
 
 int chstore_lastUsed(void)
 {
-    if (lastUsedIdx == CHSTORE_NONE || lastUsedIdx >= nbChannels)
-        return -1;
+    int idx = -1;
 
-    return (int)lastUsedIdx;
+    BANK_LOCK();
+    if ((lastUsedIdx != CHSTORE_NONE) && (lastUsedIdx < nbChannels))
+        idx = (int)lastUsedIdx;
+    BANK_UNLOCK();
+
+    return idx;
 }
 
 void chstore_setLastUsed(uint16_t idx)
 {
-    if (idx >= nbChannels || idx == lastUsedIdx)
-        return;
-
-    lastUsedIdx = idx;
-    pending = true;
-    pendingSince = getTick();
+    BANK_LOCK();
+    if ((idx < nbChannels) && (idx != lastUsedIdx)) {
+        lastUsedIdx = idx;
+        pending = true;
+        pendingSince = getTick();
+    }
+    BANK_UNLOCK();
 }
 
-int chstore_commit(void)
+/* Body of chstore_commit(), run by a caller that already holds the lock. */
+static int commitLocked(void)
 {
     if (!pending)
         return 0;
@@ -507,21 +671,34 @@ int chstore_commit(void)
     return ret;
 }
 
+int chstore_commit(void)
+{
+    BANK_LOCK();
+    int ret = commitLocked();
+    BANK_UNLOCK();
+
+    return ret;
+}
+
 void chstore_task(void)
 {
-    if (!pending)
-        return;
-
-    if ((getTick() - pendingSince) < CHSTORE_LASTUSED_DELAY_MS)
-        return;
-
-    (void)chstore_commit();
+    BANK_LOCK();
+    if (pending && ((getTick() - pendingSince) >= CHSTORE_LASTUSED_DELAY_MS))
+        (void)commitLocked();
+    BANK_UNLOCK();
 }
 
 int chstore_toChannel(uint16_t idx, channel_t *out)
 {
-    if (out == NULL || idx >= nbChannels)
+    if (out == NULL)
         return -EINVAL;
+
+    BANK_LOCK();
+
+    if (idx >= nbChannels) {
+        BANK_UNLOCK();
+        return -EINVAL;
+    }
 
     const chstore_channel_t *ch = &bank[idx];
 
@@ -557,30 +734,45 @@ int chstore_toChannel(uint16_t idx, channel_t *out)
         out->fm.txTone = ch->tx_tone;
     }
 
+    BANK_UNLOCK();
     return 0;
 }
 
 int chstore_applySettings(uint16_t idx, settings_t *settings)
 {
-    if (settings == NULL || idx >= nbChannels)
+    if (settings == NULL)
         return -EINVAL;
+
+    BANK_LOCK();
+
+    if (idx >= nbChannels) {
+        BANK_UNLOCK();
+        return -EINVAL;
+    }
 
     const chstore_channel_t *ch = &bank[idx];
 
-    if (ch->mode != OPMODE_DMR)
-        return 0;
+    if (ch->mode == OPMODE_DMR) {
+        settings->dmr_dest_type = ch->dmr_dest_type;
+        settings->dmr_dest_id = ch->dmr_dest_id;
+        settings->dmr_timeslot = (ch->dmr_ts == 0) ? 1 : 2;
+    }
 
-    settings->dmr_dest_type = ch->dmr_dest_type;
-    settings->dmr_dest_id = ch->dmr_dest_id;
-    settings->dmr_timeslot = (ch->dmr_ts == 0) ? 1 : 2;
-
+    BANK_UNLOCK();
     return 0;
 }
 
 int chstore_applyRtx(uint16_t idx, rtxStatus_t *rtx)
 {
-    if (rtx == NULL || idx >= nbChannels)
+    if (rtx == NULL)
         return -EINVAL;
+
+    BANK_LOCK();
+
+    if (idx >= nbChannels) {
+        BANK_UNLOCK();
+        return -EINVAL;
+    }
 
     const chstore_channel_t *ch = &bank[idx];
 
@@ -604,6 +796,7 @@ int chstore_applyRtx(uint16_t idx, rtxStatus_t *rtx)
         rtx->dmrDestId = ch->dmr_dest_id;
     }
 
+    BANK_UNLOCK();
     return 0;
 }
 
@@ -674,9 +867,13 @@ int chstore_export(void *buf, size_t cap)
     if (buf == NULL)
         return -EINVAL;
 
+    BANK_LOCK();
+
     len = 2U + (size_t)nbChannels * sizeof(chstore_channel_t);
-    if (len > cap)
+    if (len > cap) {
+        BANK_UNLOCK();
         return -ENOSPC;
+    }
 
     uint8_t *out = (uint8_t *)buf;
     out[0] = (uint8_t)(nbChannels & 0xFF);
@@ -685,6 +882,7 @@ int chstore_export(void *buf, size_t cap)
     if (nbChannels > 0)
         memcpy(out + 2, bank, (size_t)nbChannels * sizeof(chstore_channel_t));
 
+    BANK_UNLOCK();
     return (int)len;
 }
 
@@ -707,10 +905,14 @@ int chstore_import(const void *buf, size_t len)
     const chstore_channel_t *recs =
         (const chstore_channel_t *)(const void *)(in + 2);
 
+    BANK_LOCK();
+
     /* Validate every record before the bank in RAM is touched */
     for (uint16_t i = 0; i < count; i++) {
-        if (!chstore_valid(&recs[i]))
+        if (!chstore_valid(&recs[i])) {
+            BANK_UNLOCK();
             return -EINVAL;
+        }
     }
 
     memset(bank, 0, sizeof(bank));
@@ -721,7 +923,7 @@ int chstore_import(const void *buf, size_t len)
         lastUsedIdx = CHSTORE_NONE;
     pending = true;
 
-    if (chstore_commit() != 0) {
+    if (commitLocked() != 0) {
         /*
          * The write failed, so the slot that held the previous bank is still
          * the newest valid one: reload from it. Re-reading (instead of undoing
@@ -729,9 +931,11 @@ int chstore_import(const void *buf, size_t len)
          * not write the restored bank later and call it a success.
          */
         ready = false;
-        chstore_init();
+        (void)initLocked();
+        BANK_UNLOCK();
         return -EIO;
     }
 
+    BANK_UNLOCK();
     return 0;
 }

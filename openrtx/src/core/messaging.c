@@ -23,6 +23,10 @@
  */
 
 #include <string.h>
+#include <stdio.h>
+#ifdef __ZEPHYR__
+#include <zephyr/sys/printk.h>
+#endif
 
 #include "core/messaging.h"
 #include "core/psram_state.h"
@@ -46,6 +50,16 @@ static struct k_mutex msgLock;
 /** Debounce of the flash write: the radio writes once, a few seconds later. */
 #define MSG_WRITE_DEBOUNCE_MS 4000
 
+/*
+ * Delay between retries when the store refuses a write, ms.  A failing write
+ * used to be retried on the very next pass of state_task() -- ten erases of a
+ * 4 KiB sector per second -- which wears the sector out in hours and steals
+ * the main thread while the audio path and the keyboard wait for it.  The
+ * delay doubles up to the cap, and the first failure of a streak says so.
+ */
+#define MSG_WRITE_RETRY_MS 10000
+#define MSG_WRITE_RETRY_MAX_MS 60000
+
 #define MSG_RECORD_MAGIC 0x3147534dU /* "MSG1" */
 #define MSG_RECORD_VERSION 2
 
@@ -64,6 +78,10 @@ static unsigned inboxUnread;
 static uint8_t nextId = 1;
 static bool dirty;
 static uint32_t lastChange;
+
+/* Failed store writes: how many in a row, and when the next one is due. */
+static uint8_t writeFailures;
+static uint32_t nextAttempt;
 
 /**
  * The compose draft.  It is one more entry of the same record, not a queue:
@@ -99,6 +117,8 @@ static void touch(void)
 {
     dirty = true;
 }
+
+static uint8_t allocIdLocked(void);
 
 /* ---------------------------------------------------------------- queue --- */
 
@@ -158,6 +178,8 @@ void messaging_init(void)
     nextId = 1;
     dirty = false;
     lastChange = 0;
+    writeFailures = 0;
+    nextAttempt = 0;
     unlock();
     initialised = true;
 
@@ -187,9 +209,7 @@ int messaging_sendAddr(enum msgTransport transport, uint32_t dst,
         return -1;
     }
     memset(m, 0, sizeof(*m));
-    m->id = nextId++;
-    if (nextId == 0)
-        nextId = 1;
+    m->id = allocIdLocked();
     m->transport = (uint8_t)transport;
     m->state = MSG_STATE_QUEUED;
     m->dst = dst;
@@ -294,32 +314,97 @@ int messaging_begin(enum msgTransport transport)
     return id;
 }
 
-struct message *messaging_find(int id)
+/*
+ * The outbox entry an id refers to, most recent first.
+ *
+ * An id is one byte, so it comes round again after 255 messages and two
+ * entries can carry the same one while both are alive (a finished entry keeps
+ * its slot until it is reused).  Taking the first match applied a confirmation
+ * or a cancellation to the older message; the newest entry with that id is the
+ * one the caller means, because the id it holds was handed out for it last.
+ */
+static struct message *findByIdLocked(int id)
 {
     struct message *found = NULL;
 
-    lock();
-    for (int i = 0; i < MSG_OUTBOX_LEN; i++) {
-        if ((outbox[i].id == (uint8_t)id) && (outbox[i].state != MSG_STATE_FREE)) {
-            found = &outbox[i];
-            break;
-        }
-    }
-    unlock();
-    return found;
-}
-
-void messaging_done(int id, bool delivered, uint16_t ref, uint32_t now)
-{
-    lock();
     for (int i = 0; i < MSG_OUTBOX_LEN; i++) {
         struct message *m = &outbox[i];
 
         if ((m->id != (uint8_t)id) || (m->state == MSG_STATE_FREE))
             continue;
-        /* A cancelled message keeps its state: the outcome is not interesting */
-        if (m->state == MSG_STATE_CANCELLED)
-            break;
+        if ((found == NULL) || (m->time >= found->time))
+            found = m;
+    }
+
+    return found;
+}
+
+/*
+ * An id no live entry is using, so that two messages in the outbox at the same
+ * time are never told apart by a number that repeats.
+ */
+static uint8_t allocIdLocked(void)
+{
+    for (unsigned tries = 0; tries < 256; tries++) {
+        uint8_t id = nextId++;
+
+        if (nextId == 0)
+            nextId = 1;
+        if (id == 0)
+            continue;
+
+        bool used = false;
+
+        for (int i = 0; i < MSG_OUTBOX_LEN; i++) {
+            if ((outbox[i].state != MSG_STATE_FREE) && (outbox[i].id == id)) {
+                used = true;
+                break;
+            }
+        }
+
+        if (!used)
+            return id;
+    }
+
+    return 1;
+}
+
+struct message *messaging_find(int id)
+{
+    struct message *found = NULL;
+
+    lock();
+    found = findByIdLocked(id);
+    unlock();
+    return found;
+}
+
+int messaging_copy(int id, struct message *out)
+{
+    if (out == NULL)
+        return -1;
+
+    int ret = -1;
+
+    lock();
+    const struct message *m = findByIdLocked(id);
+
+    if (m != NULL) {
+        *out = *m;
+        ret = 0;
+    }
+    unlock();
+
+    return ret;
+}
+
+void messaging_done(int id, bool delivered, uint16_t ref, uint32_t now)
+{
+    lock();
+    struct message *m = findByIdLocked(id);
+
+    /* A cancelled message keeps its state: the outcome is not interesting */
+    if ((m != NULL) && (m->state != MSG_STATE_CANCELLED)) {
         if (ref != 0)
             m->ref = ref;
         if (delivered) {
@@ -335,7 +420,6 @@ void messaging_done(int id, bool delivered, uint16_t ref, uint32_t now)
             m->state = MSG_STATE_QUEUED;
         }
         m->time = now;
-        break;
     }
     touch();
     unlock();
@@ -344,15 +428,12 @@ void messaging_done(int id, bool delivered, uint16_t ref, uint32_t now)
 void messaging_fail(int id, uint32_t now)
 {
     lock();
-    for (int i = 0; i < MSG_OUTBOX_LEN; i++) {
-        struct message *m = &outbox[i];
+    struct message *m = findByIdLocked(id);
 
-        if ((m->id != (uint8_t)id) || (m->state == MSG_STATE_FREE))
-            continue;
+    if (m != NULL) {
         m->state = MSG_STATE_FAILED;
         m->time = now;
         touch();
-        break;
     }
     unlock();
 }
@@ -398,9 +479,7 @@ int messaging_received(enum msgTransport transport, uint32_t src, uint32_t dst,
     struct message *m = &inbox[0];
 
     memset(m, 0, sizeof(*m));
-    m->id = nextId++;
-    if (nextId == 0)
-        nextId = 1;
+    m->id = allocIdLocked();
     m->transport = (uint8_t)transport;
     m->state = MSG_STATE_DELIVERED; /* it arrived: that is its final state */
     m->src = src;
@@ -490,19 +569,14 @@ void messaging_markReadId(int id)
 void messaging_cancel(int id, uint32_t now)
 {
     lock();
-    for (int i = 0; i < MSG_OUTBOX_LEN; i++) {
-        struct message *m = &outbox[i];
+    struct message *m = findByIdLocked(id);
 
-        if ((m->id != (uint8_t)id) || (m->state == MSG_STATE_FREE))
-            continue;
-        if ((m->state == MSG_STATE_DELIVERED)
-            || (m->state == MSG_STATE_SENT)
-            || (m->state == MSG_STATE_CANCELLED))
-            break; /* already over: nothing to cancel */
+    /* already over: nothing to cancel */
+    if ((m != NULL) && (m->state != MSG_STATE_DELIVERED)
+        && (m->state != MSG_STATE_SENT) && (m->state != MSG_STATE_CANCELLED)) {
         m->state = MSG_STATE_CANCELLED;
         m->time = now;
         touch();
-        break;
     }
     unlock();
 }
@@ -804,6 +878,8 @@ int messaging_deserialise(const uint8_t *buf, size_t len)
 
     dirty = false;
     lastChange = 0;
+    writeFailures = 0;
+    nextAttempt = 0;
     unlock();
     return restored;
 
@@ -843,6 +919,8 @@ void messaging_task(uint32_t now)
         return;
     if ((now - lastChange) < MSG_WRITE_DEBOUNCE_MS)
         return;
+    if ((writeFailures > 0) && ((int32_t)(now - nextAttempt) < 0))
+        return;
 
     int n = messaging_serialise(recordBuf, sizeof(recordBuf));
 
@@ -852,8 +930,37 @@ void messaging_task(uint32_t now)
         lock();
         dirty = false;
         lastChange = now;
+        writeFailures = 0;
         unlock();
+        return;
     }
+
+    /*
+     * The store refused it.  The record stays dirty, so the next attempt
+     * writes it again -- but not on the next pass: an erase every 100 ms is
+     * what wore the sector and stalled the main thread.  The delay doubles up
+     * to the cap and the first failure of a streak is logged once: a message
+     * that never reaches the flash was otherwise indistinguishable from one
+     * that did.
+     */
+    uint32_t delay = MSG_WRITE_RETRY_MS;
+
+    if (writeFailures > 0) {
+        unsigned shift = (writeFailures > 3) ? 3u : writeFailures;
+        delay = MSG_WRITE_RETRY_MS << shift;
+        if (delay > MSG_WRITE_RETRY_MAX_MS)
+            delay = MSG_WRITE_RETRY_MAX_MS;
+    } else {
+#ifdef __ZEPHYR__
+        printk("messaging: store write failed, retrying\n");
+#else
+        printf("messaging: store write failed, retrying\n");
+#endif
+    }
+
+    nextAttempt = now + delay;
+    if (writeFailures < 8)
+        writeFailures++;
 }
 
 bool messaging_dirty(void)

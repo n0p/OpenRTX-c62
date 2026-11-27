@@ -24,6 +24,7 @@ extern "C" {
 #include "core/settings.h"
 #include "core/settings_record.h"
 #include "core/crc.h"
+#include "core/nvm_debounce.h"
 }
 
 /*
@@ -470,4 +471,124 @@ TEST_CASE("DMR identifiers and SMS formats are validated", "[settings]")
     REQUIRE(settings_dmrTimeslotValid(dflt().dmr_timeslot));
     REQUIRE(dflt().dmr_timeslot == 1);
     REQUIRE(dflt().dmr_id == 0);  /* no ID until the operator sets one */
+}
+
+/*
+ * The debounced write-back of the settings and the VFO (core/nvm_debounce.h).
+ *
+ * The radio writes its settings a few seconds after the operator stops turning
+ * knobs, and the interesting part is what happens when the write does not
+ * land: the change must stay pending, not be recorded as stored.  The old code
+ * updated its CRC before the write, so a failed write looked like a successful
+ * one on the next pass and the setting was lost at the next power cycle with
+ * nothing said (docs/TX_SAFETY.md, the power case).  These cases drive the
+ * decision logic against a fake clock, which is why it lives in its own file.
+ */
+
+namespace {
+uint8_t recordA[16] = {0};
+uint8_t recordB[16] = {1, 2, 3};
+} /* namespace */
+
+TEST_CASE("A settings change is written once it has been stable",
+          "[settings]")
+{
+    struct nvmDebounce db;
+
+    nvmDebounce_seed(&db, recordA, sizeof(recordA));
+
+    /* RAM says what the flash says: nothing to write, however long it waits */
+    REQUIRE_FALSE(nvmDebounce_due(&db, recordA, sizeof(recordA), 10000, 3000));
+
+    /* A change arms the window and does not write on the same pass */
+    REQUIRE_FALSE(nvmDebounce_due(&db, recordB, sizeof(recordB), 20000, 3000));
+    REQUIRE_FALSE(nvmDebounce_due(&db, recordB, sizeof(recordB), 22999, 3000));
+    REQUIRE(nvmDebounce_due(&db, recordB, sizeof(recordB), 23000, 3000));
+
+    nvmDebounce_done(&db);
+    REQUIRE_FALSE(nvmDebounce_due(&db, recordB, sizeof(recordB), 24000, 3000));
+}
+
+TEST_CASE("A failed settings write is retried, not forgotten", "[settings]")
+{
+    struct nvmDebounce db;
+
+    nvmDebounce_seed(&db, recordA, sizeof(recordA));
+
+    REQUIRE_FALSE(nvmDebounce_due(&db, recordB, sizeof(recordB), 0, 3000));
+    REQUIRE(nvmDebounce_due(&db, recordB, sizeof(recordB), 3000, 3000));
+
+    /* The flash refused it: the change is still pending ... */
+    nvmDebounce_failed(&db, 3000);
+    REQUIRE(db.dirty);
+    REQUIRE(db.pending == crc_ccitt(recordB, sizeof(recordB)));
+    REQUIRE(db.written == crc_ccitt(recordA, sizeof(recordA)));
+
+    /* ... and it is tried again on a backoff, not on the next 100 ms pass */
+    REQUIRE(nvmDebounce_retryMs(&db) == NVM_DEBOUNCE_RETRY_MS);
+    REQUIRE_FALSE(nvmDebounce_due(&db, recordB, sizeof(recordB), 3100, 3000));
+    REQUIRE_FALSE(nvmDebounce_due(&db, recordB, sizeof(recordB), 12900, 3000));
+    REQUIRE(nvmDebounce_due(&db, recordB, sizeof(recordB), 13000, 3000));
+
+    /* Each further failure doubles the wait, up to the cap */
+    nvmDebounce_failed(&db, 13000);
+    REQUIRE(db.failures == 2);
+    REQUIRE(nvmDebounce_retryMs(&db) == 2 * NVM_DEBOUNCE_RETRY_MS);
+    REQUIRE_FALSE(nvmDebounce_due(&db, recordB, sizeof(recordB), 32900, 3000));
+    REQUIRE(nvmDebounce_due(&db, recordB, sizeof(recordB), 33000, 3000));
+
+    nvmDebounce_failed(&db, 33000);
+    nvmDebounce_failed(&db, 33000);
+    nvmDebounce_failed(&db, 33000);
+    REQUIRE(nvmDebounce_retryMs(&db) == NVM_DEBOUNCE_RETRY_MAX_MS);
+
+    /* Only a write that landed clears it */
+    nvmDebounce_done(&db);
+    REQUIRE_FALSE(db.dirty);
+    REQUIRE(db.failures == 0);
+    REQUIRE_FALSE(nvmDebounce_due(&db, recordB, sizeof(recordB), 34000, 3000));
+}
+
+/*
+ * A record written by a build with another set of optional blocks is reported
+ * as another version, not as a corrupt record.
+ *
+ * CONFIG_APRS and CONFIG_KISS put fields in the middle of settings_t, so the
+ * two builds write the same structure with different sizes and different
+ * offsets for everything behind the block -- but both used to stamp it with
+ * version 8.  Switching builds (or restoring a backup taken with the other
+ * one) therefore dropped the settings and told the operator they were corrupt,
+ * which sends him looking for a fault that is a rebuild.  The version now says
+ * which blocks the writer had.
+ */
+TEST_CASE("A record from a build with other blocks is another version",
+          "[settings]")
+{
+    uint8_t rec[SETTINGS_RECORD_SIZE];
+    settings_t s = dflt();
+
+    REQUIRE(settings_recordPack(rec, sizeof(rec), &s) ==
+            (int)SETTINGS_RECORD_SIZE);
+
+    /*
+     * The same record stamped by a build with the opposite set of blocks --
+     * with neither, both, or the other one, depending on how this build was
+     * configured.  Flipping both bits is always a valid other combination and
+     * never this one.
+     */
+    uint16_t other = (uint16_t)(SETTINGS_VERSION ^
+                                SETTINGS_VERSION_BLOCKS_MASK);
+    rec[6] = (uint8_t)(other & 0xFF);
+    rec[7] = (uint8_t)(other >> 8);
+
+    settings_t out;
+    REQUIRE(settings_recordRead(rec, sizeof(rec), &out) ==
+            SETTINGS_RECORD_ERR_VERSION);
+
+    /*
+     * And the reason has to survive the length check: a record of the other
+     * build is a different size too, and "corrupt" would be the wrong answer.
+     */
+    REQUIRE(settings_recordRead(rec, SETTINGS_RECORD_HDR + 10, &out) ==
+            SETTINGS_RECORD_ERR_VERSION);
 }

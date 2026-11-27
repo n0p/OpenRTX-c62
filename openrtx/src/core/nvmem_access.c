@@ -48,9 +48,15 @@ int nvm_read(const uint32_t idx, const uint32_t part, uint32_t offset,
     if (ret < 0)
         return ret;
 
-    // Accesses exceeding the nvm->size boundary are caught by this check,
-    // provided that the partition table is well defined.
-    if ((offset + len) > np.size)
+    /*
+     * Accesses exceeding the partition are caught by this check, provided that
+     * the partition table is well defined.  It is written as a subtraction
+     * because offset and len are 32 bit and the caller chooses the offset: a
+     * large one made offset+len wrap round and pass, and the access that
+     * followed went to whatever the same flash holds at baseAddr+offset --
+     * another partition, the DSP image, the factory area.
+     */
+    if ((offset > np.size) || (len > (np.size - offset)))
         return -EINVAL;
 
     // Index already validated by nvm_getPart
@@ -71,7 +77,7 @@ int nvm_write(const uint32_t idx, const uint32_t part, uint32_t offset,
     if (ret < 0)
         return ret;
 
-    if ((offset + len) > np.size)
+    if ((offset > np.size) || (len > (np.size - offset)))
         return -EINVAL;
 
     nvm = &nvmTab.areas[idx];
@@ -91,7 +97,7 @@ int nvm_erase(const uint32_t idx, const uint32_t part, uint32_t offset,
     if (ret < 0)
         return ret;
 
-    if ((offset + size) > np.size)
+    if ((offset > np.size) || (size > (np.size - offset)))
         return -EINVAL;
 
     nvm = &nvmTab.areas[idx];

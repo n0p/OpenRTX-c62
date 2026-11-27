@@ -78,7 +78,14 @@ uint16_t settings_recordVersion(const uint8_t *buf, size_t len)
 
 int settings_recordRead(const uint8_t *buf, size_t len, settings_t *out)
 {
-    if (buf == NULL || out == NULL || len < SETTINGS_RECORD_SIZE)
+    /*
+     * Only the header is needed to tell whose record this is: the length check
+     * comes after the version, because a record written by a build with
+     * another set of optional blocks (CONFIG_APRS, CONFIG_KISS) has a
+     * different size *and* a different version, and "another version" is the
+     * answer the operator needs -- "corrupt" sends him looking for a fault.
+     */
+    if (buf == NULL || out == NULL || len < SETTINGS_RECORD_HDR)
         return SETTINGS_RECORD_ERR_CORRUPT;
 
     if (read_u32(buf) != SETTINGS_RECORD_MAGIC)
@@ -117,6 +124,9 @@ int settings_recordRead(const uint8_t *buf, size_t len, settings_t *out)
 
     if (version != (uint16_t)SETTINGS_VERSION)
         return SETTINGS_RECORD_ERR_VERSION;
+
+    if (len < SETTINGS_RECORD_SIZE)
+        return SETTINGS_RECORD_ERR_CORRUPT;
 
     uint16_t crc = crc_ccitt(buf + SETTINGS_RECORD_HDR, sizeof(settings_t));
     if (crc != read_u16(buf + 4))

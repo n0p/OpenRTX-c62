@@ -347,12 +347,18 @@ void OpMode_DMR::smsStartTx(const rtxStatus_t *status)
     if (begun < 0)
         return;
 
-    msg = messaging_find(begun);
-    if (msg == NULL)
+    /*
+     * The entry is taken by value: the pointer messaging_head() handed out is
+     * not valid across the calls above, and the text that goes on the air has
+     * to be the text of the message that was begun.
+     */
+    struct message sms;
+
+    if (messaging_copy(begun, &sms) != 0)
         return;
 
     if (!dmrSms_send(dst, !c62_dmr.privateCall,
-                     dmrGlue_smsFormat(state.settings.sms_format), msg->text,
+                     dmrGlue_smsFormat(state.settings.sms_format), sms.text,
                      c62_dmr.id)) {
         messaging_done(begun, false, 0, (uint32_t)getTick());
         return;

@@ -271,3 +271,117 @@ TEST_CASE("tuning a bank entry keeps the VFO it was on", "[ui][channels]")
     REQUIRE(state.ui_screen == MAIN_MEM);
     REQUIRE(state.channel.rx_frequency == CH_FREQ);
 }
+
+/*
+ * Power-on has to come back on the channel the operator left the radio on, and
+ * on its index.
+ *
+ * state_init() loads the bank, takes chstore_lastUsed() and fills state.channel
+ * with that record, index included -- and then the inherited "initialise
+ * remaining fields" block assigned 0 to state.channel_index, fifty lines later,
+ * throwing the index away while keeping the channel.  The screen drew "CH 1"
+ * next to the other channel's name, the voice prompt announced number 1, the
+ * first knob turn loaded channel 2 (skipping 1) and chstore_setLastUsed()
+ * stored an index the operator never had.
+ */
+TEST_CASE("power-on comes back on the stored channel and its index",
+          "[ui][channels]")
+{
+    flash = new FakeFlash();
+    port.read   = ffRead;
+    port.erase  = ffErase;
+    port.write  = ffWrite;
+    port.ctx    = flash;
+    port.size   = (uint32_t)flash->mem.size();
+    port.sector = CHSTORE_SECTOR_SIZE;
+
+    chstore_bind(&port);
+    REQUIRE(chstore_init() == 0);
+
+    chstore_channel_t c;
+    memset(&c, 0, sizeof(c));
+    snprintf(c.name, sizeof(c.name), "FIRST");
+    c.rx_freq = CH_FREQ;
+    c.tx_freq = CH_FREQ;
+    c.power   = 1000;
+    c.mode    = OPMODE_FM;
+    c.bandwidth = BW_12_5;
+    REQUIRE(chstore_add(&c) == 0);
+
+    memset(&c, 0, sizeof(c));
+    snprintf(c.name, sizeof(c.name), "SECOND");
+    c.rx_freq = CH_FREQ + 12500;
+    c.tx_freq = CH_FREQ + 12500;
+    c.power   = 1000;
+    c.mode    = OPMODE_FM;
+    c.bandwidth = BW_12_5;
+    REQUIRE(chstore_add(&c) == 1);
+
+    /* The operator tuned channel 2 and switched the radio off there */
+    chstore_setLastUsed(1);
+    REQUIRE(chstore_commit() == 0);
+
+    state_init();
+
+    REQUIRE(state.channel_index == 1);
+    REQUIRE(strcmp(state.channel.name, "SECOND") == 0);
+    REQUIRE(state.channel.rx_frequency == CH_FREQ + 12500);
+}
+
+/*
+ * A stored channel's own DMR call destination has to reach the transmitter
+ * when the operator selects it.
+ *
+ * channel_t has no room for it, so it lives in the settings and only
+ * chstore_applySettings() knows how to copy it.  The scanner called it; the
+ * channel list did not, so a channel opened here transmitted to the talkgroup
+ * of the channel before it, while the screen showed the new one.
+ */
+TEST_CASE("a stored DMR channel brings its call destination", "[ui][channels]")
+{
+    flash = new FakeFlash();
+    port.read   = ffRead;
+    port.erase  = ffErase;
+    port.write  = ffWrite;
+    port.ctx    = flash;
+    port.size   = (uint32_t)flash->mem.size();
+    port.sector = CHSTORE_SECTOR_SIZE;
+
+    chstore_bind(&port);
+    REQUIRE(chstore_init() == 0);
+
+    chstore_channel_t c;
+    memset(&c, 0, sizeof(c));
+    snprintf(c.name, sizeof(c.name), "LOCAL");
+    c.rx_freq = CH_FREQ;
+    c.tx_freq = CH_FREQ;
+    c.power   = 1000;
+    c.mode    = OPMODE_FM;
+    c.bandwidth = BW_12_5;
+    REQUIRE(chstore_add(&c) == 0);
+
+    memset(&c, 0, sizeof(c));
+    snprintf(c.name, sizeof(c.name), "TG91");
+    c.rx_freq = CH_FREQ + 25000;
+    c.tx_freq = CH_FREQ + 25000;
+    c.power   = 1000;
+    c.mode    = OPMODE_DMR;
+    c.bandwidth = BW_12_5;
+    c.dmr_cc  = 1;
+    c.dmr_dest_type = DMR_DEST_GROUP;
+    c.dmr_dest_id   = 91;
+    REQUIRE(chstore_add(&c) == 1);
+
+    resetUi();
+
+    /* The default destination is the settings' own, not this channel's */
+    REQUIRE(state.settings.dmr_dest_id != 91);
+
+    openChannels();
+    pressKey(KEY_DOWN);
+    pressKey(KEY_ENTER);
+
+    REQUIRE(strcmp(state.channel.name, "TG91") == 0);
+    REQUIRE(state.settings.dmr_dest_type == DMR_DEST_GROUP);
+    REQUIRE(state.settings.dmr_dest_id == 91);
+}

@@ -471,3 +471,33 @@ TEST_CASE("gfx_printBufferClipped lays out the whole string, however long",
 
     REQUIRE((sz_long.y - sz_short.y) == (int16_t)(29 * TT_Y_ADVANCE));
 }
+
+/*
+ * gfx_clearRows() works in rows, not in bytes.
+ *
+ * The function had no caller and no test, and its arithmetic multiplied the
+ * row numbers by the width and the pixel size and used the result both as an
+ * index into the pixel array and as a byte count: startRow=1, endRow=2 gave a
+ * negative length in a uint16_t (~65000) and a memset that ran tens of kB past
+ * the framebuffer.  Reading the framebuffer back is the only way to tell which
+ * rows a call really cleared.
+ */
+TEST_CASE("gfx_clearRows clears exactly the rows it is given", "[gfx]")
+{
+    const uint16_t *fb = static_cast<const uint16_t *>(gfx_framebuffer());
+    color_t white = { 255, 255, 255, 255 };
+
+    gfx_fillScreen(white);
+    gfx_clearRows(1, 2);
+
+    for (uint16_t y = 0; y < CONFIG_SCREEN_HEIGHT; y++) {
+        bool cleared = (y == 1) || (y == 2);
+        /* One pixel is enough: the rows are uniform before the call */
+        uint16_t px = fb[(size_t)y * CONFIG_SCREEN_WIDTH + 3];
+
+        if (cleared)
+            REQUIRE(px == 0);
+        else
+            REQUIRE(px != 0);
+    }
+}
