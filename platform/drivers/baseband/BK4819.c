@@ -672,6 +672,15 @@ void bk4819_setTxAudioFilter(const struct BK4819 *dev, uint8_t bw)
 
 void bk4819_setBandwidth(const struct BK4819 *dev, enum bk4819_bandwidth bw)
 {
+    /*
+     * The enum indexes bandwidthFilters[] and it arrives from a mode profile
+     * and, upstream of that, from a channel record: clamp it, so a value the
+     * chip does not have becomes 12.5 kHz instead of a field written from
+     * whatever is behind the table.
+     */
+    if ((unsigned)bw > (unsigned)BK4819_BW_25K)
+        bw = BK4819_BW_12K5;
+
     const struct bandwidthFilter *filters = &bandwidthFilters[bw];
     const uint16_t mask = BK4819_REG43_RF_BW_MASK | BK4819_REG43_RF_BW_WEAK_MASK
                         | BK4819_REG43_AF_TX_LPF2_BW_MASK

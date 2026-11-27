@@ -239,7 +239,18 @@ static void planOptions(struct radioPlanOptions *opt)
 /** The channel spacing a plan is built for, when it comes from the status */
 static enum bandwidth planBandwidth()
 {
-    return (config != nullptr) ? (enum bandwidth)config->bandwidth : BW_12_5;
+    const enum bandwidth bw =
+        (config != nullptr) ? (enum bandwidth)config->bandwidth : BW_12_5;
+
+    /*
+     * The value comes from the channel record the RTX was configured with, and
+     * a record written by another firmware (or a damaged one) can hold a
+     * spacing this build does not have.  It is narrowed here so that nothing
+     * downstream -- the plan's tables, the mode's own comparisons -- sees a
+     * value the enum does not describe; 12.5 kHz is the channel mode every
+     * mode accepts.
+     */
+    return ((unsigned)bw <= (unsigned)BW_6_25) ? bw : BW_12_5;
 }
 
 /**
