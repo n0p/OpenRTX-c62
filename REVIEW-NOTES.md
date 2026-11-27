@@ -647,3 +647,274 @@ sin guarda): configuración que no existe en la C62, que define los dos.
   (`meson.build:483`). Lo que sí se ha hecho para no ir a ciegas es compilar los
   cinco ficheros con `g++ -fsyntax-only -Wall -Wextra` en las dos variantes
   (`CONFIG_*_TX` definido y no definido), sin avisos nuevos.
+
+---
+
+# Mensajería, persistencia, teclado y códec: qué se ha aplicado
+
+Rama `claude/core-data`, worktree `~/src/c62/work/cl-core2`, sobre `739c1834`
+(master). Un commit por hallazgo, en inglés y con el porqué en el mensaje. Nada
+subido a ningún remoto; la radio y `/dev/ttyUSB*` sin tocar; **no se ha
+compilado firmware**.
+
+Ocho hallazgos de `FINDINGS-CORE.md` caen en estas áreas. **Cinco se han
+arreglado aquí; tres (7, 13 y la mitad principal del 17) ya estaban en master**
+—los arreglos de `09514c2f`, `9ba4d05b` y `320aa3a3`— y lo que se ha hecho es
+verificarlos contra el código y, donde faltaba, poner el test que los fija. No
+se ha rechazado ninguno.
+
+Los hallazgos de transmisión (2, 3, 4) y el bloqueo del escáner (1) son del otro
+agente y no se han tocado. Del 5 sólo se ha tomado la mitad que es mía: la
+puerta de TX desatendida y el retorno que se ignoraba en el editor de APRS; el
+resto del hallazgo (los acuses que se retienen) es el mismo mecanismo.
+
+## Tabla
+
+| # | Hallazgo | Grav. | Veredicto | Commit |
+|---|----------|-------|-----------|--------|
+| 5 | Mensajes y balizas no salen con su pantalla abierta | media | **arreglado** (puerta separada + retorno de `aprs_sendMessage()`) | `13212957` |
+| 6 | Una tecla mantenida entrega primero su acción corta | media | **arreglado** | `6b53244d`, `3364f254`, `37e2d081` |
+| 7 | Los ID de mensaje vuelven a 1 en cada arranque | media | ya estaba (`09514c2f`); test nuevo que lo fija | `c8ff723b` |
+| 8 | APRS tiene dos máquinas de reintento | media | **arreglado** | `62d465e6` |
+| 9 | El escaneo se graba como si fuera el VFO | media | **arreglado** | `45539b7d` |
+| 11 | Hilo del códec: errno positivo y 16 KiB por salida propia | media | **arreglado** | `ac3a6ccc` |
+| 13 | Almacén de mensajes: cabecera antes que datos, reintento cada 100 ms | media | ya estaba (`9ba4d05b`, `09514c2f`) | — |
+| 17 | `chstore_delete()` no restaura bien | media | la marcha atrás ya estaba (`320aa3a3`); faltaba `pending` | `11796407` |
+
+Un commit más, `63b7a15a`, arregla un defecto que el test del 6 descubrió (el
+compositor se abría con el borrador que otro camino acababa de descartar) y
+`3364f254` cambia también el arnés de tests, que hasta ahora sólo pulsaba teclas
+y por eso no podía ver un fallo que vive en la secuencia pulsación → larga →
+suelta.
+
+## 5. La puerta de TX desatendida — arreglado
+
+`_ui_syncTxDisable()` ponía `state.txDisable` en toda pantalla que no fuera
+`MAIN_VFO`/`MAIN_MEM`, y `rtx_unattendedTxAllowed()` (`rtx.cpp:1178`) leía ese
+mismo flag: los mensajes que envía DMR (`OpMode_DMR.cpp:785`), la baliza APRS
+(`OpMode_FM.cpp:199`) y sus acuses quedaban retenidos justo mientras el
+operador estaba en la pantalla desde la que los pide, y la pantalla decía
+"SENT".
+
+Ahora hay dos banderas en `rtxStatus_t` (un bit del relleno que sobraba) y en
+`state_t`:
+
+- `txDisable`: el PTT. Ninguna pantalla que no sea principal deja clavear, y
+  las de mensajes y APRS tampoco.
+- `unattendedTxDisable`: la TX sin operador. Cerrada por las mismas pantallas
+  **menos** las de mensajería y APRS, que son donde se pide. Un canal RX-only
+  cierra las dos (`threads.c`, `chstore_applyRtx()`).
+
+Las dos se calculan en un solo sitio (`_ui_syncTxDisable()`, y
+`ui_open_screen()` para las pantallas que se abren fuera del FSM), y
+`rtx_unattendedTxAllowed()` sólo mira la segunda. El editor de mensajes de APRS
+además comprobaba nada del retorno de `aprs_sendMessage()`: con el buzón lleno
+el texto se perdía y se volvía a la lista como si hubiera salido. Ahora deja
+"SEND FAILED" y se queda.
+
+Qué se verá: mandar un mensaje desde el compositor ya transmite sin volver a la
+pantalla principal. Es el cambio de comportamiento que pide el informe.
+
+## 6. El evento doble de la pulsación larga — arreglado
+
+Tres defectos distintos con la misma causa (`input_scanKeyboard()` emite la
+pulsación y, 700 ms después, la misma tecla con `long_press`):
+
+- **Dígitos duplicados.** `input_isNumberPressed()`/`input_isCharPressed()`
+  contaban también el evento largo: mantener un dedo en un dígito entraba el
+  dígito dos veces y corría todo lo escrito después. 446.00625 con el 6
+  mantenido salía 446.60062. Ahora las dos funciones responden sólo al flanco
+  de pulsación; quien quiera la larga mira `msg.long_press` antes, como ya
+  hacían el compositor y los editores.
+- **Borrar un canal inalcanzable.** La lista actuaba en el flanco (abría el
+  editor) y el evento largo llegaba al editor, donde P2 guarda: mantener P2 no
+  borraba nada y reescribía el slot de 8 KiB. Ahora la pulsación sólo recuerda
+  la tecla y decide con lo que venga: larga → confirmación de borrado, suelta
+  (`keys == 0`) → editor. Lo mismo en la lista de contactos, donde el borrado
+  tampoco se alcanzaba.
+- **Compositor.** Mantener un dígito significa el dígito (es como se teclea un
+  SSID, `docs/UI.md`), pero la pulsación ya había insertado la primera letra
+  del grupo: quedaba "A2" donde tocaba "2". La larga ahora sustituye el
+  carácter que insertó esa misma pulsación.
+
+Una larga cuyo flanco fue a otra pantalla (el guardado con P2 del editor, que
+llega a la lista después) se ignora: si no, guardar un canal preguntaba acto
+seguido si borrarlo.
+
+El arnés (`tests/unit/ui_walk.hpp`) pulsaba una sola vez cada tecla y no veía
+nada de esto; ahora entrega pulsación, larga opcional y suelta, como el teclado.
+
+## 7. Los ID de mensaje — ya estaba, con test nuevo
+
+`09514c2f` añadió `allocIdLocked()`, que salta los id vivos del buzón de
+salida, y `findByIdLocked()` desempata por el más reciente. El
+`nextId = 1` de cada arranque ya no puede chocar con lo restaurado. No había
+ningún test que lo fijara: `tests/unit/messaging_fsm.cpp` tiene ahora el caso
+que falla sin él (un mensaje compuesto tras un ciclo de alimentación tomaba el
+id 1, que la entrada restaurada ya tenía, y el acuse de uno marcaba al otro).
+
+## 8. Un solo mecanismo de reintento en APRS — arreglado
+
+El buzón de APRS reintenta por su cuenta (12 s, luego 24 s, 3 intentos,
+`aprs_msg.c:97`) y `msg_service.c:aprsSync()` lleva el resultado al almacén
+(entregado o fallido). El almacén, además, trataba "entregado al buzón" como
+"en el aire esperando acuse" y reencolaba a los 30 s (`messaging_task()`), así
+que un mensaje sin acuse generaba una segunda copia mientras la primera seguía
+reintentándose: hasta seis transmisiones donde el protocolo pide tres. APRS
+queda fuera del tiempo de espera; DMR y TETRA, cuyos transportes no tienen
+temporizador propio, siguen caducando ahí.
+
+## 9. El escáner ya no escribe el VFO — arreglado
+
+`state_task()` grababa ajustes y VFO en cuanto llevaban 3 s estables, sin mirar
+si el receptor lo estaba moviendo el escáner o la búsqueda de portadora (que
+escriben `state.channel` y, en DMR, el destino de los ajustes). Una parada de
+más de 3 s en un canal ocupado borraba y reescribía el sector del VFO con el
+canal prestado; y en la C62 el apagado es el mando de volumen cortando la
+alimentación, así que el camino de `state_terminate()` que para el escáner antes
+de grabar nunca corre: la radio arrancaba en el canal donde estaba el escáner,
+con su talkgroup.
+
+Ahora, mientras hay escaneo o búsqueda, no se compara ni se escribe: el
+debouncer sigue describiendo lo que hay en flash, así que al parar y restaurar
+el canal las dos copias vuelven a coincidir y no se escribe nada.
+
+**Sin test de host**: lo que cambia es cuándo se le pregunta al debouncer, y el
+banco del host no cuenta escrituras de NVM (el driver de Linux escribe a un
+fichero de `XDG_STATE_HOME`). Qué medir en la radio: arrancar un escaneo de
+memorias, dejarlo parado 10 s en un canal con portadora, apagar con el mando y
+encender: tiene que volver al canal que había antes del escaneo, no al del
+escáner.
+
+## 11. El códec que se queda sin pila — arreglado
+
+La comprobación del `malloc` de la pila que añadió `fe0dc9bf` está bien y se ha
+respetado; lo que quedaba era la fuga. La pila de 16 KiB es un `malloc` en este
+target y un hilo no puede liberar la pila sobre la que corre: cada salida propia
+del hilo (flujo que no abre, tiempo agotado del driver) ponía `running = false`
+y `codec_stop()` volvía en su primera línea por eso mismo, así que la pila no se
+liberaba nunca. M17 llama a `codec_startDecode()` en cada trama mientras
+`codec_running()` sea falso: 16 KiB de un heap de 40 KiB cada 40 ms.
+
+Arreglo:
+
+- Cada hilo lleva su propio registro (`struct codecRun`: ruta, pila, "he
+  terminado") y el puntero es la identidad. Un hilo cuyo `codec_stop()` agotó su
+  plazo puede volver cuando ya hay otro: no puede tocar las banderas del nuevo
+  (eso es lo que hacía que un hilo vivo pareciera parado, y con este arreglo
+  habría hecho que se liberara su pila en marcha).
+- Quien supervisa hace `pthread_join()` del hilo que ya ha terminado —es lo
+  único que prueba que la pila no es de nadie— y la libera: en `codec_stop()`,
+  en `codec_startDecode()` y al terminar.
+- Un hilo que no vuelve sigue detachado y conserva su pila: esa pérdida acotada
+  es el precio del plazo, y es lo que el código anterior hacía con *todas* las
+  salidas.
+- `pthread_create()` devuelve el número de error, no -1: el `ret < 0` dejaba
+  pasar un rechazo y el llamante creía que había hilo.
+- El decodificador comprueba `codec2_create()` como ya hacía el codificador:
+  `codec2_decode(NULL)` en mitad de un aviso de voz es una falta.
+
+**Sin test de host**: la pila que se `malloc`ea es la del target Zephyr; en el
+host no existe. Se ha compilado el fichero con `-D__ZEPHYR__` y un *shim* de
+`printk` (`-Wall -Wextra -Wpedantic`, limpio). Qué medir en la radio: entrar y
+salir de M17 veinte veces con el flujo fallando (`heap_usage` en la pantalla de
+estado no debe bajar 16 KiB por intento) y comprobar que el PTT sigue
+transmitiendo después.
+
+## 13. El almacén de mensajes — ya estaba
+
+`9ba4d05b` hizo lo que pedía el informe por el otro camino que él mismo admitía
+("como mínimo"): datos primero y cabecera al final
+(`messaging_store_zephyr.c:219-227`), `messaging_store_read()` valida el CRC de
+cada sector antes de elegir (`loadSector()` + `messaging_recordValid()`) y cae
+al otro si el más nuevo está roto, y el reintento no es cada 100 ms: el
+`messaging_task()` de `09514c2f` espera 10 s duplicando hasta 60 s y avisa una
+vez. Los tests están en `tests/unit/messaging_store.cpp` con un flash falso que
+corta la alimentación. No se ha tocado; pasarlo a `slot_store` habría sido un
+cambio grande para un comportamiento que ya cumple.
+
+## 17. `chstore_delete()` — la mitad que faltaba
+
+La marcha atrás (guardar el registro borrado y devolverlo) ya estaba en
+`320aa3a3`, con test. Lo que quedaba era `pending`: `bankCommit()` lo pone antes
+de escribir y ninguna de las tres marcha atrás (`chstore_set`, `chstore_add`,
+`chstore_delete`) lo bajaba, así que `chstore_task()` borraba y reescribía un
+slot 2 s después para grabar exactamente lo que ya había —un ciclo de borrado de
+4 KiB por intento fallido, y una escritura que el operador no había pedido
+después de ver "WRITE FAILED"—. Ahora las tres lo bajan, porque tras la marcha
+atrás RAM y flash describen el mismo banco.
+
+Test nuevo: `A failed write leaves nothing pending` (el `eraseCount()` del flash
+falso no sube con el `chstore_commit()` del apagado).
+
+## El borrador que resucitaba (`63b7a15a`)
+
+`composeEnter()` llamaba a `draftLoad()`, que sólo rellena el búfer cuando el
+almacén tiene borrador. Si otro camino lo había descartado (enviar, "borrar
+mensajes" del protocolo PC, restaurar una copia), el compositor se abría con el
+texto que el operador ya había tirado y verde lo grababa como nuevo. El
+compositor ahora empieza siempre en vacío. Lo destapó el test del compositor
+(una composición anterior se colaba en la siguiente).
+
+## Cómo se ha comprobado que cada test es rojo
+
+Cada arreglo de comportamiento va con un caso que **falla al revertirlo**,
+comprobado revirtiendo el fichero y volviendo a compilar:
+
+| arreglo | al revertirlo |
+|---------|---------------|
+| dígitos duplicados | `REQUIRE(state.ui_screen == MAIN_VFO)` falla con `1 == 0`: el campo no se completa |
+| P2 mantenido en la lista | la primera comprobación tras la pulsación ve el editor (`"EDIT 1/1" != "CHANNELS 1/128"`) |
+| dígito mantenido en el compositor | `"A2" == "2"` falla |
+| compositor en vacío | `"G" == ""` falla |
+| APRS sin segundo reintento | `stateOf(aprs)` es `QUEUED` (1) y no `SENDING` (2) |
+| `pending` tras un fallo | `eraseCount()` sube de 4 a 5 |
+| puerta desatendida | `REQUIRE(state.unattendedTxDisable)` falla en la pantalla de contactos |
+
+Sin caso rojo posible:
+
+- **Escáner y VFO (9)**: ver arriba, el banco del host no cuenta escrituras.
+- **Códec (11)**: la pila es del target Zephyr.
+- **ID de mensaje (7)**: el test nuevo fija el arreglo de `09514c2f`; revertir
+  ese commit no es parte de este trabajo, pero el caso es el que lo describe.
+
+## Suite del host
+
+Los mismos comandos que las otras revisiones, en este worktree:
+
+```
+meson setup build_linux -Dcpp_args=-fpermissive \
+      -Dtetra_lib_dir=/home/n0p/src/c62/build/c62-ws/modules/lib/libtetra
+ninja -C build_linux -k 0
+ninja -C build_linux sim-coverage.txt
+meson test -C build_linux --no-rebuild
+```
+
+- **`Ok: 114 / Fail: 0`**, `Interrupt Context Rules` incluido. El "Simulator
+  Menu Audit" (599 s) y el "Menu Tour" (213 s) son los lentos.
+- `ninja -k 0` sigue devolviendo error en los targets ARM/miosix
+  (`openrtx_md3x0…rt4d`: no hay toolchain) y en los dos de host que ya fallaban
+  en master y no están en la suite: `linux_inputStream_test` (API retirada) y el
+  enlace de `openrtx_linux_mod17`. Ninguno toca estos ficheros.
+- Ningún cambio añade `LOG_`/`printk`/mutex en un callback de interrupción: los
+  dos `printk` nuevos del códec están en `startThread()`.
+
+## Visto y no tocado (mismo sitio, otro hallazgo)
+
+- **`ui_contacts.c`**: mantener verde en el editor guarda (flanco) y el evento
+  largo llega a la lista, donde verde vuelve a abrir el editor: guardar y
+  reabrirlo de un tirón. Es la misma clase que el 6, en un camino que el
+  informe no nombraba; el arreglo es el mismo patrón (decidir en la suelta) o
+  no darle significado a la larga ahí.
+- **Rejilla de macros (`ui.c:1225`)**: usa `input_getPressedNumber()` directo,
+  así que un dígito mantenido ejecuta la macro dos veces. Fuera del alcance del
+  hallazgo (no era entrada de dígitos) y arreglarlo cambia el mapa de teclas de
+  la rejilla.
+- Los menores del informe que caen en estas áreas siguen abiertos:
+  `msg_service.c:282` (los APRS llegan sin remitente), `messaging.c:395-416`
+  (contador de no leídos), `threads.c:331/352` (`malloc` de las pilas de RTX y
+  UI sin comprobar) y `ui_aprs.c:480-484` (la UI cierra el flujo de audio que
+  posee el hilo RTX).
+- La alternativa "pila estática en PSRAM" para el códec no se ha tomado: añade
+  16 KiB permanentes a un mapa de RAM que ya está al 72 % para ahorrar un
+  `malloc` que ahora se libera.
