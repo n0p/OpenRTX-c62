@@ -24,6 +24,36 @@ El formato lo define `core/settings_record.h` / `settings_record.c` y lo prueban
 `tests/unit/settings_record.cpp` y `tests/unit/channel_store.cpp`: el mismo
 código que corre en el radio.
 
+### 1.1 El sector es un diario, no una copia única
+
+Ese registro **no se reescribe en su sitio**. El sector de 4 KiB está dividido
+en 16 ranuras de 256 B, y cada guardado escribe en la primera ranura que sigue
+borrada (`0xFF`), dejando intactas las anteriores:
+
+| offset del sector | ranura | contenido |
+|---|---|---|
+| `+0x000` | 0 | el primer registro guardado (o el que dejó un firmware anterior) |
+| `+0x100` | 1 | el siguiente |
+| … | … | … |
+| `+0xF00` | 15 | el último antes de borrar el sector |
+
+Al arrancar, `nvm_readSettings()` recorre las ranuras **de la más nueva a la más
+vieja** y se queda con la primera que `settings_recordLoad()` acepta; el VFO y
+sus registros con cabecera `nvmRecord` hacen lo mismo con su CRC. El número de
+ranura es, por tanto, el número de secuencia, y no hace falta ningún campo
+nuevo en el registro.
+
+Por qué: el C62 no tiene apagado ordenado — el interruptor es la batería — y
+antes cada guardado borraba el sector y lo escribía después. Un corte entre el
+borrado y la escritura dejaba el sector en blanco y el operador perdía ajustes
+y VFO sin más aviso que `settings_reset`. Con el diario el sector se borra **una
+vez cada 16 guardados**, y un corte en uno de ellos pierde ese guardado y
+devuelve el anterior. El coste es una lectura de 4 B por ranura para encontrar
+hueco, y una lectura de verificación de lo escrito; no hay RAM nueva.
+
+Un registro de un firmware anterior, escrito en la ranura 0, se sigue leyendo:
+la primera ranura libre es la 1 y el diario arranca detrás de él.
+
 ## 2. Por qué hay versión
 
 `settings_t` crece. Sin versión, un registro escrito por un firmware anterior se
