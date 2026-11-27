@@ -33,6 +33,18 @@ static const struct planBandwidth planBandwidths[] = {
 };
 
 /*
+ * The table is indexed by enum bandwidth and the value reaches it from a
+ * channel record read out of flash, so a record written by another firmware
+ * (or a damaged one) can be outside it.  The assertion keeps the table and the
+ * enum together; the clamp in emitBandwidth() below keeps a bad index from
+ * reading whatever is behind the table.
+ */
+#define PLAN_BW_COUNT (sizeof(planBandwidths) / sizeof(planBandwidths[0]))
+
+_Static_assert(PLAN_BW_COUNT == BW_6_25 + 1,
+               "planBandwidths must cover every enum bandwidth");
+
+/*
  * Per-mode numbers, all of them from radio_C62.cpp before the plan existed.
  * Where each one comes from is in docs/RADIO_CONFIG.md.
  */
@@ -190,7 +202,17 @@ static void emitAudioMode(struct radioPlan *plan, bool bypass)
 /** Channel mode and the three filters of REG_43, bk4819_setBandwidth() */
 static void emitBandwidth(struct radioPlan *plan, enum bandwidth bandwidth)
 {
-    const struct planBandwidth *f = &planBandwidths[bandwidth];
+    /*
+     * A spacing outside the enum is not a spacing: fall back to 12.5 kHz
+     * rather than index past the table with a value that came from a channel
+     * record.  12.5 kHz is the narrowest of the three and the one every mode
+     * here accepts, so a corrupt record degrades to a narrow channel instead
+     * of to whatever the bytes after the table happen to be.
+     */
+    const unsigned idx = ((unsigned)bandwidth < PLAN_BW_COUNT)
+                             ? (unsigned)bandwidth
+                             : (unsigned)BW_12_5;
+    const struct planBandwidth *f = &planBandwidths[idx];
     const uint16_t mask = BK4819_REG43_RF_BW_MASK | BK4819_REG43_RF_BW_WEAK_MASK
                         | BK4819_REG43_AF_TX_LPF2_BW_MASK
                         | BK4819_REG43_BW_MODE_MASK | BK4819_REG43_UNDOC3;

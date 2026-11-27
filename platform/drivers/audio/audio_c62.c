@@ -95,7 +95,28 @@ void audio_init(void)
     gpio_pin_configure_dt(&speaker_enable, GPIO_OUTPUT_INACTIVE);
 #endif
     gpio_pin_configure_dt(&dtmf_enable, GPIO_OUTPUT_INACTIVE);
-    initialized = csk6codec_init() == 0;
+
+    const int err = csk6codec_init();
+    initialized = (err == 0);
+
+    /*
+     * A codec that did not start leaves every audio_* call returning without a
+     * word: no receiver audio, no transmit audio, and a UI, a PTT and a PA
+     * that all work perfectly.  That is the failure nobody diagnoses, so it is
+     * said here, once, with the code that explains it.
+     */
+    if (!initialized)
+        printk("AUDIO: codec init failed: %d\n", err);
+}
+
+/**
+ * Whether the audio path came up.
+ *
+ * @return true when the codec answered and the routes can be applied.
+ */
+bool audio_ready(void)
+{
+    return initialized;
 }
 
 void audio_terminate(void)

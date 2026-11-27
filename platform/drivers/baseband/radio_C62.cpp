@@ -239,7 +239,18 @@ static void planOptions(struct radioPlanOptions *opt)
 /** The channel spacing a plan is built for, when it comes from the status */
 static enum bandwidth planBandwidth()
 {
-    return (config != nullptr) ? (enum bandwidth)config->bandwidth : BW_12_5;
+    const enum bandwidth bw =
+        (config != nullptr) ? (enum bandwidth)config->bandwidth : BW_12_5;
+
+    /*
+     * The value comes from the channel record the RTX was configured with, and
+     * a record written by another firmware (or a damaged one) can hold a
+     * spacing this build does not have.  It is narrowed here so that nothing
+     * downstream -- the plan's tables, the mode's own comparisons -- sees a
+     * value the enum does not describe; 12.5 kHz is the channel mode every
+     * mode accepts.
+     */
+    return ((unsigned)bw <= (unsigned)BW_6_25) ? bw : BW_12_5;
 }
 
 /**
@@ -410,7 +421,22 @@ static bool wfmEnter()
     gpioPin_setMode(&c62_bk1080.pwr, OUTPUT);
     gpioPin_set(&c62_bk1080.pwr);       // make sure it is off before powering
 
+    /*
+     * One lock around the whole power-up: the driver's frame state lives
+     * between calls, so a register access from the protocol thread in the
+     * middle of the init table would land in the wrong register (see
+     * c62Bk1080Lock()).  A second of polling holds it, which is why the lock
+     * is bounded and the other side reports a busy bus.
+     */
+    if (!c62Bk1080Lock())
+    {
+        printk("WFM: tuner bus busy, not powering up\n");
+        return false;
+    }
+
     if (!BK1080_Init(&c62_bk1080)) {
+        c62Bk1080Unlock();
+
         /*
          * A chip that does not answer costs a second of polling, so do not
          * retry it on every retune: three attempts per power cycle, then the
@@ -434,6 +460,8 @@ static bool wfmEnter()
     BK1080_SetSeekThreshold(&c62_bk1080, 8);    // dBuV, around S3
     BK1080_SetSeekQuality(&c62_bk1080, 2, 14);  // the factory table's values
 
+    c62Bk1080Unlock();
+
     wfmLastPoll = 0;
     return true;
 }
@@ -446,7 +474,12 @@ static void wfmLeave()
     if (!wfmReady)
         return;
 
-    BK1080_PowerOff(&c62_bk1080);
+    if (c62Bk1080Lock())
+    {
+        BK1080_PowerOff(&c62_bk1080);
+        c62Bk1080Unlock();
+    }
+
     wfmReady = false;
 }
 
@@ -466,7 +499,15 @@ static bool wfmUpdateStatus(const bool force)
     wfmLastPoll = now;
 
     struct bk1080Status hw;
-    if (!BK1080_ReadStatus(&c62_bk1080, &hw)) {
+    bool ok = false;
+
+    if (c62Bk1080Lock())
+    {
+        ok = BK1080_ReadStatus(&c62_bk1080, &hw);
+        c62Bk1080Unlock();
+    }
+
+    if (!ok) {
         wfmLastOk = false;
         return false;
     }
@@ -500,9 +541,13 @@ static void wfmTune(const uint32_t freq)
     freq_t target = wfm_snap(freq, (wfmSpacing == BK1080_SPACE_50K)
                                       ? WFM_STEP_FINE_HZ : WFM_STEP_HZ);
 
-    BK1080_SetMute(&c62_bk1080, true);
-    bool ok = BK1080_SetFrequency(&c62_bk1080, target, wfmSpacing);
-    BK1080_SetMute(&c62_bk1080, !ok);
+    if (c62Bk1080Lock())
+    {
+        BK1080_SetMute(&c62_bk1080, true);
+        bool ok = BK1080_SetFrequency(&c62_bk1080, target, wfmSpacing);
+        BK1080_SetMute(&c62_bk1080, !ok);
+        c62Bk1080Unlock();
+    }
 
     /* The previous status was another channel: do not carry it over */
     wfmLastPoll = 0;
@@ -520,8 +565,10 @@ static void wfmTune(const uint32_t freq)
  * follows the ripple and the output power stops tracking the duty cycle.
  *
  * @param power: TX power, in mW.
+ * @return true when the APC duty was applied, false when the PWM refused it --
+ *         the caller must not key the PA on a bias nobody chose.
  */
-static void set_tx_power(const uint32_t power)
+static bool set_tx_power(const uint32_t power)
 {
     float pwr = static_cast<float>(power) / 1000.0f;
     pwr = std::max(std::min(pwr, 5.0f), 1.0f);
@@ -537,7 +584,10 @@ static void set_tx_power(const uint32_t power)
 
     if (ret < 0) {
         printk("Failed to set TX power PWM: %d\n", ret);
+        return false;
     }
+
+    return true;
 }
 
 void radio_init(const rtxStatus_t *rtxState)
@@ -930,7 +980,28 @@ void radio_enableTx()
 
         const uint32_t freq = airband_snap(config->txFrequency);
         if ((freq < AIRBAND_FREQ_MIN) || (freq > AIRBAND_FREQ_MAX))
+        {
+            /*
+             * Same rule as the generic path below: a keying this driver does
+             * not do has to say so.  A bare return here left the operator (and
+             * the CPS) with the state of the last keying, which is "none", and
+             * a PTT that does nothing at all.
+             */
+            static uint32_t refusedAt = 0;
+            const uint32_t nowMs = k_uptime_get_32();
+
+            txRefusedReason = "tx out of airband";
+            if ((uint32_t)(nowMs - refusedAt) >= 1000)
+            {
+                refusedAt = nowMs;
+                printk("PA: keying refused, TX %lu Hz outside the airband "
+                       "%lu-%lu Hz\n",
+                       (unsigned long)config->txFrequency,
+                       (unsigned long)AIRBAND_FREQ_MIN,
+                       (unsigned long)AIRBAND_FREQ_MAX);
+            }
             return;
+        }
 
         /* The carrier level, from the band calibration at the TX frequency */
         const uint32_t pwr = (config->txPower < RADIO_PLAN_AM_CARRIER_MW)
@@ -944,7 +1015,28 @@ void radio_enableTx()
             gpioDev_set(PA_UHF_EN);
 
         gpioDev_set(ALC_TX_LED_EN);
-        set_tx_power(pwr);
+
+        if (!set_tx_power(pwr))
+        {
+            /*
+             * No APC, no keying: the PA switch is the last thing that goes
+             * up here, and without the bias this would be a carrier into an
+             * unbiased stage at a duty nobody chose.
+             */
+            static uint32_t apcRefusedAt = 0;
+            const uint32_t nowMs = k_uptime_get_32();
+
+            txRefusedReason = "no apc";
+            gpioDev_clear(PA_VHF_EN);
+            gpioDev_clear(PA_UHF_EN);
+            gpioDev_clear(ALC_TX_LED_EN);
+            if ((uint32_t)(nowMs - apcRefusedAt) >= 1000)
+            {
+                apcRefusedAt = nowMs;
+                printk("PA: keying refused, APC PWM did not take the duty\n");
+            }
+            return;
+        }
 
         /* The carrier, then the envelope */
         bk4819_enableTx(&c62_bk4819);
@@ -1014,6 +1106,54 @@ void radio_enableTx()
         return;
     }
 
+    /*
+     * A calibration that is not there is not a power setting of zero: the
+     * table decides the APC duty that gives the PA its bias, and a zeroed
+     * band (no factory points, calibC62_interp() answers a zeroed point) would
+     * key the switch with a 0 % duty -- the "keys into nothing" case.  Refuse
+     * it like a zero power and say which of the two it is.
+     */
+    if ((txCal.loPwr == 0) && (txCal.hiPwr == 0))
+    {
+        static uint32_t refusedAt = 0;
+        const uint32_t nowMs = k_uptime_get_32();
+
+        txRefusedReason = "no calibration";
+        if ((uint32_t)(nowMs - refusedAt) >= 1000)
+        {
+            refusedAt = nowMs;
+            printk("PA: keying refused, no TX calibration at %lu Hz\n",
+                   (unsigned long)config->txFrequency);
+        }
+        return;
+    }
+
+    /*
+     * The PA and its calibration were measured in 136-174 and 400-480 MHz
+     * (calib_C62.c): outside those the chip still transmits, with the UHF
+     * branch enabled above 174 MHz and the duty and deviation of the nearest
+     * measured point (calibC62_interp() clamps to the first or the last one).
+     * Unlocked tuning is a feature of this firmware, so this does not refuse
+     * the keying -- but what goes out is not a measured transmission and the
+     * operator is told so instead of finding out on the air.
+     */
+    if (!((config->txFrequency >= 136000000u &&
+           config->txFrequency <= 174000000u) ||
+          (config->txFrequency >= 400000000u &&
+           config->txFrequency <= 480000000u)))
+    {
+        static uint32_t warnedAt = 0;
+        const uint32_t nowMs = k_uptime_get_32();
+
+        if ((uint32_t)(nowMs - warnedAt) >= 5000)
+        {
+            warnedAt = nowMs;
+            printk("PA: TX %lu Hz outside the PA bands (136-174 / 400-480 "
+                   "MHz), power and deviation extrapolated\n",
+                   (unsigned long)config->txFrequency);
+        }
+    }
+
     bk4819_setFrequency(&c62_bk4819, config->txFrequency);
 
     if ((radioMode != OPMODE_M17) && config->txToneEn) {
@@ -1028,7 +1168,23 @@ void radio_enableTx()
 
     gpioDev_set(ALC_TX_LED_EN);
 
-    set_tx_power(config->txPower);
+    if (!set_tx_power(config->txPower))
+    {
+        /* No bias, no keying: the lines go back down and the status says so. */
+        static uint32_t apcRefusedAt = 0;
+        const uint32_t nowMs = k_uptime_get_32();
+
+        txRefusedReason = "no apc";
+        gpioDev_clear(PA_VHF_EN);
+        gpioDev_clear(PA_UHF_EN);
+        gpioDev_clear(ALC_TX_LED_EN);
+        if ((uint32_t)(nowMs - apcRefusedAt) >= 1000)
+        {
+            apcRefusedAt = nowMs;
+            printk("PA: keying refused, APC PWM did not take the duty\n");
+        }
+        return;
+    }
 
     bk4819_enableTx(&c62_bk4819);
     radioStatus = TX;
@@ -1040,36 +1196,90 @@ const char *radio_txRefusedReason(void)
     return txRefusedReason;
 }
 
-void radio_disableRtx()
-{
-    bb_mark(BB_M_TX_OFF);
+/*
+ * The three transmit enable lines, as the REG_33 bits they are.
+ *
+ * PA_VHF_EN (pin 2), PA_UHF_EN (pin 3) and ALC_TX_LED_EN (pin 4) hang from the
+ * BK4819's own GPIOs, not from pins of this MCU: there is no way to drop them
+ * without a bus transaction, and the "PA off" of this board is a register
+ * write.  What can be avoided is everything else happening first.
+ */
+static constexpr uint16_t PA_LATCH_MASK = 0x001Cu;
 
+/**
+ * Drop the three transmit lines, in one register access.
+ *
+ * One read-modify-write of REG_33 for the whole group, instead of the three
+ * the per-pin helpers issue: the three bits are one latch, so either all of
+ * them are off or the teardown has not started, and it is the shortest path
+ * this hardware offers between "the driver decided" and "the PA is off".
+ *
+ * @return true when the register write completed.
+ */
+static bool paLinesDown()
+{
+    return bk4819_maskSetRegister(&c62_bk4819, 0x33, PA_LATCH_MASK, 0) == 0;
+}
+
+/**
+ * End a transmission.
+ *
+ * @param force: true for the emergency cut, where the lines go down before
+ *               anything else and no ramp is worth waiting for.
+ */
+static void radio_endTx(bool force)
+{
     /*
-     * The air ends here as far as the driver's clock is concerned: it is the
-     * one place that puts the PA down, so it is the one place that tells the
-     * barrier. Doing it first means a slow teardown (a DSP call, a tuner
-     * power-down) is not counted as air.
+     * The emergency cut first, with nothing in front of it: this is what
+     * paCut() runs when the RTX thread has been keyed past the driver's own
+     * limit, and the thread that should have unkeyed may be stuck inside a
+     * transfer.  Every microsecond the PA stays up is air, so the one register
+     * write that can bring it down is the first thing that happens.
      */
-    paNoteOff();
+    if (force)
+        paLinesDown();
+
+    bb_mark(BB_M_TX_OFF);
 
 #ifdef CONFIG_C62_AIR_TX
     /*
-     * The airband transmitter is stopped before anything else: the modulator
-     * ramps the carrier down in 16 ms and then releases the APC line, so that
-     * the PA switch is not what cuts the carrier. It is a no-op when the
-     * modulator is not keyed.
+     * The airband transmitter is stopped before the lines in the normal path:
+     * the modulator ramps the carrier down in 16 ms, so that the PA switch is
+     * not what cuts the carrier (and the ramp itself is bus-free: it writes
+     * the PWM, not the chip).  In the emergency cut the lines are already
+     * down, so there is nothing left to ramp and the modulator is stopped
+     * without the 16 ms.
      */
     if (radioMode == OPMODE_AIRBAND)
-        air_tx_key(false);
+    {
+        if (force)
+            air_tx_abort();
+        else
+            air_tx_key(false);
+    }
 #endif
+
+    /*
+     * The lines down before the rest of the teardown, which is a chain of bus
+     * transactions: bk4819_disableCtdcss(), bk4819_disableRtx() and the audio
+     * path all talk to a chip, and the one that matters is the one that turns
+     * the PA off.
+     */
+    if (!force)
+        paLinesDown();
+
+    /*
+     * The air ends when the lines are down, not when the decision was taken:
+     * the 16 ms ramp and the teardown are not air, and this is the clock the
+     * 95 s barrier reads.  It used to be called first, which made the count
+     * optimistic by the length of whatever came after it.
+     */
+    paNoteOff();
 
     bk4819_disableCtdcss(&c62_bk4819);
 
     gpioDev_clear(LNA_VHF_EN);
     gpioDev_clear(LNA_UHF_EN);
-    gpioDev_clear(PA_VHF_EN);
-    gpioDev_clear(PA_UHF_EN);
-    gpioDev_clear(ALC_TX_LED_EN);
 
     if (radioMode == OPMODE_WFM_BC) {
         /*
@@ -1078,7 +1288,13 @@ void radio_disableRtx()
          * the pop-suppression sequence the stock firmware uses as well.
          */
         if (wfmReady)
-            BK1080_SetMute(&c62_bk1080, true);
+        {
+            if (c62Bk1080Lock())
+            {
+                BK1080_SetMute(&c62_bk1080, true);
+                c62Bk1080Unlock();
+            }
+        }
 
         audio_setExtSource(false);
     } else if (radioStatus == RX) {
@@ -1089,6 +1305,11 @@ void radio_disableRtx()
 
     bk4819_disableRtx(&c62_bk4819);
     radioStatus = OFF;
+}
+
+void radio_disableRtx()
+{
+    radio_endTx(false);
 }
 
 /**
@@ -1105,7 +1326,18 @@ static bool paLatchOff(void)
 {
     /* The output latch of pin n is bit (0x0040 >> n) of REG_33 */
     const uint16_t txMask = (0x0040u >> 2) | (0x0040u >> 3) | (0x0040u >> 4);
-    const uint16_t reg = bk4819_readReg(&c62_bk4819, 0x33);
+    uint16_t reg;
+
+    /*
+     * A read that did not complete is not proof of anything.  Answering "not
+     * off" is the safe direction: radio_paForceOff() retries and reports the
+     * radio as keyed, and radio_txPathOff() never lets an unproven latch count
+     * as an off one.  This used to return the contents of an uninitialised
+     * stack buffer when the transfer failed, which could "prove" that a keyed
+     * PA was off.
+     */
+    if (bk4819_readRegChecked(&c62_bk4819, 0x33, &reg) < 0)
+        return false;
 
     return (reg & txMask) == 0;
 }
@@ -1144,9 +1376,8 @@ bool radio_paForceOff(void)
     bool off = false;
     for (unsigned attempt = 0; attempt < 3; attempt++)
     {
-        gpioDev_clear(PA_VHF_EN);
-        gpioDev_clear(PA_UHF_EN);
-        gpioDev_clear(ALC_TX_LED_EN);
+        /* One access for the three lines, as in every other down path */
+        paLinesDown();
 
         if (paLatchOff())
         {
@@ -1168,9 +1399,12 @@ bool radio_paForceOff(void)
  * The driver barrier fired: the keying has lasted the limit plus the margin.
  *
  * Runs in the system work queue, not in the RTX thread, because the RTX thread
- * is exactly what may be stuck. The PA goes first and the rest of the teardown
- * follows the normal unkey path; the clock stays blocked, so nothing keys
- * again until the radio has been off the air for a release.
+ * is exactly what may be stuck.  The transmit lines are the first thing that
+ * happens -- one REG_33 write, in radio_endTx(true) -- before the ramp, before
+ * the chip's turn-off sequence and before the audio teardown, all of which are
+ * bus transactions that a stuck RTX thread may be blocking.  The clock stays
+ * blocked, so nothing keys again until the radio has been off the air for a
+ * release.
  */
 static void paCut(struct k_work *work)
 {
@@ -1182,7 +1416,7 @@ static void paCut(struct k_work *work)
     txw_sample(&paWatch, now, true);
     txw_tick(&paWatch, now);
 
-    radio_disableRtx();
+    radio_endTx(true);
 
     printk("PA: TX BARRIER %us: driver cut the PA, air=%lums cuts=%lu\n",
            (unsigned int)(TXW_DRIVER_LIMIT_MS / 1000),

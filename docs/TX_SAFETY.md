@@ -181,14 +181,29 @@ two halves:
   message queue that keeps asking -- gets "no" every time;
 - **a `k_timer`**, armed at each keying for whatever is left of the bar,
   expires 95 s later and submits a work item to the system work queue, which
-  performs the normal unkey. That half is what covers the case the supervisor
-  cannot: the supervisor not running at all.
+  brings the transmitter down without the RTX thread having to run. The first
+  thing that work item does is the one register write that deasserts the three
+  enable lines (REG_33, see below); the ramp, the chip's turn-off sequence and
+  the audio teardown follow it. That half is what covers the case the
+  supervisor cannot: the supervisor not running at all.
 
 So the belt is the supervisor's 90 s, with the mode unwinding; the braces are
 the driver's 95 s, from a timer, with no thread of ours in the path.
 
 Both barriers count from the same events and neither resets on its own: only a
 release does.
+
+The PA enable lines are not pins of this MCU: PA VHF, PA UHF and the ALC/bias
+line hang from the BK4819's own GPIOs, so turning the transmitter off is a
+register write (one read-modify-write of REG_33 for all three) and every
+"PA off" path in the firmware depends on the bus the chip sits on. What the
+driver controls is the order: the lines are written before
+`bk4819_disableCtdcss()`, before `bk4819_disableRtx()` and before the audio
+path is torn down, so the first bus transaction after the decision to unkey is
+the one that can turn the PA off -- with one deliberate exception, the airband
+amplitude modulator, whose 16 ms down-ramp is bus-free and has to happen while
+the PA is still enabled. In the timer's cut that ramp is skipped: the lines go
+first and the modulator is stopped afterwards.
 
 ## Booting
 

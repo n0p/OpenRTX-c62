@@ -69,6 +69,37 @@ GPIO_BK4819_DEVICE_DEFINE(c62_bk4819_gpio, c62_bk4819)
 static struct i2cBitbangState c62_bk1080_i2cState;
 
 /*
+ * Serialisation of the tuner's bit-banged bus.
+ *
+ * The BK1080 driver keeps the "bus held" state of a frame from one call to the
+ * next (i2c_bitbang.h), so two contexts interleaving calls is not a slow read:
+ * it is a frame addressed to the wrong register or a value written where
+ * another one was going.  Two contexts reach it on the radio -- the RTX thread
+ * (radio_getRssi() in the broadcast mode) and the pcproto thread (the debug
+ * namespace's register access) -- and neither can use the pthread_mutex_t of
+ * struct i2cDevice, which under this target's newlib is a plain uint32_t.
+ *
+ * Bounded, like the BK4819's: the access that holds it can hang, and a reader
+ * that cannot have the bus has to say so instead of parking for ever.
+ */
+static K_MUTEX_DEFINE(c62Bk1080Mutex);
+
+bool c62Bk1080Lock(void)
+{
+    if (k_is_in_isr())
+        return true;
+
+    return k_mutex_lock(&c62Bk1080Mutex, K_MSEC(C62_BUS_LOCK_TIMEOUT_MS)) == 0;
+}
+
+void c62Bk1080Unlock(void)
+{
+    if (!k_is_in_isr())
+        k_mutex_unlock(&c62Bk1080Mutex);
+}
+
+
+/*
  * Clock half-period, microseconds. The BK1080 takes up to 2.5 MHz on this bus
  * (400 ns), and delayUs() below 1 ms is a busy wait on this SoC, so every
  * microsecond here is CPU time: 2 us (250 kHz, ten times slower than the chip

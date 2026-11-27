@@ -16,6 +16,67 @@
 #include "core/utils.h"
 
 /*
+ * Serialisation of the chip's serial bus.
+ *
+ * One register access is not one transfer: the command byte and the data share
+ * a chip-select window (readRegChecked()/writeRegOn()), and a read-modify-write
+ * is two accesses.  spi_acquire()/spi_release() only protect a single transfer,
+ * and only when the device was given a mutex -- and on this target the mutex
+ * cannot be the pthread_mutex_t of struct spiDevice, which is a plain uint32_t
+ * under the C62's newlib.  So the exclusion lives here, around the whole
+ * sequence, and the bus mutex of the SPI device stays NULL.
+ *
+ * Three contexts reach the chip on the radio: the RTX thread (everything
+ * radio_*), the pcproto thread (the debug namespace's register read/write) and
+ * the system workqueue (paCut() -> radio_disableRtx() -> REG_33).  Without
+ * this, one context can slip its own transfer between the command and the data
+ * of another, and the read comes from a different register than the one asked
+ * for -- REG_30 and REG_33, the PA path, included.
+ *
+ * Two properties are deliberate:
+ *  - recursive, because bk4819_maskSetRegister() takes it and then calls the
+ *    two halves that take it again;
+ *  - bounded, because what can hold it is a transfer that never completes
+ *    (zephyrSpiBus_transfer() waits inside the driver), and the workqueue's
+ *    cut must not park behind that: the access fails after
+ *    BK4819_LOCK_TIMEOUT_MS and the teardown continues.
+ *
+ * Not built for the host tests, which drive the driver from one thread against
+ * a fake bus.
+ */
+#ifdef __ZEPHYR__
+#include <zephyr/kernel.h>
+
+#define BK4819_LOCK_TIMEOUT_MS 50
+
+static K_MUTEX_DEFINE(bk4819BusMutex);
+static bool busLock(void)
+{
+    /* Nothing here is called from an interrupt today, and a mutex may not be
+     * taken from one: skip the lock instead of faulting if that ever changes. */
+    if (k_is_in_isr())
+        return true;
+
+    return k_mutex_lock(&bk4819BusMutex, K_MSEC(BK4819_LOCK_TIMEOUT_MS)) == 0;
+}
+
+static void busUnlock(void)
+{
+    if (!k_is_in_isr())
+        k_mutex_unlock(&bk4819BusMutex);
+}
+#else
+static bool busLock(void)
+{
+    return true;
+}
+
+static void busUnlock(void)
+{
+}
+#endif
+
+/*
  * Audio processing fields, with their values by enum bk4819_audioMode: voice
  * (the values bk4819_init() sets), then bypass, as the application note's
  * RF_EnterBypass() sets it.
@@ -123,45 +184,106 @@ static const struct spiDevice *busOf(const struct BK4819 *dev, bool fast)
     return dev->spi;
 }
 
-static uint16_t readRegOn(const struct BK4819 *dev, const struct spiDevice *spi,
-                          uint8_t reg)
+/*
+ * Read one register and say whether the transfer completed.
+ *
+ * The SPI layer returns a negative error code when the bus did not deliver
+ * (spiZephyr_transfer() passes Zephyr's own), and this driver used to ignore
+ * all three results while returning whatever was in an uninitialised stack
+ * buffer.  A register read is the evidence the transmit path is built on --
+ * radio_txPathOff() proves the PA is off by reading REG_33 -- so a failure has
+ * to reach the caller, not become the value of the register.
+ *
+ * @return zero on success and the value in *out; a negative error code
+ *         otherwise, with *out untouched.
+ */
+static int readRegChecked(const struct BK4819 *dev, const struct spiDevice *spi,
+                          uint8_t reg, uint16_t *out)
 {
     const uint8_t cmd = reg | BK4819_REG_READ;
-    uint8_t rx[2];
+    uint8_t rx[2] = { 0, 0 };
+    int ret;
 
-    spi_acquire(spi);
+    if (!busLock())
+        return -EBUSY;
+
+    if (spi_acquire(spi) < 0) {
+        busUnlock();
+        return -EBUSY;
+    }
+
     gpioPin_clear(&dev->scn);
     delayUs(1);
 
-    spi_send(spi, &cmd, 1);
-    spi_receive(spi, rx, sizeof(rx));
+    ret = spi_send(spi, &cmd, 1);
+    if (ret == 0)
+        ret = spi_receive(spi, rx, sizeof(rx));
 
+    /* Chip select goes back up whatever happened: left selected, the chip's
+     * interface stays busy for whatever transfer comes next. */
     delayUs(1);
     gpioPin_set(&dev->scn);
     spi_release(spi);
+    busUnlock();
 
-    return ((uint16_t)rx[0] << 8) | rx[1];
+    if (ret < 0)
+        return ret;
+
+    *out = ((uint16_t)rx[0] << 8) | rx[1];
+
+    return 0;
 }
 
-static void writeRegOn(const struct BK4819 *dev, const struct spiDevice *spi,
-                       uint8_t reg, uint16_t data)
+/**
+ * Read one register over the slow bus, without a failure channel.
+ *
+ * Used by the callers whose answer is a scalar (the S-meter, the glitch
+ * counter): a failed read is a zero, which those keep as "no level" rather
+ * than as a measurement.  Everything that acts on the value -- the register
+ * read-modify-write, the PA latch, the debug protocol -- uses
+ * bk4819_readRegChecked() instead.
+ */
+static uint16_t readRegOn(const struct BK4819 *dev, const struct spiDevice *spi,
+                          uint8_t reg)
+{
+    uint16_t value = 0;
+
+    (void)readRegChecked(dev, spi, reg, &value);
+
+    return value;
+}
+
+static int writeRegOn(const struct BK4819 *dev, const struct spiDevice *spi,
+                      uint8_t reg, uint16_t data)
 {
     const uint8_t cmd = reg | BK4819_REG_WRITE;
     const uint8_t tx[2] = {
         (data >> 8) & 0xFF,
         data & 0xFF,
     };
+    int ret;
 
-    spi_acquire(spi);
+    if (!busLock())
+        return -EBUSY;
+
+    if (spi_acquire(spi) < 0) {
+        busUnlock();
+        return -EBUSY;
+    }
+
     gpioPin_clear(&dev->scn);
     delayUs(1);
 
-    spi_send(spi, &cmd, 1);
-    spi_send(spi, tx, sizeof(tx));
+    ret = spi_send(spi, &cmd, 1);
+    if (ret == 0)
+        ret = spi_send(spi, tx, sizeof(tx));
 
     delayUs(1);
     gpioPin_set(&dev->scn);
     spi_release(spi);
+    busUnlock();
+
+    return ret;
 }
 
 uint16_t bk4819_readReg(const struct BK4819 *dev, uint8_t reg)
@@ -169,16 +291,50 @@ uint16_t bk4819_readReg(const struct BK4819 *dev, uint8_t reg)
     return readRegOn(dev, dev->spi, reg);
 }
 
-void bk4819_writeReg(const struct BK4819 *dev, uint8_t reg, uint16_t data)
+int bk4819_readRegChecked(const struct BK4819 *dev, uint8_t reg, uint16_t *out)
 {
-    writeRegOn(dev, dev->spi, reg, data);
+    return readRegChecked(dev, dev->spi, reg, out);
 }
 
-void bk4819_maskSetRegister(const struct BK4819 *dev, uint8_t reg,
-                            uint16_t mask, uint16_t value)
+void bk4819_writeReg(const struct BK4819 *dev, uint8_t reg, uint16_t data)
 {
-    uint16_t current = bk4819_readReg(dev, reg);
-    bk4819_writeReg(dev, reg, (current & ~mask) | (value & mask));
+    (void)writeRegOn(dev, dev->spi, reg, data);
+}
+
+int bk4819_maskSetRegister(const struct BK4819 *dev, uint8_t reg,
+                           uint16_t mask, uint16_t value)
+{
+    uint16_t current = 0;
+    int ret;
+
+    /*
+     * The whole read-modify-write is one transaction on the bus: without this
+     * outer lock another context could write the register between this side's
+     * read and its write, and the other context's bits would be thrown away.
+     * Recursive, so the two accesses below take the same mutex again.
+     */
+    if (!busLock())
+        return -EBUSY;
+
+    ret = readRegChecked(dev, dev->spi, reg, &current);
+
+    /*
+     * A failed read still writes, with the unread bits taken as zero.
+     *
+     * This is the register path of REG_33, and REG_33 is what drives the PA,
+     * the ALC and the LNA switches: the last chance to change a register that
+     * may be keying must not be thrown away because the read before it failed.
+     * A zero base also lands on the safe side of every register this function
+     * touches -- REG_33 has all the pins deasserted and every pin an output,
+     * REG_30 has the PA gain and the TX DSP off, REG_43 keeps the fields the
+     * mask carries.  The error still reaches the caller, which is what decides
+     * whether the result counts as proof.
+     */
+    int wr = writeRegOn(dev, dev->spi, reg, (current & ~mask) | (value & mask));
+
+    busUnlock();
+
+    return (ret < 0) ? ret : wr;
 }
 
 void bk4819_init(const struct BK4819 *dev)
@@ -516,6 +672,15 @@ void bk4819_setTxAudioFilter(const struct BK4819 *dev, uint8_t bw)
 
 void bk4819_setBandwidth(const struct BK4819 *dev, enum bk4819_bandwidth bw)
 {
+    /*
+     * The enum indexes bandwidthFilters[] and it arrives from a mode profile
+     * and, upstream of that, from a channel record: clamp it, so a value the
+     * chip does not have becomes 12.5 kHz instead of a field written from
+     * whatever is behind the table.
+     */
+    if ((unsigned)bw > (unsigned)BK4819_BW_25K)
+        bw = BK4819_BW_12K5;
+
     const struct bandwidthFilter *filters = &bandwidthFilters[bw];
     const uint16_t mask = BK4819_REG43_RF_BW_MASK | BK4819_REG43_RF_BW_WEAK_MASK
                         | BK4819_REG43_AF_TX_LPF2_BW_MASK

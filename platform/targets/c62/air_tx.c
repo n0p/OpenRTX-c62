@@ -153,16 +153,30 @@ static void paceTick(uint32_t event, void *param)
 }
 
 /**
- * Push one duty value, dropping the oldest if the timer has not kept up.
+ * Push one duty value from the audio worker.
+ *
+ * Only the pacing interrupt moves ringTail: it is the consumer, and the worker
+ * used to move it too when the ring was full.  That write is a lost update --
+ * the interrupt can advance the index between the worker's `next == ringTail`
+ * test and its write, and the worker then moves the index back over a value
+ * that was already consumed: the envelope repeats a step or skips one (a click
+ * or a chirp) and, at unkey, the ramp can start from a level the PA never had.
+ *
+ * A full ring therefore overwrites the newest value instead of dropping the
+ * oldest: being full means the timer is more than 8 ms behind, so the oldest
+ * sample is already the past and the value the audio block just produced is
+ * the one worth keeping.
  *
  * @param v: value.
  */
 static void ringPush(uint16_t v)
 {
-    uint8_t next = (uint8_t)((ringHead + 1) % DUTY_RING);
+    const uint8_t next = (uint8_t)((ringHead + 1) % DUTY_RING);
 
-    if (next == ringTail)
-        ringTail = (uint8_t)((ringTail + 1) % DUTY_RING);
+    if (next == ringTail) {
+        ring[(uint8_t)((ringHead + DUTY_RING - 1) % DUTY_RING)] = v;
+        return;
+    }
 
     ring[ringHead] = v;
     ringHead = next;
@@ -340,15 +354,21 @@ void air_tx_key(bool down)
      * carrier would be cut by the PA switch instead of by the envelope. 128
      * steps of 125 us is 16 ms, the same shape as the key-up, and it is the
      * only place in the transmit path where the RTX thread blocks.
+     *
+     * The level the ramp starts from is lastDuty, which the pacing interrupt
+     * writes: it is read with interrupts off, right after `keyed` is cleared,
+     * so the ramp starts from what the APC line was really holding and not
+     * from a value the interrupt changed in between.
      */
+    unsigned int lockKey = irq_lock();
     keyed = false;
+    uint16_t start = lastDuty;
+    irq_unlock(lockKey);
 
     if (pathOwned) {
         csk6codec_setTxProcessor(NULL);
         pathOwned = false;
     }
-
-    uint16_t start = lastDuty;
 
     for (int i = RAMP_STEPS; i >= 0; i--) {
         apcWrite((uint16_t)(((uint32_t)start * (uint32_t)i) / RAMP_STEPS));
@@ -372,9 +392,18 @@ bool air_tx_busy(void)
 
 void air_tx_abort(void)
 {
+    /*
+     * Stop the pacing interrupt first: it is the only other writer of the ring
+     * indices and of lastDuty, and it returns as soon as `keyed` is false.
+     * Resetting the indices under the same lock is what makes the next keying
+     * start from a clean ring instead of from whatever a tick left behind.
+     */
+    unsigned int lockKey = irq_lock();
     keyed = false;
     ringHead = 0;
     ringTail = 0;
+    irq_unlock(lockKey);
+
     apcWrite(0);
     am_tx_reset(&mod);
 

@@ -133,11 +133,26 @@ struct BK4819Priv {
 /**
  * Read a register.
  *
+ * No failure channel: the value is the one on the bus, or zero when the
+ * transfer did not complete. Use bk4819_readRegChecked() when the answer
+ * decides something -- the S-meter and the glitch counter are the two callers
+ * that cannot act on a failure anyway.
+ *
  * @param dev: pointer to device data.
  * @param reg: register address.
- * @return register value.
+ * @return register value, zero if the read failed.
  */
 uint16_t bk4819_readReg(const struct BK4819 *dev, uint8_t reg);
+
+/**
+ * Read a register, reporting whether the transfer completed.
+ *
+ * @param dev: pointer to device data.
+ * @param reg: register address.
+ * @param out: destination; untouched when the read fails.
+ * @return zero on success, a negative error code otherwise.
+ */
+int bk4819_readRegChecked(const struct BK4819 *dev, uint8_t reg, uint16_t *out);
 
 /**
  * Write a register.
@@ -152,13 +167,19 @@ void bk4819_writeReg(const struct BK4819 *dev, uint8_t reg, uint16_t data);
  * Write the bits of a register selected by a mask. For the BK4819 GPIO
  * driver: radio code uses the named setters.
  *
+ * The write happens even when the read-modify-write cannot read (the unread
+ * bits are written as zero), because this is the path of REG_33, which drives
+ * the PA: see the comment in the implementation.
+ *
  * @param dev: pointer to device data.
  * @param reg: register address.
  * @param mask: bits to write.
  * @param value: new value of those bits.
+ * @return zero when both the read and the write completed, a negative error
+ *         code otherwise.
  */
-void bk4819_maskSetRegister(const struct BK4819 *dev, uint8_t reg,
-                            uint16_t mask, uint16_t value);
+int bk4819_maskSetRegister(const struct BK4819 *dev, uint8_t reg,
+                           uint16_t mask, uint16_t value);
 
 /**
  * Initialise the BK4819 chip.
