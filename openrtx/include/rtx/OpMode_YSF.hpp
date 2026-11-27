@@ -56,7 +56,7 @@ private:
 
 #ifdef CONFIG_YSF_TX
     bool startTx(const rtxStatus_t *status);
-    void stopTx();
+    void stopTx(bool drain = true);
     bool txSlot();
     static int voiceTrampoline(uint8_t frame[9], void *user);
     bool fillMic(unsigned slots);
@@ -75,6 +75,7 @@ private:
     streamId micId;
     bool txBlocked;
     bool txEnded;
+    bool txFirstBlock;  ///< A block of this over has reached the sink
 #endif
 };
 

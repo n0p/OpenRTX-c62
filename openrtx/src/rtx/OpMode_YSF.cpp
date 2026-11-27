@@ -20,6 +20,7 @@
 
 #ifdef CONFIG_YSF_TX
 #include "protocols/YSF/YsfTx.h"
+#include "rtx/TxGuard.h"
 /*
  * The voice is AMBE+2 2450, the canonical 72-bit frame: lib/dmr_encoder, the
  * same C encoder the DMR transmitter runs.  It is NOT dmrEnc_encode(), which
@@ -88,7 +89,17 @@ static int16_t baseband[2 * BLOCK_SAMPLES] YSF_EXT_RAM;
 /** AMBE+2 frames buffered for the transmit path (4 x 20 ms). */
 #define TX_FRAME_QUEUE 4
 
-static int16_t txSamples[TX_FRAME_SAMPLES] YSF_EXT_RAM;
+/**
+ * The stream's own buffer: two halves of one 100 ms frame.
+ *
+ * audioStream_start() is given the length of the whole buffer and a
+ * double-buffered stream plays one half while the mode renders into the other
+ * (outputStream_getIdleBuffer()), which is the pattern the DMR, NXDN and dPMR
+ * transmitters already use.  This used to be declared as a single half while
+ * the stream was told it held two, so the sink read 9.6 kB of PSRAM past the
+ * end of the array on every frame.
+ */
+static stream_sample_t txBaseband[2 * TX_FRAME_SAMPLES] YSF_EXT_RAM;
 static int16_t micPcm[2 * YSF_TX_PCM_SAMPLES] YSF_EXT_RAM;
 static uint8_t txFrames[TX_FRAME_QUEUE][YSF_TX_FRAME_BYTES] YSF_EXT_RAM;
 static unsigned txFrameHead;
@@ -134,6 +145,7 @@ OpMode_YSF::OpMode_YSF()
     micId = -1;
     txBlocked = false;
     txEnded = false;
+    txFirstBlock = false;
 #endif
 }
 
@@ -243,7 +255,18 @@ bool OpMode_YSF::fillMic(unsigned slots)
 /** Start a System Fusion transmission. */
 bool OpMode_YSF::startTx(const rtxStatus_t *status)
 {
+    struct txGuard *guard = rtx_getTxGuard();
     struct ysfTxConfig cfg;
+
+    /*
+     * The transmit supervisor covers this over from here on: a PTT that never
+     * comes back, a stream that stops taking blocks or an over that outlives
+     * the cap is cut from the main thread, and the driver's own 95 s barrier
+     * has a guard to ask.  Until this existed the mode put TX on the screen,
+     * built the waveform into an audio path nobody had keyed and left the
+     * radio in receive.
+     */
+    txg_enter(guard, (uint32_t)getTick());
 
     memset(&cfg, 0, sizeof(cfg));
     snprintf(cfg.source, sizeof(cfg.source), "%.10s", state.settings.callsign);
@@ -258,12 +281,20 @@ bool OpMode_YSF::startTx(const rtxStatus_t *status)
     txEnded = false;
     txFrameHead = 0;
     txFrameCount = 0;
+    txFirstBlock = false;
 
     txPath = audioPath_request(SOURCE_MCU, SINK_RTX, PRIO_TX);
     if (txPath < 0)
         return false;
 
-    txId = audioStream_start(txPath, txSamples, 2 * TX_FRAME_SAMPLES, 48000,
+    /*
+     * The buffer is NOLOAD PSRAM and the sink starts playing its first half as
+     * soon as the stream is attached, so it is zeroed here: the alternative is
+     * that the first 100 ms of a transmission is whatever was left there.
+     */
+    memset(txBaseband, 0, sizeof(txBaseband));
+
+    txId = audioStream_start(txPath, txBaseband, 2 * TX_FRAME_SAMPLES, 48000,
                              STREAM_OUTPUT | BUF_CIRC_DOUBLE);
     if (txId < 0) {
         audioPath_release(txPath);
@@ -286,16 +317,42 @@ bool OpMode_YSF::startTx(const rtxStatus_t *status)
 #ifdef YSF_TX_HAS_ENCODER
     dmr_encoder_reset();
 #endif
+
+    /*
+     * Everything the modulator needs is open: key the PA through the driver's
+     * own gate (rtx_txPermitted() is what the driver checks, and the gate this
+     * mode has just passed is what it asks) and treat a refusal as a failed
+     * key-up, not as a transmission with no carrier.
+     */
+    txg_streamsOpen(guard, (uint32_t)getTick());
+    radio_enableTx();
+    if (radio_getStatus() != TX) {
+        /* Nothing was keyed and nothing played: close without waiting for the
+         * sink (stopTx(false)). */
+        stopTx(false);
+        return false;
+    }
+    txg_note(guard, TXG_EV_KEYED, (uint32_t)getTick());
     return true;
 }
 
-void OpMode_YSF::stopTx()
+void OpMode_YSF::stopTx(bool drain)
 {
     ysfTx_setVoiceSource(NULL, NULL);
     ysfTx_end();
 
-    if (txId >= 0)
-        audioStream_terminate(txId);
+    if (txId >= 0) {
+        /*
+         * drain: let the sink finish the half it has (audioStream_stop()),
+         * which is what puts the last frames of the over on the air.
+         * Otherwise cancel at once (audioStream_terminate()): that is the
+         * abort path, which runs in the main thread and must not wait.
+         */
+        if (drain)
+            audioStream_stop(txId);
+        else
+            audioStream_terminate(txId);
+    }
     if (micId >= 0)
         audioStream_terminate(micId);
     if (txPath >= 0)
@@ -305,14 +362,53 @@ void OpMode_YSF::stopTx()
     txId = micId = -1;
     txPath = micPath = -1;
     txFrameCount = 0;
+    txFirstBlock = false;
+
+    /*
+     * The over is over: close the guard here, or the supervisor keeps asking
+     * for an abort that already happened (and an aborted transmission keeps
+     * the reason it was aborted for).
+     */
+    txg_exit(rtx_getTxGuard(), (uint32_t)getTick(), TXG_REASON_MODE);
 }
 
 /** One 100 ms frame of modulating waveform; true when the call is over. */
 bool OpMode_YSF::txSlot()
 {
+    struct txGuard *guard = rtx_getTxGuard();
+    stream_sample_t *idle = outputStream_getIdleBuffer(txId);
+
     fillMic(YSF_VOICE_SLOTS);
-    ysfTx_samples(txSamples, TX_FRAME_SAMPLES, YSF_TX_LEVEL);
-    outputStream_sync(txId, false);
+
+    /*
+     * The half the sink is *not* playing is the one to write: with a double
+     * buffered stream, writing the same half every time and syncing with
+     * "nothing changed" (what this did) overwrites what is on the air and
+     * leaves the other half playing stale memory for ever.
+     */
+    if (idle == NULL) {
+        txBlocked = true;
+        return true;
+    }
+
+    ysfTx_samples(idle, TX_FRAME_SAMPLES, YSF_TX_LEVEL);
+    if (!outputStream_sync(txId, true)) {
+        /* The sink is not consuming: this is the end of the over, not a
+         * frame to retry.  The PTT stays blocked until it is released. */
+        txBlocked = true;
+        return true;
+    }
+
+    /*
+     * One block reached the sink: the first one starts the supervisor's
+     * cadence clock, the rest keep it and flag a half that arrived late.
+     */
+    if (!txFirstBlock) {
+        txFirstBlock = true;
+        txg_firstBlock(guard, (uint32_t)getTick());
+    } else {
+        txg_block(guard, (uint32_t)getTick());
+    }
 
     if (ysfTx_done() && !txEnded) {
         txEnded = true;
