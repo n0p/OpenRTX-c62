@@ -603,11 +603,22 @@ static bool tmsDecode(const uint8_t *p, int len, bool *isAck, bool *wantAck,
 }
 
 /* The answers a message to us asks for */
+/*
+ * The answering scratch.  A confirmed response is one burst, a TMS ACK is
+ * a preamble chain, but the arrays were sized for the longest of either and
+ * reserved on every call -- 624 bytes of stack, in the rtx thread, for an
+ * ACK that is usually one burst, on a radio whose DTCM is at 95.9 %.
+ * answer() runs with `lock` held and is its only user, so one copy of the
+ * scratch, in PSRAM with the rest of this file's state, serves every call.
+ */
+static SMS_PSRAM uint8_t replyDt[BURSTS_MAX];
+static SMS_PSRAM uint8_t replyBs[BURSTS_MAX][12];
+
 static void answer(const dmr_packet_t *pk, bool tmsWantsAck, uint8_t tmsSeq)
 {
     const dmr_data_header_t *h = &pk->hdr;
-    uint8_t dts[BURSTS_MAX];
-    uint8_t bs[BURSTS_MAX][12];
+    uint8_t *dts = replyDt;
+    uint8_t (*bs)[12] = replyBs;
     if (h->group || h->dst != ownId || ownId == 0)
         return;
     /* Confirmed data, or short data with the response bit: the ETSI
