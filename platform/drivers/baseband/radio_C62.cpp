@@ -554,8 +554,10 @@ static void wfmTune(const uint32_t freq)
  * follows the ripple and the output power stops tracking the duty cycle.
  *
  * @param power: TX power, in mW.
+ * @return true when the APC duty was applied, false when the PWM refused it --
+ *         the caller must not key the PA on a bias nobody chose.
  */
-static void set_tx_power(const uint32_t power)
+static bool set_tx_power(const uint32_t power)
 {
     float pwr = static_cast<float>(power) / 1000.0f;
     pwr = std::max(std::min(pwr, 5.0f), 1.0f);
@@ -571,7 +573,10 @@ static void set_tx_power(const uint32_t power)
 
     if (ret < 0) {
         printk("Failed to set TX power PWM: %d\n", ret);
+        return false;
     }
+
+    return true;
 }
 
 void radio_init(const rtxStatus_t *rtxState)
@@ -999,7 +1004,28 @@ void radio_enableTx()
             gpioDev_set(PA_UHF_EN);
 
         gpioDev_set(ALC_TX_LED_EN);
-        set_tx_power(pwr);
+
+        if (!set_tx_power(pwr))
+        {
+            /*
+             * No APC, no keying: the PA switch is the last thing that goes
+             * up here, and without the bias this would be a carrier into an
+             * unbiased stage at a duty nobody chose.
+             */
+            static uint32_t apcRefusedAt = 0;
+            const uint32_t nowMs = k_uptime_get_32();
+
+            txRefusedReason = "no apc";
+            gpioDev_clear(PA_VHF_EN);
+            gpioDev_clear(PA_UHF_EN);
+            gpioDev_clear(ALC_TX_LED_EN);
+            if ((uint32_t)(nowMs - apcRefusedAt) >= 1000)
+            {
+                apcRefusedAt = nowMs;
+                printk("PA: keying refused, APC PWM did not take the duty\n");
+            }
+            return;
+        }
 
         /* The carrier, then the envelope */
         bk4819_enableTx(&c62_bk4819);
@@ -1069,6 +1095,28 @@ void radio_enableTx()
         return;
     }
 
+    /*
+     * A calibration that is not there is not a power setting of zero: the
+     * table decides the APC duty that gives the PA its bias, and a zeroed
+     * band (no factory points, calibC62_interp() answers a zeroed point) would
+     * key the switch with a 0 % duty -- the "keys into nothing" case.  Refuse
+     * it like a zero power and say which of the two it is.
+     */
+    if ((txCal.loPwr == 0) && (txCal.hiPwr == 0))
+    {
+        static uint32_t refusedAt = 0;
+        const uint32_t nowMs = k_uptime_get_32();
+
+        txRefusedReason = "no calibration";
+        if ((uint32_t)(nowMs - refusedAt) >= 1000)
+        {
+            refusedAt = nowMs;
+            printk("PA: keying refused, no TX calibration at %lu Hz\n",
+                   (unsigned long)config->txFrequency);
+        }
+        return;
+    }
+
     bk4819_setFrequency(&c62_bk4819, config->txFrequency);
 
     if ((radioMode != OPMODE_M17) && config->txToneEn) {
@@ -1083,7 +1131,23 @@ void radio_enableTx()
 
     gpioDev_set(ALC_TX_LED_EN);
 
-    set_tx_power(config->txPower);
+    if (!set_tx_power(config->txPower))
+    {
+        /* No bias, no keying: the lines go back down and the status says so. */
+        static uint32_t apcRefusedAt = 0;
+        const uint32_t nowMs = k_uptime_get_32();
+
+        txRefusedReason = "no apc";
+        gpioDev_clear(PA_VHF_EN);
+        gpioDev_clear(PA_UHF_EN);
+        gpioDev_clear(ALC_TX_LED_EN);
+        if ((uint32_t)(nowMs - apcRefusedAt) >= 1000)
+        {
+            apcRefusedAt = nowMs;
+            printk("PA: keying refused, APC PWM did not take the duty\n");
+        }
+        return;
+    }
 
     bk4819_enableTx(&c62_bk4819);
     radioStatus = TX;
