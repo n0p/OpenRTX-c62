@@ -57,8 +57,18 @@
 /** Line the long press waits for, plus a margin (core/input.c). */
 #define LONG_PRESS_MS 750
 
-/** How long a command waits for the UI to catch up, milliseconds. */
-#define SETTLE_TIMEOUT_MS 4000
+/**
+ * How long a command waits for the UI to catch up, milliseconds.
+ *
+ * This is not the radio's timing: the host's.  Four seconds was enough on an
+ * idle machine and not on a loaded one -- with the whole suite running in
+ * parallel (sixteen processes) the UI thread was starved for longer than that
+ * and a key press came back as an error, which the tour and the menu audit read
+ * as "the screen does not take this key".  Fifteen seconds is the same
+ * condition with room: a key the interface really ignores still fails, because
+ * then the queue never drains at all.
+ */
+#define SETTLE_TIMEOUT_MS 15000
 
 /** Size of the dump buffers: the JSON of a full settings page is large. */
 #define DUMP_BUF 16384
