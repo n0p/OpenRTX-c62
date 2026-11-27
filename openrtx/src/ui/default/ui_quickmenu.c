@@ -659,12 +659,14 @@ void qm_am_set_agc(int on)
 
 #ifdef CONFIG_C62_AIR_TX
 /*
- * Transmit confirmation and depth. The state row is the only way to disarm
- * except switching the radio off, and it shows what the transmitter would do:
- * "LOCK" (the first PTT will raise the warning), "PROMPT" (the warning is on
- * screen) or "ARM" (PTT transmits). The depth row is what the modulator tries
- * to produce; the value the PA can actually reach is what it shows once the
- * window is narrower than the setting.
+ * Transmit confirmation and depth. The row is the only way to disarm except
+ * switching the radio off, and it shows what the transmitter would do: "LOCK"
+ * (it transmits nothing), "WAIT" (the warning is on screen, waiting for the
+ * second press) or "ARM" (PTT transmits). Arming is not done from here: the
+ * double PTT of OpMode_Airband.cpp is the consent, because it is the only path
+ * that shows the warning first. The depth row is what the modulator tries to
+ * produce; the value the PA can actually reach is what it shows once the window
+ * is narrower than the setting.
  */
 int qm_am_get_tx(void)
 {
@@ -673,8 +675,22 @@ int qm_am_get_tx(void)
 
 void qm_am_set_tx(int v)
 {
-    airband_txSetState((v != 0) ? AIRBAND_TX_ARMED : AIRBAND_TX_LOCKED);
-    /* The transmitter reads the state at the next key, nothing to resync */
+    /*
+     * Any change of this row disarms, and only that.  The three states are
+     * shown so the operator can see WAIT and ARM, but the setter never arms:
+     * mapping "not zero" to AIRBAND_TX_ARMED made one P2 from LOCK put the
+     * transmitter on the air without the warning the mode shows on the first
+     * press, which is the whole confirmation of the airband transmitter.
+     */
+    (void)v;
+
+    if (airband_txState() != AIRBAND_TX_LOCKED) {
+        airband_txSetState(AIRBAND_TX_LOCKED);
+        vp_beep(BEEP_KEY_GENERIC, SHORT_BEEP);
+    } else {
+        /* Already locked: say so instead of pretending the key did something */
+        vp_beep(400, SHORT_BEEP);
+    }
 }
 
 static const char *const qm_names_am_tx[] = { "LOCK", "WAIT", "ARM" };
@@ -1048,7 +1064,13 @@ static const qm_item_t qm_items_airband[] =
     QM_ITEM_ENUM("IF", 0, 1, qm_am_get_if, qm_am_set_if,
                  qm_names_am_if, NULL),
 #ifdef CONFIG_C62_AIR_TX
-    QM_ITEM_ENUM("TX", 0, 1, qm_am_get_tx, qm_am_set_tx,
+    /*
+     * The row carries the state, so it declares the three values it can show:
+     * with 0..1 an armed transmitter (2) fell outside the range and the value
+     * text came out empty exactly when the operator needed to read it, and P2
+     * wrapped 2 back to 1, which the old setter turned into "armed" again.
+     */
+    QM_ITEM_ENUM("TX", 0, 2, qm_am_get_tx, qm_am_set_tx,
                  qm_names_am_tx, NULL),
     QM_ITEM_INT("DEPTH", AMTX_DEPTH_MIN, AMTX_DEPTH_MAX, 10,
                 qm_am_get_depth, qm_am_set_depth),

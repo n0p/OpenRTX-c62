@@ -34,6 +34,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
+#include <cstring>
 #include <pthread.h>
 
 extern "C" {
@@ -44,6 +45,7 @@ extern "C" {
 #include "core/airband.h"
 #include "core/audio_path.h"
 #include "rtx/rtx.h"
+#include "ui/ui_quickmenu.h"
 }
 
 unsigned radio_linux_keyCount(void);
@@ -427,4 +429,61 @@ TEST_CASE("a change of mode never keys the AM transmitter", "[airband][tx][rtx]"
     rtx_configure(&cfg);
     rtx_task();
     rtx_terminate();
+}
+
+/*
+ * The TX row of the quick menu is the only way to disarm the airband
+ * transmitter without switching the radio off, and it must not be a way to arm
+ * it: the consent is the double PTT, because the first press is what puts the
+ * warning on screen.  The row carried the gate but declared a range of 0..1
+ * against a getter that returns 0..2, so an armed transmitter showed no value
+ * at all (the text came out empty exactly when it had to be read) and one press
+ * of P2 from LOCK armed it without the warning.
+ */
+TEST_CASE("the TX row disarms the transmitter and can never arm it",
+          "[airband][tx][quickmenu]")
+{
+    const qm_menu_t *qm = qm_findMenu(OPMODE_AIRBAND);
+    REQUIRE(qm != nullptr);
+
+    int tx = -1;
+    for (uint8_t i = 0; i < qm->count; i++) {
+        if (std::strcmp(qm->items[i].label, "TX") == 0)
+            tx = (int)i;
+    }
+    REQUIRE(tx >= 0);
+
+    char buf[QM_VALUE_BUF];
+
+    /* Armed: the row says so instead of showing nothing */
+    airband_txSetState(AIRBAND_TX_ARMED);
+    REQUIRE(qm_value_text_of(qm, (uint8_t)tx, buf, sizeof(buf)));
+    REQUIRE(std::strcmp(buf, "ARM") == 0);
+
+    /* A gesture on the row disarms it -- in either direction */
+    qm_openTable(qm);
+    qm_select((uint8_t)tx);
+
+    qm_adjust(+1);
+    REQUIRE(airband_txState() == AIRBAND_TX_LOCKED);
+    REQUIRE(qm_value_text_of(qm, (uint8_t)tx, buf, sizeof(buf)));
+    REQUIRE(std::strcmp(buf, "LOCK") == 0);
+
+    airband_txSetState(AIRBAND_TX_ARMED);
+    qm_adjust(-1);
+    REQUIRE(airband_txState() == AIRBAND_TX_LOCKED);
+
+    /* Locked: no gesture arms, and the row still reads LOCK */
+    for (int i = 0; i < 4; i++)
+        qm_adjust((i % 2) ? -1 : +1);
+    REQUIRE(airband_txState() == AIRBAND_TX_LOCKED);
+
+    /* The warning state is shown too: WAIT is what the first press produces */
+    airband_txSetState(AIRBAND_TX_PROMPT);
+    REQUIRE(qm_value_text_of(qm, (uint8_t)tx, buf, sizeof(buf)));
+    REQUIRE(std::strcmp(buf, "WAIT") == 0);
+    qm_adjust(+1);
+    REQUIRE(airband_txState() == AIRBAND_TX_LOCKED);
+
+    qm_close();
 }

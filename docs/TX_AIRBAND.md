@@ -234,8 +234,11 @@ Tres piezas, y ninguna de las tres se guarda en flash:
    modo está seleccionado, la línea 1 de la pantalla lleva además `TX-LOCK` o
    `TX-ARM` al lado del squelch: el estado del transmisor no está a un menú de
    distancia.
-3. **El menú**: la fila `TX` del menú rápido del modo arma o bloquea a mano, y la
-   fila `DEPTH` elige la profundidad (30-90 %).
+3. **El menú**: la fila `TX` del menú rápido del modo muestra la compuerta
+   (`LOCK` / `WAIT` / `ARM`) y la bloquea a mano cuando se toca. Armar desde el
+   menú no se puede: la confirmación es el doble PTT, que es el único camino que
+   enseña antes el aviso; un menú que armase sería una transmisión sin aviso
+   leído. La fila `DEPTH` elige la profundidad (30-90 %).
 
 Además:
 
