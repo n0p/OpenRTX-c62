@@ -175,10 +175,22 @@ static bool preambles(struct out *o, bool group, uint32_t dst, uint32_t src,
 
 /* The user octets padded, the CRC-32 (least significant octet first, B.8C),
  * in rate 1/2 blocks */
-static bool blocks(struct out *o, const uint8_t *data, int length, int blocks)
+static bool blocks(struct out *o, const uint8_t *data, int length)
 {
     static SMS_PSRAM uint8_t pkt[BURSTS_MAX * BLOCK];
-    const int pad = blocks * BLOCK - 4 - length;
+    /*
+     * The block count is derived here, not passed in: every caller computed
+     * it with this formula, so a stale or wrong one -- the parameter was
+     * redundant with `length` -- made `pad` negative and turned the memset
+     * below into a write of (size_t)pad bytes over a 576 byte PSRAM static.
+     */
+    const int nb = (length + 4 + BLOCK - 1) / BLOCK;
+    const int pad = nb * BLOCK - 4 - length;
+
+    if ((length < 0) || (nb < 1) || (nb > BURSTS_MAX)
+        || (length + pad + 4 > (int)sizeof(pkt)))
+        return false;
+
     memcpy(pkt, data, (size_t)length);
     memset(pkt + length, 0, (size_t)pad);
     const uint32_t crc = dmr_crc32(pkt, length + pad);
@@ -187,7 +199,7 @@ static bool blocks(struct out *o, const uint8_t *data, int length, int blocks)
     c[1] = (uint8_t)(crc >> 8);
     c[2] = (uint8_t)(crc >> 16);
     c[3] = (uint8_t)(crc >> 24);
-    for (int i = 0; i < blocks; i++)
+    for (int i = 0; i < nb; i++)
         if (!put(o, DT_RATE_12, pkt + i * BLOCK))
             return false;
     return true;
@@ -212,7 +224,7 @@ static bool packet(struct out *o, uint8_t sap, bool group, uint32_t dst,
     h[8] = (uint8_t)(0x80u | nb); /* full message */
     h[9] = 0x00;                  /* FSN */
     addCrc16(h, 0xCC);
-    return put(o, DT_DATA_HEADER, h) && blocks(o, data, length, nb);
+    return put(o, DT_DATA_HEADER, h) && blocks(o, data, length);
 }
 
 /* IPv4 / UDP around a payload (full header, SAP 4), with both checksums */
@@ -327,7 +339,7 @@ int dmrSms_build(uint32_t dst, bool group, uint8_t format, const char *text,
             h[9] = (uint8_t)(pad * 8);
             addCrc16(h, 0xCC);
             if (!put(&o, DT_DATA_HEADER, h)
-                || !blocks(&o, (const uint8_t *)text, n, nb))
+                || !blocks(&o, (const uint8_t *)text, n))
                 return 0;
             break;
         }
