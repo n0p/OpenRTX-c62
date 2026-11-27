@@ -107,7 +107,9 @@ fit; the TX build leaves 62 KB of SRAM and 3.7 KB of DTCM.
 
 RAM is measured by the image's own link report (`Memory region ... Used
 Size`), not by a formula: the figures move with `git describe` and with the
-Kconfig set.
+Kconfig set.  Since the vocoder scratch moved out of DTCM (`docs/DMR_VOCODER.md`,
+"Where the state lives"), the DMR rows gain 4 052 B in PSRAM and lose 4 048 B of
+DTCM; the totals above predate that split.
 
 ## The vocoders
 
@@ -232,7 +234,9 @@ The risks, in the order they can bite:
 
 - `lib/dmr_vocoder` — the decoder, GPL-2.0+/GPL-3.0+ (see
   `docs/DMR_VOCODER.md`). Was out of the DMR path while the package's mbelib
-  was in; it is the default backend again. State 8 540 B, in DTCM.
+  was in; it is the default backend again. State 4 492 B in DTCM plus a
+  4 052 B per-frame scratch in PSRAM (it was 8 540 B, all in DTCM; see
+  `docs/DMR_VOCODER.md`, "Where the state lives").
 - `lib/dmr_encoder` — the encoder, GPL-3.0+ (see `docs/DMR_TX.md`). Same
   history; the default backend for `DMR_TX`. State 5.5 KB of `.bss`.
 - `lib/opendmr` (submodule, `n0p/OpenDMR`) — no longer built by default. Kept

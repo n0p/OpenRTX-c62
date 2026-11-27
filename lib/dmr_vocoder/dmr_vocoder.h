@@ -107,7 +107,10 @@ void dmr_vocoder_reset(void);
 unsigned int dmr_vocoder_last_errors(void);
 
 /**
- * @brief Static RAM used by the vocoder state (.bss, no initialisers).
+ * @brief Static RAM used by the vocoder: state plus per-frame scratch.
+ *
+ * On the target 8 544 B (4 492 B of state and 4 052 B of scratch); the host
+ * adds the wider pointer and reports 8 548 B.
  */
 size_t dmr_vocoder_state_bytes(void);
 

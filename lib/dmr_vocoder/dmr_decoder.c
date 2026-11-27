@@ -658,10 +658,11 @@ static void synth_unvoiced(dmr_vocoder_t *v, float *out, dmr_parms_t *cur)
 {
     const int L = cur->L;
     const float w0 = cur->w0;
+    dmr_scratch_t *s = v->scratch;
 
     for (int i = 0; i < DMR_FFT_N; i++)
-        v->uw[i] = v->noise[i] * dmr_win256[i];
-    dmr_rfft256(v->uw, v->fft_re, v->fft_im);
+        s->uw[i] = s->noise[i] * dmr_win256[i];
+    dmr_rfft256(s->uw, s->fft_re, s->fft_im);
 
     const float multiplier = dmr_nofma(MBE_256_OVER_2PI * w0); /* band edges are
                                                                * decided by a ceil() */
@@ -672,44 +673,44 @@ static void synth_unvoiced(dmr_vocoder_t *v, float *out, dmr_parms_t *cur)
             a = 0;
         if (b > DMR_FFT_N / 2)
             b = DMR_FFT_N / 2;
-        v->a_min[l] = (int16_t)a;
-        v->b_max[l] = (int16_t)b;
+        s->a_min[l] = (int16_t)a;
+        s->b_max[l] = (int16_t)b;
     }
 
-    memset(v->bin_scale, 0, sizeof(v->bin_scale));
+    memset(s->bin_scale, 0, sizeof(s->bin_scale));
     for (int l = 1; l <= L; l++) {
         if (cur->Vl[l] == 0) {
-            const int a = v->a_min[l], b = v->b_max[l];
+            const int a = s->a_min[l], b = s->b_max[l];
             const int nb = b - a;
             float num = 0.0f;
             for (int bin = a; bin < b; bin++)
-                num += (v->fft_re[bin] * v->fft_re[bin]) + (v->fft_im[bin] * v->fft_im[bin]);
+                num += (s->fft_re[bin] * s->fft_re[bin]) + (s->fft_im[bin] * s->fft_im[bin]);
             if (nb > 0 && num > 1e-10f) {
                 float scalor = MBE_UNVOICED_SCALE_COEFF * cur->Ml[l] / dmr_sqrtf(num / (float)nb);
                 for (int bin = a; bin < b; bin++)
-                    v->bin_scale[bin] = scalor;
+                    s->bin_scale[bin] = scalor;
             }
         }
     }
     for (int bin = 0; bin <= DMR_FFT_N / 2; bin++) {
-        v->fft_re[bin] *= v->bin_scale[bin];
-        v->fft_im[bin] *= v->bin_scale[bin];
+        s->fft_re[bin] *= s->bin_scale[bin];
+        s->fft_im[bin] *= s->bin_scale[bin];
     }
 
-    dmr_irfft256(v->fft_re, v->fft_im, v->uw);
+    dmr_irfft256(s->fft_re, s->fft_im, s->uw);
     const float sc = 1.0f / (float)DMR_FFT_N;
     for (int i = 0; i < DMR_FFT_N; i++)
-        v->uw[i] *= sc;
+        s->uw[i] *= sc;
 
     /* WOLA against the previous frame */
     const float *puw = v->last_uw;
-    const float *cuw = v->uw;
+    const float *cuw = s->uw;
     for (int n = 0; n < N_SAMPLES; n++) {
         float ps = (n < 128) ? puw[n + 128] : 0.0f;
         float cs = (n >= 32) ? cuw[n - 32] : 0.0f;
         out[n] += (dmr_wola_wprev[n] * ps + dmr_wola_wcurr[n] * cs) * dmr_wola_inv[n];
     }
-    memcpy(v->last_uw, v->uw, sizeof(v->last_uw));
+    memcpy(v->last_uw, s->uw, sizeof(v->last_uw));
 }
 
 /* ------------------------------------------------------------------ */
@@ -721,6 +722,7 @@ static void synth_speech(dmr_vocoder_t *v, float *aout, dmr_parms_t *cur, dmr_pa
     int l, n, maxl, numUv;
     float cw0, pw0, cw0l, pw0l;
     const int N = N_SAMPLES;
+    dmr_scratch_t *s = v->scratch;
 
     if (cur->repeatCount >= MBE_MAX_FRAME_REPEATS || cur->errorRate > cur->mutingThreshold) {
         synth_comfort_noise(v, aout);
@@ -729,7 +731,7 @@ static void synth_speech(dmr_vocoder_t *v, float *aout, dmr_parms_t *cur, dmr_pa
         return;
     }
 
-    gen_noise_overlap(v->noise, &v->noise_seed, v->noise_overlap);
+    gen_noise_overlap(s->noise, &v->noise_seed, v->noise_overlap);
 
     numUv = 0;
     for (l = 1; l <= cur->L; l++)
@@ -772,7 +774,7 @@ static void synth_speech(dmr_vocoder_t *v, float *aout, dmr_parms_t *cur, dmr_pa
         if (l <= (cur->L / 4)) {
             cur->PHIl[l] = cur->PSIl[l];
         } else {
-            float pl = (MBE_WHITE_NOISE_SCALAR * v->noise[l]) - DMR_PI;
+            float pl = (MBE_WHITE_NOISE_SCALAR * s->noise[l]) - DMR_PI;
             cur->PHIl[l] = cur->PSIl[l] + (((float)numUv * pl) / (float)cur->L);
         }
     }
@@ -848,15 +850,18 @@ static void vocoder_reset(dmr_vocoder_t *v)
     v->noise_seed = MBE_LCG_DEFAULT_SEED;
 }
 
-void dmr_vocoder_init(dmr_vocoder_t *v)
+void dmr_vocoder_init(dmr_vocoder_t *v, dmr_scratch_t *scratch)
 {
     if (v) {
+        v->scratch = scratch;
         vocoder_reset(v);
         v->cn_seed = 0x12345678u;
     }
 }
 
 size_t dmr_vocoder_state_size(void) { return sizeof(dmr_vocoder_t); }
+
+size_t dmr_vocoder_scratch_size(void) { return sizeof(dmr_scratch_t); }
 
 int dmr_golay24_correct(uint32_t w24, uint32_t *info12)
 {
@@ -907,7 +912,7 @@ static void decode_params(dmr_vocoder_t *v, const uint8_t d[49],
     if (bad == 0) {
         if (cur->repeat <= 3) {
             *prev = *cur;
-            spectral_amp_enhance(cur, v->cos_tab);
+            spectral_amp_enhance(cur, v->scratch->cos_tab);
             synth_speech(v, fbuf, cur, enh);
             *enh = *cur;
         } else {
@@ -937,7 +942,7 @@ static void decode_params(dmr_vocoder_t *v, const uint8_t d[49],
 int dmr_vocoder_decode_ambe_params(dmr_vocoder_t *v, const uint8_t d[49],
                            int16_t pcm[DMR_PCM_SAMPLES], int *errs)
 {
-    if (!v || !d || !pcm)
+    if (!v || !v->scratch || !d || !pcm)
         return -1;
 
     decode_params(v, d, pcm, 0, errs);
@@ -952,7 +957,7 @@ int dmr_vocoder_decode_ambe_params(dmr_vocoder_t *v, const uint8_t d[49],
 int dmr_vocoder_decode_data(dmr_vocoder_t *v, const uint8_t d[49],
                             int16_t pcm[DMR_PCM_SAMPLES])
 {
-    if (!v || !d || !pcm)
+    if (!v || !v->scratch || !d || !pcm)
         return -1;
 
     decode_params(v, d, pcm, 0, NULL);
@@ -975,7 +980,7 @@ int dmr_vocoder_unpack(const uint8_t frame[DMR_FRAME_BYTES], uint8_t d[49])
 int dmr_vocoder_decode_frame(dmr_vocoder_t *v, const uint8_t frame[DMR_FRAME_BYTES],
                              int16_t pcm[DMR_PCM_SAMPLES], int *errs)
 {
-    if (!v || !frame || !pcm)
+    if (!v || !v->scratch || !frame || !pcm)
         return -1;
 
     uint8_t d[49];

@@ -14,7 +14,9 @@ integration in the firmware build, and the measurements that show it fits.
 
 The backend is a pure C reimplementation of the decoder half of OpenDMR
 (mbelib-neo): no C++, no heap, no thread-local storage, no libm, every table in
-flash and the whole decoder state in one 8.5 KiB object.  Nothing from
+flash, and the decoder state split into the 4.5 KiB that has to survive
+between frames and a 4 KiB per-frame scratch the caller can place in slower
+memory.  Nothing from
 `lib/opendmr` is compiled; the submodule stays in the tree as the reference this
 decoder was verified against.
 
@@ -42,7 +44,8 @@ is initialised on the first call, so an explicit reset before the first frame is
 optional.  Frames must be decoded in order: the synthesis window overlaps two
 frames, so the first frame after a reset fades in from silence (same behaviour
 as the reference implementation).  Diagnostics: `dmr_vocoder_last_errors()`
-(Golay corrections in the last frame), `dmr_vocoder_state_bytes()` (8 540 B) and
+(Golay corrections in the last frame), `dmr_vocoder_state_bytes()` (8 544 B on
+the target: 4 492 B of state + 4 052 B of scratch) and
 `dmr_vocoder_arena_used()` (always 0: nothing is allocated).
 
 ### The two halves, for encrypted calls
@@ -62,9 +65,12 @@ dmr_vocoder_decode_data(&v, d, pcm);        /* synthesis, no FEC             */
 `dmr_vocoder_unpack()` returns the corrected-bit count that
 `dmr_vocoder_decode_frame()` reports, and `dmr_vocoder_decode_data()` is the
 mirror of mbelib's `mbe_processAmbe2450Dataf()` (and of the second half of
-`mbe_processAmbe3600x2450Framef()`). The DMR mode places its instance in DTCM
-through this header (`dmr_voice.c`); the single-instance `dmr_vocoder.h` above
-is the same decoder in plain `.bss`.
+`mbe_processAmbe3600x2450Framef()`). The DMR mode places the frame-to-frame
+state in DTCM and the per-frame scratch in PSRAM through this header
+(`dmr_voice.c`, `DMR_FAST_BSS`/`DMR_SLOW_BSS`); the single-instance
+`dmr_vocoder.h` above puts both in `.bss`, or in `.psram_section` in the
+firmware build.  `dmr_vocoder_init(v, scratch)` only stores the scratch
+pointer: the caller owns that storage and must keep it alive.
 
 ### The backend is replaceable
 
@@ -130,6 +136,45 @@ its own playback thread (`DmrSpeech.c`, `THREAD_STACK` = 8 192 B), so the 2 KiB
 of the audio worker and of the main thread are not in the path — with 2 KiB it
 would also fit, but with only ~430 B to spare.
 
+### Where the state lives: the DTCM budget
+
+The decoder state is two objects, not one:
+
+| object | bytes (target) | where | why |
+|---|---:|---|---|
+| `dmr_vocoder_t` — `cur`/`prev`/`enh`, WOLA history, noise overlap, RNG seeds | **4 492** | DTCM (`DMR_FAST_BSS`) | predictive state, read and written every frame; the WOLA history is read per sample |
+| `dmr_scratch_t` — `noise`, `uw`, `fft_re/im`, `bin_scale`, `cos_tab`, band edges | **4 052** | PSRAM (`.psram_section`, `DMR_SLOW_BSS`) | only exists inside one decode: filled and consumed once or twice per 20 ms, never read per sample |
+| total | 8 544 | | same as the old single object (8 540 B + 4 B of `vdec_t` padding) |
+
+The split exists because DTCM is the resource that limits the C62: 16 KiB, and
+the DMR speech thread's stack (7 168 B) lives there too.  Measured in the TX
+image (`CONFIG_C62_DMR_RX=y`, `CONFIG_DMR_TX=y`, `-O2` objects):
+
+| | before | after |
+|---|---:|---:|
+| `.dtcm_bss` (map, `__dtcm_bss_end - __dtcm_bss_start`) | **15 712 B (95.9 %)** | **11 664 B (71.2 %)** |
+| — `DmrSpeech.c` stack | 7 168 | 7 168 |
+| — `dmr_voice.c` vocoder state | 8 544 | 4 496 (`dmr_vocoder_t` + `level`) |
+| PSRAM: per-frame scratch | 0 | 4 052 |
+| RAM region (SRAM) | 193 328 B | 193 328 B (unchanged) |
+| FLASH | 828 184 B (828 212 B in the report's build) | 828 216 B (+32 B) |
+| instructions/frame (firmware objects, QEMU) | 113 418 (113 370 in the report's build) | **113 414 (−4, 0.00 %)** |
+| PCM against the previous implementation, 1 000 frames | — | **1 000/1 000 bit-exact**, host and M33 |
+
+The pointer indirection costs no measurable instructions: same-tree builds give
+113 418 → 113 414 per frame (the 4-instruction difference is below run-to-run
+noise), and every access sits in a straight-line loop over `scratch`
+that GCC hoists.  The cost QEMU cannot measure is memory latency: PSRAM is
+slower than DTCM, and the criterion for the radio is the per-frame
+`s_own_us_total` that `dmr_voice.c` already records (p99 no more than 10 %
+above the DTCM value).  That is measured on hardware, not here.
+
+The 4 048 B freed make two decoder instances plausible (two `dmr_vocoder_t`
+plus one shared scratch fit; today `dmr_voice.c` decodes one slot at a time
+because two did not).  That change is not made here: it is a separate decision
+about the audio queue, and the report `reports/codecs.md` §3.2 lists its own
+acceptance test.
+
 ## Size in the firmware
 
 Build with `-DCONFIG_C62_DMR_VOCODER=y -DC62_DMR_VOCODER_FORCE_LINK=ON`,
@@ -159,7 +204,7 @@ Per object (`arm-none-eabi-size`, text includes rodata):
 |---|---|---|---|
 | `dmr_decoder.c` | 35 642 | 0 | FEC, parameters, synthesis, tables |
 | `dmr_fft.c` | 2 968 | 0 | 256-point real FFT, twiddles in flash |
-| `dmr_vocoder.c` | 132 | 8 548 | API + the one instance (8 540 B) |
+| `dmr_vocoder.c` | 132 | 8 548 | API + instance (4 492 B) + scratch (4 052 B) |
 | **Total** | **38 742** | **8 548** | linked: +38 680 B, −62 B dropped by `--gc-sections` |
 
 The largest tables are the pre-computed DCT/HOC cosines (7 140 B), the AMBE
@@ -272,8 +317,10 @@ change a decision (`__builtin_fmaf` in the polynomials).
 * **One instance, not reentrant**: one decoder state per device, no locking.
 * **Decoder quality** is mbelib-neo's: intelligible, but it is a
   reimplementation of AMBE+2, and nothing was validated against live repeaters.
-* **RAM**: 8.5 KiB of `.bss` (the three parameter sets, the WOLA history and the
-  per-instance FFT/PCM scratch).
+* **RAM**: 8.5 KiB in two objects: 4 492 B of frame-to-frame state (three
+  parameter sets, WOLA history, noise overlap) and 4 052 B of per-frame scratch
+  (FFT/WOLA buffers, band scales).  In the C62 firmware the first is in DTCM and
+  the second in PSRAM; elsewhere both are in `.bss`.
 * **PSRAM XIP** would slow everything down; the numbers above assume code and
   data in SRAM.
 
