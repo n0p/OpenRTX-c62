@@ -54,7 +54,7 @@ Run feed(const std::vector<int16_t> &in)
 
     tetraDemod_init(&dm);
     for (size_t off = 0; off + BLOCK <= in.size(); off += BLOCK) {
-        size_t n = tetraDemod_process(&dm, in.data() + off, BLOCK, soft);
+        size_t n = tetraDemod_process(&dm, in.data() + off, BLOCK, soft, sizeof(soft));
 
         if (n > sizeof(soft))
             FAIL("the demodulator wrote more soft bits than the buffer holds");
@@ -186,4 +186,47 @@ TEST_CASE("The soft-bit buffer contract holds block by block", "[tetra][demod]")
     Run r = feed(in);
     REQUIRE(r.finite);
     REQUIRE(r.softMax <= BLOCK * 3 / 4 + 8);
+}
+
+TEST_CASE("A soft buffer smaller than the contract is a stop, not an overrun",
+          "[tetra][demod]")
+{
+    /*
+     * The worst case the demodulator can emit is 3 interpolated samples x 2
+     * catch-up symbols x 2 bits = 12 bits per input sample, while the callers
+     * reserve 0.75 and rely on the timing loop never running away.  The
+     * capacity is an argument now, so a caller whose arithmetic disagrees with
+     * this file's gets its bits cut at the end of its own buffer instead of a
+     * write into whatever follows it -- on the radio that is the soft buffer
+     * of OpMode_TETRA, in PSRAM, with the rest of the receiver's state around
+     * it.
+     */
+    constexpr size_t CAP = 64;
+    static int8_t soft[CAP + 16];
+    static struct tetraDemod dm;
+    std::vector<int16_t> in;
+    uint32_t s = 0x5bd1e995u;
+
+    for (size_t i = 0; i < 48000; i++) {
+        s ^= s << 13;
+        s ^= s >> 17;
+        s ^= s << 5;
+        in.push_back((int16_t)((s >> 11) & 0x1fff) - 4096);
+    }
+
+    memset(soft, 0x5A, sizeof(soft));
+    tetraDemod_init(&dm);
+
+    bool stopped = false;
+    for (size_t off = 0; off + BLOCK <= in.size(); off += BLOCK) {
+        size_t n = tetraDemod_process(&dm, in.data() + off, BLOCK, soft, CAP);
+
+        REQUIRE(n <= CAP);
+        stopped |= (n == CAP);
+    }
+
+    REQUIRE(stopped); /* the guard was really exercised */
+
+    for (size_t i = CAP; i < sizeof(soft); i++)
+        REQUIRE(soft[i] == 0x5A);
 }

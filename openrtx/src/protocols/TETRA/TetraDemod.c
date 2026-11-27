@@ -611,7 +611,7 @@ static void timing(struct tetraDemod *dm)
 }
 
 size_t tetraDemod_process(struct tetraDemod *dm, const int16_t *in, size_t n,
-                          int8_t *soft)
+                          int8_t *soft, size_t softMax)
 {
     size_t out = 0;
 
@@ -646,6 +646,19 @@ size_t tetraDemod_process(struct tetraDemod *dm, const int16_t *in, size_t n,
             for (int catchUp = 0; catchUp < 2; catchUp++) {
                 if ((int32_t)(dm->written - dm->nextInt) < SPS / 2 + 2)
                     break;
+                /*
+                 * Two soft bits per symbol, and the caller's buffer is sized
+                 * from the sample count: 3 interpolated samples x 2 catch-up
+                 * steps x 2 bits is the arithmetic worst case per input
+                 * sample, more than the 0.75 bytes per sample the callers
+                 * reserve.  Stop here rather than write past their array --
+                 * it holds demodulator state in PSRAM that the rest of the
+                 * receiver keeps using.  Reaching it means the timing loop
+                 * ran away, not a signal that fails to decode: the bits
+                 * already produced are still good.
+                 */
+                if ((out + 2) > softMax)
+                    return out;
                 timing(dm);
                 float v = sampleAt(dm, 0);
                 out += symbol(dm, v, soft + out);

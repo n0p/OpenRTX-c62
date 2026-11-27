@@ -138,11 +138,15 @@ void tetraDemod_setEqualizer(struct tetraDemod *dm, const float *taps);
  * @param dm: demodulator.
  * @param in: input samples.
  * @param n: number of input samples.
- * @param soft: output soft bits, room for at least n * 3 / 4 + 4 values.
+ * @param soft: output soft bits.
+ * @param softMax: capacity of soft, in bits.  The worst case is 3 * 2 * 2
+ *                 bits per input sample (three interpolations, two catch-up
+ *                 symbols), far above the 0.75 per sample that is reserved in
+ *                 practice; the demodulator stops rather than write past it.
  * @return number of soft bits written (two per symbol).
  */
 size_t tetraDemod_process(struct tetraDemod *dm, const int16_t *in, size_t n,
-                          int8_t *soft);
+                          int8_t *soft, size_t softMax);
 
 /**
  * Tell the demodulator that the decoder just decoded a good block (a CRC

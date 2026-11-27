@@ -452,7 +452,8 @@ void OpMode_TETRA::update(rtxStatus_t *const rtx, const bool newCfg)
     }
 
     modeStats_blockStart(MS_MODE_TETRA);
-    size_t n = tetraDemod_process(&st->demod, block.data, block.len, soft);
+    size_t n = tetraDemod_process(&st->demod, block.data, block.len, soft,
+                                sizeof(soft));
 
     /* The demodulator followed a timing jump or re-acquired: resync too */
     uint32_t jumps = tetraDemod_reacquisitions(&st->demod);

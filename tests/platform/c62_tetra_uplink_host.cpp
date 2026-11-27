@@ -566,7 +566,7 @@ unsigned runAudio(const int16_t *audio, size_t n)
 
     while (off < n) {
         size_t k = (n - off < 1440) ? (n - off) : 1440;
-        size_t sym = tetraDemod_process(&demod, audio + off, k, soft);
+        size_t sym = tetraDemod_process(&demod, audio + off, k, soft, sizeof(soft));
         uint32_t j = tetraDemod_reacquisitions(&demod);
 
         if (j != jumps) {
@@ -702,7 +702,7 @@ int checkCapture(const char *path, const char *cellarg)
     tetra_tmo_set_uplink_cell(&rx, (uint16_t)mcc, (uint16_t)mnc, (uint8_t)cc);
 
     while ((n = fread(buf, 2, 1440, f)) > 0) {
-        size_t k = tetraDemod_process(&demod, buf, n, soft);
+        size_t k = tetraDemod_process(&demod, buf, n, soft, sizeof(soft));
         uint32_t j = tetraDemod_reacquisitions(&demod);
 
         if (j != jumps) {
