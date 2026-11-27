@@ -239,12 +239,27 @@ void platform_init_csk6()
     /* Init ADC for Battery reading */
     battery_init();
 
-    /* C62 can boot with power button off when charging.
-     * That's why we put a wait here until the power button is switched on.
+    /*
+     * C62 can boot with power button off when charging: the MCU starts as
+     * soon as USB is connected, so wait for the knob to be turned on.  That
+     * wait used to be silent and unconditional -- an ADC that never answered
+     * spun here for ever, printing an error every 10 ms, and with the PC
+     * protocol on the four-line log ring was all error lines.
+     *
+     * Two changes: an unmeasurable battery is not a flat one any more
+     * (platform_pwrButtonStatus()), so this loop ends instead of spinning,
+     * and the wait says what it is waiting for once a second.  A *measured*
+     * level below 3 V still keeps the radio waiting: that is the knob being
+     * off with the charger connected, which is exactly what this loop is for.
      */
-    do {
+    for (uint32_t waited = 0; !platform_pwrButtonStatus(); waited += 10)
+    {
+        if ((waited % 1000) == 0)
+            printk("boot: waiting for the power knob, battery %u mV\n",
+                   (unsigned int)platform_getVbat());
+
         sleepFor(0, 10);
-    } while (!platform_pwrButtonStatus());
+    }
 
     /* Enable keyboard backlight: the UI turns it off later if the setting says so */
     c62_setKeyBacklight(true);
