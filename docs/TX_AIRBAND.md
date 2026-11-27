@@ -184,6 +184,12 @@ el host y en QEMU.
   16 ms), ventana entre 0,80 y 0,95 de fondo de escala, ganancia de −12 a +36 dB,
   ataque de 10 dB en 9,6 ms y liberación de 10 dB en 640 ms. Es lo que hace que
   la profundidad no dependa de si el operador habla fuerte o bajo.
+  *Pendiente*: esas constantes son para el detector a 8 kHz y `levelUpdate()`
+  se llama hoy por muestra de entrada, seis veces más deprisa (ataque 1,6 ms,
+  liberación 107 ms); llevarlo a la tasa de trabajo cambia la profundidad que
+  sale de verdad (30 % pedido: 25,2 % ahora, 23,8 % con el detector a 8 kHz),
+  así que va con la recalibración de la profundidad y una medida en el aire.
+  Está en `review/REVIEW-NOTES.md`.
 - **Limitador**: lineal hasta 0,98 de fondo de escala y 4:1 por encima, con tope
   en fondo de escala. Nunca recorta: lo que el AGC no llega a bajar se comprime.
 - **Profundidad**: `duty = dutyPortadora + pendiente · m · x`, con `m` en 30-90 %

@@ -265,3 +265,79 @@ TEST_CASE("A block of 48 samples gives 8 duty values", "[am_tx]")
 
     REQUIRE(out[0] == CARRIER);
 }
+
+/**
+ * The limiter of core/am_tx.c, in floating point: linear to the knee, 4:1
+ * above it, top at full scale.
+ */
+static double limitOf(double v)
+{
+    const double knee = 32112.0;
+    const double span = 32767.0 - knee;
+    double a = std::fabs(v);
+    double over = a - knee;
+
+    if (over <= 0)
+        return v;
+
+    over = (over * span) / (4.0 * span + over);
+    a = knee + over;
+
+    return (v < 0) ? -a : a;
+}
+
+TEST_CASE("The levelling gain cannot wrap a sample at the limiter", "[am_tx]")
+{
+    /*
+     * The gain is Q16 and reaches +36 dB (64.0).  A sample at full scale
+     * multiplied by it is 1.4e11, which does not fit an int32_t: the product
+     * wrapped into an arbitrary sign and magnitude exactly when the limiter
+     * was about to cap the sample, i.e. on every loud peak -- the one case the
+     * limiter exists for.  On the air that is an AM transmission splattering
+     * into the 8.33 kHz neighbours.
+     *
+     * The check is against the arithmetic: with the gain pinned for every
+     * sample the envelope must be limit(gain * x).  The 0 dB run gives x
+     * itself, because a tone at 12 % of full scale stays under the knee.
+     */
+    const double GAIN_MAX = 64.0 * 65536.0;
+
+    std::vector<int16_t> audio = tone(0.12, 4800);
+
+    amTxConfig cfg = wideWindow();
+    amTx a, b;
+
+    am_tx_init(&a, &cfg);
+    am_tx_init(&b, &cfg);
+
+    std::vector<int32_t> unity(audio.size());
+    std::vector<int32_t> boosted(audio.size());
+
+    for (size_t i = 0; i < audio.size(); i++) {
+        /* Pin the gain: the detector moves it on every sample and this test is
+           about the product, not about the levelling */
+        a.gain = 65536;
+        unity[i] = am_tx_envelope(&a, audio[i]);
+
+        b.gain = (int32_t)GAIN_MAX;
+        boosted[i] = am_tx_envelope(&b, audio[i]);
+    }
+
+    int saturated = 0;
+
+    for (size_t i = 0; i < audio.size(); i++) {
+        double expected = limitOf((double)unity[i] * 64.0);
+        double got = (double)boosted[i];
+
+        INFO("sample " << i << ": unity=" << unity[i] << " got=" << got
+                       << " expected=" << expected);
+        REQUIRE(std::fabs(got - expected) <= 2.0);
+        REQUIRE(std::abs(boosted[i]) <= 32767);
+
+        if (std::abs(boosted[i]) > 32700)
+            saturated++;
+    }
+
+    /* The run must actually reach the limiter, or it proves nothing */
+    REQUIRE(saturated > 100);
+}

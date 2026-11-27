@@ -52,6 +52,17 @@ static const struct amTxBiquad lpf3000b = {
  * its shifts look faster than the ones of core/agc.c even where the time
  * constant is the same.
  *
+ * PENDING, and deliberately not changed here: levelUpdate() is called from
+ * envelopeSample(), once per 48 kHz input sample, so the detector runs six
+ * times faster than these constants describe (attack 10 dB in 1.6 ms, release
+ * 10 dB in 107 ms, and the 16 ms decay is shorter than a 300 Hz waveform
+ * cycle, which the comment below says it must not be).  Stepping it once per
+ * decimated sample restores the documented timing but changes the modulation
+ * depth the transmitter delivers -- measured on the host, a 30 % request gives
+ * 25.2 % now and 23.8 % with the detector at the duty rate -- so the depth
+ * calibration and the depth test bounds have to be re-fitted together with a
+ * measurement on the air.  It is written up in review/REVIEW-NOTES.md.
+ *
  * It looks at the *output* of the gain, as the receive AGC does, so that a
  * syllable the limiter is already holding down still lowers the gain. The
  * 16 ms decay is short enough to follow speech and long enough not to follow a
@@ -164,7 +175,11 @@ static int32_t limit(int32_t v)
     if (over <= 0)
         return v;
 
-    over = (over * span) / (4 * span + over);
+    /*
+     * 64-bit: the levelling gain can put a sample two million units over the
+     * knee, and 655 of those do not fit an int32_t.
+     */
+    over = (int32_t)(((int64_t)over * span) / (4 * (int64_t)span + over));
     a = LIMIT_KNEE + over;
     if (a > 32767)
         a = 32767;
@@ -212,7 +227,22 @@ static int32_t envelopeSample(struct amTx *t, int32_t sample)
     int32_t v = biquad(&t->highPass, sample);
     v = biquad(&t->lowPassA, v);
     v = biquad(&t->lowPassB, v);
-    v = limit((v * t->gain) >> 16);
+
+    /*
+     * The product is 64-bit, as core/agc.c does it: the gain is Q16 and reaches
+     * +36 dB (64 * 65536), so a sample at full scale multiplies out to 1.4e11,
+     * which does not fit an int32_t -- it wrapped into a sign flip and an
+     * arbitrary magnitude exactly when the limiter was about to cap the
+     * sample, i.e. on every loud peak.  On the air that is an AM transmission
+     * splattering into the 8.33 kHz neighbours.
+     */
+    int64_t p = ((int64_t)v * t->gain) >> 16;
+    if (p > INT32_MAX)
+        p = INT32_MAX;
+    if (p < INT32_MIN)
+        p = INT32_MIN;
+    v = limit((int32_t)p);
+
     levelUpdate(t, magnitude(v));
 
     return v;
