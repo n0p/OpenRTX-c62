@@ -216,6 +216,20 @@ static int decode_parms_values(const uint8_t *d, dmr_parms_t *cur, dmr_parms_t *
     if (silence == 0) {
         for (l = 1; l <= L; l++) {
             jl = (int)((float)l * 16.0f * f0);
+            /*
+             * dmr_vuv is 8 columns wide (dmr_tables.h) and the generated tables
+             * reach exactly 7 today, with no margin: the index is an invariant
+             * of tools/gen_tables.py, not of this code.  mbelib, where this
+             * comes from, clamps here; without the clamp a regenerated table
+             * -- or another f0 on the silence path -- reads up to 15 rows past
+             * the codebook and the V/UV decisions come out of the next
+             * constant, which is noise in the received speech and a fault that
+             * cannot be attributed.
+             */
+            if (jl < 0)
+                jl = 0;
+            else if (jl > 7)
+                jl = 7;
             cur->Vl[l] = (uint8_t)dmr_vuv[b1][jl];
         }
     }

@@ -191,3 +191,37 @@ TEST_CASE("Status and message fields are built for the configured station",
     /* A buffer that cannot hold the packet is a failure, not a cut frame */
     REQUIRE(aprs_build_message(info, 8, "EA5ABC-9", "Hola", "01") == 0);
 }
+
+TEST_CASE("A position field that ends on its symbol does not read past it",
+          "[aprs]")
+{
+    /*
+     * "!DDMM.mmN/DDDMM.mmW<sym><comment>": the symbol is byte 19 and the lat
+     * and lon need bytes 1..18.  A field of exactly 19 bytes is a truncated
+     * sentence; the receiver must still publish the fix it has, but it must
+     * not take the symbol from the byte after the field -- the first byte of
+     * the frame's FCS -- nor compute the comment length as len - 20 (a size_t
+     * underflow).
+     */
+    aprs_info_t out;
+
+    /* 20 bytes in the buffer, 19 of them the information field */
+    const char shortField[] = "!4832.20N/00123.45WX";
+
+    std::memset(&out, 0, sizeof(out));
+    REQUIRE(aprs_parse_info(shortField, 19, &out));
+    REQUIRE(out.type == APRS_INFO_POSITION);
+    REQUIRE(out.pos.symbol == ' ');  /* not the 'X' past the field */
+    REQUIRE(out.pos.comment[0] == '\0');
+    REQUIRE(out.pos.lat > 48.0);
+    REQUIRE(out.pos.lat < 49.0);
+    REQUIRE(out.pos.lon < 0.0);
+
+    /* The whole field is unaffected: the symbol and the comment are read */
+    const char fullField[] = "!4832.20N/00123.45W>EA5TEST";
+
+    std::memset(&out, 0, sizeof(out));
+    REQUIRE(aprs_parse_info(fullField, sizeof(fullField) - 1, &out));
+    REQUIRE(out.pos.symbol == '>');
+    REQUIRE(std::strcmp(out.pos.comment, "EA5TEST") == 0);
+}

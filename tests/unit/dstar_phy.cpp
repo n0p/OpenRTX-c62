@@ -42,6 +42,7 @@
 extern "C" {
 #include "protocols/DSTAR/DStarDefs.h"
 #include "protocols/DSTAR/DStarPhy.h"
+#include "protocols/DSTAR/DStarSlowData.h"
 #include "protocols/DSTAR/DStarStatus.h"
 #include "protocols/DSTAR/DStarTx.h"
 #include "protocols/DSTAR/DStarVocoder.h"
@@ -396,4 +397,54 @@ TEST_CASE("no 2400 decoder is linked, and the mode says so", "[dstar][vocoder]")
     } else {
         REQUIRE(dstarVocoder_decode(dstarNullVoice, pcm) == -1);
     }
+}
+
+TEST_CASE("a full NMEA accumulator is closed inside its own buffer",
+          "[dstar][slow]")
+{
+    /*
+     * gps[] is DSTAR_GPS_LEN + 1 characters and gpsLen is documented as at
+     * most DSTAR_GPS_LEN, which is what makes the terminator written after
+     * every fragment fit.  A sentence that reaches the limit (a $GPGGA with a
+     * comment does) followed by the start of the next one used to append the
+     * newline unbounded, leaving gpsLen at 91, and the next fragment then
+     * wrote gps[91] -- one byte past a PSRAM field, with the rest of the
+     * channel state behind it.
+     */
+    struct dstarSlow sd;
+    uint8_t blk[DSTAR_SLOW_BLOCK];
+
+    std::memset(&sd, 0, sizeof(sd));
+
+    auto fragment = [&](const char *five) {
+        blk[0] = (uint8_t)(DSTAR_SLOW_GPS | 5);
+        for (int i = 0; i < 5; i++)
+            blk[1 + i] = (uint8_t)five[i];
+
+        /* A block is two halves of three bytes, in air order */
+        dstarSlow_push(&sd, blk);
+        dstarSlow_push(&sd, blk + 3);
+    };
+
+    /* Exactly DSTAR_GPS_LEN characters, five at a time */
+    for (int i = 0; i < DSTAR_GPS_LEN / 5; i++)
+        fragment("AAAAA");
+
+    REQUIRE(sd.gpsLen == DSTAR_GPS_LEN);
+    REQUIRE(sizeof(sd.gps) == DSTAR_GPS_LEN + 1);
+
+    /* The next sentence starts without the previous one having ended */
+    fragment("$GPGT");
+    REQUIRE(sd.gpsLen <= DSTAR_GPS_LEN);
+
+    /* And a further fragment has nowhere to go, but must not write past it */
+    fragment("AAAAB");
+    REQUIRE(sd.gpsLen <= DSTAR_GPS_LEN);
+
+    /* The accumulator still holds one sentence and hands it over */
+    const char *sentence = dstarSlow_sentence(&sd);
+
+    REQUIRE(sentence != nullptr);
+    REQUIRE(std::strlen(sentence) <= DSTAR_GPS_LEN);
+    REQUIRE(sd.gpsLen <= DSTAR_GPS_LEN);
 }

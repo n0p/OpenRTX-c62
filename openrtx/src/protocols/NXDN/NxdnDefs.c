@@ -57,12 +57,18 @@ void nxdnLichVoice(const struct nxdnLich *lich, int *first, int *count)
         *first = 0;
         *count = 4;
         break;
-    case NXDN_STEAL_SECOND:
-        /* VCH1/VCH2 are FACCH1, the second half is voice */
+    case NXDN_STEAL_FIRST:
+        /* VCH1/VCH2 are FACCH1 (enum nxdnSteal): the *first* half of the
+         * slot carries signalling and the second half carries voice.  The
+         * two cases used to be the other way round, so a frame with half a
+         * slot stolen handed the 36 Golay protected FACCH1 dibits to the
+         * vocoder as AMBE+2 -- which always "decodes" something, a burst of
+         * noise at speech volume -- and threw away the half that had voice. */
         *first = 2;
         *count = 2;
         break;
-    case NXDN_STEAL_FIRST:
+    case NXDN_STEAL_SECOND:
+        /* VCH3/VCH4 are FACCH1: the first half is voice */
         *first = 0;
         *count = 2;
         break;

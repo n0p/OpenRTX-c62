@@ -218,14 +218,35 @@ bool dmr_data_header(int slot, const uint8_t data[96], uint32_t t_ms,
         return true;
     }
     if (h.btf < 1) {
+        /*
+         * A header that declares no appended blocks opens nothing.  It used
+         * to leave the assembler exactly as it was -- pending, with the blocks
+         * of the previous packet still in buf -- for the 15 s of
+         * CONFIRMED_HOLD_MS, so a later confirmed header with the same
+         * src/dst/ns was taken as a selective retry of a packet that was never
+         * finished and the two transmissions were assembled into one.
+         */
+        a->pending = false;
+        a->total = 0;
+        a->expect = 0;
+        a->count = 0;
+        a->blen = 0;
+        a->rate_dt = 0;
         return true;
     }
 
     if (h.dpf == DMR_DPF_CONFIRMED && !h.full && a->pending
         && a->hdr.dpf == DMR_DPF_CONFIRMED && a->hdr.src == h.src
-        && a->hdr.dst == h.dst && a->hdr.ns == h.ns
+        && a->hdr.dst == h.dst && (a->hdr.ns == h.ns) && (h.btf <= a->total)
+        && a->hdr.sap == h.sap && a->hdr.poc == h.poc
         && (t_ms - a->t_ms) < CONFIRMED_HOLD_MS) {
-        /* selective retry of the pending packet: keep the blocks we have */
+        /*
+         * Selective retry of the pending packet: keep the blocks we have.  The
+         * service access point and the pad count have to match too -- they
+         * are what the block contents mean -- and a retry can only ask for a
+         * subset of the packet, never for more blocks than it was declared to
+         * have.
+         */
         a->collecting = true;
         a->expect = h.btf;
         a->t_ms = t_ms;

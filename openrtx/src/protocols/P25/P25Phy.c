@@ -30,6 +30,15 @@
 
 #include "protocols/P25/P25Fec.h"
 
+/**
+ * Symbol offsets of the HDU fields in the 36 six-bit words of the header data
+ * unit (TIA-102.AABF-D): the 72 bit message indicator occupies 0..11, the
+ * MFID 12, then ALGID (8 bits), KID (16) and TGID (16) packed from 13.
+ */
+#define HDU_OFF_ALGID 13
+#define HDU_OFF_KID 14
+#define HDU_OFF_TGID 17
+
 /** Matched filter: RRC, alpha 0.2, 8 symbols either side, 10 samples/symbol. */
 #define P25_MF_TAPS 81
 #define P25_MF_CENTER 40
@@ -570,19 +579,25 @@ static bool decodeFrame(struct p25Frame *f, p25FrameHandler handler, void *user,
 #endif
             if (bad == 0 && p25Fec_rsDecode(hb, 36, 20) >= 0)
             {
-                int j = 0;
-                for (int i = 0; i < 9;)
-                {
-                    i += 3;
-                    j += 4;
-                }
-                f->hduAlgid = (uint8_t)((hb[j + 1] & 0xF) << 4 |
-                                        (hb[j + 2] >> 2));
-                f->hduKeyid = (uint16_t)(((hb[j + 2] & 0x3) << 14) |
-                                         (hb[j + 3] << 8) | (hb[j + 4] << 2) |
-                                         (hb[j + 5] >> 4));
-                f->hduGroup = (uint16_t)(((hb[j + 5] & 0xF) << 12) |
-                                         (hb[j + 6] << 6) | hb[j + 7]);
+                /*
+                 * Field offsets in hb[] (TIA-102.AABF-D, HDU): the 72 bit MI
+                 * takes the first 12 symbols, the MFID one more, and ALGID,
+                 * KID and TGID follow.  They used to be read as hb[j + n]
+                 * with `j` coming out of a loop that ran `i += 3; j += 4;`
+                 * nine times and always left j at 12: the arithmetic was
+                 * decoded by hand to check it, and anyone "adjusting" the loop
+                 * would have moved ALGID, KID and TGID six bits at once --
+                 * a call shown with the wrong key and talkgroup, silently.
+                 */
+                f->hduAlgid = (uint8_t)((hb[HDU_OFF_ALGID] & 0xF) << 4 |
+                                        (hb[HDU_OFF_ALGID + 1] >> 2));
+                f->hduKeyid = (uint16_t)(((hb[HDU_OFF_KID] & 0x3) << 14) |
+                                         (hb[HDU_OFF_KID + 1] << 8) |
+                                         (hb[HDU_OFF_KID + 2] << 2) |
+                                         (hb[HDU_OFF_KID + 3] >> 4));
+                f->hduGroup = (uint16_t)(((hb[HDU_OFF_TGID] & 0xF) << 12) |
+                                         (hb[HDU_OFF_TGID + 1] << 6) |
+                                         hb[HDU_OFF_TGID + 2]);
             }
             break;
         }

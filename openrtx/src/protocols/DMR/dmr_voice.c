@@ -183,16 +183,15 @@ void dmr_voice_burst(int slot, const uint8_t burst[132], int voice_idx,
  */
 void dmr_voice_tick(uint32_t t_ms)
 {
-    const int playing = s_playing; /* volatile: one read, one index */
-
-    if (playing < 0 || playing > 1)
-        return;
-
-    const uint32_t hold = (s_pref == DMR_VOICE_PREF_AUTO) ? VOICE_AUTO_HOLD_MS
-                                                        : VOICE_TIMEOUT_MS;
-
-    if ((t_ms - s_call[playing].last_voice_ms) > hold)
-        s_playing = -1;
+    /*
+     * In the build without a vocoder there is no playback to expire, so the
+     * rule has nothing to do.  This used to be the body of the voice branch,
+     * reading s_call[] and VOICE_AUTO_HOLD_MS -- both defined only in the
+     * #else that starts below -- so the file did not compile at all with
+     * neither DMR_VOICE_OWN nor DMR_VOICE_ENABLED defined.
+     */
+    (void)t_ms;
+    s_playing = -1;
 }
 
 void dmr_voice_call_end(int slot)

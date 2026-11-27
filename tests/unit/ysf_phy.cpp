@@ -245,3 +245,124 @@ TEST_CASE("a frame after a lost one is still found", "[ysf][phy]")
     REQUIRE(s.fichOk);
     REQUIRE(strcmp(s.source, "EA5TEST") == 0);
 }
+
+namespace {
+
+/** The transmitter's next frame as the frame layer takes it. */
+struct ysfFrame nextFrame(const uint8_t *dibits)
+{
+    struct ysfFrame f;
+
+    memset(&f, 0, sizeof(f));
+    memcpy(f.dibits, dibits, YSF_FRAME_DIBITS);
+    return f;
+}
+
+} // namespace
+
+TEST_CASE("a frame whose FICH did not verify still hands over its voice",
+          "[ysf][frame]")
+{
+    /*
+     * The FICH is a convolutional code plus Golay(24,12) plus a CRC-16, so a
+     * frame whose FICH fails is a frame with real errors -- but its payload can
+     * still be intact, and it is 100 ms of speech.  Dropping the whole frame
+     * leaves a hole in the speech timeline that is audible as a clip; the
+     * layout of the previous frame of the same transmission is the best guess
+     * for it, and the frame must not update what the transmission says.
+     *
+     * The frames are the transmitter's own: the header (fi 0, DT 0) followed by
+     * the first voice frame of the call (fi 1, DT 0).
+     */
+    struct ysfTxConfig cfg;
+
+    memset(&cfg, 0, sizeof(cfg));
+    strcpy(cfg.source, "EA5TEST");
+    strcpy(cfg.dest, "CQCQCQ");
+    strcpy(cfg.uplink, "EA5RPT");
+    strcpy(cfg.downlink, "EA5RPT");
+    cfg.text = nullptr;
+
+    ysfTx_begin(&cfg);
+
+    std::vector<int16_t> pcm((size_t)YSF_FRAME_SYMBOLS * C4FM_MOD_SPS);
+    ysfTx_samples(pcm.data(), (int)pcm.size(), GAIN);
+    const struct ysfFrame header = nextFrame(ysfTx_frameDibits());
+
+    ysfTx_samples(pcm.data(), (int)pcm.size(), GAIN);
+    struct ysfFrame voice = nextFrame(ysfTx_frameDibits());
+    ysfTx_end();
+
+    ysfFrame_reset();
+    const struct ysfDecoded *h = ysfFrame_decode(&header);
+
+    REQUIRE(h != nullptr);
+    REQUIRE(h->fichOk);
+    REQUIRE(h->call.dt == 0);
+    REQUIRE(ysfFrame_call()->fi == 0);
+
+    /* The same frame with its FICH beyond repair: 200 bits after the sync,
+     * flipped so that neither the Viterbi metric nor Golay can absorb it */
+    for (int i = 0; i < 100; i += 3)
+        voice.dibits[YSF_SYNC_SYMBOLS + i] ^= 3;
+
+    const struct ysfDecoded *v = ysfFrame_decode(&voice);
+
+    REQUIRE(v != nullptr);
+    REQUIRE_FALSE(v->fichOk);
+    REQUIRE(v->voiceCount == YSF_VOICE_SLOTS);
+    REQUIRE(ysfFrame_call()->badFich == 1);
+
+    /* It did not touch what the transmission says */
+    REQUIRE(ysfFrame_call()->fi == 0);
+    REQUIRE(ysfFrame_call()->frames == 1);
+}
+
+TEST_CASE("after a terminator a bad FICH does not invent voice", "[ysf][frame]")
+{
+    /*
+     * The fallback must not run past the end of a call: a terminator ends the
+     * voice layout, so a frame after it whose FICH fails is silence, not a data
+     * channel decoded as speech.
+     */
+    struct ysfTxConfig cfg;
+
+    memset(&cfg, 0, sizeof(cfg));
+    strcpy(cfg.source, "EA5TEST");
+    strcpy(cfg.dest, "CQCQCQ");
+    cfg.text = nullptr;
+
+    ysfTx_begin(&cfg);
+
+    std::vector<int16_t> pcm((size_t)YSF_FRAME_SYMBOLS * C4FM_MOD_SPS);
+
+    ysfFrame_reset();
+
+    /* The header and one voice frame, so the call is on a voice layout */
+    ysfTx_samples(pcm.data(), (int)pcm.size(), GAIN);
+    const struct ysfFrame header = nextFrame(ysfTx_frameDibits());
+    ysfTx_samples(pcm.data(), (int)pcm.size(), GAIN);
+    const struct ysfFrame voice = nextFrame(ysfTx_frameDibits());
+
+    REQUIRE(ysfFrame_decode(&header)->fichOk);
+    REQUIRE(ysfFrame_decode(&voice)->voiceCount == YSF_VOICE_SLOTS);
+
+    /* The end of the transmission: the terminator is the next frame out */
+    ysfTx_end();
+    ysfTx_samples(pcm.data(), (int)pcm.size(), GAIN);
+    struct ysfFrame term = nextFrame(ysfTx_frameDibits());
+    ysfTx_end();
+
+    const struct ysfDecoded *t = ysfFrame_decode(&term);
+
+    REQUIRE(t->fichOk);
+    REQUIRE(t->call.fi == 2);
+
+    for (int i = 0; i < 100; i += 3)
+        term.dibits[YSF_SYNC_SYMBOLS + i] ^= 3;
+
+    const struct ysfDecoded *v = ysfFrame_decode(&term);
+
+    REQUIRE_FALSE(v->fichOk);
+    REQUIRE(v->voiceCount == 0);
+}

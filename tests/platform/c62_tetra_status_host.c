@@ -101,7 +101,7 @@ int main(int argc, char **argv)
     uint32_t lastCrc = 0;
     size_t n;
     while ((n = fread(buf, 2, HALF_SAMPLES, f)) > 0) {
-        size_t k = tetraDemod_process(&demod, buf, n, soft);
+        size_t k = tetraDemod_process(&demod, buf, n, soft, sizeof(soft));
         uint32_t j = tetraDemod_reacquisitions(&demod);
         if (j != jumps) {
             jumps = j;

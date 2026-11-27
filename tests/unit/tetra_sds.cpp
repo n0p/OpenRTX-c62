@@ -460,3 +460,48 @@ TEST_CASE("The message ring and its record survive a power cycle",
     REQUIRE(sds_hist_deserialise(record, (size_t)len - 1) < 0);
     REQUIRE(sds_hist_count() == 0);
 }
+
+TEST_CASE("a text that does not fit the PDU is refused, not written past it",
+          "[tetra][sds]")
+{
+    /*
+     * The encoder appends to a struct sds_tx, which tetraSds_encodeText()
+     * declares as a local: 400 octets and a bit count.  Neither branch of the
+     * text payload used to be bounded -- GSM 7-bit only refused more than 512
+     * characters, which is already 448 octets of packed text, and UCS-2 had no
+     * limit at all -- so a message the UI limit does not allow today but the
+     * public API does wrote past the end of that object, over the caller's
+     * stack frame.  What must happen instead: -1, a bit count that still
+     * describes the object, and a writer usable afterwards.
+     */
+    struct sds_tx out;
+    std::string long7(600, 'A');       /* 600 septets = 525 octets */
+    std::string longUcs(300, '\xc4'); /* not GSM 7-bit: 600 octets as UCS-2 */
+
+    REQUIRE(tetraSds_encodeText(&out, 3001, long7.c_str(), false) == -1);
+    REQUIRE(out.nbits <= 8 * sizeof(out.buf));
+
+    REQUIRE(tetraSds_encodeText(&out, 3001, longUcs.c_str(), false) == -1);
+    REQUIRE(out.nbits <= 8 * sizeof(out.buf));
+
+    /* The same writer still encodes a message that fits, unchanged */
+    REQUIRE(tetraSds_encodeText(&out, 3001, "HOLA", false) == 0);
+    REQUIRE(out.nbits > 0);
+    REQUIRE(out.nbits <= 8 * sizeof(out.buf));
+}
+
+TEST_CASE("a text that fits exactly is not refused", "[tetra][sds]")
+{
+    /*
+     * The bound must not eat a long message that still fits: 280 GSM 7-bit
+     * characters are 245 packed octets, 1 976 bits of text plus the
+     * U-SDS-DATA header, inside both the 400 octet writer and the 11 bit
+     * length field of the PDU.
+     */
+    struct sds_tx out;
+    std::string text(280, 'A');
+
+    REQUIRE(tetraSds_encodeText(&out, 3001, text.c_str(), false) == 0);
+    REQUIRE(out.nbits <= 8 * sizeof(out.buf));
+    REQUIRE_FALSE(out.overflow);
+}

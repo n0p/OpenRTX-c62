@@ -42,6 +42,7 @@
 #include <vector>
 
 extern "C" {
+#include "dmr_tables.h"
 #include "protocols/DPMR/DpmrData.h"
 #include "protocols/DPMR/DpmrDefs.h"
 #include "protocols/DPMR/DpmrPhy.h"
@@ -973,4 +974,35 @@ TEST_CASE("dPMR header and END reject what their CRCs cannot rescue",
     REQUIRE(dpmrFec_endDecode(half.data(), &e));
     REQUIRE(e.crcOk[1]);
     REQUIRE(e.status == 0x15);
+}
+
+TEST_CASE("the V/UV table index has no margin left to lose", "[dmr][vocoder]")
+{
+    /*
+     * dmr_decoder.c reads dmr_vuv[b1][(int)(l * 16 * f0)] out of an 8 column
+     * codebook, with l up to L = dmr_l_table[b0].  Over the 120 rows the
+     * product reaches 7.4 (b0 = 113), which truncates to 7, the last valid
+     * column: there is less than one column of margin, and none at all once
+     * the 0.4 is spent.  The clamp mbelib has (and which this port had
+     * dropped) is back in the decoder, so an index past the last column can no
+     * longer read the constant that follows the table; this case pins the
+     * other half, the tables.  If a regenerated dmr_w0 or dmr_l_table ever
+     * truncates to 8 or more, it fails here, on the host, instead of turning
+     * into V/UV decisions taken from someone else's data on the radio.
+     */
+    double worst = 0.0;
+    int worstB0 = -1;
+
+    for (int b0 = 0; b0 < 120; b0++) {
+        const double p = (double)dmr_l_table[b0] * 16.0 * (double)dmr_w0[b0];
+
+        if (p > worst) {
+            worst = p;
+            worstB0 = b0;
+        }
+    }
+
+    INFO("worst product " << worst << " at b0 " << worstB0);
+    REQUIRE(worst < 8.0); /* (int)worst is the column index */
+    REQUIRE(worstB0 >= 0);
 }

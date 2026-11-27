@@ -210,7 +210,7 @@ int main(int argc, char **argv)
                 buf[i] = v > 32767 ? 32767 : (v < -32768 ? -32768 : v);
             }
         }
-        size_t k = tetraDemod_process(&demod, buf, n, soft);
+        size_t k = tetraDemod_process(&demod, buf, n, soft, sizeof(soft));
         uint32_t j = tetraDemod_reacquisitions(&demod);
         if (j != jumps) {
             jumps = j;

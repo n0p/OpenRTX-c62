@@ -15,11 +15,26 @@
 
 #include "protocols/TETRA/TetraSdsEnc.h"
 
+/**
+ * Append the n least significant bits of v, most significant first.
+ *
+ * The writer is a fixed 400 octet buffer, so every bit is checked against it:
+ * the callers of this file used to bound the text themselves and one of them
+ * (the UCS-2 branch of sds_tx_text_payload) did not, which turned a long
+ * message into a write past the end of a stack object.
+ */
 static void put(struct sds_tx *t, uint32_t v, unsigned n)
 {
     for (unsigned i = 0; i < n; i++) {
         unsigned bit = (v >> (n - 1 - i)) & 1;
-        unsigned pos = t->nbits++;
+        unsigned pos = t->nbits;
+
+        if (pos >= 8u * sizeof(t->buf)) {
+            t->overflow = true;
+            return;
+        }
+
+        t->nbits = pos + 1;
 
         if (bit)
             t->buf[pos >> 3] |= (uint8_t)(0x80 >> (pos & 7));
@@ -76,7 +91,8 @@ static int gsm7_septet(unsigned char c, int *ext)
 int sds_tx_text_payload(struct sds_tx *t, const char *text, uint8_t coding,
                         bool sdstl, bool immediate, uint8_t ref)
 {
-    unsigned len = (unsigned)strlen(text);
+    const unsigned len = (unsigned)strlen(text);
+    const unsigned capacity = 8u * (unsigned)sizeof(t->buf);
 
     if (sdstl)
         put(t, immediate ? TETRA_PID_IMM_TEXT : TETRA_PID_TEXT, 8);
@@ -97,49 +113,78 @@ int sds_tx_text_payload(struct sds_tx *t, const char *text, uint8_t coding,
         put(t, coding, 7);
     }
 
+    if (t->overflow)
+        return -1;
+
     if (coding == TETRA_TCS_GSM7) {
-        uint8_t sept[1024];
-        uint8_t packed[1024];
+        /*
+         * GSM 03.38 packing, without the septet and octet arrays it used to
+         * need (2 KiB, on the stack of a receiver whose DTCM is all but
+         * full).  The first pass only measures and validates the alphabet;
+         * the second one packs straight into the writer, seven bits at a
+         * time through a small accumulator.  Octet j carries septet bits
+         * 8j..8j+7, least significant bit first inside the septet, and the
+         * octets go out most significant bit first like every other field.
+         */
         unsigned nsept = 0;
 
-        if (len > sizeof(sept) / 2)
-            return -1;
         for (unsigned i = 0; i < len; i++) {
             int ext;
             int v = gsm7_septet((unsigned char)text[i], &ext);
 
             if (v < 0)
                 return -1; /* not in the alphabet: send it as UCS-2 */
-            sept[nsept++] = (uint8_t)v;
-            if (ext >= 0)
-                sept[nsept++] = (uint8_t)ext;
+            nsept += (ext >= 0) ? 2u : 1u;
         }
 
-        /*
-         * GSM 03.38 packing: septet i starts at bit 7*i, least significant
-         * bit first inside the octet; the octets are then sent most
-         * significant bit first, like every other field.
-         */
-        unsigned octets = (7 * nsept + 7) / 8;
+        /* 7 * nsept cannot wrap: nsept is at most twice strlen(text) */
+        const unsigned octets = (7u * nsept + 7u) / 8u;
 
-        memset(packed, 0, sizeof(packed));
-        for (unsigned i = 0; i < nsept; i++) {
-            unsigned b = 7 * i;
+        if ((t->nbits + 8u * octets) > capacity)
+            return -1;
 
-            packed[b / 8] |= (uint8_t)(sept[i] << (b % 8));
-            if (b % 8 > 1 && b / 8 + 1 < octets)
-                packed[b / 8 + 1] |= (uint8_t)(sept[i] >> (8 - b % 8));
+        uint32_t acc = 0;    /* pending septet bits, least significant first */
+        unsigned accBits = 0;
+
+        for (unsigned i = 0; i < len; i++) {
+            int ext;
+            int v = gsm7_septet((unsigned char)text[i], &ext);
+
+            acc |= (uint32_t)v << accBits;
+            accBits += 7;
+
+            while (accBits >= 8) {
+                put(t, acc & 0xffu, 8);
+                acc >>= 8;
+                accBits -= 8;
+            }
+
+            if (ext >= 0) {
+                acc |= (uint32_t)ext << accBits;
+                accBits += 7;
+
+                while (accBits >= 8) {
+                    put(t, acc & 0xffu, 8);
+                    acc >>= 8;
+                    accBits -= 8;
+                }
+            }
         }
-        for (unsigned j = 0; j < octets; j++)
-            put(t, packed[j], 8);
+
+        if (accBits > 0)
+            put(t, acc & 0xffu, 8);
     } else if (coding == TETRA_TCS_UCS2) {
+        if ((t->nbits + 16u * len) > capacity)
+            return -1;
         for (unsigned i = 0; i < len; i++)
             put(t, (unsigned char)text[i], 16);
     } else {
+        if ((t->nbits + 8u * len) > capacity)
+            return -1;
         for (unsigned i = 0; i < len; i++)
             put(t, (unsigned char)text[i], 8);
     }
-    return 0;
+    return t->overflow ? -1 : 0;
 }
 
 int sds_tx_u_sds_data(struct sds_tx *t, uint32_t dst_ssi, uint8_t area,
@@ -160,7 +205,7 @@ int sds_tx_u_sds_data(struct sds_tx *t, uint32_t dst_ssi, uint8_t area,
 
         put(t, bit, 1);
     }
-    return 0;
+    return t->overflow ? -1 : 0;
 }
 
 int sds_tx_u_status(struct sds_tx *t, uint32_t dst_ssi, uint8_t area,
@@ -172,7 +217,7 @@ int sds_tx_u_status(struct sds_tx *t, uint32_t dst_ssi, uint8_t area,
     put(t, 1, 2);
     put(t, dst_ssi, 24);
     put(t, status, 16);
-    return 0;
+    return t->overflow ? -1 : 0;
 }
 
 int sds_tx_wrap_llc(struct sds_tx *t, const struct sds_tx *cmce)
@@ -188,7 +233,7 @@ int sds_tx_wrap_llc(struct sds_tx *t, const struct sds_tx *cmce)
         put(&out, bit, 1);
     }
     *t = out;
-    return 0;
+    return out.overflow ? -1 : 0;
 }
 
 /* Append a '1' fill bit then zeros up to nbits (MAC fill). */
@@ -220,6 +265,8 @@ int sds_tx_mac_access(uint8_t out[92], uint32_t ssi, const struct sds_tx *sdu)
 
         put(&m, bit, 1);
     }
+    if (m.overflow)
+        return -1;
     fill_to(m.buf, &m.nbits, 92);
     for (unsigned i = 0; i < 92; i++)
         out[i] = (uint8_t)((m.buf[i >> 3] >> (7 - (i & 7))) & 1);
@@ -246,6 +293,13 @@ int sds_tx_mac_data(uint8_t out[268], uint32_t ssi, const struct sds_tx *sdu)
 
         put(&m, bit, 1);
     }
+    /*
+     * A TM-SDU longer than the block can carry is refused here instead of
+     * being truncated by fill_to() below, which rewinds nbits and would hand
+     * out a block whose tail is whatever the writer held.
+     */
+    if (m.overflow || (body > 268u))
+        return -1;
     fill_to(m.buf, &m.nbits, li * 8);
     fill_to(m.buf, &m.nbits, 268);
     for (unsigned i = 0; i < 268; i++)

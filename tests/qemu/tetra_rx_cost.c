@@ -49,7 +49,7 @@ void __attribute__((noinline)) frame_marker(void)
 
 static void block_demod(const int16_t *in, size_t *n)
 {
-    *n = tetraDemod_process(&demod, in, BLOCK, soft);
+    *n = tetraDemod_process(&demod, in, BLOCK, soft, sizeof(soft));
     sink += (uint32_t)*n;
 }
 
