@@ -564,6 +564,30 @@ bool ysfPhy_synced(void)
            ((phy.ringIndex - phy.lastSync) < (long)(2 * FRAME_SAMPLES));
 }
 
+/**
+ * Sample positions are floats and the ring index is a long.  A float keeps
+ * every integer sample up to 2^24 and the fraction well below that; a receiver
+ * left on a channel accumulates 48 000 samples a second, so after about six
+ * minutes `pos + 5.0f == pos` stops being true in the hunt loop, which never
+ * advances again: the RTX thread spins forever and the black box reboots the
+ * radio about 47 minutes in.  The fix is not to widen anything: every position
+ * here is relative to the ring, so subtracting a whole number of rings from all
+ * of them changes no index and no difference, and the floats go back to being
+ * small.  Called from append(), after the samples are in the ring.
+ */
+#define REBASE_OFFSET (RING_LEN * 64)   /* ~9.8 s of samples, a whole ring */
+#define REBASE_AT (2 * REBASE_OFFSET)
+
+static void rebase(void)
+{
+    if (phy.ringIndex < REBASE_AT)
+        return;
+
+    phy.ringIndex -= REBASE_OFFSET;
+    phy.pos -= (float)REBASE_OFFSET;
+    phy.lastSync -= REBASE_OFFSET;
+}
+
 /** Append samples to the ring. */
 static void append(const int16_t *samples, size_t n)
 {
@@ -572,6 +596,8 @@ static void append(const int16_t *samples, size_t n)
         ring[ring_slot(phy.ringIndex)] = samples[i];
         phy.ringIndex++;
     }
+
+    rebase();
 }
 
 void ysfPhy_push(const int16_t *samples, size_t count, ysfFrameHandler handler,

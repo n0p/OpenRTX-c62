@@ -406,6 +406,19 @@ void dstarPhy_push(const int16_t *samples, size_t count, dstarHeaderHandler hh,
         if (((uint32_t)((symPosQ8 >> 8) + BLOCK_SYMBOLS * SPS + 3) <= yTotal) &&
             ((yTotal - (uint32_t)(symPosQ8 >> 8)) < YRING - 16u)) {
             runBlock();
+
+            /*
+             * Rebase: symPosQ8 is the Q8 position of the next symbol, so an
+             * int32 overflows at 2^23 samples -- 349 s of D-STAR at 24 kHz --
+             * and the cast to unsigned in the test above then never agrees
+             * again: the demodulator stops receiving for good (a mode change
+             * was the only way back).  A whole number of rings changes no ring
+             * slot, and both counters are shifted by the same amount.
+             */
+            if ((symPosQ8 >> 8) >= (int32_t)(1u << 20)) {
+                yTotal -= 1u << 20;
+                symPosQ8 -= 1 << 28; /* (1 << 20) * 256 */
+            }
         }
     }
 }
