@@ -46,6 +46,22 @@
 /** Coarse hunt step, in samples: a quarter of a symbol. */
 #define HUNT_STEP 5
 
+/**
+ * Samples appended to the ring per hunt() call while hunting.
+ *
+ * hunt() only scores positions whose whole frame is in the ring, so the ring
+ * has to hold one frame plus everything appended since the last hunt.  The
+ * mode hands over 4800-sample blocks (one YSF frame), and a block that size
+ * leaves the oldest 2240 positions of the scan already overwritten: a frame
+ * lasts exactly one block, so its sync keeps the same phase relative to the
+ * block boundary for the whole transmission, and a transmission whose sync
+ * falls in those 2240 is never found.  Half a block is inside the margin, and
+ * it costs nothing else: the scan still covers every position exactly once.
+ */
+#define HUNT_CHUNK 2400
+_Static_assert(HUNT_CHUNK <= (RING_LEN - FRAME_SAMPLES),
+               "the hunt ring must hold a frame plus one chunk");
+
 /** Timing refinement: +-8 samples around the expected position, one by one. */
 #define TRACK_SPAN 8
 
@@ -610,18 +626,26 @@ void ysfPhy_push(const int16_t *samples, size_t count, ysfFrameHandler handler,
 
     /*
      * Serve the frame clock without a branch per sample: while hunting, take
-     * the whole block and scan it; once locked, take exactly as many samples
-     * as the current frame still needs, so track() runs the moment the frame
-     * is complete -- the ring only holds one frame plus a sync of margin, and
-     * a late frame would read samples that have already wrapped.
+     * the block a chunk at a time and scan after each one, so that every
+     * position is scored while its whole frame is still in the ring; once
+     * locked, take exactly as many samples as the current frame still needs,
+     * so track() runs the moment the frame is complete -- the ring only holds
+     * one frame plus a sync of margin, and a late frame would read samples
+     * that have already wrapped.
      */
     while (done < count)
     {
         if (phy.hunt)
         {
-            append(&samples[done], count - done);
+            size_t n = count - done;
+
+            if (n > HUNT_CHUNK)
+                n = HUNT_CHUNK;
+
+            append(&samples[done], n);
             hunt();
-            break;
+            done += n;
+            continue;
         }
 
         long want = (long)phy.pos + FRAME_SAMPLES - phy.ringIndex;

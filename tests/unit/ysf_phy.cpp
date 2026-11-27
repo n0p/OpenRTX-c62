@@ -246,6 +246,34 @@ TEST_CASE("a frame after a lost one is still found", "[ysf][phy]")
     REQUIRE(strcmp(s.source, "EA5TEST") == 0);
 }
 
+TEST_CASE("a frame handed over in one-frame blocks is still found",
+          "[ysf][phy]")
+{
+    /*
+     * The mode reads the baseband in 4800-sample blocks, one YSF frame each
+     * (OpMode_YSF::BLOCK_SAMPLES).  A frame lasts exactly one block, so the
+     * phase of its sync relative to the block boundary is the same for every
+     * block of the transmission: whatever the hunt gets wrong for one block,
+     * it gets wrong for the whole call.  The ring holds one frame plus a
+     * margin, so a block appended whole leaves the oldest of the positions
+     * hunt() would scan already overwritten -- and a frame starting there was
+     * never acquired.  Each lead below puts the sync at a different distance
+     * from the block boundary, covering the whole block.
+     */
+    const Frame f = txHeaderFrame();
+
+    for (int lead : {100, 1337, 2401, 3600}) {
+        const std::vector<int16_t> pcm = modulate(f.d, YSF_FRAME_DIBITS,
+                                                  lead, 4800);
+        const Seen s = run(pcm, 4800);
+
+        INFO("lead " << lead);
+        REQUIRE(s.frames == 1);
+        REQUIRE(s.fichOk);
+        REQUIRE(strcmp(s.source, "EA5TEST") == 0);
+    }
+}
+
 namespace {
 
 /** The transmitter's next frame as the frame layer takes it. */
