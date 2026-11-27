@@ -318,32 +318,39 @@ static enum dpmrSync searchSync(float *window, uint32_t *start,
 
 /* --------------------------------------------------------------- slicing --- */
 
+/** Slice one symbol against the frame's outer level; returns its level error. */
+static float sliceSymbol(float v, float amplitude, float polarity,
+                         uint8_t *dibit)
+{
+    float outer = 2.0f * amplitude / 3.0f;
+    float s = v * polarity;
+    float ideal;
+
+    if (s > outer) {
+        *dibit = 1;         /* 01: +3, +1050 Hz */
+        ideal = amplitude;
+    } else if (s > 0.0f) {
+        *dibit = 0;         /* 00: +1, +350 Hz  */
+        ideal = amplitude / 3.0f;
+    } else if (s > -outer) {
+        *dibit = 2;         /* 10: -1, -350 Hz  */
+        ideal = -amplitude / 3.0f;
+    } else {
+        *dibit = 3;         /* 11: -3, -1050 Hz */
+        ideal = -amplitude;
+    }
+
+    return absf(s - ideal);
+}
+
 /** Slice n read symbols into dibits; returns the normalised level error. */
 static float slice(const float *y, unsigned n, float amplitude, float polarity,
                    uint8_t *dibits)
 {
     float error = 0.0f;
-    float outer = 2.0f * amplitude / 3.0f;
 
-    for (unsigned k = 0; k < n; k++) {
-        float v = y[k] * polarity;
-        float ideal;
-
-        if (v > outer) {
-            dibits[k] = 1;      /* 01: +3, +1050 Hz */
-            ideal = amplitude;
-        } else if (v > 0.0f) {
-            dibits[k] = 0;      /* 00: +1, +350 Hz  */
-            ideal = amplitude / 3.0f;
-        } else if (v > -outer) {
-            dibits[k] = 2;      /* 10: -1, -350 Hz  */
-            ideal = -amplitude / 3.0f;
-        } else {
-            dibits[k] = 3;      /* 11: -3, -1050 Hz */
-            ideal = -amplitude;
-        }
-        error += absf(v - ideal);
-    }
+    for (unsigned k = 0; k < n; k++)
+        error += sliceSymbol(y[k], amplitude, polarity, &dibits[k]);
 
     return (n > 0 && amplitude > 0.0f) ? error / ((float)n * amplitude) : 1.0f;
 }
@@ -357,7 +364,16 @@ static float slice(const float *y, unsigned n, float amplitude, float polarity,
 static bool decodePayloadAt(uint32_t start, float fraction, float polarity,
                             struct dpmrFrame *frame)
 {
-    float y[DPMR_FRAME_SYMBOLS];
+    /*
+     * Only the run that sets the level reference is read as samples; the
+     * other 180 symbols are read and sliced one at a time straight into
+     * `dibits`.  The 192 float array this used to keep cost 768 bytes of
+     * stack per attempt, on top of the 192 bytes of dibits, and the frame is
+     * swept 3 x 33 times on acquisition: on the C62 the stacks live in DTCM,
+     * which is all but full, and the cost was paid in the thread that also
+     * runs the matched filter.
+     */
+    float y[DPMR_SYNC_SYMBOLS];
     uint8_t dibits[DPMR_FRAME_SYMBOLS];
 
     memset(frame, 0, sizeof(*frame));
@@ -367,9 +383,22 @@ static bool decodePayloadAt(uint32_t start, float fraction, float polarity,
      * are all outer symbols, and so is every channel code (clause 7.1 encodes
      * each code bit as 01 or 11).
      */
-    float amp = readSymbols(start, DPMR_FRAME_SYMBOLS, fraction, y,
+    float amp = readSymbols(start, DPMR_SYNC_SYMBOLS, fraction, y,
                             DPMR_SYNC_SYMBOLS);
-    frame->evm = slice(y, DPMR_FRAME_SYMBOLS, amp, polarity, dibits);
+    float err = 0.0f;
+
+    for (unsigned k = 0; k < DPMR_SYNC_SYMBOLS; k++)
+        err += sliceSymbol(y[k], amp, polarity, &dibits[k]);
+
+    for (unsigned k = DPMR_SYNC_SYMBOLS; k < DPMR_FRAME_SYMBOLS; k++) {
+        float v = ringAt((float)start + (float)(k * DPMR_PHY_SPS) + fraction);
+
+        err += sliceSymbol(v, amp, polarity, &dibits[k]);
+    }
+
+    frame->evm = (amp > 0.0f)
+                     ? err / ((float)DPMR_FRAME_SYMBOLS * amp)
+                     : 1.0f;
 
     frame->sync = DPMR_SYNC_CC;
     if (scorePattern(y, syncFs2, 12, polarity) > DPMR_SYNC_SCORE)
@@ -516,7 +545,13 @@ static bool payloadWithRetries(uint32_t start, float fraction, float polarity,
                                uint32_t *winStart)
 {
     static const float fracs[3] = { 0.0f, 0.5f, -0.5f };
-    struct dpmrFrame frame;
+    /*
+     * Two frame structures, not three: `cand` is the attempt in flight and
+     * `best` only receives the one that wins, so a losing quarter-sample
+     * refinement costs a decode, not a copy of the whole frame.
+     */
+    struct dpmrFrame best;
+    struct dpmrFrame cand;
 
     /*
      * Acquisition sweeps two whole symbols: the sync correlation can peak up
@@ -529,7 +564,7 @@ static bool payloadWithRetries(uint32_t start, float fraction, float polarity,
     for (int ds = lo; ds <= hi; ds++) {
         for (unsigned fi = 0; fi < 3; fi++) {
             if (!decodePayloadAt((uint32_t)((int32_t)start + ds),
-                                 fraction + fracs[fi], polarity, &frame))
+                                 fraction + fracs[fi], polarity, &cand))
                 continue;
 
             /*
@@ -541,22 +576,21 @@ static bool payloadWithRetries(uint32_t start, float fraction, float polarity,
              * took the level error from 0.02 to 0.17.
              */
             float bestFrac = fraction + fracs[fi];
-            float bestEvm = frame.evm;
-            struct dpmrFrame best = frame;
+            float bestEvm = cand.evm;
+
+            best = cand;
 
             for (int q = -2; q <= 2; q++) {
-                struct dpmrFrame tryFrame;
-
                 if (q == 0)
                     continue;
                 if (!decodePayloadAt((uint32_t)((int32_t)start + ds),
                                      bestFrac + 0.125f * (float)q, polarity,
-                                     &tryFrame))
+                                     &cand))
                     continue;
-                if (tryFrame.evm < bestEvm) {
-                    bestEvm = tryFrame.evm;
+                if (cand.evm < bestEvm) {
+                    bestEvm = cand.evm;
                     bestFrac += 0.125f * (float)q;
-                    best = tryFrame;
+                    best = cand;
                 }
             }
 
