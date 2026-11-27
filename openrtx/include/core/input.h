@@ -47,20 +47,28 @@ typedef union {
 bool input_scanKeyboard(kbd_msg_t *msg);
 
 /**
- * This function returns true if at least one number is pressed on the
- * keyboard.
+ * True if the event carries a number key that has just been pressed.
+ *
+ * input_scanKeyboard() reports the press edge and, 700 ms later, a second
+ * event for the same key with long_press set. The long press is a repeat of a
+ * keystroke already delivered, not another one: a screen that types a digit
+ * has to see it once, or holding a key enters it twice (the frequency, the
+ * offset and the DMR ID entries all did). Screens that give the long press a
+ * meaning of its own test msg.long_press before asking.
  *
  * @param msg: the keyboard queue message
- * @return true if at least a number is pressed on the keyboard
+ * @return true if a number key was pressed by this event
  */
 bool input_isNumberPressed(kbd_msg_t msg);
 
 /**
- * This function returns true if at least one character is pressed on the
- * keyboard.
+ * True if the event carries a character key that has just been pressed.
+ *
+ * Same rule as input_isNumberPressed(): the long-press repeat is not a second
+ * keystroke.
  *
  * @param msg: the keyboard queue message
- * @return true if at least a char is pressed on the keyboard
+ * @return true if a character key was pressed by this event
  */
 bool input_isCharPressed(kbd_msg_t msg);
 
