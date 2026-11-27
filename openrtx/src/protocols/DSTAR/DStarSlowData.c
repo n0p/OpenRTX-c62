@@ -340,9 +340,22 @@ static void blockComplete(struct dstarSlow *sd)
         if (len > 5)
             len = 5;
         if (payload[0] == '$' && sd->gpsLen > 0) {
-            /* A new sentence started without a newline: close the old one by
-             * appending a terminator, which dstarSlow_sentence() looks for. */
-            sd->gps[sd->gpsLen++] = '\n';
+            /*
+             * A new sentence started without a newline: close the old one by
+             * appending a terminator, which dstarSlow_sentence() looks for.
+             * gps[] is DSTAR_GPS_LEN + 1 long and gpsLen is documented as at
+             * most DSTAR_GPS_LEN, which is what keeps the terminator written
+             * by the branch below inside the array.  This append used to be
+             * unbounded: with a full accumulator (a $GPGGA with a comment
+             * reaches 90 characters) it left gpsLen at 91, and the next
+             * fragment wrote gps[91] -- past the end of a PSRAM field, with
+             * the rest of the channel state behind it.  The last character of
+             * a full sentence is lost here, and the sentence it belonged to
+             * has already been handed over: dstarSlow_sentence() treats a full
+             * buffer as a complete sentence.
+             */
+            if ((unsigned)(sd->gpsLen + 1) < sizeof(sd->gps))
+                sd->gps[sd->gpsLen++] = '\n';
         } else {
             for (int i = 0; i < len; i++) {
                 if (payload[i] == DSTAR_SLOW_FILL)
