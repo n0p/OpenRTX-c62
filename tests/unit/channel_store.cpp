@@ -42,7 +42,7 @@ class FakeFlash
 {
 public:
     explicit FakeFlash(uint32_t size = CHSTORE_PARTITION_SIZE)
-        : mem(size, 0xFF), budget(-1), dead(false), erases(0)
+        : mem(size, 0xFF), budget(-1), dead(false), silent(-1), erases(0)
     {}
 
     /* Lose power after "count" more bytes are erased or written */
@@ -50,12 +50,27 @@ public:
     {
         budget = count;
         dead = false;
+        silent = -1;
+    }
+
+    /*
+     * A device that reports success and programs only "count" more bytes: the
+     * rest stays as it was (erased, here).  Flash chips do this when a page
+     * boundary is crossed or when the chip goes busy mid-transfer, and the
+     * driver's write() has no way to tell.
+     */
+    void lieAfter(int64_t count)
+    {
+        silent = count;
+        budget = -1;
+        dead = false;
     }
 
     void clearFault()
     {
         budget = -1;
         dead = false;
+        silent = -1;
     }
 
     bool faulted() const { return dead; }
@@ -101,6 +116,14 @@ public:
         if (dead)
             return -1;
 
+        if (silent >= 0) {
+            size_t n = (silent < (int64_t)len) ? (size_t)silent : len;
+
+            memcpy(&mem[off], buf, n);
+            silent = 0;
+            return 0;   /* success, and only part of the buffer landed */
+        }
+
         if (budget >= 0) {
             if (budget < (int64_t)len) {
                 memcpy(&mem[off], buf, (size_t)budget);
@@ -118,6 +141,7 @@ public:
     std::vector<uint8_t> mem;
     int64_t budget;
     bool dead;
+    int64_t silent;
     int erases;
 };
 
@@ -747,4 +771,89 @@ TEST_CASE("A stored channel fills the RTX configuration, DMR included",
     REQUIRE(st.dmr_timeslot == 2);
 
     REQUIRE(chstore_applySettings(9, &st) < 0);
+}
+
+/*
+ * A delete whose write fails has to leave RAM describing the bank on flash.
+ *
+ * The rollback used to move the tail back one place on top of a record the
+ * shift had already overwritten, so undoing the delete of "b" from [a,b,c,d]
+ * produced [a,c,c,d]: one channel lost and another duplicated, and the next
+ * save persisted the corruption.  The operator saw "DELETE FAILED" on a list
+ * that no longer matched what the radio had.
+ */
+TEST_CASE("A failed delete leaves RAM describing the bank on flash",
+          "[chstore]")
+{
+    TestBank tb;
+    fillThree(tb);
+
+    const std::vector<uint8_t> golden = tb.flash.mem;
+    const size_t total = CHSTORE_SLOT_SIZE + sizeof(chstore_hdr_t) +
+                         2 * sizeof(chstore_channel_t);
+
+    for (size_t cut = 0; cut <= total; cut += 7) {
+        tb.flash.mem = golden;
+        tb.boot();
+
+        tb.flash.cutAfter((int64_t)cut);
+        int ret = chstore_delete(1);
+
+        /* Same bank in RAM and on flash, whichever way the write went */
+        REQUIRE(chstore_count() == ((ret == 0) ? 2 : 3));
+        REQUIRE(nameOf(0) == "ALPHA");
+        REQUIRE(nameOf(1) == ((ret == 0) ? "CHARLIE" : "BRAVO"));
+        if (ret != 0)
+            REQUIRE(nameOf(2) == "CHARLIE");
+
+        tb.boot();
+
+        REQUIRE(chstore_count() == ((ret == 0) ? 2 : 3));
+        REQUIRE(nameOf(0) == "ALPHA");
+        REQUIRE(nameOf(1) == ((ret == 0) ? "CHARLIE" : "BRAVO"));
+        if (ret != 0)
+            REQUIRE(nameOf(2) == "CHARLIE");
+    }
+}
+
+/*
+ * A payload that the device reports as written but did not program must not
+ * make its slot the current one.
+ *
+ * bankWrite() only re-read the header, which is written first and completely,
+ * so a payload cut short still validated: the broken slot became the active
+ * one and the next save erased the only slot with a good bank -- and the radio
+ * booted without channels after the second failure.
+ */
+TEST_CASE("A write that lands short is caught by the payload read-back",
+          "[chstore]")
+{
+    TestBank tb;
+    fillThree(tb);
+
+    /* The header goes in whole, ten bytes of the payload follow it */
+    tb.flash.lieAfter((int64_t)(sizeof(chstore_hdr_t) + 10));
+
+    chstore_channel_t edit = makeChannel("ALPHA-2", 145500000, 145500000);
+    REQUIRE(chstore_set(0, &edit) != 0);
+
+    /* RAM still says what the flash says, and the bank is the old one */
+    REQUIRE(nameOf(0) == "ALPHA");
+
+    tb.boot();
+    REQUIRE(chstore_count() == 3);
+    REQUIRE(nameOf(0) == "ALPHA");
+
+    /*
+     * And the good slot is still the good slot: the next save can fail too and
+     * the bank is not lost.
+     */
+    tb.flash.lieAfter(0);
+    REQUIRE(chstore_delete(0) != 0);
+
+    tb.boot();
+    REQUIRE(chstore_count() == 3);
+    REQUIRE(nameOf(0) == "ALPHA");
+    REQUIRE(nameOf(1) == "BRAVO");
+    REQUIRE(nameOf(2) == "CHARLIE");
 }

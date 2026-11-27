@@ -49,6 +49,15 @@ extern "C" {
 /** Erase sector size assumed by the store. */
 #define CHSTORE_SECTOR_SIZE 0x1000
 
+/**
+ * Size of the read-back chunks used to confirm a write, bytes.
+ *
+ * The bank is checked against the flash after every save: a device that reports
+ * a successful write and then drops the tail of it would otherwise be adopted
+ * as the newest slot, and the next save would erase the good one.
+ */
+#define CHSTORE_VERIFY_CHUNK 64
+
 /** Magic value of the record header: "CRTS". */
 #define CHSTORE_MAGIC 0x53545243U
 
