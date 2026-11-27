@@ -1159,36 +1159,90 @@ const char *radio_txRefusedReason(void)
     return txRefusedReason;
 }
 
-void radio_disableRtx()
-{
-    bb_mark(BB_M_TX_OFF);
+/*
+ * The three transmit enable lines, as the REG_33 bits they are.
+ *
+ * PA_VHF_EN (pin 2), PA_UHF_EN (pin 3) and ALC_TX_LED_EN (pin 4) hang from the
+ * BK4819's own GPIOs, not from pins of this MCU: there is no way to drop them
+ * without a bus transaction, and the "PA off" of this board is a register
+ * write.  What can be avoided is everything else happening first.
+ */
+static constexpr uint16_t PA_LATCH_MASK = 0x001Cu;
 
+/**
+ * Drop the three transmit lines, in one register access.
+ *
+ * One read-modify-write of REG_33 for the whole group, instead of the three
+ * the per-pin helpers issue: the three bits are one latch, so either all of
+ * them are off or the teardown has not started, and it is the shortest path
+ * this hardware offers between "the driver decided" and "the PA is off".
+ *
+ * @return true when the register write completed.
+ */
+static bool paLinesDown()
+{
+    return bk4819_maskSetRegister(&c62_bk4819, 0x33, PA_LATCH_MASK, 0) == 0;
+}
+
+/**
+ * End a transmission.
+ *
+ * @param force: true for the emergency cut, where the lines go down before
+ *               anything else and no ramp is worth waiting for.
+ */
+static void radio_endTx(bool force)
+{
     /*
-     * The air ends here as far as the driver's clock is concerned: it is the
-     * one place that puts the PA down, so it is the one place that tells the
-     * barrier. Doing it first means a slow teardown (a DSP call, a tuner
-     * power-down) is not counted as air.
+     * The emergency cut first, with nothing in front of it: this is what
+     * paCut() runs when the RTX thread has been keyed past the driver's own
+     * limit, and the thread that should have unkeyed may be stuck inside a
+     * transfer.  Every microsecond the PA stays up is air, so the one register
+     * write that can bring it down is the first thing that happens.
      */
-    paNoteOff();
+    if (force)
+        paLinesDown();
+
+    bb_mark(BB_M_TX_OFF);
 
 #ifdef CONFIG_C62_AIR_TX
     /*
-     * The airband transmitter is stopped before anything else: the modulator
-     * ramps the carrier down in 16 ms and then releases the APC line, so that
-     * the PA switch is not what cuts the carrier. It is a no-op when the
-     * modulator is not keyed.
+     * The airband transmitter is stopped before the lines in the normal path:
+     * the modulator ramps the carrier down in 16 ms, so that the PA switch is
+     * not what cuts the carrier (and the ramp itself is bus-free: it writes
+     * the PWM, not the chip).  In the emergency cut the lines are already
+     * down, so there is nothing left to ramp and the modulator is stopped
+     * without the 16 ms.
      */
     if (radioMode == OPMODE_AIRBAND)
-        air_tx_key(false);
+    {
+        if (force)
+            air_tx_abort();
+        else
+            air_tx_key(false);
+    }
 #endif
+
+    /*
+     * The lines down before the rest of the teardown, which is a chain of bus
+     * transactions: bk4819_disableCtdcss(), bk4819_disableRtx() and the audio
+     * path all talk to a chip, and the one that matters is the one that turns
+     * the PA off.
+     */
+    if (!force)
+        paLinesDown();
+
+    /*
+     * The air ends when the lines are down, not when the decision was taken:
+     * the 16 ms ramp and the teardown are not air, and this is the clock the
+     * 95 s barrier reads.  It used to be called first, which made the count
+     * optimistic by the length of whatever came after it.
+     */
+    paNoteOff();
 
     bk4819_disableCtdcss(&c62_bk4819);
 
     gpioDev_clear(LNA_VHF_EN);
     gpioDev_clear(LNA_UHF_EN);
-    gpioDev_clear(PA_VHF_EN);
-    gpioDev_clear(PA_UHF_EN);
-    gpioDev_clear(ALC_TX_LED_EN);
 
     if (radioMode == OPMODE_WFM_BC) {
         /*
@@ -1214,6 +1268,11 @@ void radio_disableRtx()
 
     bk4819_disableRtx(&c62_bk4819);
     radioStatus = OFF;
+}
+
+void radio_disableRtx()
+{
+    radio_endTx(false);
 }
 
 /**
@@ -1280,9 +1339,8 @@ bool radio_paForceOff(void)
     bool off = false;
     for (unsigned attempt = 0; attempt < 3; attempt++)
     {
-        gpioDev_clear(PA_VHF_EN);
-        gpioDev_clear(PA_UHF_EN);
-        gpioDev_clear(ALC_TX_LED_EN);
+        /* One access for the three lines, as in every other down path */
+        paLinesDown();
 
         if (paLatchOff())
         {
@@ -1304,9 +1362,12 @@ bool radio_paForceOff(void)
  * The driver barrier fired: the keying has lasted the limit plus the margin.
  *
  * Runs in the system work queue, not in the RTX thread, because the RTX thread
- * is exactly what may be stuck. The PA goes first and the rest of the teardown
- * follows the normal unkey path; the clock stays blocked, so nothing keys
- * again until the radio has been off the air for a release.
+ * is exactly what may be stuck.  The transmit lines are the first thing that
+ * happens -- one REG_33 write, in radio_endTx(true) -- before the ramp, before
+ * the chip's turn-off sequence and before the audio teardown, all of which are
+ * bus transactions that a stuck RTX thread may be blocking.  The clock stays
+ * blocked, so nothing keys again until the radio has been off the air for a
+ * release.
  */
 static void paCut(struct k_work *work)
 {
@@ -1318,7 +1379,7 @@ static void paCut(struct k_work *work)
     txw_sample(&paWatch, now, true);
     txw_tick(&paWatch, now);
 
-    radio_disableRtx();
+    radio_endTx(true);
 
     printk("PA: TX BARRIER %us: driver cut the PA, air=%lums cuts=%lu\n",
            (unsigned int)(TXW_DRIVER_LIMIT_MS / 1000),
