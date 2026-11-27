@@ -614,8 +614,9 @@ static bool tmsDecode(const uint8_t *p, int len, bool *isAck, bool *wantAck,
     return true;
 }
 
-/* The answers a message to us asks for */
 /*
+ * The answers a message to us asks for.
+ *
  * The answering scratch.  A confirmed response is one burst, a TMS ACK is
  * a preamble chain, but the arrays were sized for the longest of either and
  * reserved on every call -- 624 bytes of stack, in the rtx thread, for an
