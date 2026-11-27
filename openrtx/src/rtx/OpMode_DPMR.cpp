@@ -319,6 +319,14 @@ bool OpMode_DPMR::startTx(const rtxStatus_t *status)
     txHalf = 0;
     txTail = 0;
     txRunning = true;
+    /*
+     * A new transmission waits for its own first block: putHalf() reports
+     * txg_firstBlock() only when this is false, and a flag left set by the
+     * previous over made the guard -- already in WAIT_FIRST -- take txg_block()
+     * for this one, which that phase ignores, until TXG_FIRST_MS expired and
+     * the supervisor aborted the second press 300 ms in (see OpMode_NXDN).
+     */
+    txFirstBlock = false;
 
     txg_streamsOpen(guard, (uint32_t)getTick());
     radio_enableTx();

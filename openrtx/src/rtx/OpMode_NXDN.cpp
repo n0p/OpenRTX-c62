@@ -219,6 +219,14 @@ bool OpMode_NXDN::startTx(const rtxStatus_t *status)
     txPreamble = NXDN_TX_PREAMBLE_HALVES;
     txTail = 0;
     txRunning = true;
+    /*
+     * A new transmission waits for its own first block: putHalf() reports
+     * txg_firstBlock() only when this is false, and a flag left set by the
+     * previous over made the guard -- already in WAIT_FIRST -- take txg_block()
+     * for this one, which that phase ignores, until TXG_FIRST_MS expired and
+     * the supervisor aborted the second press 300 ms in.
+     */
+    txFirstBlock = false;
 
     txg_streamsOpen(guard, (uint32_t)getTick());
     radio_enableTx();
@@ -311,7 +319,14 @@ bool OpMode_NXDN::txSlot(const rtxStatus_t *status)
         txStage = 2;
         txHalf = 0;
         txReleaseFrames = 0;
-        txg_finishing(rtx_getTxGuard(), (uint32_t)getTick());
+        /*
+         * No txg_finishing() here: the release is a superframe of TX_REL
+         * messages (four frames, 320 ms) that is still the call, and the drain
+         * budget (TXG_DRAIN_MS, 160 ms) would cut the PA in the middle of it on
+         * every transmission.  The tail starts when the superframe is out, and
+         * that is where the guard is told the transmission is finishing; the
+         * absolute cap (TXG_MAX_TX_MS) and the 90 s clock cover the rest.
+         */
     }
 
     if (txStage == 3) {
@@ -354,6 +369,9 @@ bool OpMode_NXDN::txSlot(const rtxStatus_t *status)
                 txStage = 1;
         } else if ((txStage == 2) && (++txReleaseFrames >= NXDN_SUPERFRAME)) {
             txStage = 3;
+            /* The release is on the air: from here what is left is the tail,
+             * and it has a budget (TXG_DRAIN_MS) it meets. */
+            txg_finishing(rtx_getTxGuard(), (uint32_t)getTick());
         }
     }
 
