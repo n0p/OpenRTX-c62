@@ -64,7 +64,8 @@ void _setVolume()
 }
 #endif
 
-OpMode_FM::OpMode_FM() : rfSqlOpen(false), sqlOpen(false), enterRx(true)
+OpMode_FM::OpMode_FM() : rfSqlOpen(false), sqlOpen(false), enterRx(true),
+                         txBlocked(false)
 {
 }
 
@@ -78,6 +79,7 @@ void OpMode_FM::enable()
     rfSqlOpen = false;
     sqlOpen   = false;
     enterRx   = true;
+    txBlocked = false;
 }
 
 void OpMode_FM::disable()
@@ -100,6 +102,16 @@ void OpMode_FM::disable()
 void OpMode_FM::update(rtxStatus_t *const status, const bool newCfg)
 {
     (void) newCfg;
+
+    /*
+     * An aborted over does not key again until the operator lets go: the
+     * supervisor cuts the PA with the PTT still held, and without this the mode
+     * would ask for it again on the next pass.  The key gate needs a release
+     * after a clock cut for the same reason; this is the second lock, and it is
+     * the one that also covers an abort the gate knows nothing about.
+     */
+    if (platform_getPttStatus() == false)
+        txBlocked = false;
 
     #if defined(PLATFORM_TTWRPLUS)
     // Set output volume by changing the HR_C6000 DAC gain
@@ -190,7 +202,7 @@ void OpMode_FM::update(rtxStatus_t *const status, const bool newCfg)
             aprs_pkt_t kind = APRS_PKT_NONE;
             if(aprs_txPrepare(info, sizeof(info), &kind, now))
             {
-                aprsSendPacket(info);
+                aprsSendPacket(status, info);
                 aprs_txDone(kind, (uint32_t)getTick());
             }
         }
@@ -202,7 +214,7 @@ void OpMode_FM::update(rtxStatus_t *const status, const bool newCfg)
      * The gate decides, not the level of the PTT line: a change of mode cannot
      * key the radio, and the press has to be one the operator made after it.
      */
-    if(rtx_keyingAllowed(status) && (status->opStatus != TX))
+    if(rtx_keyingAllowed(status) && (status->opStatus != TX) && (txBlocked == false))
     {
         audioPath_release(rxAudioPath);
         radio_disableRtx();
@@ -296,6 +308,31 @@ bool OpMode_FM::rxSquelchOpen()
     return sqlOpen;
 }
 
+void OpMode_FM::abortTx()
+{
+    /*
+     * The supervisor unkeyed the radio from another thread (a stuck PTT, the
+     * five-minute cap, the watchdog) and left the status at OFF.  Two things
+     * are owed here: the microphone path is still open and nobody else is going
+     * to close it, and the mode has to ask for the receiver again -- the OFF
+     * branch of update() only re-enters receive with enterRx set, so without it
+     * the radio stays mute with the chip receiving until the next PTT press.
+     */
+    if (txAudioPath > 0)
+    {
+        audioPath_release(txAudioPath);
+        txAudioPath = 0;
+    }
+
+    txg_exit(rtx_getTxGuard(), (uint32_t)getTick(), TXG_REASON_MODE);
+    modeStats_txEnd(MS_MODE_FM);
+
+    txBlocked = true;
+    enterRx   = true;
+    sqlOpen   = false;
+    rfSqlOpen = false;
+}
+
 #ifdef CONFIG_APRS
 
 void OpMode_FM::aprsReceiveStep(bool channelOpen)
@@ -320,7 +357,7 @@ void OpMode_FM::aprsReceiveStep(bool channelOpen)
         aprs_rxPoll();
 }
 
-void OpMode_FM::aprsSendPacket(const char *info)
+void OpMode_FM::aprsSendPacket(rtxStatus_t *const status, const char *info)
 {
     /* Build the frame: our callsign and SSID, APRS as destination, the
      * digipeater path from the settings. */
@@ -346,7 +383,11 @@ void OpMode_FM::aprsSendPacket(const char *info)
 
     /*
      * The radio is going to be keyed: both receive paths go away, the packet
-     * goes out, and the mode returns to RX afterwards.
+     * goes out, and the mode returns to RX afterwards.  Every way out of this
+     * function after this point has to leave the mode asking for the receiver
+     * again: the chip is disabled here, and a mode that still says RX waits for
+     * a squelch that can never open (the update loop only re-enters receive
+     * from OFF with enterRx set) -- a radio that goes deaf after every beacon.
      */
     if(aprs_rxActive())
         aprs_rxEnd();
@@ -357,6 +398,8 @@ void OpMode_FM::aprsSendPacket(const char *info)
     if(txPath < 0)
     {
         radio_disableRtx();
+        status->opStatus = OFF;
+        enterRx = true;
         return;
     }
 
@@ -367,6 +410,8 @@ void OpMode_FM::aprsSendPacket(const char *info)
     {
         audioPath_release(txPath);
         radio_disableRtx();
+        status->opStatus = OFF;
+        enterRx = true;
         return;
     }
 
@@ -375,10 +420,14 @@ void OpMode_FM::aprsSendPacket(const char *info)
     {
         /*
          * The gate refused: a mode change is in progress, or the radio has not
-         * settled since the last one. Nothing is keyed; put the paths back.
+         * settled since the last one. Nothing is keyed; put the paths back and
+         * ask for the receiver again, the same way the other exits do.
          */
         audioStream_stop(txStream);
         audioPath_release(txPath);
+        radio_disableRtx();
+        status->opStatus = OFF;
+        enterRx = true;
         return;
     }
     platform_ledOn(RED);
@@ -447,6 +496,11 @@ void OpMode_FM::aprsSendPacket(const char *info)
     audioPath_release(txPath);
     radio_disableRtx();
     platform_ledOff(RED);
+
+    /* The packet is over: leave the mode asking for the receiver, which the
+     * next update pass turns into radio_enableRx(). */
+    status->opStatus = OFF;
+    enterRx = true;
 }
 
 #endif /* CONFIG_APRS */

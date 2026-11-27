@@ -75,11 +75,19 @@ public:
      */
     virtual bool rxSquelchOpen() override;
 
+    /**
+     * The supervisor cut a transmission this mode owned: close the microphone
+     * path and ask for the receiver again, without waiting for a PTT release
+     * that may never come.
+     */
+    virtual void abortTx() override;
+
 private:
 
     bool   rfSqlOpen;   ///< Flag for RF squelch status (analog squelch).
     bool   sqlOpen;     ///< Flag for squelch status.
     bool   enterRx;     ///< Flag for RX management.
+    bool   txBlocked;   ///< An aborted over waits for the PTT to be released
     pathId rxAudioPath; ///< Audio path ID for RX
     pathId txAudioPath; ///< Audio path ID for TX
 
@@ -91,7 +99,7 @@ private:
      * unkeys and leaves the mode ready to receive again. Blocks for the
      * duration of the packet (under two seconds), like the digital modes do.
      */
-    void aprsSendPacket(const char *info);
+    void aprsSendPacket(rtxStatus_t *const status, const char *info);
 
     /** Receive step: open, poll or close the APRS tap. */
     void aprsReceiveStep(bool squelchOpen);
