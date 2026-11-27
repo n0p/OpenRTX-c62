@@ -164,3 +164,8 @@ __attribute__((weak)) bool dstarVocoder_available(void)
 {
     return false;
 }
+
+/* Weak default: no 2400 core linked, so there is no state to forget */
+__attribute__((weak)) void dstarVocoder_reset(void)
+{
+}

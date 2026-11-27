@@ -116,6 +116,12 @@ private:
     /** Refuse this over: block the PTT until it is released, say why. */
     bool txRefuse(const char *why);
     bool startDataTx(const rtxStatus_t *status);
+    /** A data call that did not open: wait, retry, give up after a few */
+    void dataTxRetry();
+    /** The queued list did not go out: drop it and report it failed */
+    void dataGiveUp();
+    /** The list reached the air whole */
+    void dataTxSucceeded();
     void stopTx();
     uint8_t txTimeslot(const rtxStatus_t *status) const;
     bool txSlot(const rtxStatus_t *status);
@@ -138,6 +144,11 @@ private:
     bool txAligned;       ///< Through a repeater: aligned to its TS1
     bool txSaidStream;    ///< The lost-sink line has been printed for this over
     size_t txSilence;     ///< Samples of alignment silence still to write
+
+    /* The unattended data transmission's lockout: when it may be tried again,
+     * and how many times in a row it could not open (see dataTxRetry()) */
+    uint32_t dataRetryAt;
+    uint8_t dataTries;
 
     pathId micPath;
     streamId micId;

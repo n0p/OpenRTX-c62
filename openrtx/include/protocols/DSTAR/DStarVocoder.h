@@ -106,6 +106,16 @@ int dstarVocoder_decode(const uint8_t air[DSTAR_VOICE_BYTES],
 /** @return true when a 2400 decoder is linked in (i.e. audio will play). */
 bool dstarVocoder_available(void);
 
+/**
+ * @brief Forget the previous talker: pitch, phases, noise and error history.
+ *
+ * Called when a transmission starts.  A weak no-op here keeps the protocol
+ * layer free of the decoder library; the 2400 core (lib/dstar_vocoder) defines
+ * it, and its state -- which lives in PSRAM on the C62 and is not cleared at
+ * start-up -- is only usable after this has run.
+ */
+void dstarVocoder_reset(void);
+
 #ifdef __cplusplus
 }
 #endif

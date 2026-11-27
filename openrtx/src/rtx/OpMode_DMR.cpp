@@ -84,6 +84,15 @@
 #define DMR_TX_HEADERS 2
 /* Bursts of silence after the terminator before the PA goes off */
 #define TX_TAIL_SLOTS 2
+/*
+ * A data call that could not open waits this long before it is tried again,
+ * and this many consecutive failures drop the queued list.  Nobody presses
+ * anything for a short message: without a wait the mode tears the receiver
+ * down, tries to key and remounts it on every 30 ms pass, and without a bound
+ * it does so for ever.
+ */
+#define DMR_DATA_RETRY_MS 2000
+#define DMR_DATA_MAX_TRIES 3
 #endif
 
 OpMode_DMR::OpMode_DMR()
@@ -109,6 +118,8 @@ OpMode_DMR::OpMode_DMR()
     , txAligned(false)
     , txSaidStream(false)
     , txSilence(0)
+    , dataRetryAt(0)
+    , dataTries(0)
     , micPath(-1)
     , micId(-1)
     , txPath(-1)
@@ -140,6 +151,14 @@ void OpMode_DMR::reset()
 {
     settle = SETTLE_SAMPLES;
     dataErrors = 0;
+#ifdef CONFIG_DMR_TX
+    /*
+     * A different channel is a different attempt: the retry that was waiting
+     * for its turn does not follow the operator there.
+     */
+    dataTries = 0;
+    dataRetryAt = 0;
+#endif
     dmr_demod_reset();
     dmr_proto_reset();
     dmr_voice_reset();
@@ -738,6 +757,25 @@ bool OpMode_DMR::txSlot(const rtxStatus_t *status)
 
 bool OpMode_DMR::needDataTx(const rtxStatus_t *status) const
 {
+    if ((status->opStatus != RX) && (status->opStatus != OFF))
+        return false;
+    if (txBlocked)
+        return false;
+
+    /*
+     * A level the driver cannot use is not a reason to keep keying: it refuses
+     * every time, and each refusal costs the receiver that was remounted for
+     * it.  The same for a call that just failed: it waits its turn instead of
+     * coming straight back on the next pass.  Both are answered before the
+     * gate, so a transmission that will not be attempted does not leave an
+     * unattended grant behind.
+     */
+    if (status->txPower == 0)
+        return false;
+    if ((dataTries > 0)
+        && ((int32_t)((uint32_t)getTick() - dataRetryAt) < 0))
+        return false;
+
     /*
      * A queued message is the only transmission in this radio that starts with
      * nobody pressing anything, so it is the one that most needs the gate: it
@@ -745,10 +783,6 @@ bool OpMode_DMR::needDataTx(const rtxStatus_t *status) const
      * PTT down during it.
      */
     if (!rtx_unattendedTxAllowed(status))
-        return false;
-    if (txBlocked)
-        return false;
-    if ((status->opStatus != RX) && (status->opStatus != OFF))
         return false;
 
 #ifdef CONFIG_DMR_SMS
@@ -802,6 +836,54 @@ bool OpMode_DMR::startDataTx(const rtxStatus_t *status)
     txg_note(guard, TXG_EV_KEYED, (uint32_t)getTick());
     modeStats_txKey(MS_MODE_DMR, (uint32_t)getTick());
     return true;
+}
+
+/**
+ * A data call that did not open: wait, retry a few times, then give up.
+ *
+ * The PTT is the lockout for an over that fails with an operator pressing it
+ * (txRefuse holds the call until the line is released).  A message has nobody
+ * to release it: without a wait the mode comes straight back on the next pass,
+ * and without a bound it never stops.  Each refusal costs the receiver that
+ * needDataTx() had to unmount, so the retry is spaced out as well as limited.
+ */
+void OpMode_DMR::dataTxRetry()
+{
+    dataRetryAt = (uint32_t)getTick() + DMR_DATA_RETRY_MS;
+
+    if (dataTries < 0xFF)
+        dataTries++;
+
+    if (dataTries >= DMR_DATA_MAX_TRIES)
+        dataGiveUp();
+}
+
+/**
+ * Drop the queued list: it did not go out, and it will not be tried again.
+ *
+ * The package's queue is what needDataTx() is answered by, so dropping the
+ * list is what ends the retries; the entry core/messaging is holding is
+ * reported failed here because the package's expiry has no way to say so.
+ */
+void OpMode_DMR::dataGiveUp()
+{
+    dataTries = 0;
+    dataRetryAt = 0;
+
+#ifdef CONFIG_DMR_SMS
+    dmrSms_txDone(false);
+    if (smsTxId >= 0) {
+        messaging_done(smsTxId, false, 0, (uint32_t)getTick());
+        smsTxId = -1;
+    }
+#endif
+}
+
+/** The list reached the air whole: the next one starts with a clean count. */
+void OpMode_DMR::dataTxSucceeded()
+{
+    dataTries = 0;
+    dataRetryAt = 0;
 }
 
 /**
@@ -950,6 +1032,19 @@ void OpMode_DMR::update(rtxStatus_t *const rtx, const bool newCfg)
                  * delivery response, which arrives later (smsPoll), so a call
                  * whose bursts went out is reported as sent, not as failed.
                  */
+                if (wasData) {
+                    /*
+                     * A call that ends with bursts of its list still queued
+                     * (the sink stopped consuming, the stream was cancelled)
+                     * must not key again for them: needDataTx() would answer
+                     * yes on the next pass, and the next, for the rest of the
+                     * list -- up to 48 bursts with nobody pressing anything.
+                     */
+                    if (smsDataSent)
+                        dataTxSucceeded();
+                    else
+                        dataGiveUp();
+                }
                 if (wasData && (smsTxId >= 0)) {
                     messaging_done(smsTxId, smsDataSent, 0,
                                    (uint32_t)getTick());
@@ -999,6 +1094,7 @@ void OpMode_DMR::update(rtxStatus_t *const rtx, const bool newCfg)
             return;
         }
         startRx = true;
+        dataTxRetry();
     }
 #endif
 
