@@ -1126,7 +1126,18 @@ static bool paLatchOff(void)
 {
     /* The output latch of pin n is bit (0x0040 >> n) of REG_33 */
     const uint16_t txMask = (0x0040u >> 2) | (0x0040u >> 3) | (0x0040u >> 4);
-    const uint16_t reg = bk4819_readReg(&c62_bk4819, 0x33);
+    uint16_t reg;
+
+    /*
+     * A read that did not complete is not proof of anything.  Answering "not
+     * off" is the safe direction: radio_paForceOff() retries and reports the
+     * radio as keyed, and radio_txPathOff() never lets an unproven latch count
+     * as an off one.  This used to return the contents of an uninitialised
+     * stack buffer when the transfer failed, which could "prove" that a keyed
+     * PA was off.
+     */
+    if (bk4819_readRegChecked(&c62_bk4819, 0x33, &reg) < 0)
+        return false;
 
     return (reg & txMask) == 0;
 }

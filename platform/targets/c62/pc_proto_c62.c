@@ -616,7 +616,10 @@ int pc_proto_platformDiag(pcProtoDiag_t *out)
 int pc_proto_platformReg(int chip, uint8_t reg, uint16_t *value)
 {
     if (chip == 0) {
-        *value = bk4819_readReg(&c62_bk4819, reg);
+        /* -1 when the transfer did not complete: the client sees an error
+         * instead of a made-up register value. */
+        if (bk4819_readRegChecked(&c62_bk4819, reg, value) < 0)
+            return -1;
         return 0;
     }
     if (chip == 1) {

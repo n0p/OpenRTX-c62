@@ -123,24 +123,67 @@ static const struct spiDevice *busOf(const struct BK4819 *dev, bool fast)
     return dev->spi;
 }
 
-static uint16_t readRegOn(const struct BK4819 *dev, const struct spiDevice *spi,
-                          uint8_t reg)
+/*
+ * Read one register and say whether the transfer completed.
+ *
+ * The SPI layer returns a negative error code when the bus did not deliver
+ * (spiZephyr_transfer() passes Zephyr's own), and this driver used to ignore
+ * all three results while returning whatever was in an uninitialised stack
+ * buffer.  A register read is the evidence the transmit path is built on --
+ * radio_txPathOff() proves the PA is off by reading REG_33 -- so a failure has
+ * to reach the caller, not become the value of the register.
+ *
+ * @return zero on success and the value in *out; a negative error code
+ *         otherwise, with *out untouched.
+ */
+static int readRegChecked(const struct BK4819 *dev, const struct spiDevice *spi,
+                          uint8_t reg, uint16_t *out)
 {
     const uint8_t cmd = reg | BK4819_REG_READ;
-    uint8_t rx[2];
+    uint8_t rx[2] = { 0, 0 };
+    int ret;
 
-    spi_acquire(spi);
+    if (spi_acquire(spi) < 0)
+        return -EBUSY;
+
     gpioPin_clear(&dev->scn);
     delayUs(1);
 
-    spi_send(spi, &cmd, 1);
-    spi_receive(spi, rx, sizeof(rx));
+    ret = spi_send(spi, &cmd, 1);
+    if (ret == 0)
+        ret = spi_receive(spi, rx, sizeof(rx));
 
+    /* Chip select goes back up whatever happened: left selected, the chip's
+     * interface stays busy for whatever transfer comes next. */
     delayUs(1);
     gpioPin_set(&dev->scn);
     spi_release(spi);
 
-    return ((uint16_t)rx[0] << 8) | rx[1];
+    if (ret < 0)
+        return ret;
+
+    *out = ((uint16_t)rx[0] << 8) | rx[1];
+
+    return 0;
+}
+
+/**
+ * Read one register over the slow bus, without a failure channel.
+ *
+ * Used by the callers whose answer is a scalar (the S-meter, the glitch
+ * counter): a failed read is a zero, which those keep as "no level" rather
+ * than as a measurement.  Everything that acts on the value -- the register
+ * read-modify-write, the PA latch, the debug protocol -- uses
+ * bk4819_readRegChecked() instead.
+ */
+static uint16_t readRegOn(const struct BK4819 *dev, const struct spiDevice *spi,
+                          uint8_t reg)
+{
+    uint16_t value = 0;
+
+    (void)readRegChecked(dev, spi, reg, &value);
+
+    return value;
 }
 
 static void writeRegOn(const struct BK4819 *dev, const struct spiDevice *spi,
@@ -169,16 +212,37 @@ uint16_t bk4819_readReg(const struct BK4819 *dev, uint8_t reg)
     return readRegOn(dev, dev->spi, reg);
 }
 
+int bk4819_readRegChecked(const struct BK4819 *dev, uint8_t reg, uint16_t *out)
+{
+    return readRegChecked(dev, dev->spi, reg, out);
+}
+
 void bk4819_writeReg(const struct BK4819 *dev, uint8_t reg, uint16_t data)
 {
     writeRegOn(dev, dev->spi, reg, data);
 }
 
-void bk4819_maskSetRegister(const struct BK4819 *dev, uint8_t reg,
-                            uint16_t mask, uint16_t value)
+int bk4819_maskSetRegister(const struct BK4819 *dev, uint8_t reg,
+                           uint16_t mask, uint16_t value)
 {
-    uint16_t current = bk4819_readReg(dev, reg);
-    bk4819_writeReg(dev, reg, (current & ~mask) | (value & mask));
+    uint16_t current = 0;
+    int ret = readRegChecked(dev, dev->spi, reg, &current);
+
+    /*
+     * A failed read still writes, with the unread bits taken as zero.
+     *
+     * This is the register path of REG_33, and REG_33 is what drives the PA,
+     * the ALC and the LNA switches: the last chance to change a register that
+     * may be keying must not be thrown away because the read before it failed.
+     * A zero base also lands on the safe side of every register this function
+     * touches -- REG_33 has all the pins deasserted and every pin an output,
+     * REG_30 has the PA gain and the TX DSP off, REG_43 keeps the fields the
+     * mask carries.  The error still reaches the caller, which is what decides
+     * whether the result counts as proof.
+     */
+    writeRegOn(dev, dev->spi, reg, (current & ~mask) | (value & mask));
+
+    return ret;
 }
 
 void bk4819_init(const struct BK4819 *dev)
