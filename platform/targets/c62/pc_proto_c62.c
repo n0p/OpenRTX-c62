@@ -636,9 +636,44 @@ int pc_proto_platformReg(int chip, uint8_t reg, uint16_t *value)
     return -1;
 }
 
+/*
+ * REG_30 carries two kinds of bit: the audio path a bench session writes it
+ * for (AF DAC, discriminator, RX DSP) and the two that start the chip's
+ * transmitter on their own -- PA gain and the TX DSP.  The register itself is
+ * on the protocol's whitelist on purpose (pc_proto_dbg.c), and the PA enable
+ * latch of REG_33, which is what puts the radio on the air, is not writable
+ * from the cable at all.  What is left is a carrier with nobody asking for it:
+ * writing those two bits while the driver is not transmitting is refused, and
+ * the audio-path bits stay writable so the bench keeps what the whitelist is
+ * for.
+ */
+#define REG30_TX_ENABLE_BITS (BIT(3) | BIT(1))
+
+static bool regStartsTransmitter(uint8_t reg, uint16_t value)
+{
+    if (reg != 0x30)
+        return false;
+
+    return ((value & REG30_TX_ENABLE_BITS) != 0) &&
+           (radio_getStatus() != TX);
+}
+
 int pc_proto_platformRegWrite(int chip, uint8_t reg, uint16_t value)
 {
     if (chip == 0) {
+        if (regStartsTransmitter(reg, value)) {
+            static uint32_t refusedAt = 0;
+            const uint32_t now = k_uptime_get_32();
+
+            if ((uint32_t)(now - refusedAt) >= 1000) {
+                refusedAt = now;
+                printk("pcproto: REG_30 = %04x would key the transmitter, "
+                       "refused (the bench PTT asks the gate)\n",
+                       value);
+            }
+            return -1;
+        }
+
         bk4819_writeReg(&c62_bk4819, reg, value);
         return 0;
     }
