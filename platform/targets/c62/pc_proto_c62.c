@@ -693,12 +693,26 @@ int pc_proto_platformCapture(int op, pcProtoCapture_t *st, uint8_t *buf,
         case PC_CAP_OP_STATUS:
             *st = cap;
             return 0;
-        case PC_CAP_OP_READ:
-            if (off >= cap.written || off + count > cap.written)
+        case PC_CAP_OP_READ: {
+            /*
+             * off and count come from a frame, not from this firmware, and
+             * they are 32-bit: `off + count > cap.written` passes for
+             * off = 0x100, count = 0xFFFFFF00 because the sum wraps to zero,
+             * and the memcpy below then reads ~4 GiB out of PSRAM.  Checked as
+             * a subtraction, which cannot wrap, and against the capture's own
+             * capacity before it becomes a byte length.
+             */
+            const uint32_t written = cap.written;
+
+            if ((off >= written) || (count > (written - off)) ||
+                (count > (uint32_t)CAP_MAX))
                 return -1;
+
             memcpy(buf, &capBuffer[off], (size_t)count * 2);
             cap.read = off + count;
             return (int)count;
+        }
+
         default:
             return -1;
     }
