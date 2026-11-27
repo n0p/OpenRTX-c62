@@ -221,12 +221,18 @@ int msg_service_queue(enum msgTransport tp, const char *peer, const char *text,
 
 bool msg_service_cancel(int id, uint32_t now)
 {
-    struct message *m = messaging_find(id);
+    /*
+     * Everything this needs from the message is taken by value before the
+     * cancel: the entry's slot can be reused the moment messaging_cancel()
+     * returns, and reading the text through the pointer afterwards cancelled
+     * messages by a text nobody had written yet.
+     */
+    struct message m;
 
-    if (m == NULL)
+    if (messaging_copy(id, &m) != 0)
         return false;
-    if ((m->state == MSG_STATE_DELIVERED) || (m->state == MSG_STATE_SENT)
-        || (m->state == MSG_STATE_CANCELLED))
+    if ((m.state == MSG_STATE_DELIVERED) || (m.state == MSG_STATE_SENT)
+        || (m.state == MSG_STATE_CANCELLED))
         return false;
 
     messaging_cancel(id, now);
@@ -236,7 +242,7 @@ bool msg_service_cancel(int id, uint32_t now)
      * APRS keeps its own retry schedule in the FM mailbox: drop the entry
      * there too, or the service would send it anyway.
      */
-    if (m->transport == MSG_TRANSPORT_APRS) {
+    if (m.transport == MSG_TRANSPORT_APRS) {
         aprs_mbox_t *box = aprs_mailbox();
 
         for (uint8_t i = 0; i < APRS_OUTBOX_MAX; i++) {
@@ -244,8 +250,8 @@ bool msg_service_cancel(int id, uint32_t now)
 
             if (!o->inUse)
                 continue;
-            if ((strncmp(o->peer, m->peer, sizeof(o->peer)) == 0)
-                && (strncmp(o->text, m->text, sizeof(o->text)) == 0))
+            if ((strncmp(o->peer, m.peer, sizeof(o->peer)) == 0)
+                && (strncmp(o->text, m.text, sizeof(o->text)) == 0))
                 o->inUse = false;
         }
     }
