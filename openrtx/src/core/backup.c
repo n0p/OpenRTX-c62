@@ -25,25 +25,6 @@ static int getDataCallback(uint8_t *ptr, size_t size)
     return 0;
 }
 
-static void writeDataCallback(uint8_t *ptr, size_t size)
-{
-    // Trigger sector erase on each 4kB address boundary
-    if((memAddr % 0x1000) == 0)
-    {
-        W25Qx_erase(memAddr, 0x1000);
-    }
-
-    for(size_t written = 0; written < size; )
-    {
-        size_t toWrite = size - written;
-        if(toWrite > 256) toWrite = 256;
-        W25Qx_writePage(memAddr, ptr, toWrite);
-        written += toWrite;
-        memAddr += toWrite;
-        ptr     += toWrite;
-    }
-}
-
 void eflash_dump()
 {
     memAddr = 0;
@@ -51,9 +32,11 @@ void eflash_dump()
     xmodem_sendData(EFLASH_SIZE, getDataCallback);
 }
 
-void eflash_restore()
-{
-    memAddr = 0;
-    W25Qx_wakeup();
-    xmodem_receiveData(EFLASH_SIZE, writeDataCallback);
-}
+/*
+ * There is no eflash_restore() any more: it wrote the whole 16 MB back over
+ * the programming interface -- bootloader included, sectors erased only when a
+ * block happened to start on a 4 KiB boundary, pages written without respecting
+ * the chip's page limit -- and nothing called it.  A restore is
+ * core/backup_image.c now: the radio's own stores, in the radio's own
+ * partition, with the stores' read-back checks (docs/BACKUP.md).
+ */

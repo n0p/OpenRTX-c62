@@ -6,6 +6,9 @@
 
 #include "core/ui.h"
 #include <stdio.h>
+#ifdef __ZEPHYR__
+#include <zephyr/sys/printk.h>
+#endif
 #include <string.h>
 #include <stdlib.h>
 #include "core/event.h"
@@ -19,6 +22,7 @@
 #include "interfaces/nvmem.h"
 #include "core/crc.h"
 #include "core/channel_store.h"
+#include "core/nvm_debounce.h"
 #include "core/scan_service.h"
 #ifdef CONFIG_VFO_SEARCH
 #include "core/vfo_search_service.h"
@@ -43,31 +47,25 @@
 #define NVM_WRITE_DEBOUNCE_MS 3000
 #endif
 
-struct debouncer {
-    long long lastChange;
-    uint16_t crc;
-    bool pending;
-};
+static struct nvmDebounce settingsDebouncer;
+static struct nvmDebounce vfoDebouncer;
 
-static struct debouncer settingsDebouncer;
-static struct debouncer vfoDebouncer;
-
-static bool hasChanged(struct debouncer *db, const void *data, const size_t len)
+/*
+ * A settings or VFO write that does not land used to be invisible: the change
+ * stayed in RAM, the radio behaved as if it were saved and the operator found
+ * out at the next power cycle.  One line per streak -- the retry may fail for
+ * minutes -- puts it in the PC protocol's log ring and on the console.
+ */
+static void logNvmWriteFailure(int ret)
 {
-    uint16_t crc = crc_ccitt(data, len);
-    if (crc != db->crc) {
-        db->crc = crc;
-        db->pending = true;
-        db->lastChange = getTick();
-    } else {
-        long long elapsed = getTick() - db->lastChange;
-        if (db->pending && (elapsed > NVM_WRITE_DEBOUNCE_MS)) {
-            db->pending = false;
-            return true;
-        }
-    }
+    char line[64];
 
-    return false;
+    sniprintf(line, sizeof(line), "nvm: write failed (%d), retrying", ret);
+#ifdef __ZEPHYR__
+    printk("%s\n", line);
+#else
+    printf("%s\n", line);
+#endif
 }
 
 #endif /* NVMEM_DEBOUNCED_WRITE */
@@ -126,6 +124,17 @@ void state_init()
     }
 
     /*
+     * Default channel index, and it comes before anything that can set it: a
+     * VFO leaves it at 0, and the stored-channel block below overwrites it
+     * with the index it restored.  Assigning 0 after that block -- which is
+     * what this used to do, in the inherited "initialise remaining fields"
+     * section -- threw the restored index away while keeping the channel: the
+     * header drew "CH 1" next to another channel's name, the voice prompt
+     * announced the wrong number and the first knob turn skipped a channel.
+     */
+    state.channel_index = 0;
+
+    /*
      * Channels kept by the in-radio editor: come back on the channel that was
      * selected at power-off. With an empty bank the VFO above stays in use.
      */
@@ -136,6 +145,13 @@ void state_init()
         if (idx >= 0 && chstore_toChannel((uint16_t)idx, &ch) == 0) {
             state.channel = ch;
             state.channel_index = (uint16_t)idx;
+            /*
+             * And its DMR call destination, which channel_t cannot carry: the
+             * radio comes back on the talkgroup of the channel it comes back
+             * on, not on whatever the settings record held.
+             */
+            if (ch.mode == OPMODE_DMR)
+                (void)chstore_applySettings((uint16_t)idx, &state.settings);
         }
     }
 
@@ -144,14 +160,14 @@ void state_init()
      * repairs below: a field the firmware has to rewrite at load (a brightness
      * above 100, a power above the PA's ceiling, a VFO with no transmit
      * frequency) has to reach the record once, or every boot repairs RAM and
-     * the flash keeps a value this firmware never accepts.  hasChanged() sees
+     * the flash keeps a value this firmware never accepts.  The debouncer sees
      * the difference on the first pass of state_task() and writes it after the
      * debounce window, like any other change.  Nothing is written when there
      * was nothing to repair, which is the common case.
      */
 #ifdef NVMEM_DEBOUNCED_WRITE
-    settingsDebouncer.crc = crc_ccitt(&state.settings, sizeof(settings_t));
-    vfoDebouncer.crc = crc_ccitt(&state.channel, sizeof(channel_t));
+    nvmDebounce_seed(&settingsDebouncer, &state.settings, sizeof(settings_t));
+    nvmDebounce_seed(&vfoDebouncer, &state.channel, sizeof(channel_t));
 #endif
 
     /*
@@ -165,7 +181,7 @@ void state_init()
     if (state.channel.tx_frequency == 0)
         state.channel.tx_frequency = state.channel.rx_frequency;
 
-/*
+    /*
      * Initialise remaining fields
      */
 #ifdef CONFIG_RTC
@@ -176,7 +192,6 @@ void state_init()
     state.rssi = -127.0f;
     state.volume = platform_getVolumeLevel();
 
-    state.channel_index = 0; // Set default channel index (it is 0-based)
     state.bank_enabled = false;
     state.rtxStatus = RTX_OFF;
     state.emergency = false;
@@ -192,6 +207,19 @@ void state_init()
      * to maximum, so a corrupt record does not become a 5 W setting. */
     if (!settings_txPowerValid(state.settings.tx_power))
         state.settings.tx_power = default_settings.tx_power;
+
+    /*
+     * The callsign is checked here too, not only on the keypad and on the PC
+     * protocol: a record written by another tool or restored from a backup
+     * never passed either check, and a callsign that fills the 10-byte field
+     * has no room for its terminator -- which is the reason the field is nine
+     * characters plus NUL in the first place.  N0CALL instead of a broken
+     * identity: the operator can type his own again, and nothing reads past
+     * the field meanwhile.
+     */
+    if (!settings_callsignFieldValid(state.settings.callsign))
+        memcpy(state.settings.callsign, default_settings.callsign,
+               SETTINGS_CALLSIGN_LEN);
 
 #ifdef CONFIG_TETRA
     /* Received SDS messages, kept across power cycles */
@@ -313,15 +341,44 @@ void state_task()
     /*
      * Persist here, and only here: this task runs every 100 ms and can afford
      * the tens of milliseconds of a 4 KiB sector erase, the audio path cannot.
-     * hasChanged() restarts its timer on every change, so a knob being turned
-     * postpones the write instead of triggering one per interval.
+     * The debouncer restarts its window on every change, so a knob being
+     * turned postpones the write instead of triggering one per interval.
+     *
+     * The write result is not optional: the change is only marked as stored
+     * once the record is actually on flash.  A failed write leaves it pending
+     * and is retried on a backoff (nvmDebounce_retryMs) instead of being lost
+     * -- a power or a squelch level that stays in RAM while the radio behaves
+     * as if it were saved is exactly the silent failure docs/TX_SAFETY.md is
+     * about -- and the first failure of a streak says so in the log.
      */
-    bool writeSettings = hasChanged(&settingsDebouncer, &settings,
-                                    sizeof(settings_t));
-    bool writeVfo = hasChanged(&vfoDebouncer, &vfo, sizeof(channel_t));
+    uint32_t now = (uint32_t)getTick();
+    bool writeSettings = nvmDebounce_due(&settingsDebouncer, &settings,
+                                         sizeof(settings_t), now,
+                                         NVM_WRITE_DEBOUNCE_MS);
+    bool writeVfo = nvmDebounce_due(&vfoDebouncer, &vfo, sizeof(channel_t), now,
+                                    NVM_WRITE_DEBOUNCE_MS);
+
     if (writeSettings || writeVfo) {
-        nvm_writeSettingsAndVfo(writeSettings ? &settings : NULL,
-                                writeVfo ? &vfo : NULL);
+        int ret = nvm_writeSettingsAndVfo(writeSettings ? &settings : NULL,
+                                          writeVfo ? &vfo : NULL);
+
+        if (ret == 0) {
+            if (writeSettings)
+                nvmDebounce_done(&settingsDebouncer);
+            if (writeVfo)
+                nvmDebounce_done(&vfoDebouncer);
+        } else {
+            bool first = (settingsDebouncer.failures == 0)
+                         && (vfoDebouncer.failures == 0);
+
+            if (writeSettings)
+                nvmDebounce_failed(&settingsDebouncer, now);
+            if (writeVfo)
+                nvmDebounce_failed(&vfoDebouncer, now);
+
+            if (first)
+                logNvmWriteFailure(ret);
+        }
     }
 #endif
 

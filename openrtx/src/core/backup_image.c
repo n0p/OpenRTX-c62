@@ -410,6 +410,19 @@ static int applySettings(const uint8_t *buf, size_t len)
     if (!settings_txPowerValid(state.settings.tx_power))
         state.settings.tx_power = default_settings.tx_power;
 
+    /*
+     * And the callsign: a backup is a record like any other, and this one was
+     * never validated (the keypad entry and the PC protocol are).  A field with
+     * no terminator in its 10 bytes makes every consumer of the M17 addresses
+     * read past them, so it becomes N0CALL here, before it reaches the flash.
+     */
+    if (!settings_callsignFieldValid(state.settings.callsign)) {
+        memcpy(state.settings.callsign, default_settings.callsign,
+               SETTINGS_CALLSIGN_LEN);
+        if (nvm_writeSettings(&state.settings) != 0)
+            return BKP_ERR_IO;
+    }
+
     return BKP_OK;
 }
 
@@ -421,7 +434,17 @@ static int applyVfo(const uint8_t *buf, size_t len)
     channel_t ch;
     memcpy(&ch, buf, sizeof(ch));
 
-    if (ch.rx_frequency == 0 || ch.mode > OPMODE_WFM_BC)
+    /*
+     * A VFO is always a receiver: OPMODE_NONE is what "no mode" is, and
+     * restoring it left the radio on MAIN_VFO with a frequency, a name and
+     * switchMode(OPMODE_NONE) as its only receiver -- a screen that looks
+     * normal over a radio that is deaf.  The power has the PA's own ceiling as
+     * its limit (0 is the operator's "do not transmit" and is kept).
+     */
+    if (ch.rx_frequency == 0 || ch.mode == OPMODE_NONE || ch.mode > OPMODE_WFM_BC)
+        return BKP_ERR_STORE;
+
+    if (!settings_txPowerValid(ch.power))
         return BKP_ERR_STORE;
 
     if (ch.tx_frequency == 0)

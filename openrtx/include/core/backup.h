@@ -18,12 +18,11 @@ extern "C" {
  * blocking function.
  */
 void eflash_dump();
-
-/**
- * Start a restore of the external flash memory content via xmodem transfer,
- * blocking function.
+/*
+ * There is no restore here on purpose: writing the whole external flash back
+ * over xmodem would overwrite the bootloader, and core/backup_image.c is the
+ * restore path the radio has (docs/BACKUP.md).
  */
-void eflash_restore();
 
 #ifdef __cplusplus
 }
