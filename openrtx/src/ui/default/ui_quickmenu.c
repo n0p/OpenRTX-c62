@@ -341,7 +341,7 @@ void qm_fm_set_tone(int index)
 
 void qm_fm_fmt_tone(char *buf, int len)
 {
-    uint16_t tone = ctcss_tone[state.channel.fm.txTone];
+    uint16_t tone = ctcssFreqFromIndex(state.channel.fm.txTone);
     snprintf(buf, len, "%u.%u", (unsigned)tone / 10, (unsigned)tone % 10);
 }
 

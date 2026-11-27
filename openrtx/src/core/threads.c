@@ -132,8 +132,17 @@ void *ui_threadFunc(void *arg)
             // Copy new M17 CAN, source and destination addresses
             rtx_cfg.can = state.settings.m17_can;
             rtx_cfg.canRxEn = state.settings.m17_can_rx;
+            /*
+             * The terminator is forced: both fields are 10 bytes, the callsign
+             * has room for nine characters and a record that came from
+             * elsewhere may fill all ten.  Everything that reads these as a
+             * string -- the M17 LSF encoder, the screen, the voice prompts --
+             * would then read on into the structure.
+             */
             strncpy(rtx_cfg.source_address,      state.settings.callsign, 10);
+            rtx_cfg.source_address[9] = '\0';
             strncpy(rtx_cfg.destination_address, state.settings.m17_dest, 10);
+            rtx_cfg.destination_address[9] = '\0';
 
             /*
              * DMR identity and call destination.  The radio ID goes in the

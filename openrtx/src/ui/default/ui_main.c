@@ -763,7 +763,16 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
             // Print Bandwidth, Tone and encdec info
             if (tone_tx_enable || tone_rx_enable)
             {
-                uint16_t tone = ctcss_tone[last_state.channel.fm.txTone];
+                /*
+                 * The index is a 7 bit field and the table has 50 entries: a
+                 * record from another codeplug, or this union read in a mode
+                 * that is not FM, can hold anything up to 127.  The helper
+                 * wraps, which is what the channel store has always done, so
+                 * the screen never shows a tone that does not exist.
+                 */
+                uint16_t tone = ctcssFreqFromIndex(tone_tx_enable
+                                                  ? last_state.channel.fm.txTone
+                                                  : last_state.channel.fm.rxTone);
                 gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
                           color_white, "%s %d.%d %s", bw_str, (tone / 10),
                           (tone % 10), _ui_getToneEnabledString(tone_tx_enable, tone_rx_enable, true));

@@ -196,6 +196,17 @@ static bool tuneChannel(uint16_t idx)
     state.tuner_mode = CH;
     chstore_setLastUsed(idx);
 
+    /*
+     * A stored channel's own DMR call destination has no field in channel_t:
+     * it reaches the transmitter through the settings, and the store is the
+     * one that knows how to copy it.  Without this the radio transmitted to
+     * the talkgroup of the channel before -- the scanner applied it and this
+     * path did not, so the same channel behaved differently depending on how
+     * the operator got to it.
+     */
+    if (ch.mode == OPMODE_DMR)
+        (void)chstore_applySettings(idx, &state.settings);
+
     /* An airband channel brings its raster back with it (see qm_am_applyRaster) */
     qm_am_applyRaster();
 
@@ -483,15 +494,39 @@ static void bwStep(uint8_t mode, int dir)
 
 static void powerStep(int dir)
 {
-    static const uint16_t powers[] = { 1000, 2500, 5000 };
-    int cur = 0;
+    /*
+     * 500 mW is a real setting of this radio: it is what a PMR446 channel
+     * carries (zones.c, ZONE_FLAG_FIXED_POWER).  It was not in the list, so a
+     * PMR channel opened in the editor and touched on POWER jumped to the next
+     * entry -- the operator could save a legal 500 mW channel at 1 W or 2.5 W
+     * without being told.
+     */
+    static const uint16_t powers[] = { 500, 1000, 2500, 5000 };
+    const int n = (int)(sizeof(powers) / sizeof(powers[0]));
+    int cur = -1;
 
-    for (size_t i = 0; i < sizeof(powers) / sizeof(powers[0]); i++) {
+    for (int i = 0; i < n; i++) {
         if (powers[i] == edit.power)
-            cur = (int)i;
+            cur = i;
     }
 
-    cur = (cur + dir + 3) % 3;
+    /*
+     * A power the list does not have (a record from another tool, a value a
+     * zone or a backup wrote): start from the first entry that is at least the
+     * current one, so the first step is the neighbouring value and not a jump
+     * to the top of the list.
+     */
+    if (cur < 0) {
+        cur = n - 1;
+        for (int i = 0; i < n; i++) {
+            if (powers[i] >= edit.power) {
+                cur = i;
+                break;
+            }
+        }
+    }
+
+    cur = (cur + dir + n) % n;
     edit.power = powers[cur];
 }
 

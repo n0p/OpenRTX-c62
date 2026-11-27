@@ -27,12 +27,14 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstring>
+#include <cstdio>
 #include <string>
 
 #include "ui_walk.hpp"
 
 extern "C" {
 #include "core/channel_store.h"
+#include "core/cps.h"
 #include "ui/ui_layout.h"
 }
 
@@ -509,4 +511,37 @@ TEST_CASE("the list opens on the channel that was in use at power-off",
     ui_walk::pressKey(KEY_ENTER);
     REQUIRE(state.channel_index == 2);
     REQUIRE(state.channel.rx_frequency == 438800000);
+}
+
+/*
+ * An out-of-range CTCSS index must not be read out of the tone table.
+ *
+ * fmInfo_t.txTone is a 7-bit field and ctcss_tone[] has CTCSS_FREQ_NUM entries,
+ * so a record from another codeplug, a restored backup or this union read in a
+ * mode that is not FM can carry 50..127.  The main screen indexed the table
+ * with it and drew whatever followed in .rodata ("27.9", "63.1"), and a value
+ * copied from there into a channel was then stored.  ctcssFreqFromIndex() is
+ * the one conversion the tree already had ("Wrapping is what channel_store.c
+ * has always done"); the screen has to use it too.
+ */
+TEST_CASE("An out-of-range CTCSS index shows a tone that exists", "[ui][fm]")
+{
+    boot();
+    ui_walk::resetUi();
+
+    state.channel.mode        = OPMODE_FM;
+    state.channel.fm.txToneEn = 1;
+    state.channel.fm.rxToneEn = 0;
+    state.channel.fm.txTone   = 91;   /* 7 bits wide, the table holds 50 */
+    state.channel.fm.rxTone   = 91;
+
+    gfx_capture_frame_t f = frame();
+
+    uint16_t tone = ctcssFreqFromIndex(91);
+    char want[16];
+
+    snprintf(want, sizeof(want), "%u.%u", (unsigned)(tone / 10),
+             (unsigned)(tone % 10));
+
+    REQUIRE(hasLine(f, want));
 }

@@ -190,13 +190,25 @@ void gfx_render()
 
 void gfx_clearRows(uint8_t startRow, uint8_t endRow)
 {
-    if (endRow < startRow)
+    if ((endRow < startRow) || (startRow >= CONFIG_SCREEN_HEIGHT))
         return;
 
-    uint16_t start = startRow * CONFIG_SCREEN_WIDTH * sizeof(PIXEL_T);
-    uint16_t height = endRow - startRow * CONFIG_SCREEN_WIDTH * sizeof(PIXEL_T);
-    // Set the specified rows to 0x00 = make the screen black
-    memset(framebuffer + start, 0x00, height);
+    /*
+     * Rows are rows, not bytes: the framebuffer is an array of pixels, and the
+     * offsets and lengths are in elements of it.  The old code multiplied the
+     * row numbers by the width and the pixel size and used the result both as
+     * an index and as a byte count, which for startRow=1, endRow=2 produced a
+     * negative length in a uint16_t and a memset of ~65 kB outside the
+     * framebuffer.  Nothing called it, which is the only reason it never
+     * happened.
+     */
+    if (endRow >= CONFIG_SCREEN_HEIGHT)
+        endRow = CONFIG_SCREEN_HEIGHT - 1;
+
+    size_t start = (size_t)startRow * CONFIG_SCREEN_WIDTH;
+    size_t rows = (size_t)(endRow - startRow) + 1;
+
+    memset(framebuffer + start, 0x00, rows * CONFIG_SCREEN_WIDTH * sizeof(PIXEL_T));
 }
 
 void gfx_clearScreen()

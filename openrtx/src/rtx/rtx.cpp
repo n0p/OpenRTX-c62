@@ -48,7 +48,36 @@
 
 static pthread_mutex_t   *cfgMutex;     // Mutex for incoming config messages
 static const rtxStatus_t *newCnf;       // Pointer for incoming config messages
-static rtxStatus_t        rtxStatus;    // RTX driver status
+static rtxStatus_t        rtxStatus;    // RTX driver status, owned by this thread
+
+/*
+ * The status the rest of the firmware reads.
+ *
+ * rtxStatus belongs to the RTX thread: it is rewritten whole (a memcpy of ~200
+ * bytes when a new configuration arrives), field by field by the mode's
+ * update() and byte by byte through every opStatus transition.  Handing a copy
+ * of it out from under those writes gave the screen -- and the scanner, which
+ * decides whether there is a carrier from that same value -- a torn picture:
+ * opStatus of the new state with the frequencies of the old one, or an M17
+ * source address copied halfway.
+ *
+ * So the thread publishes a consistent snapshot at the end of every pass, at
+ * the points where nothing is being written, and readers copy that under this
+ * mutex.  The cost is one pass of latency (25 ms at the 40 Hz cadence), which
+ * is what a screen and a squelch decision can afford, and it needs no lock
+ * around a mode's update(): that call does DSP and can block for a whole
+ * transmission.
+ */
+static rtxStatus_t        publishedStatus;
+static pthread_mutex_t    statusMutex = PTHREAD_MUTEX_INITIALIZER;
+
+/* Publish rtxStatus.  Called from the RTX thread, never during an update. */
+static void publishStatus(void)
+{
+    pthread_mutex_lock(&statusMutex);
+    memcpy(&publishedStatus, &rtxStatus, sizeof(rtxStatus_t));
+    pthread_mutex_unlock(&statusMutex);
+}
 static rssi_t             rssi;         // Current RSSI in dBm
 static bool               reinitFilter; // Flag for RSSI filter re-initialisation
 
@@ -590,6 +619,9 @@ void rtx_init(pthread_mutex_t *m)
      */
     rssi         = radio_getRssi();
     reinitFilter = false;
+
+    /* What a reader sees before the first pass of rtx_task() */
+    publishStatus();
 }
 
 void rtx_terminate()
@@ -608,6 +640,9 @@ void rtx_terminate()
         dying->~OpMode();
     modeArena_release();
     radio_terminate();
+
+    /* Idle and off is what the next rtx_init() starts from, published too */
+    publishStatus();
 }
 
 void rtx_configure(const rtxStatus_t *cfg)
@@ -625,7 +660,13 @@ void rtx_configure(const rtxStatus_t *cfg)
 
 rtxStatus_t rtx_getCurrentStatus()
 {
-    return rtxStatus;
+    rtxStatus_t copy;
+
+    pthread_mutex_lock(&statusMutex);
+    copy = publishedStatus;
+    pthread_mutex_unlock(&statusMutex);
+
+    return copy;
 }
 
 struct txGuard *rtx_getTxGuard()
@@ -844,8 +885,14 @@ void rtx_task()
      * mode's own decisions keep working between two sweeps, and how a carrier
      * on the centre pauses the sweep instead of being chopped by it.
      */
-    if (spectrumService_poll())
+    if (spectrumService_poll()) {
+        /*
+         * The analyser owns the receiver for this pass and does not touch the
+         * status, but a mode's last transition may still be unpublished.
+         */
+        publishStatus();
         return;
+    }
 
     /*
      * A transmission the supervisor had to abort: it already unkeyed the PA and
@@ -1000,6 +1047,13 @@ void rtx_task()
         radio_enableRx();
 
     logTxExit();
+
+    /*
+     * One consistent snapshot per pass, after everything that writes rtxStatus
+     * in it (the abort, the new configuration, the mode's own update) and
+     * before the next one begins.
+     */
+    publishStatus();
 }
 
 rssi_t rtx_getRssi()

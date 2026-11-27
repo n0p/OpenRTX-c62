@@ -107,6 +107,10 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/protocols/TETRA/TetraUplink.c',
                'openrtx/src/core/slot_store.c',
                'openrtx/src/core/contact_store.c',
+               # Debounced, retried NVM write-back of settings and VFO: the
+               # decision logic state_task() uses, portable C so that it can be
+               # tested against a fake clock (docs/SETTINGS.md).
+               'openrtx/src/core/nvm_debounce.c',
                # The internal backup of the stores: header, directory, CRC and
                # the two areas a save ping-pongs between (docs/BACKUP.md).
                'openrtx/src/core/backup_image.c',

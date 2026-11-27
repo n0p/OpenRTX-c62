@@ -2885,10 +2885,16 @@ void ui_updateFSM(bool *sync_rtx)
                         {
                             state.bank_enabled = true;
                             result = cps_readBankHeader(&newbank, ui_state.menu_selected - 1);
+                            /*
+                             * Only with a bank: on "All channels" the index used
+                             * to be 0 - 1, which wraps round to 255 in a
+                             * uint8_t and left state.bank pointing nowhere.
+                             */
+                            if(result != -1)
+                                state.bank = ui_state.menu_selected - 1;
                         }
                         if(result != -1)
                         {
-                            state.bank = ui_state.menu_selected - 1;
                             // If we were in VFO mode, save VFO channel
                             if(ui_state.last_main_state == MAIN_VFO)
                                 state.vfo_channel = state.channel;
@@ -3052,7 +3058,16 @@ void ui_updateFSM(bool *sync_rtx)
                         ui_state.menu_selected -= 1;
                 }
                 else if(msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
-                    ui_state.menu_selected += 1;
+                {
+                    /*
+                     * Bounded, like MENU_INFO: the list of authors is a fixed
+                     * array and the draw indexes it with this value.  Left to
+                     * grow, the index ran past the array as soon as the panel
+                     * showed more rows than there are authors.
+                     */
+                    if(ui_state.menu_selected + 1 < author_num)
+                        ui_state.menu_selected += 1;
+                }
                 else if(msg.keys & KEY_ENTER)
                     _ui_menuBack(MENU_TOP);   /* green is "OK" on the bar */
                 else if(msg.keys & KEY_ESC)
