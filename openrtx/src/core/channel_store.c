@@ -489,8 +489,11 @@ int chstore_set(uint16_t idx, const chstore_channel_t *ch)
     bank[idx] = *ch;
 
     if (bankCommit() != 0) {
-        /* Keep RAM describing what is on flash */
+        /* Keep RAM describing what is on flash, and nothing pending: after the
+         * rollback the two are the same bank again, so a retry would only
+         * erase and rewrite a slot that already holds it. */
         bank[idx] = old;
+        pending = false;
         BANK_UNLOCK();
         return -EIO;
     }
@@ -515,9 +518,11 @@ int chstore_add(const chstore_channel_t *ch)
     nbChannels++;
 
     if (bankCommit() != 0) {
-        /* Keep RAM and flash consistent: the bank did not grow. */
+        /* Keep RAM and flash consistent: the bank did not grow, and with the
+         * record gone from RAM there is nothing left to write. */
         nbChannels--;
         memset(&bank[nbChannels], 0, sizeof(chstore_channel_t));
+        pending = false;
         BANK_UNLOCK();
         return -EIO;
     }
@@ -597,13 +602,24 @@ int chstore_delete(uint16_t idx)
     }
 
     if (bankCommit() != 0) {
-        /* Roll back so that RAM keeps describing the bank on flash. */
+        /*
+         * Roll back so that RAM keeps describing the bank on flash.  The
+         * deleted record has to go back too: the shift above overwrote it, so
+         * moving the tail up alone would leave a copy of the record that took
+         * its place (deleting "b" from [a,b,c,d] gave [a,c,c,d]) and RAM would
+         * then say the opposite of what is on flash.
+         *
+         * And with the rollback done there is nothing pending: RAM and flash
+         * hold the same bank, so the retry the task would make a second later
+         * only erased the slot to write back what was already in it.
+         */
         if (idx + 1 < oldCount)
             memmove(&bank[idx + 1], &bank[idx],
                     (size_t)(oldCount - idx - 1) * sizeof(chstore_channel_t));
         bank[idx] = saved;
         nbChannels = oldCount;
         lastUsedIdx = oldLast;
+        pending = false;
         BANK_UNLOCK();
         return -EIO;
     }
