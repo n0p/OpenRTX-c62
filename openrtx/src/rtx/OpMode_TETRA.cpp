@@ -118,10 +118,11 @@ static int32_t afcStored(void)
 /**
  * Store the correction in the settings when it has moved far enough; they
  * are saved to flash a few seconds later (CONFIG_NVM_SAVE_ON_CHANGE).
- *
- * The lock is taken with a deadline and the store is simply skipped when the
- * UI holds it: the next AFC update in a second stores the same correction, and
- * this runs in the RTX thread, whose job is the receiver, not the settings.
+ */
+/*
+ * The state lock, taken with a deadline: the UI holds it while it draws and the
+ * next AFC update in a second stores the same correction, so skipping one is
+ * better than parking the receiver behind the screen.
  */
 #define AFC_STATE_LOCK_MS 5
 
@@ -460,7 +461,8 @@ void OpMode_TETRA::update(rtxStatus_t *const rtx, const bool newCfg)
     }
 
     modeStats_blockStart(MS_MODE_TETRA);
-    size_t n = tetraDemod_process(&st->demod, block.data, block.len, soft);
+    size_t n = tetraDemod_process(&st->demod, block.data, block.len, soft,
+                                sizeof(soft));
 
     /* The demodulator followed a timing jump or re-acquired: resync too */
     uint32_t jumps = tetraDemod_reacquisitions(&st->demod);
