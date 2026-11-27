@@ -3,7 +3,8 @@
 NXDN (NXDN Forum TS 1-A/1-B, JVC Kenwood + Icom) receiver for the Retevis C62:
 4FSK demodulation of the radio's discriminator output, frame sync, LICH, the
 SACCH superframe with its layer 3 messages and voice through the AMBE+2
-decoder. Receive only: there is no NXDN transmitter in this firmware.
+decoder. Transmit with `CONFIG_NXDN_TX`: `protocols/NXDN/NxdnTx.c` builds the
+frames this receiver decodes (`docs/TX_NXDN.md`).
 
 The chain was validated on two real off-air captures before anything was
 integrated, against `dsd-neo` as the reference decoder. This document is the
