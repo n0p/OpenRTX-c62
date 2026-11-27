@@ -501,18 +501,6 @@ config C62_SPECTRUM_GATE_POLLS
 	  compromise between the resolution of the wait and the traffic it
 	  costs.
 
-endmenu
-
-DT_COMPAT_LSF_SERVICE_CONTROLLER := lsf,service-controller
-
-config LSF_SERVICE_CONTROLLER
-	bool "LSF Service Controller"
-	select REQUIRES_FULL_LIBC
-
-if LSF_SERVICE_CONTROLLER
-orsource "services/Kconfig"
-endif # LSF_SERVICE_CONTROLLER
-
 #
 # RNNoise noise suppression on the analog FM receive path.  Off by default; see
 # docs/NOISE.md and lib/rnnoise/.  The stage is switched at run time from the
@@ -527,3 +515,15 @@ config C62_NOISE_SUPPRESS
 	  Audio menu. Off by default, and off at run time until the switch is
 	  set: while disabled the stage costs one flag test per 10 ms frame
 	  and allocates nothing.
+
+endmenu
+
+DT_COMPAT_LSF_SERVICE_CONTROLLER := lsf,service-controller
+
+config LSF_SERVICE_CONTROLLER
+	bool "LSF Service Controller"
+	select REQUIRES_FULL_LIBC
+
+if LSF_SERVICE_CONTROLLER
+orsource "services/Kconfig"
+endif # LSF_SERVICE_CONTROLLER
