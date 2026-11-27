@@ -107,6 +107,20 @@ static const uint32_t keyMap[] = { KEY_ENTER, KEY_F1, KEY_3,   KEY_7, KEY_0,
 static volatile keyboard_t kbdCache;
 static volatile bool kbdLive; /* the scanner has produced its first pass */
 
+/*
+ * One matrix sweep at a time.
+ *
+ * The scanner thread is created with a 300 ms start delay (K_THREAD_DEFINE
+ * below), which is measured from the kernel's start and is not the same
+ * instant as the end of platform_init_csk6(): the boot checks ask for the keys
+ * (kbd_getKeys() -> kbdScan()) in that window, and a sweep from the boot code
+ * running at the same time as the scanner's own drives a row that the other
+ * side is reading as pressed -- a key nobody pressed, and if it lands in the
+ * PTT column, a transmitter that keys itself.  The lock costs one uncontended
+ * mutex per 20 ms sweep.
+ */
+static K_MUTEX_DEFINE(kbdMatrixMutex);
+
 /**
  * Scan the matrix once and return the keys that are down.
  *
@@ -118,6 +132,10 @@ static volatile bool kbdLive; /* the scanner has produced its first pass */
 static keyboard_t kbdScan(void)
 {
     uint32_t keys = 0;
+
+    /* The rows are driven and the columns read as one operation: see
+     * kbdMatrixMutex.  A recursive lock is fine -- nothing here scans twice. */
+    k_mutex_lock(&kbdMatrixMutex, K_FOREVER);
 
     // Configure the four row lines as outputs, all high (inactive)
     for (size_t i = 0; i < ARRAY_SIZE(rows); i++) {
@@ -168,6 +186,8 @@ static keyboard_t kbdScan(void)
         LOG_DBG("matrix 0x%05x -> keys 0x%08x", keys, result);
         prior = keys;
     }
+
+    k_mutex_unlock(&kbdMatrixMutex);
 
     return result;
 }
