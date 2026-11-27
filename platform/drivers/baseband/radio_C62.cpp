@@ -1128,6 +1128,32 @@ void radio_enableTx()
         return;
     }
 
+    /*
+     * The PA and its calibration were measured in 136-174 and 400-480 MHz
+     * (calib_C62.c): outside those the chip still transmits, with the UHF
+     * branch enabled above 174 MHz and the duty and deviation of the nearest
+     * measured point (calibC62_interp() clamps to the first or the last one).
+     * Unlocked tuning is a feature of this firmware, so this does not refuse
+     * the keying -- but what goes out is not a measured transmission and the
+     * operator is told so instead of finding out on the air.
+     */
+    if (!((config->txFrequency >= 136000000u &&
+           config->txFrequency <= 174000000u) ||
+          (config->txFrequency >= 400000000u &&
+           config->txFrequency <= 480000000u)))
+    {
+        static uint32_t warnedAt = 0;
+        const uint32_t nowMs = k_uptime_get_32();
+
+        if ((uint32_t)(nowMs - warnedAt) >= 5000)
+        {
+            warnedAt = nowMs;
+            printk("PA: TX %lu Hz outside the PA bands (136-174 / 400-480 "
+                   "MHz), power and deviation extrapolated\n",
+                   (unsigned long)config->txFrequency);
+        }
+    }
+
     bk4819_setFrequency(&c62_bk4819, config->txFrequency);
 
     if ((radioMode != OPMODE_M17) && config->txToneEn) {
