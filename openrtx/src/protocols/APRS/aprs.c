@@ -204,6 +204,16 @@ static bool base91(const char *s, uint32_t *v)
  */
 static bool parsePosition(const char *s, size_t len, aprs_pos_t *p)
 {
+    /*
+     * The uncompressed form is type, lat 8, table, lon 9 and a symbol at s[19],
+     * so a position is 20 bytes and a shorter field is truncated.  The test is
+     * len >= 19, which is what the lat/lon need; what must not happen is
+     * reading s[19] when the field ends there (it would be the first byte past
+     * the information field, inside the frame but not part of the sentence) or
+     * computing the comment length as len - 20u, a size_t underflow that only
+     * stayed harmless because copyTrim() bounds by its destination.  A field
+     * of exactly 19 bytes still yields its fix, with no symbol and no comment.
+     */
     if (len >= 19 && s[5] == '.')
     {
         double lat, lon;
@@ -214,9 +224,10 @@ static bool parsePosition(const char *s, size_t len, aprs_pos_t *p)
             p->lat        = lat;
             p->lon        = lon;
             p->table      = s[9];
-            p->symbol     = s[19];
+            p->symbol     = (len >= 20) ? s[19] : ' ';
             p->compressed = false;
-            copyTrim(p->comment, sizeof(p->comment), &s[20], len - 20u);
+            copyTrim(p->comment, sizeof(p->comment), &s[20],
+                     (len > 20) ? len - 20u : 0u);
             return true;
         }
     }
