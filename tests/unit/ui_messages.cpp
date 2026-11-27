@@ -125,6 +125,37 @@ TEST_CASE("Messages: a held digit types the digit once", "[ui][messages]")
     REQUIRE(std::string(messaging_draft()->text) == "2");
 }
 
+TEST_CASE("Messages: a composition starts from an empty buffer", "[ui][messages]")
+{
+    resetStore();
+
+    /* Type something and leave it as a draft */
+    ui_msgs_compose("EA5ABC");
+    press(KEY_DOWN);           /* TO -> TEXT */
+    press(KEY_ENTER);          /* typing */
+    press(KEY_4);              /* G */
+    press(KEY_ENTER);          /* done: the draft goes to the store */
+
+    REQUIRE(std::string(messaging_draft()->text) == "G");
+
+    /* The store loses it: a send, a "clear messages" from the PC protocol or a
+       restore all drop the draft while this module still holds the buffer */
+    messaging_draftClear();
+
+    /*
+     * The composer opens again.  draftLoad() fills the buffer only when the
+     * store has a draft, so without the reset in composeEnter() the text the
+     * operator had already discarded came back and green saved it as new.
+     */
+    ui_msgs_compose("EA5ABC");
+    press(KEY_DOWN);
+    press(KEY_ENTER);          /* typing */
+    press(KEY_ENTER);          /* done */
+
+    REQUIRE(std::string(messaging_draft()->text) == "");
+    REQUIRE(std::string(messaging_draft()->peer) == "EA5ABC");
+}
+
 TEST_CASE("Messages: sending is refused without a transport", "[ui][messages]")
 {
     resetStore();

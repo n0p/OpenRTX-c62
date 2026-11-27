@@ -357,6 +357,17 @@ static void clampSel(bool sent)
 
 static void composeEnter(const char *peer)
 {
+    /*
+     * A composition starts from an empty buffer.  draftLoad() only fills it
+     * when the store holds a draft, so without this the composer opened with
+     * whatever the previous one had typed: text that a send, a "clear the
+     * messages" from the PC or a restore had already discarded came back the
+     * next time the editor was opened.
+     */
+    memset(mg.peer, 0, sizeof(mg.peer));
+    memset(mg.text, 0, sizeof(mg.text));
+    mg.pos = 0;
+
     draftLoad();
 
     if (peer != NULL) {
