@@ -265,6 +265,32 @@ void state_terminate()
     pthread_mutex_destroy(&state_mutex);
 }
 
+#ifdef NVMEM_DEBOUNCED_WRITE
+/**
+ * Is the receiver being moved by a service instead of by the operator?
+ *
+ * True while the channel scan, the bank scan or the carrier search is running:
+ * those write state.channel themselves as they walk, so neither the VFO record
+ * nor the settings may be taken as the operator's during that time.  Called
+ * from state_task() (main thread), where both services are stepped, so what it
+ * reads cannot change under it.
+ */
+static bool receiverBorrowed(void)
+{
+#ifdef CONFIG_SCAN
+    struct scanStatus scan;
+
+    if (scan_service_status(&scan) && scan.running)
+        return true;
+#endif
+#ifdef CONFIG_VFO_SEARCH
+    if (vfoSearchService_active())
+        return true;
+#endif
+    return false;
+}
+#endif /* NVMEM_DEBOUNCED_WRITE */
+
 void state_task()
 {
 #ifdef NVMEM_DEBOUNCED_WRITE
@@ -352,6 +378,26 @@ void state_task()
      * about -- and the first failure of a streak says so in the log.
      */
     uint32_t now = (uint32_t)getTick();
+
+    /*
+     * The scanner and the carrier search move the receiver themselves: they
+     * write state.channel on every hop and, on a DMR channel, the destination
+     * in the settings.  A stop of more than the debounce window on a busy
+     * channel would otherwise write that borrowed channel to flash as if the
+     * operator had tuned it -- erasing and rewriting the VFO sector, and
+     * leaving the radio booted on the channel the scan was sitting on with
+     * that channel's talkgroup.  state_terminate() stops the scan before it
+     * writes for the same reason, but on this radio power-off is the volume
+     * knob cutting the supply and that path never runs.
+     *
+     * Skipping the comparison rather than the write is deliberate: the
+     * debouncer's copy still describes what is on flash, so when the scan ends
+     * and restores the channel it found, the two match again and nothing is
+     * written at all.
+     */
+    if (receiverBorrowed())
+        return;
+
     bool writeSettings = nvmDebounce_due(&settingsDebouncer, &settings,
                                          sizeof(settings_t), now,
                                          NVM_WRITE_DEBOUNCE_MS);
