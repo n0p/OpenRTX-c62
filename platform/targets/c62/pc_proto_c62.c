@@ -234,6 +234,22 @@ static int logHook(int c)
 {
     static char line[LINE_MAX];
     static size_t len;
+    bool linked;
+
+    /*
+     * The line buffer is shared by every writer -- printk, and newlib's
+     * printf through the stdout hook -- and nothing serialised them:
+     * CONFIG_PRINTK_SYNC holds printk against printk and says nothing about
+     * printf or about an interrupt.  Two writers stepping `len` at the same
+     * time put characters of one line into the middle of the other, and the
+     * hook then feeds half a line to the ring.
+     *
+     * Interrupts off for the handful of instructions it takes to place one
+     * byte: the hook is short and never sleeps, and lineFeed() below takes the
+     * ring's own lock nested inside this one.  The console decision is read
+     * inside the lock so that it belongs to the line the bytes went into.
+     */
+    unsigned int key = irq_lock();
 
     if (c == '\n' || c == '\r') {
         if (len > 0) {
@@ -245,8 +261,12 @@ static int logHook(int c)
         line[len++] = (char)c;
     }
 
+    linked = pc_proto_linked(&proto);
+
+    irq_unlock(key);
+
     /* Before a client links, the console is still the console. */
-    if (!pc_proto_linked(&proto)) {
+    if (!linked) {
         if (prevPrintkHook != NULL)
             return prevPrintkHook(c);
         return c;
