@@ -260,14 +260,15 @@ void openChannels(void)
 
 /* ============================================================ open/close == */
 
-TEST_CASE("P1 long opens the tools menu on both main screens", "[ui][tools]")
+TEST_CASE("P1 opens the tools menu on both main screens with a tap", "[ui][tools]")
 {
     for (uint8_t screen : { MAIN_VFO, MAIN_MEM }) {
         resetUi(screen);
         ui_rtxSyncRequest = false;
 
         INFO("from screen " << (int)screen);
-        REQUIRE(claimOf(KEY_F1, true) == UI_CLAIM_TOOLS_OPEN);
+        /* A tap, not a hold: the release of a short press opens it */
+        REQUIRE(claimOf(KEY_F1) == UI_CLAIM_TOOLS_OPEN);
 
         REQUIRE(ui_tools_isOpen());
         REQUIRE_FALSE(ui_tools_inModes());

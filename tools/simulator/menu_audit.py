@@ -199,7 +199,7 @@ class Audit:
         self.home()
         if self.d()["radio"]["mode"] == name:
             return self.d()
-        self.key_long("P1")
+        self.key("P1")
         self.tools_to("Mode")
         self.key("GREEN")
         self.tools_to(name)
@@ -582,10 +582,10 @@ class Audit:
     def walk_tools(self):
         self.mode("FM")
         self.home()
-        self.key_long("P1")
+        self.key("P1")
         d = self.d()
         rows = list(d["tools"]["rows"])
-        screen = {"screen": "TOOLS_MENU", "title": "tools (P1 long)", "rows": [],
+        screen = {"screen": "TOOLS_MENU", "title": "tools (P1)", "rows": [],
                   "probed": "rows", "family": "general"}
         for i, row in enumerate(rows):
             self.tools_to(row["label"])
@@ -629,7 +629,7 @@ class Audit:
             item["enter"] = ch or ["no change"]
             screen["rows"].append(item)
             self.home()
-            self.key_long("P1")
+            self.key("P1")
 
         # the mode submenu, row by row: green applies and leaves
         self.tools_to("Mode")
@@ -652,7 +652,7 @@ class Audit:
             item["enter"] = ch or ["no change"]
             sub["rows"].append(item)
             self.home()
-            self.key_long("P1")
+            self.key("P1")
             self.tools_to("Mode")
             self.key("GREEN")
         self.key("RED")
@@ -756,14 +756,14 @@ class Audit:
         # the in-radio channel bank, through the tools menu
         self.mode("FM")
         self.home()
-        self.key_long("P1")
+        self.key("P1")
         self.tools_to("Channels")
         self.key("GREEN")
         self.module_screen("Channels (in-radio bank)",
-                           lambda: (self.home(), self.key_long("P1"),
+                           lambda: (self.home(), self.key("P1"),
                                     self.tools_to("Channels"), self.key("GREEN")))
         self.module_screen("Channel editor",
-                           lambda: (self.home(), self.key_long("P1"),
+                           lambda: (self.home(), self.key("P1"),
                                     self.tools_to("Channels"), self.key("GREEN"),
                                     self.key("P1")))
 

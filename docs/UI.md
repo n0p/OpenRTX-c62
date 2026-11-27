@@ -79,7 +79,8 @@ numbering) and maps it to `KEY_*` through `keyMap[]`:
 | Side key     | —      | `KEY_MONI`  | MONI; short or long opens the macro grid |
 | Digits       | —      | `KEY_0`..`KEY_9` | frequency entry; 1..9 jump to a quick menu row; multi-tap text in the composer |
 
-On the main screens P1 short replays the last voice prompt and P2 short opens
+On the main screens P1 opens the tools menu and, with voice prompts on, a P1
+tap that the tools menu does not take replays the last prompt; P2 short opens
 the quick menu. The side key is a second PTT and the mode selector: it is not a
 menu key. PTT always closes the quick menu and keys the radio, and it re-arms
 TX when leaving a screen that had disabled it.
@@ -194,7 +195,7 @@ other's keys:
    `state.txDisable` true.
 7. P2 long on the FM main screen: APRS, and the popup it may have opened on the
    way is closed first. Then MONI / P2 long: macro grid.
-8. Channels: P1 long opens the tools menu, whose last row is the channel list;
+8. Channels: P1 opens the tools menu, whose last row is the channel list;
 the module consumes everything while open. The backup and restore screens are
 reachable from the top menu and are documented in `docs/BACKUP.md`.
 9. The screen switch (main screens, menus, settings).
@@ -213,7 +214,7 @@ Transitions, briefly:
 | FSM | States | Enter | Leave |
 |---|---|---|---|
 | Quick menu | closed → open (latched / unlatched) | P2 short on `MAIN_VFO`/`MAIN_MEM`, unlocked, not editing | ESC, PTT, unlatched timeout (`QM_TIMEOUT_MS` = 15 s), `QM_GOTO` row |
-| Channels | `CHS_CLOSED`/`LIST`/`EDIT`/`CONFIRM` | P1 long, or Menu → Channels | ESC on the list; green on the list tunes, closes, and leaves the radio on `MAIN_MEM` |
+| Channels | `CHS_CLOSED`/`LIST`/`EDIT`/`CONFIRM` | P1, or Menu → Channels | ESC on the list; green on the list tunes, closes, and leaves the radio on `MAIN_MEM` |
 | Contacts | `CTS_CLOSED`/`LIST`/`EDIT`/`CONFIRM` | Menu → Contacts | ESC on the list (back to the menu) |
 | Zones | `ZS_CLOSED`/`ZONES`/`ENTRIES` | Menu → Zones | ESC from the zone list (back to the menu); green on an entry tunes and goes to the VFO |
 | Messages | inbox / view / sent / compose / status | Menu → Messages, quick menu `MSGS`/`MSG`, or reply from a received message | ESC from the inbox (to the menu), from sent (to the inbox), from compose (inbox, draft kept) |
@@ -232,9 +233,9 @@ falls back to the FM one, and comparing contents there rebuilt the popup on
 every UI pass — the cursor jumped back to the first row as soon as it was
 moved. That was the "the quick menu stops working with some options" report.
 
-## Herramientas (P1 mantenido)
+## Herramientas (P1)
 
-P1 mantenido en las dos pantallas principales abre el menú de herramientas
+P1 en las dos pantallas principales abre el menú de herramientas
 (`openrtx/src/ui/default/ui_tools.c`, pantalla `TOOLS_MENU`). Antes ese atajo
 abría la lista de canales; la lista es ahora la última fila del menú, así que el
 atajo no se pierde y el escáner, la búsqueda en VFO, el analizador y el selector
@@ -300,7 +301,7 @@ pantalla principal. Rojo vuelve a la lista sin salir del menú.
 
 ## Channel list and editor
 
-P1 long press on the main screens, or Menu → Channels, opens the in-radio
+P1 on the main screens, or Menu → Channels, opens the in-radio
 channel bank (`ui_channels.c`, `docs/CHANNELS.md`). The menu entry exists
 because the CPS list it used to open is empty on this radio (no codeplug,
 `cps_io_stub`). The module takes over the keypad and the screen until it

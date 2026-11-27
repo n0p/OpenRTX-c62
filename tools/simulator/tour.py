@@ -404,13 +404,13 @@ class Tour:
     # --------------------------------------------------------- tools menu ----
 
     def tools_open(self):
-        """P1 held down on a main screen: the tools menu (docs/UI.md)."""
+        """A P1 tap on a main screen: the tools menu (docs/UI.md)."""
         self.home()
-        self.key_long("P1")
+        self.key("P1")
         d = self.dump()
 
         if not d["tools"]["open"]:
-            self.fail("P1 long does not open the tools menu")
+            self.fail("P1 does not open the tools menu with a tap")
             return None
 
         return d

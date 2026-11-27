@@ -224,7 +224,7 @@ const char *settings_radio_items[] =
     "TX Power",
     /*
      * The accessory jack's pad is not here any more either: it is one row of
-     * the tools menu (P1 held down), the only menu reachable from every main
+     * the tools menu (P1), the only menu reachable from every main
      * screen. It used to be a row of this page and a row of every mode's
      * popup at the same time, and an operator who set one and saw the other
      * say something else could not tell which one the firmware obeyed
@@ -2260,7 +2260,7 @@ void ui_updateFSM(bool *sync_rtx)
         }
 
         /*
-         * Tools menu (P1 held down on a main screen, ui_tools.c): the list of
+         * Tools menu (P1 on a main screen, ui_tools.c): the list of
          * things that had no key of their own and the mode selector. It owns
          * every key while it is up -- MONI and the long P2 included -- which is
          * why this block goes before the macro grid: a menu that hands a key to
@@ -2345,13 +2345,12 @@ void ui_updateFSM(bool *sync_rtx)
         }
 
         /*
-         * P1 long press: open the tools menu (ui_tools.c). It used to open the
-         * channel list directly; the list is now the last row of the menu, so
-         * the shortcut survives and the scanner, the carrier search, the
-         * analyser and the mode selector get a door. The module takes over the
-         * keypad and the screen until it closes; see docs/UI.md.
+         * P1 opens the tools menu (ui_tools.c). A tap is enough: holding it
+         * down was the last thing in this UI that asked the operator to wait,
+         * and on a handheld every other menu is one press. The module takes
+         * over the keypad and the screen until it closes; see docs/UI.md.
          */
-        if (!ui_tools_isOpen() && (msg.keys & KEY_F1) && msg.long_press &&
+        if (!ui_tools_isOpen() && (msg.keys & KEY_F1) &&
             !ui_state.input_locked &&
             (state.ui_screen == MAIN_VFO || state.ui_screen == MAIN_MEM))
         {
@@ -3993,7 +3992,7 @@ bool ui_updateGUI()
         c62_setKeyBacklight(state.settings.keyBacklight);
 #endif
     }
-    // Tools menu (P1 long): a screen of its own, drawn before anything else
+    // Tools menu (P1): a screen of its own, drawn before anything else
     if(ui_tools_isOpen())
     {
         ui_tools_draw();
