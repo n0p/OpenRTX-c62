@@ -73,8 +73,17 @@ namespace ui_walk
 
 /* ------------------------------------------------------------- the keys --- */
 
-/** One key event, as the keypad queue delivers it, then one pass of the FSM. */
-inline void pressKey(uint32_t keys, bool isLong = false)
+/**
+ * One key event, as the keypad queue delivers it, then one pass of the FSM.
+ *
+ * A press is three events, not one: input_scanKeyboard() reports the key going
+ * down, the long press 700 ms later if it is still down, and the release (the
+ * bitmap changing is an event like any other).  The screens that give a tap and
+ * a hold different meanings -- the channel list deletes on a hold -- decide on
+ * the release, so a harness that only pressed would be testing a keypad that
+ * does not exist.
+ */
+inline void pressEvent(uint32_t keys, bool isLong)
 {
     kbd_msg_t msg;
     msg.value = 0;
@@ -88,11 +97,18 @@ inline void pressKey(uint32_t keys, bool isLong = false)
     ui_saveState();
 }
 
+inline void pressKey(uint32_t keys, bool isLong = false)
+{
+    pressEvent(keys, false);
+    if (isLong)
+        pressEvent(keys, true);
+    pressEvent(0u, false);
+}
+
 /** A digit is a press and a release, as the matrix reports it. */
 inline void digit(uint32_t k)
 {
     pressKey(k);
-    pressKey(0);
 }
 
 /* ----------------------------------------------------------- the stores --- */

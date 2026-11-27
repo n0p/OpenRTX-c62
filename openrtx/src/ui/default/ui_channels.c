@@ -101,6 +101,19 @@ static bool fieldEdit = false;
 static char msgBuf[22] = "";
 static long long msgUntil = 0;
 
+/*
+ * P2 on the list: edit on a tap, delete on a hold.
+ *
+ * The keypad reports the press and, 700 ms later, the long press as two
+ * events.  Acting on the press edge opened the editor, so the long press found
+ * itself in the editor and saved the channel there instead of deleting it: the
+ * confirmation that erases a channel could not be reached from the keypad at
+ * all, and every attempt rewrote an 8 KiB slot.  So the press only remembers
+ * the key, and the action is decided by what comes next: the long press means
+ * delete, the release (keys == 0) means the tap.
+ */
+static bool p2Held = false;
+
 /******************************************************************************
  *                              Small helpers                                 *
  ******************************************************************************/
@@ -761,6 +774,10 @@ static bool listKey(kbd_msg_t *msg, bool *sync_rtx)
 {
     uint16_t count = (uint16_t)chstore_count();
 
+    /* A key that joins P2 while it is down makes the press something else */
+    if (p2Held && (msg->keys != 0) && ((msg->keys & KEY_F2) == 0))
+        p2Held = false;
+
     /* UP is the previous entry, as in every other list of this UI */
     if (msg->keys & (KEY_UP | KNOB_LEFT)) {
         if (count > 0) {
@@ -786,11 +803,29 @@ static bool listKey(kbd_msg_t *msg, bool *sync_rtx)
         if (count == 0)
             return true;
 
-        if (msg->long_press)
-            screen = CHS_CONFIRM;
-        else
+        if (msg->long_press) {
+            /*
+             * Only a press seen on this screen can turn into a delete.  A long
+             * press whose press edge went to another screen -- the editor
+             * saves on P2, closes, and the long press arrives here afterwards
+             * -- is the tail of a keystroke this list never got: acting on it
+             * would ask to delete the channel the operator has just saved.
+             */
+            if (p2Held) {
+                p2Held = false;
+                screen = CHS_CONFIRM;
+            }
+        } else {
+            p2Held = true;
+        }
+    } else if (msg->keys == 0) {
+        /* The key came up: a tap, which edits the selected channel */
+        if (p2Held) {
+            p2Held = false;
             editorEdit(listSel);
+        }
     } else if (msg->keys & KEY_ESC) {
+        p2Held = false;
         screen = CHS_CLOSED;
     }
 
@@ -1152,6 +1187,7 @@ void ui_channels_open(void)
     screen = CHS_LIST;
     msgBuf[0] = '\0';
     fieldEdit = false;
+    p2Held = false;
 
     int last = chstore_lastUsed();
     listSel = (last >= 0) ? (uint16_t)last : 0;

@@ -79,6 +79,17 @@ static struct
     long long msgUntil;
 } ct;
 
+/*
+ * P2 on the list: edit on a tap, delete on a hold.
+ *
+ * The keypad delivers the press and, 700 ms later, the long press as two
+ * events, so acting on the press edge opened the editor and the long press
+ * then arrived in it, where P2 moves the cursor: the confirmation that erases
+ * a contact could not be reached.  The press only remembers the key and the
+ * release (keys == 0) decides the tap, as in the channel list.
+ */
+static bool p2Held = false;
+
 static const char *modeName(uint8_t mode)
 {
     switch (mode) {
@@ -265,6 +276,10 @@ static bool listKey(kbd_msg_t *msg)
 {
     uint16_t count = (uint16_t)cstore_count();
 
+    /* A key that joins P2 while it is down makes the press something else */
+    if (p2Held && (msg->keys != 0) && ((msg->keys & KEY_F2) == 0))
+        p2Held = false;
+
     /* UP is the previous contact, as in every other list */
     if (msg->keys & KEY_UP) {
         if (count > 0)
@@ -288,14 +303,27 @@ static bool listKey(kbd_msg_t *msg)
     } else if (msg->keys & KEY_F2) {
         if (count == 0)
             return true;
-        if (msg->long_press)
-            ct.screen = CTS_CONFIRM;
-        else {
+
+        if (msg->long_press) {
+            /* Only a press this screen saw can become a delete: the tail of a
+             * keystroke the editor took is not one (see the note above) */
+            if (p2Held) {
+                p2Held = false;
+                ct.screen = CTS_CONFIRM;
+            }
+        } else {
+            p2Held = true;
+        }
+    } else if (msg->keys == 0) {
+        /* The key came up: a tap, which edits the selected contact */
+        if (p2Held) {
+            p2Held = false;
             cstore_contact_t c;
             if (cstore_get(ct.sel, &c) == 0)
                 editorEnter(ct.sel, &c);
         }
     } else if (msg->keys & KEY_ESC) {
+        p2Held = false;
         ct.screen = CTS_CLOSED;
         state.ui_screen = MENU_TOP;
     }
@@ -510,6 +538,7 @@ void ui_contacts_open(void)
     cstore_init();
     ct.screen = CTS_LIST;
     ct.msg[0] = '\0';
+    p2Held = false;
     clampList();
 }
 
