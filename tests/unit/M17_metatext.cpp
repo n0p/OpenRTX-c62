@@ -145,3 +145,25 @@ TEST_CASE("getNextBlock with single block input", "[m17][metatext]")
         strncmp((char *)(meta1.raw_data + 1), (char *)(meta4.raw_data + 1), 13)
         == 0);
 }
+
+TEST_CASE("No text at all still pages a block", "[m17][metatext]")
+{
+    /*
+     * The metadata field goes out with every transmission, text or not.  With
+     * an empty text there are zero blocks, and getNextBlock() used to cycle its
+     * index with `% totalBlocks`: a division by zero, which on the M33 happens
+     * to return 0 and on any other core is undefined behaviour inside the
+     * radio thread.
+     */
+    MetaText mt;
+    meta_t meta = {};
+
+    mt.setText((char *)"");
+
+    for (int i = 0; i < 3; i++)
+        mt.getNextBlock(meta);
+
+    /* Block 0 of an empty text: index 0, no total-blocks bits, spaces */
+    REQUIRE(meta.raw_data[0] == 0x01);
+    REQUIRE(meta.raw_data[1] == ' ');
+}

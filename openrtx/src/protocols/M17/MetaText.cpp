@@ -107,6 +107,19 @@ void MetaText::getNextBlock(meta_t &meta)
 {
     uint8_t totalBlocks = DIV_ROUND_UP(strlen(text), META_TEXT_BLOCK_LEN);
 
+    /*
+     * No text at all is a legitimate state (M17 transmits the metadata field
+     * whether or not there is anything to say about the transmission), and
+     * then there are no blocks to cycle: the modulo below would be a division
+     * by zero.  On the M33 UDIV by zero returns 0 so it happens to work today,
+     * which is exactly why it must not be left to the instruction.
+     */
+    if (totalBlocks == 0) {
+        getBlock(meta, 0);
+        nextBlockIndex = 0;
+        return;
+    }
+
     getBlock(meta, nextBlockIndex);
     nextBlockIndex = (nextBlockIndex + 1) % totalBlocks;
 }
