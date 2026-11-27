@@ -103,7 +103,34 @@ static struct
     bool     ptt;
     /** A press waiting for the answer to be written: -1 none, 0 up, 1 down */
     int8_t   pttPending;
+    /** The operator's channel, kept from the first TUNE or PTT of a session:
+     *  the bench rewrites frequency, mode, power and rx_only in state.channel,
+     *  and without this a receive-only channel stayed transmittable after the
+     *  session and the bench frequency became the stored VFO. */
+    channel_t savedChannel;
+    bool     channelSaved;
 } bs;
+
+/** Remember the operator's channel, once per session (state_mutex held). */
+static void benchSaveChannelLocked(void)
+{
+    if (!bs.channelSaved) {
+        bs.savedChannel = state.channel;
+        bs.channelSaved = true;
+    }
+}
+
+/** Remember the operator's channel, once per session.  Takes the lock. */
+static bool benchSaveChannel(void)
+{
+    if (bs.channelSaved)
+        return true;
+    if (!state_tryLock(BENCH_LOCK_MS))
+        return false;
+    benchSaveChannelLocked();
+    state_unlock();
+    return true;
+}
 
 /** Index of the CTCSS entry nearest to `hz`, or -1 when none is close. */
 static int nearestCtcss(uint16_t hz)
@@ -183,9 +210,24 @@ static void benchRestore(void)
          * next RELEASE or the session reset puts it back.  Tearing the PA down
          * is what this function is for and that already happened above. */
     }
+
     bs.toneOn = false;
     bs.toneHz = 0;
     bs.toneSaved = false;
+
+    /*
+     * And the operator's channel comes back: the run rewrote its frequency,
+     * mode, power and rx_only (TUNE), and a receive-only channel that stays
+     * transmittable after the client has gone away is the one thing a bench
+     * session must not leave behind.  A lock that cannot be taken leaves the
+     * flag set, so the next RELEASE or the session reset tries again.
+     */
+    if (bs.channelSaved && state_tryLock(BENCH_LOCK_MS)) {
+        state.channel = bs.savedChannel;
+        state_unlock();
+        bs.channelSaved = false;
+        ui_rtxSyncRequest = true;
+    }
 }
 
 /**
@@ -243,8 +285,16 @@ int pc_proto_platformBench(uint8_t op, pcProtoBenchArgs_t *a)
                 return -1;
             if (a->power > SETTINGS_TX_POWER_MAX)
                 return -1;
+            /*
+             * A mode outside the table would be written into the channel and
+             * reach the driver as an opmode it does not know; the bench is a
+             * measurement instrument, not a way to invent a mode.
+             */
+            if (a->mode > OPMODE_WFM_BC)
+                return -1;
             if (!state_tryLock(BENCH_LOCK_MS))
                 return BENCH_BUSY;
+            benchSaveChannelLocked();
             state.channel.mode = a->mode != 0 ? a->mode : state.channel.mode;
             /* The wire carries bw + 1 so that 0 can mean "keep"; 1..3 map onto
              * the rtx bandwidth enum. */
@@ -305,6 +355,10 @@ int pc_proto_platformBench(uint8_t op, pcProtoBenchArgs_t *a)
             if (a->power == 0)
                 return -1;
 
+            /* The channel the release has to put back (see benchRestore()) */
+            if (!benchSaveChannel())
+                return BENCH_BUSY;
+
             /* Tone first: it has to be in the channel fields before the rtx
              * thread builds a new configuration, or the keying would use the
              * previous sub-tone. */
@@ -363,9 +417,16 @@ int pc_proto_platformBench(uint8_t op, pcProtoBenchArgs_t *a)
             a->txState = (uint8_t)rtx_getCurrentStatus().opStatus;
             a->toneHz = bs.toneHz;
             a->level = bs.level; /* 0 until the scaling lands on the PA */
-            /* What the driver will actually key with, after the rtx thread has
-             * taken the new configuration. */
-            a->power = (uint16_t)rtx_getCurrentStatus().txPower;
+            /*
+             * The power this run will key with, which is the number the client
+             * compares its measurement against -- not the rtx status, which can
+             * still read 0 for a few tens of milliseconds after a TUNE or
+             * before the first configuration.  Answering 0 there made the core
+             * refuse a keying that the platform had already armed
+             * (bs.pttPending below), and the radio then transmitted while the
+             * client believed the order had been rejected.
+             */
+            a->power = (uint16_t)state_txPowerMw();
             return 0;
         }
 

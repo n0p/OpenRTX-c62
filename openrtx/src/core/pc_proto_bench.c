@@ -339,9 +339,11 @@ int pc_bench_tune(struct pcReq *r)
     }
     power = bench.power;
 
-    if (bench.capArmed || bench.swState != SW_IDLE) {
+    if (bench.capArmed || bench.swState != SW_IDLE || bench.ptt) {
         /* Retuning in the middle of a capture or a sweep would silently
-         * invalidate what was collected. */
+         * invalidate what was collected; retuning with the PA up changes the
+         * frequency of a live transmission, which is a sweep going out on the
+         * air one point at a time. */
         r->err = PC_ERR_BUSY;
         return -1;
     }
@@ -429,6 +431,14 @@ int pc_bench_ptt(struct pcReq *r)
     a.power = bench.power;
     int rc = pc_proto_platformBench(PC_BENCH_OP_PTT, &a);
     if (rc != 0) {
+        if (on) {
+            /* Whatever the platform armed before it refused, take back: the
+             * client is about to be told the order failed and nobody will send
+             * the PTT-off for it. */
+            pcProtoBenchArgs_t rel;
+            memset(&rel, 0, sizeof(rel));
+            (void)pc_proto_platformBench(PC_BENCH_OP_RELEASE, &rel);
+        }
         if (rc == -(int)PC_ERR_BUSY)
             r->err = PC_ERR_BUSY;
         else if (on && a.power == 0)
@@ -440,6 +450,9 @@ int pc_bench_ptt(struct pcReq *r)
     /* The platform reports the power it really keyed with, which is what the
      * run has to be compared against. */
     if (a.power == 0 && on) {
+        pcProtoBenchArgs_t rel;
+        memset(&rel, 0, sizeof(rel));
+        (void)pc_proto_platformBench(PC_BENCH_OP_RELEASE, &rel);
         r->err = PC_ERR_INVALID_VALUE;
         return -1;
     }
@@ -769,7 +782,9 @@ int pc_bench_sweep(struct pcReq *r)
             r->err = PC_ERR_INVALID_VALUE;
             return -1;
         }
-        if (bench.capArmed || bench.swState != SW_IDLE) {
+        if (bench.capArmed || bench.swState != SW_IDLE || bench.ptt) {
+            /* A sweep retunes 96 times; with the PA up that is 96
+             * transmissions nobody asked for (see pc_bench_tune). */
             r->err = PC_ERR_BUSY;
             return -1;
         }

@@ -234,22 +234,6 @@ static int logHook(int c)
 {
     static char line[LINE_MAX];
     static size_t len;
-    bool linked;
-
-    /*
-     * The line buffer is shared by every writer -- printk, and newlib's
-     * printf through the stdout hook -- and nothing serialised them:
-     * CONFIG_PRINTK_SYNC holds printk against printk and says nothing about
-     * printf or about an interrupt.  Two writers stepping `len` at the same
-     * time put characters of one line into the middle of the other, and the
-     * hook then feeds half a line to the ring.
-     *
-     * Interrupts off for the handful of instructions it takes to place one
-     * byte: the hook is short and never sleeps, and lineFeed() below takes the
-     * ring's own lock nested inside this one.  The console decision is read
-     * inside the lock so that it belongs to the line the bytes went into.
-     */
-    unsigned int key = irq_lock();
 
     if (c == '\n' || c == '\r') {
         if (len > 0) {
@@ -261,12 +245,8 @@ static int logHook(int c)
         line[len++] = (char)c;
     }
 
-    linked = pc_proto_linked(&proto);
-
-    irq_unlock(key);
-
     /* Before a client links, the console is still the console. */
-    if (!linked) {
+    if (!pc_proto_linked(&proto)) {
         if (prevPrintkHook != NULL)
             return prevPrintkHook(c);
         return c;
@@ -636,72 +616,24 @@ int pc_proto_platformDiag(pcProtoDiag_t *out)
 int pc_proto_platformReg(int chip, uint8_t reg, uint16_t *value)
 {
     if (chip == 0) {
-        /* -1 when the transfer did not complete: the client sees an error
-         * instead of a made-up register value. */
-        if (bk4819_readRegChecked(&c62_bk4819, reg, value) < 0)
-            return -1;
+        *value = bk4819_readReg(&c62_bk4819, reg);
         return 0;
     }
     if (chip == 1) {
-        /* Same lock as the driver's own sequences: the tuner's frame state
-         * lives between calls, so a poke from the cable must not land in the
-         * middle of one (c62Bk1080Lock()). */
-        if (!c62Bk1080Lock())
-            return -1;
-        const uint16_t v = BK1080_ReadRegister(&c62_bk1080, reg);
-        c62Bk1080Unlock();
-        *value = v;
+        *value = BK1080_ReadRegister(&c62_bk1080, reg);
         return 0;
     }
     return -1;
 }
 
-/*
- * REG_30 carries two kinds of bit: the audio path a bench session writes it
- * for (AF DAC, discriminator, RX DSP) and the two that start the chip's
- * transmitter on their own -- PA gain and the TX DSP.  The register itself is
- * on the protocol's whitelist on purpose (pc_proto_dbg.c), and the PA enable
- * latch of REG_33, which is what puts the radio on the air, is not writable
- * from the cable at all.  What is left is a carrier with nobody asking for it:
- * writing those two bits while the driver is not transmitting is refused, and
- * the audio-path bits stay writable so the bench keeps what the whitelist is
- * for.
- */
-#define REG30_TX_ENABLE_BITS (BIT(3) | BIT(1))
-
-static bool regStartsTransmitter(uint8_t reg, uint16_t value)
-{
-    if (reg != 0x30)
-        return false;
-
-    return ((value & REG30_TX_ENABLE_BITS) != 0) &&
-           (radio_getStatus() != TX);
-}
-
 int pc_proto_platformRegWrite(int chip, uint8_t reg, uint16_t value)
 {
     if (chip == 0) {
-        if (regStartsTransmitter(reg, value)) {
-            static uint32_t refusedAt = 0;
-            const uint32_t now = k_uptime_get_32();
-
-            if ((uint32_t)(now - refusedAt) >= 1000) {
-                refusedAt = now;
-                printk("pcproto: REG_30 = %04x would key the transmitter, "
-                       "refused (the bench PTT asks the gate)\n",
-                       value);
-            }
-            return -1;
-        }
-
         bk4819_writeReg(&c62_bk4819, reg, value);
         return 0;
     }
     if (chip == 1) {
-        if (!c62Bk1080Lock())
-            return -1;
         BK1080_WriteRegister(&c62_bk1080, reg, value);
-        c62Bk1080Unlock();
         return 0;
     }
     return -1;
@@ -761,26 +693,12 @@ int pc_proto_platformCapture(int op, pcProtoCapture_t *st, uint8_t *buf,
         case PC_CAP_OP_STATUS:
             *st = cap;
             return 0;
-        case PC_CAP_OP_READ: {
-            /*
-             * off and count come from a frame, not from this firmware, and
-             * they are 32-bit: `off + count > cap.written` passes for
-             * off = 0x100, count = 0xFFFFFF00 because the sum wraps to zero,
-             * and the memcpy below then reads ~4 GiB out of PSRAM.  Checked as
-             * a subtraction, which cannot wrap, and against the capture's own
-             * capacity before it becomes a byte length.
-             */
-            const uint32_t written = cap.written;
-
-            if ((off >= written) || (count > (written - off)) ||
-                (count > (uint32_t)CAP_MAX))
+        case PC_CAP_OP_READ:
+            if (off >= cap.written || off + count > cap.written)
                 return -1;
-
             memcpy(buf, &capBuffer[off], (size_t)count * 2);
             cap.read = off + count;
             return (int)count;
-        }
-
         default:
             return -1;
     }
@@ -1243,11 +1161,24 @@ static void pcProtoMain(void *a, void *b, void *c)
                      * instance counts the frames itself. */
                     if (frames > 0)
                         lastFrameMs = k_uptime_get_32();
-                    /* A client that stops talking gives the console back. */
-                    if (pc_proto_linked(&proto) &&
-                        (k_uptime_get_32() - lastFrameMs) > PC_PROTO_IDLE_MS) {
-                        pc_proto_reset(&proto);
-                    }
+                }
+
+                /*
+                 * A client that stops talking gives the console back -- and
+                 * this has to run on every pass, not only on the ones that
+                 * carried bytes.  A client that died, or a cable that was
+                 * pulled, is exactly the case where nothing arrives: with the
+                 * check inside the `n > 0` branch the session stayed linked
+                 * for ever and the bench's PTT override with it, so the radio
+                 * kept transmitting to nobody.  pc_proto_reset() ends the
+                 * session, and with it the bench namespace, through
+                 * pc_proto_benchReset() -> the platform's release.
+                 */
+                if (pc_proto_linked(&proto) &&
+                    (k_uptime_get_32() - lastFrameMs) > PC_PROTO_IDLE_MS) {
+                    printk("port: no valid frame for %u ms, session closed\n",
+                           (unsigned)PC_PROTO_IDLE_MS);
+                    pc_proto_reset(&proto);
                 }
             }
         }
@@ -1278,19 +1209,11 @@ static void pcProtoMain(void *a, void *b, void *c)
          * it now, instead of holding a key at power on.
          */
 #ifdef C62_BASEBAND_DUMP
-        /*
-         * Its own name: `up` above is the accessory switch, and this file has
-         * to compile with the dump and the protocol both enabled -- the
-         * combination a bench session uses, where the dump is paused while a
-         * client is linked.  Redeclaring `up` here is a compile error in
-         * exactly that build, which is why the only build that can pause the
-         * dump did not exist.
-         */
-        const bool linked = pc_proto_linked(&proto);
-        if (linked && !dumpPaused) {
+        bool up = pc_proto_linked(&proto);
+        if (up && !dumpPaused) {
             baseband_dump_pause(true);
             dumpPaused = true;
-        } else if (!linked && dumpPaused) {
+        } else if (!up && dumpPaused) {
             baseband_dump_pause(false);
             dumpPaused = false;
         }
