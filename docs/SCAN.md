@@ -216,7 +216,7 @@ Ficheros:
 |---|---|
 | `core/scanner.h/.c` | la máquina de estados, sin dependencias |
 | `core/scan_service.h/.c` | squelch, banco, ajustes, retune, cola de eventos |
-| `core/state.c` | `scan_service_init()` en `state_init()`, `scan_service_poll()` al principio de `state_task()` (5 ms), `scan_service_stop()` en `state_terminate()` |
+| `core/state.c` | `scan_service_init()` en `state_init()`, `scan_service_poll()` al principio de `state_task()` (5 ms), `scan_service_stop(false)` en `state_terminate()` |
 | `core/channel_store.h/.c` | flag SKIP y `chstore_setSkipped()` |
 | `core/settings.h/.c` | los ajustes y la tabla de pasos |
 | `tests/unit/scanner.cpp` | los tests de host con receptor simulado |
@@ -224,6 +224,22 @@ Ficheros:
 **Cadencia.** `state_task()` corre cada 5 ms desde el hilo principal; el poll va
 antes del filtro de 100 ms para que los tiempos del scan sean de milisegundos y
 las sintonías caigan entre dos bloques de audio.
+
+**Cerrojos.** `scan_service.c` no llama nunca a `pthread_mutex_lock()` sobre
+`state_mutex`, y las dos razones son opuestas. La interfaz ejecuta
+`ui_updateFSM()` con el cerrojo tomado (`threads.c`), así que un servicio que lo
+vuelva a tomar se autobloquea: el mutex se crea con atributos por defecto
+(`PTHREAD_MUTEX_NORMAL`) y, en el Zephyr del workspace, el dueño que rebloquea
+duerme para siempre. El hilo de UI se queda con el cerrojo en la mano,
+`state_task()` se cuelga en la lectura de batería y la caja negra reinicia la
+radio a los 2 s: es lo que pasaba al pulsar `Scan` con un canal en el banco. El
+hilo principal, en cambio, llama a `scan_service_poll()` con el cerrojo libre y
+es el que alimenta al perro guardián y al supervisor de TX, así que no puede
+esperar a la interfaz: `state_tryLock()` con plazo (20 ms) y el paso se salta si
+no lo consigue, que el tick siguiente (5 ms) lo reintenta. Por eso las dos
+funciones que entran desde la interfaz reciben `stateLocked` en vez de decidirlo
+ellas: el contexto lo sabe el llamante, y un `pthread_mutex_trylock()` que
+funcione no distingue "lo tengo yo" de "lo tiene otro".
 
 **Retune.** La máquina no habla con el RTX: `scan_service.c` escribe
 `state.channel` (canal, frecuencia, y el destino DMR si el canal es DMR) y pone
@@ -257,9 +273,9 @@ El módulo no añade teclas ni pantallas. Lo que la interfaz tiene que hacer:
 
 | gancho | llamada | cuándo |
 |---|---|---|
-| arrancar el scan de memorias | `scan_service_start(SCAN_MODE_MEMORY)` | la fila `Scan` del menú de herramientas (P1 mantenido, `ui_tools.c`) |
-| arrancar el scan de VFO | `scan_service_start(SCAN_MODE_VFO)` | ninguna tecla todavía: el menú de herramientas arranca la búsqueda de VFO (`vfo_search_service`), que es otra máquina |
-| parar | `scan_service_stop()` | la misma tecla, `KEY_ENTER`, `KEY_ESC`, o antes de cualquier sintonía manual / cambio de canal / cambio de modo |
+| arrancar el scan de memorias | `scan_service_start(SCAN_MODE_MEMORY, true)` | la fila `Scan` del menú de herramientas (P1 mantenido, `ui_tools.c`) |
+| arrancar el scan de VFO | `scan_service_start(SCAN_MODE_VFO, true)` | ninguna tecla todavía: el menú de herramientas arranca la búsqueda de VFO (`vfo_search_service`), que es otra máquina |
+| parar | `scan_service_stop(true)` | la misma tecla, `KEY_ENTER`, `KEY_ESC`, o antes de cualquier sintonía manual / cambio de canal / cambio de modo |
 | pintar el estado | `scan_service_status(&st)` y `scan_service_stateName()` | en `ui_updateGUI()`: `st.running`, `st.state`, `st.channel`, `st.frequency`, `st.visited`, `st.stops` |
 | avisos | `while (scan_service_popEvent(&ev)) ...` | en `ui_updateFSM()`: "parado", "reanudando", "fin de rango", "prioridad" |
 | marcar SKIP | `chstore_setSkipped(idx, on)` | en el editor de canales (P2 o el menú del canal) |
@@ -268,7 +284,7 @@ El módulo no añade teclas ni pantallas. Lo que la interfaz tiene que hacer:
 
 Reglas para la UI:
 
-1. Antes de tocar `state.channel` por una acción del operador, `scan_service_stop()`.
+1. Antes de tocar `state.channel` por una acción del operador, `scan_service_stop(true)`.
    Si no, el scan volverá a sintonizar en el tick siguiente.
 2. No hace falta gestionar el PTT: el servicio lo ve y para el scan solo.
 3. `scan_service_start()` devuelve `false` si ya hay un scan, si el banco está
@@ -276,6 +292,9 @@ Reglas para la UI:
 4. El ajuste de "canal prioritario" se escribe en `state.settings.scan_priority`
    (índice+1) y `SETTINGS_SCAN_PRIORITY` en `scan_flags`: el servicio relee los
    ajustes en cada arranque, así que un cambio se aplica al siguiente scan.
+5. El segundo argumento de `start`/`stop` es el cerrojo: `true` desde la
+   interfaz (que corre dentro de `state_mutex`), `false` desde el hilo
+   principal (`state_terminate()`, tests). Lo que se explica en "Cerrojos".
 
 ## 10. Tests
 

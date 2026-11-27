@@ -52,6 +52,64 @@
 #define SCAN_VFO_LOW_DEFAULT  144000000U
 #define SCAN_VFO_HIGH_DEFAULT 146000000U
 
+/**
+ * Deadline for the state lock taken from the poll path, ms.
+ *
+ * scan_service_poll() runs in the main thread, which is the one that feeds the
+ * application watchdog and the TX supervisor: it may wait for the UI, but not
+ * for as long as the UI takes.  A missed retune costs one step of the scan and
+ * is retried on the next tick, 5 ms later.
+ */
+#define SCAN_STATE_LOCK_MS 20
+
+/*
+ * Locking, and the one rule of this file: it never calls
+ * pthread_mutex_lock()/unlock() on state_mutex.
+ *
+ * Two threads reach the functions below and they arrive in opposite states:
+ *
+ *   - the UI thread, through ui_updateFSM() -> ui_tools.c, with state_mutex
+ *     already held around the whole pass (threads.c).  Taking it again is a
+ *     self-deadlock, and on PTHREAD_MUTEX_NORMAL -- which is what state_init()
+ *     creates -- nothing breaks it: in Zephyr the owner that re-locks sleeps
+ *     for ever (zephyr-listenai/lib/posix/pthread_mutex.c).  The UI task then
+ *     stops with the mutex in its hand, state_task() waits on the battery read
+ *     for ever, and the black box reboots the radio two seconds later.  That is
+ *     the bug this parameterisation exists to remove, and core/vfo_search_service.c
+ *     documents the same trap.
+ *   - the main thread, from state_task() -> scan_service_poll() and from
+ *     state_terminate() -> scan_service_stop(), with the mutex free.
+ *
+ * So the callers say which one they are (`stateLocked`), and a writer that is
+ * not already inside the mutex takes it with a deadline (state_tryLock) and
+ * skips the step when it cannot, instead of parking the main thread.
+ */
+
+/**
+ * Take state_mutex unless the caller already owns it.
+ *
+ * @param stateLocked: true when the caller is inside state_mutex.
+ * @return true when the caller may write the state.
+ */
+static bool scanLock(bool stateLocked)
+{
+    if (stateLocked)
+        return true;
+
+    return state_tryLock(SCAN_STATE_LOCK_MS);
+}
+
+/**
+ * Release state_mutex, unless the caller owns it and will release it itself.
+ *
+ * @param stateLocked: the flag given to scanLock().
+ */
+static void scanUnlock(bool stateLocked)
+{
+    if (!stateLocked)
+        state_unlock();
+}
+
 /// Where the scan came from, to put everything back when it stops.
 struct scanHome
 {
@@ -149,14 +207,16 @@ static void noteChannel(uint16_t idx, const channel_t *ch)
     currentMode      = ch->mode;
 }
 
-static void tuneChannel(uint16_t idx)
+static bool tuneChannel(uint16_t idx, bool stateLocked)
 {
     channel_t ch;
 
     if (chstore_toChannel(idx, &ch) != 0)
-        return;
+        return false;
 
-    pthread_mutex_lock(&state_mutex);
+    if (!scanLock(stateLocked))
+        return false;
+
     state.channel       = ch;
     state.channel_index = idx;
 
@@ -170,22 +230,29 @@ static void tuneChannel(uint16_t idx)
     if (ch.mode == OPMODE_DMR)
         (void)chstore_applySettings(idx, &state.settings);
 
-    pthread_mutex_unlock(&state_mutex);
+    scanUnlock(stateLocked);
 
     noteChannel(idx, &ch);
     ui_rtxSyncRequest = true;
+
+    return true;
 }
 
-static void tuneFrequency(uint32_t frequency)
+static bool tuneFrequency(uint32_t frequency, bool stateLocked)
 {
-    pthread_mutex_lock(&state_mutex);
+    if (!scanLock(stateLocked))
+        return false;
+
     state.channel.rx_frequency = frequency;
     state.channel.tx_frequency = (uint32_t)((int32_t)frequency + home.shift);
-    pthread_mutex_unlock(&state_mutex);
+
+    scanUnlock(stateLocked);
 
     currentChannel   = SCAN_CHANNEL_NONE;
     currentFrequency = frequency;
     ui_rtxSyncRequest = true;
+
+    return true;
 }
 
 /**
@@ -193,9 +260,11 @@ static void tuneFrequency(uint32_t frequency)
  * signal keeps the operator on that channel, which is the whole point of
  * stopping there.
  */
-static void adoptCurrent(void)
+static void adoptCurrent(bool stateLocked)
 {
-    pthread_mutex_lock(&state_mutex);
+    if (!scanLock(stateLocked))
+        return;   /* the home stays the one the scan started from */
+
     home.channel   = state.channel;
     home.index     = state.channel_index;
     home.shift     = (int32_t)state.channel.tx_frequency -
@@ -204,26 +273,38 @@ static void adoptCurrent(void)
     home.dmrId     = state.settings.dmr_dest_id;
     home.dmrTs     = state.settings.dmr_timeslot;
     home.onBank    = state.bank_enabled;
-    pthread_mutex_unlock(&state_mutex);
+
+    scanUnlock(stateLocked);
 
     home.valid = true;
 }
 
 /** Put back the channel, the frequency and the mode the scan started from. */
-static void finishRestore(void)
+static void finishRestore(bool stateLocked)
 {
-    restorePending = false;
-    if (!home.valid)
+    if (!home.valid) {
+        restorePending = false;
+        return;
+    }
+
+    /*
+     * A restore that cannot take the mutex is not dropped: restorePending stays
+     * set and the next poll, 5 ms later, tries again.  Dropping it would leave
+     * the radio on a scanned channel while the scan says it is over.
+     */
+    if (!scanLock(stateLocked))
         return;
 
-    pthread_mutex_lock(&state_mutex);
+    restorePending = false;
+
     state.channel       = home.channel;
     state.channel_index = home.index;
     state.tuner_mode    = home.tunerMode;
     state.settings.dmr_dest_type = home.dmrType;
     state.settings.dmr_dest_id   = home.dmrId;
     state.settings.dmr_timeslot  = home.dmrTs;
-    pthread_mutex_unlock(&state_mutex);
+
+    scanUnlock(stateLocked);
 
     currentChannel   = home.onBank ? home.index : SCAN_CHANNEL_NONE;
     currentFrequency = home.channel.rx_frequency;
@@ -341,7 +422,7 @@ void scan_service_init(void)
     currentMode      = OPMODE_FM;
 }
 
-bool scan_service_start(uint8_t mode)
+bool scan_service_start(uint8_t mode, bool stateLocked)
 {
     if (scan_isRunning(&engine))
         return false;
@@ -361,7 +442,9 @@ bool scan_service_start(uint8_t mode)
     if (!scan_configure(&engine, &cfg))
         return false;
 
-    pthread_mutex_lock(&state_mutex);
+    if (!scanLock(stateLocked))
+        return false;
+
     home.channel    = state.channel;
     home.index      = state.channel_index;
     home.tunerMode  = state.tuner_mode;
@@ -373,7 +456,8 @@ bool scan_service_start(uint8_t mode)
     home.onBank     = state.bank_enabled;
     /* The UI hook: the previous mode is restored when the scan stops */
     state.tuner_mode = (cfg.mode == SCAN_MODE_MEMORY) ? CHSCAN : SCAN;
-    pthread_mutex_unlock(&state_mutex);
+
+    scanUnlock(stateLocked);
     home.valid = true;
 
     uint16_t startChannel = (cfg.mode == SCAN_MODE_MEMORY) ? home.index
@@ -394,14 +478,14 @@ bool scan_service_start(uint8_t mode)
 
     pushEvent(&action);
     if (action.target == SCAN_TARGET_CHANNEL)
-        tuneChannel(action.channel);
+        (void)tuneChannel(action.channel, stateLocked);
     else if (action.target == SCAN_TARGET_FREQUENCY)
-        tuneFrequency(action.frequency);
+        (void)tuneFrequency(action.frequency, stateLocked);
 
     return true;
 }
 
-void scan_service_stop(void)
+void scan_service_stop(bool stateLocked)
 {
     scanAction_t action;
     uint32_t now = (uint32_t)getTick();
@@ -410,7 +494,7 @@ void scan_service_stop(void)
     {
         /* Nothing to stop, but a stop owed a retune may still be pending */
         if (restorePending && !txActive())
-            finishRestore();
+            finishRestore(stateLocked);
         return;
     }
 
@@ -427,7 +511,7 @@ void scan_service_stop(void)
     if (txActive())
         restorePending = true;
     else
-        finishRestore();
+        finishRestore(stateLocked);
 }
 
 void scan_service_poll(void)
@@ -435,7 +519,7 @@ void scan_service_poll(void)
     if (!scan_isRunning(&engine))
     {
         if (restorePending && !txActive())
-            finishRestore();
+            finishRestore(false);
         return;
     }
 
@@ -454,7 +538,7 @@ void scan_service_poll(void)
          * back to where the scan started.
          */
         if ((before == SCAN_STATE_SIGNAL) || (before == SCAN_STATE_HANG))
-            adoptCurrent();
+            adoptCurrent(false);
 
         pushEvent(&action);
         restorePending = true;
@@ -464,9 +548,9 @@ void scan_service_poll(void)
     pushEvent(&action);
 
     if (action.target == SCAN_TARGET_CHANNEL)
-        tuneChannel(action.channel);
+        (void)tuneChannel(action.channel, false);
     else if (action.target == SCAN_TARGET_FREQUENCY)
-        tuneFrequency(action.frequency);
+        (void)tuneFrequency(action.frequency, false);
 }
 
 bool scan_service_status(struct scanStatus *out)

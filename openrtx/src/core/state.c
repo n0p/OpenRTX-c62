@@ -251,7 +251,7 @@ void state_terminate()
      * channel: stop it first, which puts the receiver (and the DMV/VFO record)
      * back where the scan found it.
      */
-    scan_service_stop();
+    scan_service_stop(false);   /* the caller of state_terminate() holds no lock */
 #endif
 
     // Never store a brightness of 0 to avoid booting with a black screen

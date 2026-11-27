@@ -259,7 +259,7 @@ static void applyMode(uint8_t id, bool *sync_rtx)
 #ifdef CONFIG_SCAN
     /* A running scan retunes the radio at every step: it stops before the
        operator's change, as docs/SCAN.md requires of any manual change */
-    scan_service_stop();
+    scan_service_stop(true);   /* ui_updateFSM() runs inside state_mutex */
 #endif
 
     state.channel.mode = id;
@@ -354,7 +354,7 @@ static void activate(uint8_t index, bool *sync_rtx)
             /* The service is what the whole feature hangs from: it walks the
                bank, samples the squelch and retunes from state_task() */
             closeMenu(sync_rtx);
-            if (scan_service_start(SCAN_MODE_MEMORY))
+            if (scan_service_start(SCAN_MODE_MEMORY, true))
                 beepOk();
             else
                 beepError();      /* empty bank, already scanning, or TX */
@@ -558,7 +558,7 @@ void ui_tools_open(void)
      * a menu whose Mode row flickered with the channel being scanned would be
      * lying about what green is going to apply.
      */
-    scan_service_stop();
+    scan_service_stop(true);   /* ui_updateFSM() runs inside state_mutex */
 #endif
 
     ts.backScreen = (state.ui_screen == MAIN_MEM) ? MAIN_MEM : MAIN_VFO;

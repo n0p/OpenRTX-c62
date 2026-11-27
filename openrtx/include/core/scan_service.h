@@ -22,10 +22,17 @@
  * What the interface has to do, and nothing else (the interface files are not
  * touched by the scan, see docs/SCAN.md for the exact hooks):
  *
- *   - call scan_service_start(SCAN_MODE_MEMORY) or
- *     scan_service_start(SCAN_MODE_VFO) from a key;
- *   - call scan_service_stop() before any manual retune or channel change;
+ *   - call scan_service_start(SCAN_MODE_MEMORY, true) or
+ *     scan_service_start(SCAN_MODE_VFO, true) from a key;
+ *   - call scan_service_stop(true) before any manual retune or channel change;
  *   - call scan_service_popEvent() while drawing, to show what happened.
+ *
+ * The second argument is the locking context, and it is not optional: the
+ * interface runs inside state_mutex (threads.c holds it around ui_updateFSM())
+ * while state_task() and state_terminate() run with it free.  Passing `true`
+ * from the interface is what keeps these calls from self-deadlocking the UI
+ * task, and passing `false` from the main thread is what keeps them from
+ * parking it behind the UI.  See the comment in core/scan_service.c.
  *
  * There is no need to stop it on PTT: the service sees the transmission, stops
  * the scan and puts the receiver back where it was, without touching the
@@ -71,17 +78,23 @@ void scan_service_init(void);
  *
  * @param mode: SCAN_MODE_MEMORY walks the channel bank, SCAN_MODE_VFO walks the
  *              range in the settings.
+ * @param stateLocked: true when the caller already holds state_mutex -- which
+ *              is the case of the interface, inside ui_updateFSM().  Only
+ *              state_terminate() and the host tests pass false.
  * @return false if a scan is already running, if there is nothing to walk
- *         (empty bank) or if the radio is transmitting.
+ *         (empty bank), if the radio is transmitting or if the state could not
+ *         be locked in time.
  */
-bool scan_service_start(uint8_t mode);
+bool scan_service_start(uint8_t mode, bool stateLocked);
 
 /**
  * Stop scanning and put the receiver back on the channel / frequency the scan
  * started from.  Safe to call when not scanning, and safe to call from the
  * middle of a call: the retune waits for the transmission to end.
+ *
+ * @param stateLocked: true when the caller already holds state_mutex.
  */
-void scan_service_stop(void);
+void scan_service_stop(bool stateLocked);
 
 /**
  * Periodic step: sample the squelch and the transmit state, advance the

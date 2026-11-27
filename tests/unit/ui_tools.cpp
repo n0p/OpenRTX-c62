@@ -28,7 +28,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <atomic>
+#include <chrono>
 #include <cstring>
+#include <pthread.h>
+#include <thread>
 #include <vector>
 
 extern "C" {
@@ -36,6 +40,7 @@ extern "C" {
 #include "core/event.h"
 #include "core/state.h"
 #include "core/ui.h"
+#include "interfaces/delays.h"
 #include "core/voicePrompts.h"
 #include "rtx/rtx.h"
 #include "ui/ui_channels.h"
@@ -159,7 +164,7 @@ void resetUi(uint8_t screen = MAIN_VFO)
         pressKey(KEY_ESC);
 
 #ifdef CONFIG_SCAN
-    scan_service_stop();
+    scan_service_stop(false);
 #endif
 #ifdef CONFIG_VFO_SEARCH
     vfoSearchService_stop();
@@ -218,6 +223,14 @@ void bootBank(void)
     }
 
     REQUIRE(chstore_count() == 2);
+
+    /*
+     * Bind the service to this bank.  Without it the scanner has no list,
+     * chstore_count() still says there is something to walk, and a start goes
+     * straight to the end of the range while reporting that it is running: a
+     * scan test would pass without the scan ever tuning anything.
+     */
+    scan_service_init();
 }
 
 /** Row index of a label in the screen that is on, -1 when it is not there. */
@@ -405,14 +418,14 @@ TEST_CASE("every row starts the service it names", "[ui][tools]")
         /* The PTT is armed again: a scan is stopped by transmitting */
         REQUIRE_FALSE(state.txDisable);
 
-        scan_service_stop();
+        scan_service_stop(false);
     }
 
     SECTION("opening the menu stops a running memory scan") {
         bootBank();
         resetUi();
 
-        REQUIRE(scan_service_start(SCAN_MODE_MEMORY));
+        REQUIRE(scan_service_start(SCAN_MODE_MEMORY, false));
         struct scanStatus st;
         REQUIRE(scan_service_status(&st));
         REQUIRE(st.running);
@@ -423,7 +436,7 @@ TEST_CASE("every row starts the service it names", "[ui][tools]")
         REQUIRE(scan_service_status(&st));
         REQUIRE_FALSE(st.running);
 
-        scan_service_stop();
+        scan_service_stop(false);
     }
 
     SECTION("Scan with an empty bank beeps and leaves the radio alone") {
@@ -520,6 +533,127 @@ TEST_CASE("every row starts the service it names", "[ui][tools]")
         REQUIRE(claimOf(KEY_ENTER) == UI_CLAIM_SCREEN);
     }
 }
+
+/* ================================================================= locking == */
+
+#ifdef CONFIG_SCAN
+/*
+ * The UI thread calls ui_updateFSM() with state_mutex held (threads.c), so
+ * every service a key starts runs inside that mutex.  state_mutex is created
+ * with default attributes -- PTHREAD_MUTEX_NORMAL -- and a second acquisition
+ * by its owner does not fail: in Zephyr the owner that re-locks the mutex it
+ * holds sleeps for ever (zephyr-listenai/lib/posix/pthread_mutex.c), and on
+ * glibc it blocks just the same.  The UI task then stops with the mutex in its
+ * hand, state_task() waits on it for the battery read, and the black box
+ * reboots the radio two seconds later.  That was Tools > Scan memory with one
+ * channel in the bank; core/vfo_search_service.c documents the same trap.
+ *
+ * These cases reproduce the thread, not just the call.  A regression leaves the
+ * worker parked on the mutex; the deadline fails the case, the mutex is then
+ * released so the worker can finish, and the rest of the binary is not left
+ * waiting on a lock a dead case took.
+ */
+template <typename F>
+bool runUnderStateLock(F fn, uint32_t timeoutMs = 2000)
+{
+    std::atomic<bool> done{false};
+
+    pthread_mutex_lock(&state_mutex);
+    std::thread worker([&]() {
+        fn();
+        done = true;
+    });
+
+    uint32_t waited = 0;
+    while (!done && (waited < timeoutMs)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        waited += 2;
+    }
+
+    /* Read the verdict before the unlock: the worker finishes as soon as it is
+     * released, and that is exactly the case this has to fail. */
+    bool finished = done.load();
+
+    pthread_mutex_unlock(&state_mutex);
+    worker.join();
+
+    return finished;
+}
+
+TEST_CASE("Scan memory starts and stops from a key without re-locking the state",
+          "[ui][tools][scan]")
+{
+    bootBank();
+    resetUi();
+    openOn("Scan");
+
+    /* Green on the row, from the UI thread's pass: start with the mutex held */
+    REQUIRE(runUnderStateLock([]() { pressKey(KEY_ENTER); }));
+
+    struct scanStatus st;
+    REQUIRE(scan_service_status(&st));
+    REQUIRE(st.running);
+    REQUIRE_FALSE(ui_tools_isOpen());
+    REQUIRE(state.tuner_mode == CHSCAN);
+
+    /* P1 long opens the menu and stops the scan -- also inside the pass */
+    REQUIRE(runUnderStateLock([]() { pressKey(KEY_F1, true); }));
+    REQUIRE(ui_tools_isOpen());
+
+    REQUIRE(scan_service_status(&st));
+    REQUIRE_FALSE(st.running);
+    REQUIRE(state.tuner_mode == VFO);
+
+    /* Out of the menu for the next case, as the harness expects */
+    while (ui_tools_isOpen())
+        pressKey(KEY_ESC);
+}
+
+TEST_CASE("The scan poll hands the state back instead of waiting for the UI",
+          "[ui][tools][scan]")
+{
+    /*
+     * state_task() polls with the mutex free, and it is the thread that feeds
+     * the application watchdog and the TX supervisor: it may wait for the UI
+     * for a moment, never for as long as a screen takes.  A retune it cannot
+     * take is skipped and retried on the next tick; a scan is not stopped by a
+     * busy UI.
+     *
+     * The first loop proves the path under test is the one that retunes -- with
+     * a free mutex the scan walks the bank; the second one repeats the same
+     * polls with the mutex held by the UI thread and only asks that they come
+     * back.
+     */
+    bootBank();
+    resetUi();
+    REQUIRE(scan_service_start(SCAN_MODE_MEMORY, false));
+
+    struct scanStatus st;
+    REQUIRE(scan_service_status(&st));
+    REQUIRE(st.running);
+    uint16_t first = state.channel_index;
+    bool walked = false;
+    for (int i = 0; (i < 100) && !walked; i++) {
+        delayMs(5);
+        scan_service_poll();
+        walked = (state.channel_index != first);
+    }
+    REQUIRE(walked);
+
+    REQUIRE(runUnderStateLock([]() {
+        /* Longer than one settle plus one dwell, so a retune is due inside */
+        for (int i = 0; i < 60; i++) {
+            delayMs(5);
+            scan_service_poll();
+        }
+    }, 5000));
+
+    REQUIRE(scan_service_status(&st));
+    REQUIRE(st.running);
+
+    scan_service_stop(false);
+}
+#endif
 
 /* ============================================================ mode submenu == */
 
