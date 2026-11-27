@@ -558,7 +558,10 @@ static bool composeKey(kbd_msg_t *msg, long long now)
             return true;
         }
         if (msg->keys & KEY_F2) {
-            textAppend(' ');
+            /* The peer is a callsign or an ID: a space there would be a
+             * character the rest of the firmware has to reject later. */
+            if (mg.row == MG_ROW_TEXT)
+                textAppend(' ');
             return true;
         }
         if (msg->keys & KEY_ENTER) {
@@ -845,8 +848,13 @@ static void drawCompose(void)
 
     if (mg.msg[0] != '\0' && getTick() < mg.msgUntil)
         ui_hints_draw(&(ui_hints_t){ mg.msg, NULL, NULL, NULL });
-    else if (mg.typing)
+    else if (mg.typing && (mg.row == MG_ROW_TEXT))
         ui_hints_draw(&(ui_hints_t){ "DONE", "DEL", "SPACE", "EXIT" });
+    else if (mg.typing)
+        /* Typing a callsign or an SSID: DEL and DONE, and no key that does
+         * nothing -- a bar that promises SPACE where a space cannot go is the
+         * same lie as a dead key. */
+        ui_hints_draw(&(ui_hints_t){ "DONE", "DEL", NULL, "EXIT" });
     else
         ui_hints_draw(&(ui_hints_t){ "OK", "-", "+", "BACK" });
 }
