@@ -194,7 +194,13 @@ static void onFrame(const uint8_t *payload, size_t len, void *user)
 static void receiveStep(void)
 {
     if (!rxOpen())
+    {
+        /* Without a receive path nothing is being listened to, and the last
+         * carrier state is not evidence of anything: with it latched the
+         * modem would wait for ever before transmitting. */
+        svc.carrier = false;
         return;
+    }
 
     dataBlock_t block = inputStream_getData(svc.rxStream);
     if ((block.data == NULL) || (block.len == 0))
@@ -354,7 +360,14 @@ static void handleParam(uint8_t cmd, uint8_t value)
 
 static void queueFrame(const uint8_t *data, size_t len)
 {
-    if ((len == 0) || (len > state.settings.packet_maxframe))
+    /*
+     * A frame longer than the slot is refused here, whatever the setting says:
+     * packet_maxframe is operator-editable (and the KISS host can hand over up
+     * to 340 bytes), while the queue slot holds sizeof(data) -- copying a
+     * longer one ran off the end of the slot and into the next one.
+     */
+    if ((len == 0) || (len > state.settings.packet_maxframe) ||
+        (len > sizeof(svc.queue[0].data)))
     {
         svc.txDropped++;
         return;
@@ -413,11 +426,27 @@ static void pumpKiss(void)
  * CSMA, as TNC2 implements it: in half duplex, wait one slot time and
  * transmit with probability PERSIST/256, otherwise wait another slot. In full
  * duplex the host is assumed to know what it is doing and there is no sense.
+ *
+ * Listening first is the half of CSMA that was missing: svc.carrier is the
+ * AFSK/G3RUH demodulator's own signal detector, updated every block while the
+ * service is receiving (receiveStep()), and a frame queued over a channel that
+ * already carries traffic collides with it and is lost -- on 144.800 with two
+ * stations that is most frames.  The slot count restarts when the channel
+ * clears, so the transmission waits out the other station's frame instead of
+ * rolling dice in the middle of it.
  */
 static bool channelFree(uint32_t nowMs)
 {
     if (svc.fullDuplex)
         return true;
+
+    if (svc.carrier)
+    {
+        /* Busy: nothing to decide, and the wait starts again on the next
+         * clear channel (the host's PERSIST/slottime still apply after it). */
+        svc.slotArmed = false;
+        return false;
+    }
 
     if (!svc.slotArmed)
     {

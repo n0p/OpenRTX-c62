@@ -26,6 +26,9 @@ static constexpr uint32_t WFM_POLL_MS = 100;
  */
 static constexpr uint32_t WFM_LOST_MS = 500;
 
+/** How long the mode waits for state_mutex before skipping a publish, ms. */
+static constexpr uint32_t WFM_STATE_LOCK_MS = 5;
+
 OpMode_WFM::OpMode_WFM() : enterRx(true), carrier(false), lastPoll(0), pollMs(0)
 {
 }
@@ -75,7 +78,12 @@ void OpMode_WFM::update(rtxStatus_t *const status, const bool newCfg)
     }
 
     if (status->opStatus != RX)
+    {
+        /* Nothing to poll when not receiving, but not for free: this is a
+         * thread, and a mode that returns without yielding spins the core. */
+        sleepFor(0, 20);
         return;
+    }
 
     const uint32_t now = (uint32_t)getTick();
 
@@ -86,7 +94,10 @@ void OpMode_WFM::update(rtxStatus_t *const status, const bool newCfg)
     }
 
     if ((lastPoll != 0) && ((now - lastPoll) < WFM_POLL_MS))
+    {
+        sleepFor(0, 5);
         return;
+    }
 
     lastPoll = now;
 
@@ -96,6 +107,7 @@ void OpMode_WFM::update(rtxStatus_t *const status, const bool newCfg)
         pollMs += WFM_POLL_MS;
         if (pollMs >= WFM_LOST_MS)
             carrier = false;
+        sleepFor(0, 20);
         return;
     }
 
@@ -122,12 +134,20 @@ void OpMode_WFM::update(rtxStatus_t *const status, const bool newCfg)
 
     /*
      * Mirror it into the shared state so that screen code reads broadcast FM
-     * the way it reads everything else.  The lock is short and taken at the
-     * rate the receiver is polled (10 Hz), never from an interrupt.
+     * the way it reads everything else.  Bounded, and skipped when the UI holds
+     * the lock: the next poll in 100 ms will publish the same picture, while a
+     * plain pthread_mutex_lock() here parks the RTX thread behind the UI --
+     * which is the thread that has to keep the receiver alive.
      */
-    pthread_mutex_lock(&state_mutex);
-    state.wfm = st;
-    pthread_mutex_unlock(&state_mutex);
+    if (state_tryLock(WFM_STATE_LOCK_MS))
+    {
+        state.wfm = st;
+        state_unlock();
+    }
+
+    /* One poll per WFM_POLL_MS, and a thread that must not spin while it
+     * waits for the next one. */
+    sleepFor(0, 10);
 }
 
 bool OpMode_WFM::rxSquelchOpen()

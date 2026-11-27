@@ -264,7 +264,15 @@ void OpMode_Airband::update(rtxStatus_t *const status, const bool newCfg)
 #endif
 
     if (status->opStatus != RX)
+    {
+        /* One poll per pass only when there is a receiver to poll: a mode that
+         * returns here without yielding keeps the RTX thread -- the highest
+         * priority one -- spinning the core at 100 %, which is both heat and an
+         * S-meter read out of the BK4819 at full speed (docs/BLACKBOX.md, the
+         * AM hang).  FM and the digital modes sleep 10-30 ms here as well. */
+        sleepFor(0, 20);
         return;
+    }
 
     const rssi_t   level = sLevelToRssi(status->sqlLevel);
     const rssi_t   rssi  = rtx_getRssi();
@@ -290,6 +298,10 @@ void OpMode_Airband::update(rtxStatus_t *const status, const bool newCfg)
         audioPath_release(rxAudioPath);
         sqlOpen = false;
     }
+
+    /* 30 ms: the 33 Hz cadence the RSSI filter in rtx.cpp is designed around,
+     * and the one the other modes keep. */
+    sleepFor(0, 30);
 }
 
 #ifdef CONFIG_C62_AIR_TX

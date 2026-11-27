@@ -251,6 +251,12 @@ int txg_formatTrace(const struct txGuard *guard, char *buf, size_t len)
     size_t used = 0;
     int n;
 
+    /* A transmission that never entered the guard (APRS, the packet modem)
+     * leaves the trace empty, and the caller prints the buffer: it has to be a
+     * string even when there is nothing to say. */
+    if (len > 0)
+        buf[0] = '\0';
+
     for (uint8_t i = 0; (i < guard->traceCount) && (used < len); i++) {
         const struct txGuardEvent *ev = &guard->trace[i];
         const char *name = (ev->code
