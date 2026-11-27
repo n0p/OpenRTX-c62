@@ -150,6 +150,8 @@ DMR_LOCK_DECLARE(s_lock);
 static EXT_RAM_BSS_ATTR dmr_slot_info_t s_pub_slot[2];
 static EXT_RAM_BSS_ATTR dmr_log_entry_t s_pub_log[DMR_LOG_LEN];
 static int s_pub_log_count;
+/* s_log_seq of the copy the UI holds: 0 until the first publish */
+static uint32_t s_pub_log_seq;
 static dmr_proto_stats_t s_pub_stats;
 
 static void printf_line(const char *fmt, ...)
@@ -158,7 +160,14 @@ static void printf_line(const char *fmt, ...)
 #include <stdarg.h>
 static void printf_line(const char *fmt, ...)
 {
-    char buf[160];
+    /*
+     * The only caller of this file's printers is the rtx thread, through
+     * dmr_proto_frame(), so one buffer serves every line.  It used to be
+     * 160 bytes of that thread's stack per formatted line -- every CSBK,
+     * data header, LRRP and alias -- on a stack that lives in DTCM at
+     * 95.9 %.
+     */
+    static EXT_RAM_BSS_ATTR char buf[160];
     va_list ap;
     if (s_print == NULL) {
         return;
@@ -204,7 +213,9 @@ void dmr_proto_reset(void)
     DMR_LOCK(s_lock);
     s_pub_slot[0] = s_slot[0].info;
     s_pub_slot[1] = s_slot[1].info;
+    memset(s_pub_log, 0, sizeof(s_pub_log));
     s_pub_log_count = 0;
+    s_pub_log_seq = ++s_log_seq;
     s_pub_stats = s_stats;
     DMR_UNLOCK(s_lock);
 }
@@ -1482,8 +1493,17 @@ int dmr_proto_frame(const dmr_frame_t *f)
     DMR_LOCK(s_lock);
     s_pub_slot[0] = s_slot[0].info;
     s_pub_slot[1] = s_slot[1].info;
-    memcpy(s_pub_log, s_log, sizeof(s_log));
-    s_pub_log_count = s_log_count;
+    /*
+     * The call log only moves when an entry is written or updated, and
+     * that bumps s_log_seq: copying the twelve records (about 900 bytes
+     * of PSRAM) under the lock that the UI takes, on every frame at
+     * 16.7 frames/s, was paying for a snapshot that had not changed.
+     */
+    if (s_pub_log_seq != s_log_seq) {
+        memcpy(s_pub_log, s_log, sizeof(s_log));
+        s_pub_log_count = s_log_count;
+        s_pub_log_seq = s_log_seq;
+    }
     s_pub_stats = s_stats;
     DMR_UNLOCK(s_lock);
 
