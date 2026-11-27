@@ -449,6 +449,7 @@ TEST_CASE("A call takes the screen over and times out", "[tetra][status][ui]")
     REQUIRE(ts.talker == 320026);
     REQUIRE_FALSE(ts.callEncrypted);
     REQUIRE(ts.voice);
+    REQUIRE((ts.tn >= 1 && ts.tn <= 4));
 
     /*
      * The call screen owns the four lines while sync and call are set
@@ -466,6 +467,8 @@ TEST_CASE("A call takes the screen over and times out", "[tetra][status][ui]")
     now_ms += 1;
     REQUIRE_FALSE(status().call);
     REQUIRE_FALSE(status().voice);
+    /* And the timeslot goes with it: no call, no slot to point at */
+    REQUIRE(status().tn == 0);
 }
 
 TEST_CASE("An uplink transmission is published and expires",

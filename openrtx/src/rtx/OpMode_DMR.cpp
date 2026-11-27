@@ -878,6 +878,25 @@ void OpMode_DMR::trunkPoll(rtxStatus_t *const status)
 
     trunkHz = hz;
     status->rxFrequency = hz;
+
+    /*
+     * The grant names the timeslot with the voice call, and in a trunked
+     * system that is the answer: the network assigns the slot, the operator's
+     * choice only means something when there is nothing to grant.  Following
+     * the grant is also what makes the other slot's traffic stop interrupting
+     * a call in progress.
+     */
+    if (slot == 1 || slot == 2) {
+        const int pref = (int)slot - 1;
+
+        if (dmr_voice_get_pref() != pref) {
+            dmr_voice_set_pref(pref);
+            printk("[DMR T3] el sistema concede el TS%u: lo sigo\n",
+                   (unsigned)slot);
+        }
+        c62_dmr.slot = (uint8_t)slot;
+    }
+
     dmr_demod_reset();
     radio_disableRtx();
     radio_enableRx();

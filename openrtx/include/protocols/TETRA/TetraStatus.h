@@ -43,6 +43,10 @@ struct tetraStatus {
     bool callGroup;     /**< Group call */
     bool callEncrypted; /**< Call or its traffic is encrypted */
     bool voice;         /**< Traffic seen in the last second */
+    uint8_t tn;         /**< Timeslot (1..4) the call is on, 0 if none.  A TETRA
+                         *   frame has four slots and one of them carries the
+                         *   call: this is the one being followed, the same
+                         *   answer the DMR timeslot gives on its two. */
     uint16_t callId;    /**< Call identifier */
     uint32_t callDst;   /**< Called (group) SSI, 0 if unknown */
     uint32_t talker;    /**< Talking party SSI, 0 if unknown */

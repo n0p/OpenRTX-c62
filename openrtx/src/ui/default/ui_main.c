@@ -182,12 +182,23 @@ static void _ui_drawTetraInfo(void)
         _ui_printWithSymbol(layout.line4_pos, layout.line4_symbol_size,
                             SYMBOL_LOCK, layout.line4_font, enc, 1);
     } else {
+        /*
+         * The state line, with the timeslot the call is being heard in when
+         * there is one: a TETRA frame has four and the call sits in one of
+         * them, so the number says which.  Three forms, widest first, because
+         * the line is 160 px and the cell above already takes its own.
+         */
         const char *voice = ts.voice ? "Voice" : "Idle";
-        snprintf(a, sizeof(a), "%s, call %u", voice, ts.callId);
-        const char *state[] = { a, voice };
-        _ui_printFit(layout.line4_pos, layout.line4_font, pad,
-                     (ts.callId != 0) ? state : state + 1,
-                     (ts.callId != 0) ? 2 : 1);
+        char tn[16] = "";
+        if (ts.tn >= 1 && ts.tn <= 4)
+            snprintf(tn, sizeof(tn), " TN%u", (unsigned)ts.tn);
+
+        char full[32], mid[32];
+        snprintf(full, sizeof(full), "%s, call %u%s", voice, ts.callId, tn);
+        snprintf(mid, sizeof(mid), "%s%s", voice, tn);
+        const char *state[] = { full, mid, voice };
+        const int n = (ts.callId != 0) ? 3 : 2;
+        _ui_printFit(layout.line4_pos, layout.line4_font, pad, state, n);
     }
 }
 

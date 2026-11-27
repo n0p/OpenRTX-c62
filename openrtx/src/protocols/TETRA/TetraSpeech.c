@@ -26,7 +26,14 @@
 /* The size and its floor live in core/stack_budget.h: this stack is malloc'd,
  * so an overrun is a heap corruption with no guard fault behind it. */
 #define THREAD_STACK STACK_BUDGET_TETRA_SPEECH
-#define FOLLOW_HOLD_MS 1000 /* Keep following a timeslot this long */
+/*
+ * How long the followed timeslot is kept after its last speech: five seconds,
+ * the same hang the DMR timeslot's AUTO uses (protocols/DMR/dmr_voice.c,
+ * VOICE_AUTO_HOLD_MS).  One answer for both TDMA modes: a conversation has
+ * gaps, and giving the slot up inside them would hand the speaker to whoever
+ * else is talking on another slot.
+ */
+#define FOLLOW_HOLD_MS 5000
 
 struct frame {
     uint8_t bits[OA_FRAME_BITS];

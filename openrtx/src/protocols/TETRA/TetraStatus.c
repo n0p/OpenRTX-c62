@@ -30,6 +30,8 @@ void tetra_getStatus(struct tetraStatus *out)
     pthread_mutex_lock(&statusMutex);
     long long now = getTick();
     status.call = status.call && (now - lastCall < CALL_TIMEOUT_MS);
+    if (!status.call)
+        status.tn = 0; /* the call is over: no slot to point at any more */
     status.voice = status.call && (now - lastVoice < VOICE_TIMEOUT_MS);
     status.uplink = status.uplink && (now - lastUplink < UPLINK_TIMEOUT_MS);
     *out = status;
@@ -151,6 +153,9 @@ void tetraStatus_onEvent(void *user, const struct tetra_event *ev)
 
         case TETRA_EV_TRAFFIC: {
             const struct tetra_traffic *t = &ev->u.traffic;
+            /* The slot the frame put this burst in: the one being heard */
+            if (t->time.tn >= 1 && t->time.tn <= 4)
+                status.tn = (uint8_t)t->time.tn;
             if (t->talker_ssi != 0)
                 status.talker = t->talker_ssi;
             status.callEncrypted |= t->encrypted;

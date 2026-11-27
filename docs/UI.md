@@ -575,6 +575,9 @@ destination: `CALL` (`GROUP` / `USER`) and `DEST` (the talkgroup or the
 subscriber ID, 24 bits, step 1, long press ±100), then `FINE`, `BKL`, `KEYLIT`,
 `LOCK`, `MSGS`, `MSG`.
 
+The whole subject — which modes have slots, what `AUTO` does, what a stored
+channel and a trunked grant each override — is in `docs/TIMESLOTS.md`.
+
 `AUTO` follows the call on the air: the receiver listens to both slots, locks
 onto the first one that carries a call, and stays with it — audio, identifiers
 and the `TS` on the main screen — until the call ends (its terminator) or five
