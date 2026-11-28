@@ -130,6 +130,9 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/rtx/rtx.cpp',
                'openrtx/src/rtx/ModeArena.cpp',
                'openrtx/src/rtx/TxGuard.c',
+               # The trace of the last startTx(): which call refused, by name
+               # (docs/TX_SAFETY.md).  Portable C, no dependency.
+               'openrtx/src/rtx/TxTrace.c',
                'openrtx/src/rtx/OpMode_FM.cpp',
                'openrtx/src/rtx/OpMode_Airband.cpp',
                'openrtx/src/rtx/OpMode_WFM.cpp',
