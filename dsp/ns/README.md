@@ -84,7 +84,9 @@ the M33 float dump converted with the firmware's rounding rule — also 3840/384
 
 ## Cost
 
-`make cost` runs two builds of the same harness on the Xtensa ISS (0 and 8
+`make cost` is a gate, not a printout: it fails when the frame goes over
+700 000 instructions or 1 000 000 cycles (thresholds in the Makefile, margin
+justified there and in docs/TEST_DSP.md §2).  It runs two builds of the same harness on the Xtensa ISS (0 and 8
 measured frames) and subtracts, so the number is one frame with nothing else in
 it:
 
@@ -124,7 +126,7 @@ table.
 
 `make cost SIMD=1` replaces `ns_matvec()` with `rnn_dsp.c`, two neurons per
 VFPU instruction (`MUL.S`/`ADD.S` on `xtfloatx2`, never fused).  It is
-**bit-exact** (8/8 frames) and **slower**: **1 030 213 instructions/frame**, 1.53×
+**bit-exact** (8/8 frames) and **slower**: **1 030 327 instructions/frame**, 1.53×
 the scalar code.  The reason is the weights: they are `signed char`, so every
 multiply needs an int8→float conversion, and the conversion costs more than the
 two-lane multiply saves; clang also scalarises the union-based splat/pack, so
@@ -138,7 +140,9 @@ which cannot be bit-exact and would have to spend the tolerance budget above.
 ```
 source ~/xtensa/env.sh          # XTENSA_CORE=venus_hifi4, core registry, licence stub
 make m33-dump dsp-dump compare  # the bit-exactness check
-make cost                       # instructions and cycles per 10 ms frame
+make cost                       # instructions and cycles per 10 ms frame, gated
+make test-path                  # 60 s of audio: continuity, latency, no-DSP path
+make test-path-mutations        # that those two tests can fail
 make m33-cost                   # the same measurement on the M33 (QEMU plugin)
 make test                       # the service body, int16 in and out
 make tables                     # diff the init-time tables of both builds

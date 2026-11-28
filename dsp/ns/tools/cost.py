@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Per-frame cost on the Xtensa ISS, and where it goes.
 
-usage: cost.py cost0.txt cost8.txt N gprof0.txt gprof8.txt
+usage: cost.py cost0.txt cost8.txt N [gprof0.txt gprof8.txt]
+                   [--max-insn N] [--max-cycles N]
 
 The harness runs two warm-up frames plus N measured ones; both builds run the
 same warm-up, so the difference of the two totals is exactly the N measured
@@ -52,7 +53,17 @@ def parse_gprof(path):
 
 
 def main():
-    c0, c8, n = sys.argv[1], sys.argv[2], int(sys.argv[3])
+    args = sys.argv[1:]
+    max_insn = max_cycles = None
+    if "--max-insn" in args:
+        i = args.index("--max-insn")
+        max_insn = int(args[i + 1])
+        del args[i:i + 2]
+    if "--max-cycles" in args:
+        i = args.index("--max-cycles")
+        max_cycles = int(args[i + 1])
+        del args[i:i + 2]
+    c0, c8, n = args[0], args[1], int(args[2])
     i0, y0 = parse_summary(c0)
     i1, y1 = parse_summary(c8)
     di, dy = (i1 - i0) / n, (y1 - y0) / n
@@ -63,9 +74,9 @@ def main():
         print(f"at {mhz} MHz: {dy * 100 / (mhz * 1e6) * 100:.1f} % of the core, "
               f"{dy / (mhz * 1e6) * 1e3:.2f} ms of CPU per 10 ms of audio")
 
-    if len(sys.argv) > 5:
-        g0 = parse_gprof(sys.argv[4])
-        g8 = parse_gprof(sys.argv[5])
+    if len(args) > 5:
+        g0 = parse_gprof(args[3])
+        g8 = parse_gprof(args[4])
         rows = []
         for name, v in g8.items():
             per = v - g0.get(name, 0.0)
@@ -77,6 +88,26 @@ def main():
         for per, name in rows[:16]:
             print(f"{per:13.0f} {100 * per / tot:5.1f}  {name}")
 
+    # The budget is a gate, not a printout: a threshold that cannot fail is not
+    # a test.  Say the number, the threshold and which one was broken.
+    failed = []
+    if max_insn is not None and di > max_insn:
+        failed.append(f"instructions/frame {di:.0f} > {max_insn}")
+    if max_cycles is not None and dy > max_cycles:
+        failed.append(f"cycles/frame {dy:.0f} > {max_cycles}")
+    if max_insn is not None or max_cycles is not None:
+        budget = []
+        if max_insn is not None:
+            budget.append(f"instructions <= {max_insn}")
+        if max_cycles is not None:
+            budget.append(f"cycles <= {max_cycles}")
+        print("\nCOST BUDGET: " + ", ".join(budget))
+        if failed:
+            print("COST OVER BUDGET: " + "; ".join(failed))
+            return 1
+        print("COST OK")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

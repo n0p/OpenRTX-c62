@@ -45,6 +45,21 @@ FPCONTRACT ?= off
 NUM     += -ffp-contract=$(FPCONTRACT)
 B       := build
 
+# Cost budget for one 10 ms frame, checked by `make cost-check` (and by `make
+# cost`, which runs it):
+#
+#     instructions <= 700 000   (measured 671 441, 4.1 % of headroom)
+#     cycles       <= 1 000 000 (measured 933 066, 6.7 % of headroom)
+#
+# The headroom is small on purpose: these are the numbers that decide whether
+# the stage fits, and a threshold 20 % above the measurement would never fire.
+# 700 000 instructions is 23.3 % of a 300 MHz core and 1 000 000 cycles is
+# 33.3 %, i.e. the check fails a change that pushes the stage past the "it fits
+# with room to spare" line even if it does not fail the 25 % criterion outright.
+# Override for an experiment: make cost-check COST_MAX_INSN=... COST_MAX_CYCLES=...
+COST_MAX_INSN   ?= 700000
+COST_MAX_CYCLES ?= 1000000
+
 # ---------------------------------------------------------------- HiFi4
 XT      ?= $(HOME)/xtensa
 TOOLS   := $(XT)/RI-2021.7-linux/XtensaTools
@@ -84,7 +99,7 @@ QEMU_ARM := qemu-system-arm -M mps2-an505 -nographic \
             -semihosting-config enable=on,target=native
 
 .PHONY: all host dsp dsp-dump m33-dump tables tables-dsp tables-m33 compare \
-        cost m33-cost trace test test-dsp test-host crosscheck clean
+        cost cost-check m33-cost trace test test-dsp test-host test-path test-path-mutations crosscheck clean
 
 all: dsp-dump compare
 
@@ -208,6 +223,45 @@ test-host: | $(B)
 test: test-dsp
 	@python3 tools/cmp_int16.py $(B)/out_m33.txt $(B)/out_ns_dsp$(V).txt
 
+# --- §4 and §5 of docs/TEST_DSP.md: continuity and latency of a 60 s stream,
+#     and what the AP does when the DSP never answers.  Host builds only: the
+#     model of the AP path is the point, and it has to run 6 000 frames.
+PATH_TEST_SRC := tests/test_ns_path.c ns_dsp.c
+PATH_TEST_LIB := $(RNSRC) $(FDLIBM)/ef_log10.c $(FDLIBM)/ef_log.c
+
+$(B)/test_ns_path: $(PATH_TEST_SRC) $(PATH_TEST_LIB) | $(B)
+	env -i PATH=/usr/bin:/bin HOME=$(HOME) TMPDIR=$(TMPDIR) \
+	  cc -O2 $(NUM) $(LIBFLAGS) -DNS_OWN_SBRK=1 $(DEFS) -I$(FDLIBM) \
+	  -D__ieee754_logf=ns_logf -D__ieee754_log10f=ns_log10f \
+	  $(NSINC) $(PATH_TEST_LIB) $(PATH_TEST_SRC) -o $@ -lm
+
+test-path: $(B)/test_ns_path
+	./$(B)/test_ns_path
+
+# The two mutations the tests have to catch.  Each is a build with one line
+# changed, and both have to fail: a test that cannot fail is not a test.
+$(B)/test_ns_path_drop: $(PATH_TEST_SRC) $(PATH_TEST_LIB) | $(B)
+	env -i PATH=/usr/bin:/bin HOME=$(HOME) TMPDIR=$(TMPDIR) \
+	  cc -O2 $(NUM) $(LIBFLAGS) -DNS_OWN_SBRK=1 -DNS_DROP_FRAME=1 $(DEFS) \
+	  -I$(FDLIBM) -D__ieee754_logf=ns_logf -D__ieee754_log10f=ns_log10f \
+	  $(NSINC) $(PATH_TEST_LIB) $(PATH_TEST_SRC) -o $@ -lm
+
+$(B)/test_ns_path_nofb: $(PATH_TEST_SRC) $(PATH_TEST_LIB) | $(B)
+	env -i PATH=/usr/bin:/bin HOME=$(HOME) TMPDIR=$(TMPDIR) \
+	  cc -O2 $(NUM) $(LIBFLAGS) -DNS_OWN_SBRK=1 -DNS_NO_FALLBACK=1 $(DEFS) \
+	  -I$(FDLIBM) -D__ieee754_logf=ns_logf -D__ieee754_log10f=ns_log10f \
+	  $(NSINC) $(PATH_TEST_LIB) $(PATH_TEST_SRC) -o $@ -lm
+
+test-path-mutations: $(B)/test_ns_path_drop $(B)/test_ns_path_nofb
+	@echo "== mutation: one frame dropped by the stage (must FAIL)"
+	@if ./$(B)/test_ns_path_drop; then \
+	  echo "FAILED: the continuity test did not notice the dropped frame"; exit 1; \
+	else echo "OK: continuity caught it"; fi
+	@echo "== mutation: no fallback when the DSP is absent (must FAIL)"
+	@if ./$(B)/test_ns_path_nofb; then \
+	  echo "FAILED: the degradation test did not notice the silence"; exit 1; \
+	else echo "OK: degradation caught it"; fi
+
 compare:
 	python3 tools/cmp_frames.py $(B)/out_m33.txt $(B)/out_dsp$(V).txt
 
@@ -225,7 +279,16 @@ cost: $(B)/dsp_cost$(V).elf $(B)/dsp_cost0$(V).elf
 	@$(XTRUN) --profile=$(B)/dsp0$(V).gmon $(B)/dsp_cost0$(V).elf > /dev/null 2>&1
 	@$(XTGPROF) $(B)/dsp_cost$(V).elf $(B)/dsp$(V).gmon > $(B)/gprof8$(V).txt 2>&1
 	@$(XTGPROF) $(B)/dsp_cost0$(V).elf $(B)/dsp0$(V).gmon > $(B)/gprof0$(V).txt 2>&1
-	@python3 tools/cost.py $(B)/cost0$(V).txt $(B)/cost8$(V).txt 8 $(B)/gprof0$(V).txt $(B)/gprof8$(V).txt
+	@python3 tools/cost.py $(B)/cost0$(V).txt $(B)/cost8$(V).txt 8 $(B)/gprof0$(V).txt $(B)/gprof8$(V).txt \
+	   --max-insn $(COST_MAX_INSN) --max-cycles $(COST_MAX_CYCLES)
+
+# --- the same measurement as a pass/fail gate.  `make cost` already enforces it;
+# this target exists so a CI or a reviewer can run nothing else.
+cost-check: $(B)/dsp_cost$(V).elf $(B)/dsp_cost0$(V).elf
+	@$(XTRUN) --client_commands="summary" $(B)/dsp_cost0$(V).elf > $(B)/cost0$(V).txt 2>&1
+	@$(XTRUN) --client_commands="summary" $(B)/dsp_cost$(V).elf > $(B)/cost8$(V).txt 2>&1
+	@python3 tools/cost.py $(B)/cost0$(V).txt $(B)/cost8$(V).txt 8 \
+	   --max-insn $(COST_MAX_INSN) --max-cycles $(COST_MAX_CYCLES)
 
 # --- the init-time tables both builds generate from their own libm
 tables-dsp: $(DSP_SRC) $(XTLIBS) | $(B)

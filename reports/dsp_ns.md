@@ -176,7 +176,7 @@ Lo que hubo que resolver para que además sea *idéntico* al M33:
 | | instrucciones/trama | ciclos/trama (ISS) | a 300 MHz |
 |---|---:|---:|---|
 | HiFi4, escalar `float` (lo que se entrega) | **671 441** | **933 066** | **31,1 %** |
-| HiFi4, kernel SIMD de 2 carriles (§4) | 1 030 213 | 1 301 625 | 43,4 % |
+| HiFi4, kernel SIMD de 2 carriles (§4) | 1 030 327 | 1 299 890 | 43,4 % |
 | M33, mismo arnés y mismas banderas | 1 556 938 | — | 51,9 % (instr.) |
 
 Reparto por función en el DSP (perfil muestreado, ±2 %):
@@ -210,7 +210,7 @@ y con qué (GRU `int16`, no más carriles float).
 `make cost SIMD=1` sustituye `ns_matvec()` por `dsp/ns/rnn_dsp.c`: dos neuronas
 por instrucción (`MUL.S`/`ADD.S` sobre `xtfloatx2`, sin fusionar, para no cambiar
 el redondeo).  Es **bit-exacto** (8/8 tramas) y **más lento**:
-**1 030 213 instrucciones/trama**, 1,53× el escalar (933 066 ciclos → 1 301 625,
+**1 030 327 instrucciones/trama**, 1,53× el escalar (933 066 ciclos → 1 299 890,
 43,4 %).
 
 La causa es el formato de los pesos, no el número de carriles.  Los pesos del
