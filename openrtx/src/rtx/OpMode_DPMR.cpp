@@ -344,6 +344,11 @@ bool OpMode_DPMR::startTx(const rtxStatus_t *status)
 
     txg_streamsOpen(guard, (uint32_t)getTick());
     radio_enableTx();
+    if (radio_getStatus() != TX) {
+        txTrace_block("radio_enableTx(): the PA did not key");
+        stopTx();
+        return false;
+    }
     txg_note(guard, TXG_EV_KEYED, (uint32_t)getTick());
     txTrace_keyed();
     return true;
