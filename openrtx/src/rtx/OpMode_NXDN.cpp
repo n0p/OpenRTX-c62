@@ -24,6 +24,7 @@
 #include "protocols/NXDN/NxdnTx.h"
 #include "rtx/TxGuard.h"
 #endif
+#include "rtx/TxTrace.h"
 
 /* 20 ms of baseband at 48 kHz.  The demodulator is streaming and keeps its own
  * history, so the block only has to be small enough that the rtx thread turns
@@ -164,18 +165,22 @@ bool OpMode_NXDN::startBaseband(const rtxStatus_t *status)
     const float level = (status->bandwidth == BW_6_25) ? NXDN_TX_LEVEL_6K25
                                                        : NXDN_TX_LEVEL_12K5;
 
-    if ((src == 0) || (dst == 0))
+    if ((src == 0) || (dst == 0)) {
+        txTrace_block("startBaseband(): source or destination ID is 0");
         return false;
+    }
 
     nxdnTx_setup(&tx, src, dst, ran, status->dmrDestType != DMR_DEST_USER);
     fsk4Mod_init(&txMod, NXDN_TX_SPS, level, NXDN_TX_INVERT, true);
 
     txPath = audioPath_request(SOURCE_MCU, SINK_RTX, PRIO_TX);
+    txTrace_step("audioPath_request(SOURCE_MCU, SINK_RTX)", txPath);
     if (txPath < 0)
         return false;
 
     txId = audioStream_start(txPath, txSamples, 2 * NXDN_TX_HALF_SAMPLES,
                              48000, STREAM_OUTPUT | BUF_CIRC_DOUBLE);
+    txTrace_step("audioStream_start(OUT, 48 kHz, baseband)", txId);
     return (txId >= 0);
 }
 
@@ -185,20 +190,28 @@ bool OpMode_NXDN::startTx(const rtxStatus_t *status)
 
     txg_enter(guard, (uint32_t)getTick());
 
-    if (!dmrEnc_available())
+    txTrace_reset("NXDN");
+
+    if (!dmrEnc_available()) {
+        txTrace_block("no AMBE+2 encoder in this image");
         return false;
+    }
 
     /* A frequency has to be there: the platform tunes from the rtx status */
-    if ((status->txFrequency == 0) || (status->txDisable != 0))
+    if ((status->txFrequency == 0) || (status->txDisable != 0)) {
+        txTrace_block("txFrequency == 0 or txDisable");
         return false;
+    }
 
     if (!startBaseband(status)) {
+        txTrace_block("startBaseband()");
         txg_streamsFailed(guard, (uint32_t)getTick());
         stopTx();
         return false;
     }
 
     micPath = audioPath_request(SOURCE_MIC, SINK_MCU, PRIO_TX);
+    txTrace_step("audioPath_request(SOURCE_MIC, SINK_MCU)", micPath);
     if (micPath < 0) {
         stopTx();
         return false;
@@ -206,6 +219,7 @@ bool OpMode_NXDN::startTx(const rtxStatus_t *status)
 
     micId = audioStream_start(micPath, micPcm, 2 * VOCODER_PCM_SAMPLES, 8000,
                               STREAM_INPUT | BUF_CIRC_DOUBLE);
+    txTrace_step("audioStream_start(IN, 8 kHz, mic)", micId);
     if (micId < 0) {
         stopTx();
         return false;
@@ -230,7 +244,13 @@ bool OpMode_NXDN::startTx(const rtxStatus_t *status)
 
     txg_streamsOpen(guard, (uint32_t)getTick());
     radio_enableTx();
+    if (radio_getStatus() != TX) {
+        txTrace_block("radio_enableTx(): the PA did not key");
+        stopTx();
+        return false;
+    }
     txg_note(guard, TXG_EV_KEYED, (uint32_t)getTick());
+    txTrace_keyed();
     return true;
 }
 

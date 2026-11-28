@@ -369,6 +369,44 @@ The DMR transmit chain itself is not linked into the host build (demodulator and
 vocoder), so its call loop is verified on the radio; what the host proves is the
 decision that starts it and the clocks that end it.
 
+## When a PTT does nothing: `rtx/TxTrace.h`, and the host bench
+
+Everything above is the rule for keying.  The other half of "the PTT did
+nothing" is the mode's own chain: an audio path, one or two streams, the PA.
+All of those are calls that return a status, and every mode turns them into a
+bool -- so by the time the RTX layer sees `startTx() == false`, the call that
+said no is gone.  Five modes were reported that way at once (D-STAR, dPMR,
+NXDN, YSF, P25: no carrier on the PTT and nothing in the log), and it took a
+host bench to answer it.
+
+`rtx/TxTrace.h` is the record: the mode names itself, marks every call with what
+it returned, says which precondition it refused on, and marks the keying when
+the PA answered.  A handful of pointers and one integer, written by the RTX
+thread only.  It costs nothing on the radio and it is the first thing to read
+when a PTT is silent; `rtx/TxTrace.c` has no dependency, so the PC protocol can
+carry it later.
+
+`tests/host/tx_bench` is where it is read.  It compiles the five modes (plus FM
+as the control) against the emulator's drivers, drives them through
+`rtx_init()`/`rtx_configure()`/`rtx_task()` with a real press of the PTT and
+prints, per mode, TX or the call that refused:
+
+```sh
+meson test -C build_linux "TX Bench Host"      # or ./build_linux/tx_bench
+```
+
+It also checks itself, and that is the part that makes it worth trusting: it
+breaks a call on purpose through `emulator/txbench.h` (the playback driver
+refuses to start, the PA refuses to key, the receiver's stream is dead) and
+fails unless the mode names the call -- or, with the receiver dead, still keys.
+
+What the bench found, and the reason the emulator could not have found it
+earlier: the Linux platform listed `SINK_RTX`, `SOURCE_MIC` and `SOURCE_RTX`
+among its audio endpoints with no driver behind them, so every digital
+transmitter stopped at `audioStream_start()` with `-ENODEV`, one call below
+anything a mode decides.  `platform/drivers/audio/audio_linux_rtx.c` is the
+transmitter, the microphone and the discriminator the host was missing.
+
 ## Visibility from the PC
 
 `PC_MSG_DBG_INFO` carries `PC_TAG_TX_SECONDS` (u16, air time since the last

@@ -21,6 +21,7 @@
 #include "protocols/DPMR/DpmrSpeech.h"
 #include "protocols/DPMR/DpmrStatus.h"
 #include "rtx/OpMode_DPMR.hpp"
+#include "rtx/TxTrace.h"
 #include "core/utils.h"
 
 #ifdef CONFIG_DPMR_TX
@@ -257,8 +258,10 @@ bool OpMode_DPMR::startBaseband(const rtxStatus_t *status)
     uint8_t codeBits[12];
     uint16_t code = 0;
 
-    if ((status->dmrSourceId == 0) || (status->dmrDestId == 0))
+    if ((status->dmrSourceId == 0) || (status->dmrDestId == 0)) {
+        txTrace_block("startBaseband(): source or destination ID is 0");
         return false;
+    }
 
     if (dpmrDefs_channelCodeBits(status->rxFrequency, DPMR_GROUP_A,
                                  codeBits)) {
@@ -273,11 +276,13 @@ bool OpMode_DPMR::startBaseband(const rtxStatus_t *status)
     fsk4Mod_init(&txMod, DPMR_TX_SPS, DPMR_TX_LEVEL, DPMR_TX_INVERT, false);
 
     txPath = audioPath_request(SOURCE_MCU, SINK_RTX, PRIO_TX);
+    txTrace_step("audioPath_request(SOURCE_MCU, SINK_RTX)", txPath);
     if (txPath < 0)
         return false;
 
     txId = audioStream_start(txPath, txSamples, 2 * DPMR_TX_HALF_SAMPLES,
                              48000, STREAM_OUTPUT | BUF_CIRC_DOUBLE);
+    txTrace_step("audioStream_start(OUT, 48 kHz, baseband)", txId);
     return (txId >= 0);
 }
 
@@ -287,19 +292,27 @@ bool OpMode_DPMR::startTx(const rtxStatus_t *status)
 
     txg_enter(guard, (uint32_t)getTick());
 
-    if (!dmrEnc_available())
-        return false;
+    txTrace_reset("dPMR");
 
-    if ((status->txFrequency == 0) || (status->txDisable != 0))
+    if (!dmrEnc_available()) {
+        txTrace_block("no AMBE+2 encoder in this image");
         return false;
+    }
+
+    if ((status->txFrequency == 0) || (status->txDisable != 0)) {
+        txTrace_block("txFrequency == 0 or txDisable");
+        return false;
+    }
 
     if (!startBaseband(status)) {
+        txTrace_block("startBaseband()");
         txg_streamsFailed(guard, (uint32_t)getTick());
         stopTx();
         return false;
     }
 
     micPath = audioPath_request(SOURCE_MIC, SINK_MCU, PRIO_TX);
+    txTrace_step("audioPath_request(SOURCE_MIC, SINK_MCU)", micPath);
     if (micPath < 0) {
         stopTx();
         return false;
@@ -307,6 +320,7 @@ bool OpMode_DPMR::startTx(const rtxStatus_t *status)
 
     micId = audioStream_start(micPath, micPcm, 2 * VOCODER_PCM_SAMPLES, 8000,
                               STREAM_INPUT | BUF_CIRC_DOUBLE);
+    txTrace_step("audioStream_start(IN, 8 kHz, mic)", micId);
     if (micId < 0) {
         stopTx();
         return false;
@@ -330,7 +344,13 @@ bool OpMode_DPMR::startTx(const rtxStatus_t *status)
 
     txg_streamsOpen(guard, (uint32_t)getTick());
     radio_enableTx();
+    if (radio_getStatus() != TX) {
+        txTrace_block("radio_enableTx(): the PA did not key");
+        stopTx();
+        return false;
+    }
     txg_note(guard, TXG_EV_KEYED, (uint32_t)getTick());
+    txTrace_keyed();
     return true;
 }
 

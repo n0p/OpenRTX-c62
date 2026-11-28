@@ -26,6 +26,8 @@
 #include "protocols/P25/P25Speech.h"
 #include "protocols/P25/P25Status.h"
 #include "protocols/P25/P25Vocoder.h"
+#include "rtx/TxTrace.h"
+
 #ifdef CONFIG_P25_TX
 #include "protocols/P25/P25Tx.h"
 #include "rtx/TxGuard.h"
@@ -190,6 +192,8 @@ bool OpMode_P25::startTx(const rtxStatus_t *status)
      */
     txg_enter(guard, (uint32_t)getTick());
 
+    txTrace_reset("P25");
+
     /*
      * The NAC, the talkgroup and the subscriber address have no field in the
      * channel or the rtx status of this firmware yet (that is a settings/UI
@@ -210,6 +214,7 @@ bool OpMode_P25::startTx(const rtxStatus_t *status)
     txFirstBlock = false;
 
     txPath = audioPath_request(SOURCE_MCU, SINK_RTX, PRIO_TX);
+    txTrace_step("audioPath_request(SOURCE_MCU, SINK_RTX)", txPath);
     if (txPath < 0)
         return false;
 
@@ -222,6 +227,7 @@ bool OpMode_P25::startTx(const rtxStatus_t *status)
 
     txId = audioStream_start(txPath, txBaseband, 2 * TX_SLOT_SAMPLES, 48000,
                              STREAM_OUTPUT | BUF_CIRC_DOUBLE);
+    txTrace_step("audioStream_start(OUT, 48 kHz, baseband)", txId);
     if (txId < 0) {
         audioPath_release(txPath);
         txPath = -1;
@@ -237,12 +243,14 @@ bool OpMode_P25::startTx(const rtxStatus_t *status)
     txg_streamsOpen(guard, (uint32_t)getTick());
     radio_enableTx();
     if (radio_getStatus() != TX) {
+        txTrace_block("radio_enableTx(): the PA did not key");
         /* Nothing was keyed and nothing played: close without waiting for the
          * sink (stopTx(false)). */
         stopTx(false);
         return false;
     }
     txg_note(guard, TXG_EV_KEYED, (uint32_t)getTick());
+    txTrace_keyed();
     return true;
 }
 
@@ -396,6 +404,32 @@ void OpMode_P25::update(rtxStatus_t *const rtx, const bool newCfg)
         radio_updateConfiguration();
     }
 
+    /*
+     * PTT first, then the receiver.
+     *
+     * This check used to sit at the end of the receive pass, behind the path
+     * check, the sample read and the 500 ms settle window (SETTLE_SAMPLES).  A
+     * press that landed on any of them was not refused, it was never looked at:
+     * the mode went back to reading samples with the PA off.  With a receiver
+     * that is not delivering -- a codec route the worker did not apply, a
+     * stream that did not start -- the transmitter was unreachable for as long
+     * as that lasted.  OpMode_DMR and OpMode_NXDN ask before they receive, and
+     * that is the rule: what the PTT does may not depend on the receiver.
+     */
+#ifdef CONFIG_P25_TX
+    if (rtx_keyingAllowed(rtx) && (txBlocked == false)) {
+        stopSampling();
+        radio_disableRtx();
+        if (startTx(rtx)) {
+            rtx->opStatus = TX;
+            platform_ledOn(GREEN);
+            return;
+        }
+        txBlocked = true;
+        startRx = true;
+    }
+#endif
+
     if (audioPath_getStatus(basebandPath) != PATH_OPEN) {
         sleepFor(0, 10);
         return;
@@ -430,19 +464,4 @@ void OpMode_P25::update(rtxStatus_t *const rtx, const bool newCfg)
     else
         platform_ledOff(GREEN);
 
-#ifdef CONFIG_P25_TX
-    /* PTT keys the transmitter: the receiver is stopped first, the BK4819 is
-     * half duplex and both directions use the same audio path */
-    if (rtx_keyingAllowed(rtx) && (txBlocked == false)) {
-        stopSampling();
-        radio_disableRtx();
-        if (startTx(rtx)) {
-            rtx->opStatus = TX;
-            platform_ledOn(GREEN);
-            return;
-        }
-        txBlocked = true;
-        startRx = true;
-    }
-#endif
 }

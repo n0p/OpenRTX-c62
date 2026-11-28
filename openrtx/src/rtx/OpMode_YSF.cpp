@@ -18,6 +18,8 @@
 #include "rtx/OpMode_YSF.hpp"
 #include "core/state.h"
 
+#include "rtx/TxTrace.h"
+
 #ifdef CONFIG_YSF_TX
 #include "protocols/YSF/YsfTx.h"
 #include "rtx/TxGuard.h"
@@ -268,6 +270,8 @@ bool OpMode_YSF::startTx(const rtxStatus_t *status)
      */
     txg_enter(guard, (uint32_t)getTick());
 
+    txTrace_reset("YSF");
+
     memset(&cfg, 0, sizeof(cfg));
     snprintf(cfg.source, sizeof(cfg.source), "%.10s", state.settings.callsign);
     snprintf(cfg.dest, sizeof(cfg.dest), "CQCQCQ");
@@ -284,6 +288,7 @@ bool OpMode_YSF::startTx(const rtxStatus_t *status)
     txFirstBlock = false;
 
     txPath = audioPath_request(SOURCE_MCU, SINK_RTX, PRIO_TX);
+    txTrace_step("audioPath_request(SOURCE_MCU, SINK_RTX)", txPath);
     if (txPath < 0)
         return false;
 
@@ -296,6 +301,7 @@ bool OpMode_YSF::startTx(const rtxStatus_t *status)
 
     txId = audioStream_start(txPath, txBaseband, 2 * TX_FRAME_SAMPLES, 48000,
                              STREAM_OUTPUT | BUF_CIRC_DOUBLE);
+    txTrace_step("audioStream_start(OUT, 48 kHz, baseband)", txId);
     if (txId < 0) {
         audioPath_release(txPath);
         txPath = -1;
@@ -303,12 +309,14 @@ bool OpMode_YSF::startTx(const rtxStatus_t *status)
     }
 
     micPath = audioPath_request(SOURCE_MIC, SINK_MCU, PRIO_TX);
+    txTrace_step("audioPath_request(SOURCE_MIC, SINK_MCU)", micPath);
     if (micPath < 0) {
         stopTx();
         return false;
     }
     micId = audioStream_start(micPath, micPcm, 2 * YSF_TX_PCM_SAMPLES, 8000,
                               STREAM_INPUT | BUF_CIRC_DOUBLE);
+    txTrace_step("audioStream_start(IN, 8 kHz, mic)", micId);
     if (micId < 0) {
         stopTx();
         return false;
@@ -327,12 +335,14 @@ bool OpMode_YSF::startTx(const rtxStatus_t *status)
     txg_streamsOpen(guard, (uint32_t)getTick());
     radio_enableTx();
     if (radio_getStatus() != TX) {
+        txTrace_block("radio_enableTx(): the PA did not key");
         /* Nothing was keyed and nothing played: close without waiting for the
          * sink (stopTx(false)). */
         stopTx(false);
         return false;
     }
     txg_note(guard, TXG_EV_KEYED, (uint32_t)getTick());
+    txTrace_keyed();
     return true;
 }
 
@@ -491,6 +501,33 @@ void OpMode_YSF::update(rtxStatus_t *const rtx, const bool newCfg)
     if (newCfg)
         reset();
 
+    /*
+     * PTT first, then the receiver.
+     *
+     * This check used to sit at the end of the receive pass, after three
+     * `return`s (a path that is not open, a block that did not arrive, the
+     * settle window).  A press that landed on any of them was not refused: it
+     * was never looked at, and the mode went back to waiting for samples with
+     * the PA off and no trace of why -- a receiver that is not delivering (a
+     * codec route that did not apply, a stream that never started) made the
+     * transmitter unreachable for as long as it lasted, which is for ever.  The
+     * other modes ask before they receive (OpMode_DMR, OpMode_NXDN) and that is
+     * the rule: what the PTT does may not depend on the receiver's buffers.
+     */
+#ifdef CONFIG_YSF_TX
+    if (rtx_keyingAllowed(rtx) && (txBlocked == false)) {
+        stopSampling();
+        radio_disableRtx();
+        if (startTx(rtx)) {
+            rtx->opStatus = TX;
+            platform_ledOn(GREEN);
+            return;
+        }
+        txBlocked = true;
+        startRx = true;
+    }
+#endif
+
     if (audioPath_getStatus(basebandPath) != PATH_OPEN) {
         sleepFor(0, 10);
         return;
@@ -524,17 +561,4 @@ void OpMode_YSF::update(rtxStatus_t *const rtx, const bool newCfg)
     else
         platform_ledOff(GREEN);
 
-#ifdef CONFIG_YSF_TX
-    if (rtx_keyingAllowed(rtx) && (txBlocked == false)) {
-        stopSampling();
-        radio_disableRtx();
-        if (startTx(rtx)) {
-            rtx->opStatus = TX;
-            platform_ledOn(GREEN);
-            return;
-        }
-        txBlocked = true;
-        startRx = true;
-    }
-#endif
 }

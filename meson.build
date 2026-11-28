@@ -130,6 +130,9 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/rtx/rtx.cpp',
                'openrtx/src/rtx/ModeArena.cpp',
                'openrtx/src/rtx/TxGuard.c',
+               # The trace of the last startTx(): which call refused, by name
+               # (docs/TX_SAFETY.md).  Portable C, no dependency.
+               'openrtx/src/rtx/TxTrace.c',
                'openrtx/src/rtx/OpMode_FM.cpp',
                'openrtx/src/rtx/OpMode_Airband.cpp',
                'openrtx/src/rtx/OpMode_WFM.cpp',
@@ -446,6 +449,9 @@ linux_src = ['platform/targets/linux/emulator/emulator.c',
              'platform/mcu/x86_64/drivers/rng.cpp',
              'platform/drivers/baseband/radio_linux.cpp',
              'platform/drivers/audio/audio_linux.c',
+             # The transmitter and the microphone the Linux platform used to
+             # declare without a driver behind them.
+             'platform/drivers/audio/audio_linux_rtx.c',
              'platform/drivers/audio/file_source.c',
              'platform/drivers/audio/audio_sdl.cpp',
              'platform/targets/linux/platform.c',
@@ -2746,6 +2752,96 @@ test('KISS Packet Modem Loop', kiss_loop_script, timeout : 300)
 # come back.
 dmr_tx_host_script = find_program('tests/host/dmr_tx_host/run.sh')
 test('DMR TX Host Sequence', dmr_tx_host_script, timeout : 300)
+
+#
+# The transmit bench (tests/host/tx_bench): the modes the host build does not
+# compile, compiled, driven by a PTT, and asked which call said no.
+#
+# D-STAR, dPMR, NXDN, YSF and P25 put no carrier on the air on the radio and
+# there was nothing to read afterwards: startTx() returns a bool.  This target
+# links the five modes with their configs on (the switches the image uses), the
+# emulator's own audio and radio drivers, and tests/host/tx_bench/main.cpp,
+# which enters each mode through rtx_configure()/rtx_task(), presses the PTT and
+# reads rtx/TxTrace.h.  FM rides along as the control: it transmits, so a bench
+# that fails it is broken itself.  The bench also breaks a call on purpose
+# (emulator/txbench.h) and asserts that the mode names it.
+#
+# The protocol sources are the ones platform/targets/c62/CMakeLists.txt adds per
+# mode; NxdnStatus.c, DpmrStatus.c, P25Status.c, DStarStatus.c and
+# DStarSlowData.c are already in openrtx_src and are not repeated here.
+tx_bench_src = ['tests/host/tx_bench/main.cpp',
+                # the modes
+                'openrtx/src/rtx/OpMode_NXDN.cpp',
+                'openrtx/src/rtx/OpMode_DPMR.cpp',
+                'openrtx/src/rtx/OpMode_DSTAR.cpp',
+                'openrtx/src/rtx/OpMode_YSF.cpp',
+                'openrtx/src/rtx/OpMode_P25.cpp',
+                # NXDN and dPMR: protocol, 4FSK modulator, transmit framer
+                'openrtx/src/protocols/NXDN/NxdnDefs.c',
+                'openrtx/src/protocols/NXDN/NxdnPhy.c',
+                'openrtx/src/protocols/NXDN/NxdnSpeech.c',
+                'openrtx/src/protocols/NXDN/NxdnTx.c',
+                'openrtx/src/protocols/DPMR/DpmrDefs.c',
+                'openrtx/src/protocols/DPMR/DpmrData.c',
+                'openrtx/src/protocols/DPMR/DpmrPhy.c',
+                'openrtx/src/protocols/DPMR/DpmrSpeech.c',
+                'openrtx/src/protocols/DPMR/DpmrTx.c',
+                'openrtx/src/protocols/Fsk4Tx.c',
+                # YSF and P25: the shared C4FM shaper
+                'openrtx/src/protocols/YSF/YsfPhy.c',
+                'openrtx/src/protocols/YSF/YsfFrame.c',
+                'openrtx/src/protocols/YSF/YsfSpeech.c',
+                'openrtx/src/protocols/YSF/YsfTx.c',
+                'openrtx/src/protocols/P25/P25Defs.c',
+                'openrtx/src/protocols/P25/P25Fec.c',
+                'openrtx/src/protocols/P25/P25Phy.c',
+                'openrtx/src/protocols/P25/P25Speech.c',
+                'openrtx/src/protocols/P25/P25Tables.c',
+                'openrtx/src/protocols/P25/P25Vocoder.c',
+                'openrtx/src/protocols/P25/P25Tx.c',
+                'openrtx/src/protocols/C4FM/C4fmMod.c',
+                # D-STAR
+                'openrtx/src/protocols/DSTAR/DStarFec.c',
+                'openrtx/src/protocols/DSTAR/DStarPhy.c',
+                'openrtx/src/protocols/DSTAR/DStarSpeech.c',
+                'openrtx/src/protocols/DSTAR/DStarVocoder.c',
+                'openrtx/src/protocols/DSTAR/DStarTx.c',
+                # The AMBE+2 encoder NXDN and dPMR key with (dmr_enc.c is the
+                # hook the modes call) and the decoder their receivers use.
+                'openrtx/src/protocols/DMR/dmr_enc.c',
+                'lib/dmr_encoder/dmr_encoder.c',
+                'lib/dmr_encoder/dmr_enc_core.c',
+                'lib/dmr_encoder/dmr_enc_frame.c',
+                'lib/dmr_encoder/dmr_enc_ambe_tables.c',
+                'lib/dmr_encoder/dmr_enc_trig.c',
+                'lib/dmr_vocoder/dmr_vocoder.c',
+                'lib/dmr_vocoder/dmr_decoder.c',
+                'lib/dmr_vocoder/dmr_fft.c',
+                'lib/dmr_vocoder/dmr_golay.c',
+                'lib/dmr_vocoder/dmr_golay_table.c']
+
+tx_bench_def = ['-DCONFIG_NXDN', '-DCONFIG_NXDN_TX',
+                '-DCONFIG_DPMR', '-DCONFIG_DPMR_TX',
+                '-DCONFIG_DSTAR', '-DCONFIG_DSTAR_TX',
+                '-DCONFIG_YSF', '-DCONFIG_YSF_TX',
+                '-DCONFIG_P25', '-DCONFIG_P25_TX',
+                # The encoder the two 4FSK modes ask for (dmr_enc.c)
+                '-DCONFIG_DMR_TX']
+
+tx_bench = executable('tx_bench',
+                      sources : unit_test_src + tx_bench_src,
+                      kwargs  : {'include_directories' : linux_inc + dmr_inc +
+                                                       ['lib/dmr_vocoder',
+                                                        'lib/dmr_encoder'],
+                                 'c_args'   : linux_c_args + tx_bench_def +
+                                              ['-O2', '-ffp-contract=off'],
+                                 'cpp_args' : linux_cpp_args + tx_bench_def,
+                                 'dependencies' : [sdl_dep, threads_dep,
+                                                   codec2_dep],
+                                 'link_args' : linux_l_args + ['-lm']})
+
+test('TX Bench Host', tx_bench, timeout : 120)
+
 
 # The menu tour of the simulator (docs/SIMULATOR.md): every screen of the C62's
 # interface, walked with keys through the control channel, with a PNG and a

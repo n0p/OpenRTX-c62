@@ -163,6 +163,9 @@ target_sources(app
     openrtx/src/rtx/rtx.cpp
     openrtx/src/rtx/ModeArena.cpp
     openrtx/src/rtx/TxGuard.c
+    # The trace of the last startTx(): which call refused, by name.  Portable C,
+    # no dependency; the PC protocol and the host bench read it.
+    openrtx/src/rtx/TxTrace.c
     openrtx/src/rtx/OpMode_FM.cpp
     openrtx/src/rtx/OpMode_Airband.cpp
     openrtx/src/rtx/OpMode_WFM.cpp

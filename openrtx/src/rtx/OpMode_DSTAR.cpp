@@ -30,6 +30,7 @@
 #include "protocols/DSTAR/DStarTx.h"
 #include "rtx/TxGuard.h"
 #endif
+#include "rtx/TxTrace.h"
 #include "rtx/OpMode_DSTAR.hpp"
 
 #ifdef CONFIG_DSTAR_MESSAGING
@@ -143,6 +144,8 @@ bool OpMode_DSTAR::startTx(const rtxStatus_t *status)
      */
     txg_enter(guard, (uint32_t)getTick());
 
+    txTrace_reset("D-STAR");
+
     /* Flag 1: voice, and "via repeater" only when a repeater is configured. */
     cfg.hdr.flags[0] = 0;
     snprintf(cfg.hdr.my, sizeof(cfg.hdr.my), "%.8s", state.settings.callsign);
@@ -179,6 +182,7 @@ bool OpMode_DSTAR::startTx(const rtxStatus_t *status)
     txFirstBlock = false;
 
     txPath = audioPath_request(SOURCE_MCU, SINK_RTX, PRIO_TX);
+    txTrace_step("audioPath_request(SOURCE_MCU, SINK_RTX)", txPath);
     if (txPath < 0)
         return false;
 
@@ -191,6 +195,7 @@ bool OpMode_DSTAR::startTx(const rtxStatus_t *status)
 
     txId = audioStream_start(txPath, audioBuffer, 2 * HALF_SAMPLES, 48000,
                              STREAM_OUTPUT | BUF_CIRC_DOUBLE);
+    txTrace_step("audioStream_start(OUT, 48 kHz, double buffer)", txId);
     if (txId < 0) {
         audioPath_release(txPath);
         txPath = -1;
@@ -206,12 +211,14 @@ bool OpMode_DSTAR::startTx(const rtxStatus_t *status)
     txg_streamsOpen(guard, (uint32_t)getTick());
     radio_enableTx();
     if (radio_getStatus() != TX) {
+        txTrace_block("radio_enableTx(): the PA did not key");
         /* Nothing was keyed and nothing played: close without waiting for the
          * sink (stopTx(false)). */
         stopTx(false);
         return false;
     }
     txg_note(guard, TXG_EV_KEYED, (uint32_t)getTick());
+    txTrace_keyed();
     return true;
 }
 

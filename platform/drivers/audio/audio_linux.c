@@ -8,6 +8,7 @@
 #include "hwconfig.h"
 #include "file_source.h"
 #include "audio_sdl.h"
+#include "audio_linux_rtx.h"
 
 static const uint8_t pathCompatibilityMatrix[9][9] = {
     // MIC-SPK MIC-RTX MIC-MCU RTX-SPK RTX-RTX RTX-MCU MCU-SPK MCU-RTX MCU-MCU
@@ -24,14 +25,26 @@ static const uint8_t pathCompatibilityMatrix[9][9] = {
 
 const struct audioDevice outputDevices[] = {
     { NULL, 0, 0, SINK_MCU },
-    { NULL, 0, 0, SINK_RTX },
+    /*
+     * The transmitter.  It had no driver, so a mode's waveform had nowhere to
+     * go on the host and audioStream_start() answered -ENODEV one call below
+     * every decision the mode takes (audio_linux_rtx.c).
+     */
+    { &audio_linux_rtxSinkDriver, NULL, 0, SINK_RTX },
     { &sdl_play_audio_driver, NULL, 0, SINK_SPK },
 };
 
 const struct audioDevice inputDevices[] = {
     { NULL, 0, 0, SOURCE_MCU },
-    { &file_source_audio_driver, "/tmp/baseband.raw", 0, SOURCE_RTX },
-    { NULL, 0, 0, SOURCE_MIC },
+    /*
+     * The discriminator.  It was the capture file and nothing else, so with no
+     * /tmp/baseband.raw the receiver never started on the host and the modes
+     * that read samples before they look at the PTT never reached their own
+     * transmit code (audio_linux_rtx.c).
+     */
+    { &audio_linux_rxSourceDriver, "/tmp/baseband.raw", 0, SOURCE_RTX },
+    /* The microphone, same reason as SINK_RTX above */
+    { &audio_linux_micDriver, NULL, 0, SOURCE_MIC },
 };
 
 void audio_init()
