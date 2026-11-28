@@ -312,7 +312,13 @@ partida (comprobado hoy, no supuesto).
 
 ### Fase 0 (previa, imprescindible): que la imagen arranque
 
-No estaba en el encargo, pero sin esto la fase (a) no existe. Estado actual, medido:
+> **Cerrada el 2026-11-28.** La imagen arranca, no cae en ninguna trampa en 30 s
+> en QEMU y el servidor contesta `lsf_connect()` del AP por el mailbox emulado.
+> Evidencia, decisiones (bare-metal + `-mabi=call0`) y los dos defectos de cable
+> que aparecieron: `reports/dsp_bringup.md`. La tabla de abajo es el estado de
+> partida, se deja como registro.
+
+No estaba en el encargo, pero sin esto la fase (a) no existe. Estado inicial, medido:
 
 | Comprobación | Resultado | Evidencia |
 |---|---|---|
