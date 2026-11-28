@@ -90,7 +90,7 @@ Supporting commits, no behaviour change on the radio:
 | `aefc2126` rtx: the six modes report the steps of startTx() | the calls themselves, in D-STAR, NXDN, dPMR, YSF, P25 and FM. Same returns, same branches. |
 | `1bdc463b` linux: the emulator gets the transmitter, the microphone and the receiver | `platform/drivers/audio/audio_linux_rtx.c` + `emulator/txbench.h`. |
 | `7d802c8a` tests: a host bench for the five modes… | `tests/host/tx_bench/` and its meson target. |
-| `docs/TX_SAFETY.md` | the new section: what to read when a PTT does nothing. |
+| `630930c4` docs: what to read when a PTT does nothing | the new section in `docs/TX_SAFETY.md`, and this report. |
 
 ## 5. Why nobody saw it before
 
@@ -109,11 +109,23 @@ stream of its own) and every digital mode looked like it could not. Both halves
 are now honest, and the three endpoints are what makes the bench able to see a
 mode that keys and renders nothing (`peak == 0`) as the failure it is.
 
-## 6. Suite
+## 6. Suite, and what else was compiled
 
-`meson test -C build_linux` — **115/115** (the 114 of `master` in a workspace
-with `libtetra`, plus `TX Bench Host`). DMR's code is untouched; FM gained the
-trace calls and nothing else.
+`meson test -C build_linux`, whole suite, nothing skipped:
+
+```
+112/115 OpenRTX:UI Fit Test                    OK
+113/115 OpenRTX:PC Protocol Host Harness       OK
+114/115 OpenRTX:Simulator Menu Tour            OK
+115/115 OpenRTX:Simulator Menu Audit           OK
+
+Ok:                115
+Fail:              0
+```
+
+115 = the 114 of `master` (with `libtetra` in the workspace) + `TX Bench Host`.
+The bench is 29 s of the total. DMR's code is untouched; FM gained the trace
+calls and nothing else.
 
 ```
 $ ./build_linux/tx_bench
@@ -139,6 +151,14 @@ receiver dead: the PTT may not depend on it
 PASS
 ```
 
+The changed translation units were also compiled for the radio: the six modes,
+`rtx.cpp` and `TxTrace.c` with the firmware's own `arm-zephyr-eabi-g++`
+command lines (taken from the last C62 build's `compile_commands.json`, with
+`-Werror` off because the tree has a pre-existing `ARRAY_SIZE` redefinition
+warning).  All clean.  A full `c62-build` was not run: the only west workspace
+on this machine has uncommitted work from another build in it, and overwriting
+it to test my branch is not something this task gets to do.
+
 ## 7. What is not verified
 
 - **The radio.** None of this was reproduced on hardware: no access, and the
@@ -150,6 +170,8 @@ PASS
   fix removes the dependency; whether what the receiver was missing on the radio
   was the codec route, the baseband stream or the settle window is not something
   the host can decide.
+- **The full firmware image.** No link, no flash: see §6 for what was
+  compiled.
 - **DMR in the bench.** The DMR mode drags the whole DMR package (demodulator,
   vocoder, trunk, SMS, messaging) into the target; FM is the control and the
   three injections are what prove the bench can tell a working transmission from
