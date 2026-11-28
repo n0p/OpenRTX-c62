@@ -8,6 +8,7 @@
 #include "interfaces/delays.h"
 #include "interfaces/radio.h"
 #include "core/mode_stats.h"
+#include "rtx/TxTrace.h"
 #include "rtx/OpMode_FM.hpp"
 #include "rtx/rtx.h"
 #include "core/utils.h"
@@ -219,17 +220,21 @@ void OpMode_FM::update(rtxStatus_t *const status, const bool newCfg)
         audioPath_release(rxAudioPath);
         radio_disableRtx();
 
+        txTrace_reset("FM");
         txAudioPath = audioPath_request(SOURCE_MIC, SINK_RTX, PRIO_TX);
+        txTrace_step("audioPath_request(SOURCE_MIC, SINK_RTX)", txAudioPath);
         radio_enableTx();
 
         if (radio_getStatus() != TX)
         {
+            txTrace_block("radio_enableTx(): the PA did not key");
             /* The driver refused: do not pretend to be transmitting */
             audioPath_release(txAudioPath);
             status->opStatus = OFF;
             enterRx = true;
             return;
         }
+        txTrace_keyed();
 
         /*
          * FM has no stream of its own -- the codec worker moves the microphone
