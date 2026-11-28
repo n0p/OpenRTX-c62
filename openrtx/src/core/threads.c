@@ -51,6 +51,20 @@ static volatile uint32_t uiThreadBeat;
 /* The rule itself: core/ui_watchdog.h, tested on the host. */
 static struct uiWatchdog uiWatchdog;
 
+/*
+ * The retune door of the UI thread.
+ *
+ * Two halves talk through it: core code that changes the configuration without
+ * going through the FSM (scan_service.c, vfo_search_service.c, the PC protocol,
+ * the quick menu setters) sets it, and the loop below turns it into sync_rtx.
+ * The flag is declared in core/ui.h and it is defined here, in the core, and
+ * not in the UI any more: the setter's half is core (it is linked into every
+ * target, module17's UI included), so a UI flavour that does not carry the
+ * variable left the core half unresolved and openrtx_linux_mod17 -- the host
+ * build of the Module17 interface -- stopped linking on it.
+ */
+volatile bool ui_rtxSyncRequest = false;
+
 /**
  * \internal Thread managing user input and UI
  */
