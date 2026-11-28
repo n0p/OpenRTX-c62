@@ -119,6 +119,28 @@ struct DenoiseState {
   float scratch_gain[FREQ_SIZE];
 };
 
+
+#ifdef NS_TRACE
+/* Stage-by-stage trace of one frame, to locate where two builds stop agreeing.
+ * Compiled out unless NS_TRACE is defined; the DSP port and the M33 reference
+ * are built with it and their dumps diffed. */
+void ns_trace(const char *tag, const float *v, int n)
+{
+  int i;
+  printf("%s", tag);
+  for (i = 0; i < n; i++) {
+    union { float f; unsigned u; } x;
+    x.f = v[i];
+    printf(" %08x", x.u);
+  }
+  printf("\n");
+}
+#define NS_T(v, n) ns_trace(#v, v, n)
+#else
+#define NS_T(v, n) do { } while (0)
+#define ns_trace(tag, v, n) do { } while (0)
+#endif
+
 static void compute_band_energy(float *bandE, const kiss_fft_cpx *X) {
   int i;
   float sum[NB_BANDS] = {0};
@@ -187,10 +209,33 @@ static void interp_band_gain(float *g, const float *bandE) {
 
 CommonState common;
 
+/*
+ * [C62 patch 3, opt-in] Tables from the reference build.
+ *
+ * half_window, dct_table and the FFT twiddles are double-precision sin()/cos()
+ * results rounded to float.  Two C libraries disagree in the last bit on a
+ * third of them (measured: 237/480 half-window, 388/484 DCT, 683/960 twiddle
+ * reals, M33 newlib against Xtensa libm), and one ulp in a twiddle is enough to
+ * unbalance every output sample, so a port that must be bit-exact against the
+ * M33 cannot compute them again on the other core: it has to use the M33's.
+ *
+ * RNNOISE_FIXED_TABLES takes the values from ns_tables.h, generated from the
+ * M33 build's own dump (dsp/ns/tools/gen_tables.py).  The allocation and all
+ * the metadata still come from the library.
+ */
+#ifdef RNNOISE_FIXED_TABLES
+#include "ns_tables.h"
+#endif
+
 static void check_init() {
   int i;
   if (common.init) return;
   common.kfft = rnn_fft_alloc_twiddles(2*FRAME_SIZE, NULL, NULL, NULL, 0);
+#ifdef RNNOISE_FIXED_TABLES
+  RNN_COPY(common.half_window, ns_half_window, FRAME_SIZE);
+  RNN_COPY(common.dct_table, ns_dct_table, NB_BANDS*NB_BANDS);
+  memcpy((void *)common.kfft->twiddles, ns_fft_twiddles, sizeof(ns_fft_twiddles));
+#else
   for (i=0;i<FRAME_SIZE;i++)
     common.half_window[i] = sin(.5*M_PI*sin(.5*M_PI*(i+.5)/FRAME_SIZE) * sin(.5*M_PI*(i+.5)/FRAME_SIZE));
   for (i=0;i<NB_BANDS;i++) {
@@ -200,6 +245,7 @@ static void check_init() {
       if (j==0) common.dct_table[i*NB_BANDS + j] *= sqrt(.5);
     }
   }
+#endif
   common.init = 1;
 }
 
@@ -500,10 +546,14 @@ float rnnoise_process_frame(DenoiseState *st, float *out, const float *in) {
   static const float a_hp[2] = {-1.99599, 0.99600};
   static const float b_hp[2] = {-2, 1};
   biquad(x, st->mem_hp_x, in, b_hp, a_hp, FRAME_SIZE);
+  NS_T(x, 8);
   silence = compute_frame_features(st, X, P, Ex, Ep, Exp, features, x);
+  NS_T(Ex, NB_BANDS); NS_T(Ep, NB_BANDS); NS_T(Exp, NB_BANDS);
+  NS_T(features, NB_FEATURES);
 
   if (!silence) {
     compute_rnn(&st->rnn, g, &vad_prob, features);
+    NS_T(g, NB_BANDS);
     pitch_filter(st, X, P, Ex, Ep, Exp, g);
     for (i=0;i<NB_BANDS;i++) {
       float alpha = .6f;
@@ -521,7 +571,9 @@ float rnnoise_process_frame(DenoiseState *st, float *out, const float *in) {
 #endif
   }
 
+  ns_trace("X", (const float *)X, 8);
   frame_synthesis(st, out, X);
+  NS_T(out, 8);
   return vad_prob;
 }
 
