@@ -81,7 +81,7 @@ it:
 
 | | instructions/frame | cycles/frame | % of 300 MHz |
 |---|---:|---:|---:|
-| Cortex-M33, same harness, `-ffp-contract=off` | 1 556 943 | — | 51.9 % (instr.) |
+| Cortex-M33, same harness, `-ffp-contract=off` | 1 556 938 | — | 51.9 % (instr.) |
 | Cortex-M33, shipped build (published) | 1 360 819 | 1 620 000 | 45 / 54 % |
 | **HiFi4, this port** | **671 327** | **934 801** | **31.2 %** |
 

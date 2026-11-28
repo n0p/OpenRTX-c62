@@ -15,7 +15,7 @@ trabajo `work/dsp-ns`), sobre el toolchain Xtensa que ya está instalado en
 
 | | instrucciones/trama | ciclos/trama | % de un núcleo a 300 MHz |
 |---|---:|---:|---:|
-| Cortex-M33, este arnés, `-ffp-contract=off` | 1 556 943 | — | 51,9 % (instr.) |
+| Cortex-M33, este arnés, `-ffp-contract=off` | 1 556 938 | — | 51,9 % (instr.) |
 | Cortex-M33, build publicado del firmware | 1 360 819 | ~1 620 000 | 45 % / 54 % |
 | **HiFi4 (`venus_hifi4`), este port** | **671 327** | **934 801** | **31,2 %** |
 
@@ -168,7 +168,7 @@ Lo que hubo que resolver para que además sea *idéntico* al M33:
 |---|---:|---:|---|
 | HiFi4, escalar `float` (lo que se entrega) | **671 327** | 934 801 | 31,2 % |
 | HiFi4, kernel SIMD de 2 carriles (§4) | 1 030 213 | 1 301 625 | 43,4 % |
-| M33, mismo arnés y mismas banderas | 1 556 943 | — | 51,9 % (instr.) |
+| M33, mismo arnés y mismas banderas | 1 556 938 | — | 51,9 % (instr.) |
 
 Reparto por función en el DSP (perfil muestreado, ±2 %):
 

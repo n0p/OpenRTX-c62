@@ -539,7 +539,7 @@ float rnnoise_process_frame(DenoiseState *st, float *out, const float *in) {
   float Ex[NB_BANDS], Ep[NB_BANDS];
   float Exp[NB_BANDS];
   float features[NB_FEATURES];
-  float g[NB_BANDS];
+  float g[NB_BANDS] __attribute__((aligned(8)));
   float *gf = st->scratch_gain;
   float vad_prob = 0;
   int silence;

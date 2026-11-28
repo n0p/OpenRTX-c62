@@ -51,9 +51,10 @@ NSLOG   := -D__ieee754_logf=ns_logf -D__ieee754_log10f=ns_log10f
 # is bit-exact but, with int8 weights, slower than the scalar code: see README.
 SIMD    ?= 0
 ifeq ($(SIMD),1)
-XTRA    += -DRNNOISE_DSP_KERNELS
+V       := -simd
+SIMDFLAG := -DRNNOISE_DSP_KERNELS
 endif
-XTRA    ?= -DRNNOISE_FIXED_TABLES -Dlog10f=ns_log10f
+XTRA    ?= -DRNNOISE_FIXED_TABLES -Dlog10f=ns_log10f $(SIMDFLAG)
 XTF     := --xtensa-core=venus_hifi4 -O2 -fno-math-errno \
            -ffp-contract=$(FPCONTRACT) -g -w $(XTRA)
 XTDEFS  := -D_GNU_SOURCE -DM_PI=3.14159265358979323846f
@@ -113,17 +114,17 @@ $(B)/ns_fpu.o: ns_fpu.c | $(B)
 
 dsp-dump: $(DSP_SRC) $(XTLIBS) | $(B)
 	$(XTCLANG) $(XTF) -DNS_DUMP=1 -DNS_ITERS=8 $(XTDEFS) $(NSINC) $(DSP_SRC) \
-	   bench/bench_main.c $(XTLINK) -o $(B)/dsp_dump.elf
-	$(XTRUN) $(B)/dsp_dump.elf > $(B)/out_dsp.txt 2>&1
-	@grep -c '^F' $(B)/out_dsp.txt
+	   bench/bench_main.c $(XTLINK) -o $(B)/dsp_dump$(V).elf
+	$(XTRUN) $(B)/dsp_dump$(V).elf > $(B)/out_dsp$(V).txt 2>&1
+	@grep -c '^F' $(B)/out_dsp$(V).txt
 
-dsp: $(B)/dsp_cost.elf
+dsp: $(B)/dsp_cost$(V).elf
 
-$(B)/dsp_cost.elf: $(DSP_SRC) $(XTLIBS) bench/bench_main.c | $(B)
+$(B)/dsp_cost$(V).elf: $(DSP_SRC) $(XTLIBS) bench/bench_main.c | $(B)
 	$(XTCLANG) $(XTF) -DNS_ITERS=8 $(XTDEFS) $(NSINC) $(DSP_SRC) \
 	   bench/bench_main.c $(XTLINK) -o $@
 
-$(B)/dsp_cost0.elf: $(DSP_SRC) $(XTLIBS) bench/bench_main.c | $(B)
+$(B)/dsp_cost0$(V).elf: $(DSP_SRC) $(XTLIBS) bench/bench_main.c | $(B)
 	$(XTCLANG) $(XTF) -DNS_ITERS=0 $(XTDEFS) $(NSINC) $(DSP_SRC) \
 	   bench/bench_main.c $(XTLINK) -o $@
 
@@ -155,9 +156,9 @@ m33-cost: $(M33OBJ) | $(B)
 # --- the service body (ns_dsp.c) end to end on the 8 frames, int16 in and out
 test-dsp: $(DSP_SRC) $(XTLIBS) | $(B)
 	$(XTCLANG) $(XTF) $(XTDEFS) $(NSINC) $(DSP_SRC) ns_dsp.c \
-	   tests/test_ns_dsp.c $(XTLINK) -o $(B)/test_ns_dsp.elf
-	$(XTRUN) $(B)/test_ns_dsp.elf > $(B)/out_ns_dsp.txt 2>&1
-	@grep -c '^I' $(B)/out_ns_dsp.txt
+	   tests/test_ns_dsp.c $(XTLINK) -o $(B)/test_ns_dsp$(V).elf
+	$(XTRUN) $(B)/test_ns_dsp$(V).elf > $(B)/out_ns_dsp$(V).txt 2>&1
+	@grep -c '^I' $(B)/out_ns_dsp$(V).txt
 
 test-host: | $(B)
 	env -i PATH=/usr/bin:/bin HOME=$(HOME) TMPDIR=$(TMPDIR) \
@@ -167,21 +168,21 @@ test-host: | $(B)
 	@python3 tools/cmp_int16.py $(B)/out_host.txt $(B)/out_ns_dsp_host.txt
 
 test: test-dsp
-	@python3 tools/cmp_int16.py $(B)/out_m33.txt $(B)/out_ns_dsp.txt
+	@python3 tools/cmp_int16.py $(B)/out_m33.txt $(B)/out_ns_dsp$(V).txt
 
 compare:
-	python3 tools/cmp_frames.py $(B)/out_m33.txt $(B)/out_dsp.txt
+	python3 tools/cmp_frames.py $(B)/out_m33.txt $(B)/out_dsp$(V).txt
 
 # --- per-frame cost on the ISS: total instructions with 8 frames minus the same
 #     build with 0 frames, over 8; cycles per frame from the profile.
-cost: $(B)/dsp_cost.elf $(B)/dsp_cost0.elf
-	@$(XTRUN) --client_commands="summary" $(B)/dsp_cost0.elf > $(B)/cost0.txt 2>&1
-	@$(XTRUN) --client_commands="summary" $(B)/dsp_cost.elf > $(B)/cost8.txt 2>&1
-	@$(XTRUN) --profile=$(B)/dsp.gmon $(B)/dsp_cost.elf > /dev/null 2>&1
-	@$(XTRUN) --profile=$(B)/dsp0.gmon $(B)/dsp_cost0.elf > /dev/null 2>&1
-	@$(XTGPROF) $(B)/dsp_cost.elf $(B)/dsp.gmon > $(B)/gprof8.txt 2>&1
-	@$(XTGPROF) $(B)/dsp_cost0.elf $(B)/dsp0.gmon > $(B)/gprof0.txt 2>&1
-	@python3 tools/cost.py $(B)/cost0.txt $(B)/cost8.txt 8 $(B)/gprof0.txt $(B)/gprof8.txt
+cost: $(B)/dsp_cost$(V).elf $(B)/dsp_cost0$(V).elf
+	@$(XTRUN) --client_commands="summary" $(B)/dsp_cost0$(V).elf > $(B)/cost0$(V).txt 2>&1
+	@$(XTRUN) --client_commands="summary" $(B)/dsp_cost$(V).elf > $(B)/cost8$(V).txt 2>&1
+	@$(XTRUN) --profile=$(B)/dsp$(V).gmon $(B)/dsp_cost$(V).elf > /dev/null 2>&1
+	@$(XTRUN) --profile=$(B)/dsp0$(V).gmon $(B)/dsp_cost0$(V).elf > /dev/null 2>&1
+	@$(XTGPROF) $(B)/dsp_cost$(V).elf $(B)/dsp$(V).gmon > $(B)/gprof8$(V).txt 2>&1
+	@$(XTGPROF) $(B)/dsp_cost0$(V).elf $(B)/dsp0$(V).gmon > $(B)/gprof0$(V).txt 2>&1
+	@python3 tools/cost.py $(B)/cost0$(V).txt $(B)/cost8$(V).txt 8 $(B)/gprof0$(V).txt $(B)/gprof8$(V).txt
 
 # --- the init-time tables both builds generate from their own libm
 tables-dsp: $(DSP_SRC) $(XTLIBS) | $(B)
@@ -209,8 +210,8 @@ ns_tables.h: tables-m33
 trace: | $(B) $(XTLIBS) $(DSP_SRC)
 	$(XTCLANG) $(XTF) -DNS_TRACE=1 -DNS_ITERS=1 $(XTDEFS) $(NSINC) \
 	   $(B)/src_f32/denoise.c $(DSP_SRC) bench/bench_main.c $(XTLINK) \
-	   -o $(B)/trace_dsp.elf
-	$(XTRUN) $(B)/trace_dsp.elf > $(B)/trace_dsp.txt 2>&1
+	   -o $(B)/trace_dsp$(V).elf
+	$(XTRUN) $(B)/trace_dsp$(V).elf > $(B)/trace_dsp$(V).txt 2>&1
 	$(ARMCC) $(ARMFLAGS) -c common/startup.c -o $(B)/startup.o
 	$(ARMCC) $(ARMFLAGS) -DNS_DUMP=1 -DNS_ITERS=1 -DNS_RDIMON=1 -DNS_OWN_SBRK=1 \
 	   -DNS_TRACE=1 $(DEFS) $(NSINC) -c bench/bench_main.c -o $(B)/bench_m33_trace.o
@@ -223,7 +224,7 @@ trace: | $(B) $(XTLIBS) $(DSP_SRC)
 	   $(B)/t_rnn_data.o $(B)/t_pitch.o $(B)/t_celt_lpc.o $(B)/t_kiss_fft.o \
 	   -lrdimon -lm -lc
 	$(QEMU_ARM) -kernel $(B)/trace_m33.elf > $(B)/trace_m33.txt 2>&1 || true
-	@diff $(B)/trace_m33.txt $(B)/trace_dsp.txt > $(B)/trace.diff && echo "traces identical" \
+	@diff $(B)/trace_m33.txt $(B)/trace_dsp$(V).txt > $(B)/trace.diff && echo "traces identical" \
 	  || (echo "first differences:"; head -6 $(B)/trace.diff)
 
 # --- x86, only to check the harness itself.  PATH is cleared on purpose: with
