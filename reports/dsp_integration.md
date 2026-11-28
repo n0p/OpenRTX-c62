@@ -37,7 +37,7 @@ Lo que más probabilidades tiene de pararlo, por orden:
    validar contra hardware, no por inspección.
 4. **El coste en silicio.** El 31,1 % es del ISS sin cachés. Con una D-cache de 16 KB y un
    *working set* de ~150 KB (estado 62 KB + pesos 87 KB), cada trama recorre todo desde PSRAM.
-   Es acotable (medido: se puede mover el estado a DRAM1), pero el número real puede ser
+   Es acotable (estado y pesos caben en DRAM1, que está libre), pero el número real puede ser
    35–45 %, lo que sigue cabiendo y sigue sin cumplir el criterio de producción (≤10 %).
 
 Lo que **no** va a pararlo: la licencia del toolchain (XOS 2.10 viene con las herramientas y
@@ -232,7 +232,7 @@ tamaño de bloque del APC en la fábrica (16 bits de muestra, ráfaga ≤16).
 En el AP, dentro del worker del códec, sobre la trama **capturada** y **sólo en el canal de
 radio**, justo antes de la cola del demodulador:
 
-```
+```c   // resumido; el original está en las líneas citadas
 platform/drivers/audio/csk6_codec.c:836-859
   for (source = 0..1)
     raw = &samples[rec->mChannelOutIdx[source]]
@@ -241,7 +241,7 @@ platform/drivers/audio/csk6_codec.c:836-859
         nsSamples[i] = raw[i*stride];            // de-intercala
         noiseSuppress_process(nsSamples, count); // rnnoise, 480 muestras
         played = nsSamples; playedStride = 1;
-    captureToFmQueues(source, played, playedStride, count);
+  captureToFmQueues(source, played, playedStride, count);   // fuera del for
 ```
 
 Es decir: **entre el anillo de captura del DSP y el demodulador**. No toca los streams que leen
@@ -265,9 +265,9 @@ Por qué encaja sin fricción:
 * **Misma trama.** `NS_DSP_FRAME = 480` (`dsp/ns/ns_dsp.h`) y el AP pide 48 kHz con tramas de
   10 ms = 480 muestras (`csk6_codec.c:48-58`), y los anillos se crean a 480 muestras ×2 canales
   (`srv_lsf.c:888-890`). No hay remuestreo ni cambio de geometría.
-* **Mismo punto de señal.** El AP ya procesa la salida del ADC, no la entrada del demodulador:
-  ponerlo en el CP da *exactamente* la misma señal con los mismos bits (medido bit-exacto en el
-  banco).
+* **Mismo punto de señal.** El AP ya procesa la señal que sale del ADC y la entrega ya filtrada
+  al demodulador; poner la etapa en el CP, en ese mismo punto de la cadena, da *exactamente* la
+  misma señal con los mismos bits (medido bit-exacto en el banco).
 * **Latencia cero añadida.** Al ser in-place y por trama completa, la etapa no acumula muestras:
   la trama que entra es la que sale.
 
@@ -296,7 +296,7 @@ Casi nada, y todo *fuera* del cable:
    no lo entienda lo ignora, como hoy. Permite conmutar en caliente y volver al camino del AP
    como *fallback*.
 3. **Nada más.** No hace falta un `ICStream` nuevo, ni otro anillo, ni un RPC nuevo, ni cambiar
-   `frameCount`, ni la profundidad de los anillos. El contrato de §`docs/INTEGRACION_AP.md` no se
+   `frameCount`, ni la profundidad de los anillos. El contrato de `docs/INTEGRACION_AP.md` no se
    toca.
 
 Lo que **no** conviene: poner la etapa en la ruta de reproducción (anillo 0/1 → DAC). Ahí el NS
@@ -385,7 +385,8 @@ lo que se midió».
 Qué se hace: integrar el HAL (`adc_pdm`, `apc`, `dac`, `dma`, `ClockManager`, `IOMuxManager`,
 `cache_cp`) con XOS o con ganchos propios; escribir el pegamento de audio que hoy no existe:
 `ADC_PDM_Initialize(cb)`, `ADC_PDM_Receive_LLP()` con dos buffers de 480 muestras, callback que
-despierta la tarea, `DAC_Send`() con LLP desde el anillo; aplicar las ganancias del `k=v`
+despierta la tarea, `DAC_Send_LLP()` con la lista enlazada de buffers desde el anillo; aplicar las
+ganancias del `k=v`
 (`ADC_PDM_SetVolume`/`DAC_SetVolume`) y la tasa de 48 kHz; y el reparto L/R → DAC0/DAC1.
 
 **Criterio medible (en la radio, porque no hay emulador del APC):**
@@ -430,8 +431,8 @@ criterio fuerte es en radio).
 ### 4.1 El bring-up de la imagen (probabilidad alta, coste acotado)
 
 Ya está medido que la imagen no arranca (§3, fase 0). Es el riesgo con **mayor probabilidad de
-aparecer primero** y el más barato de cerrar. Pero arrastra una decisión con consecuencias: XOS o
-* bare-metal*. Con XOS se hereda el despacho de interrupciones y los semáforos, y el `crt` de
+aparecer primero** y el más barato de cerrar. Pero arrastra una decisión con consecuencias: XOS
+o *bare-metal*. Con XOS se hereda el despacho de interrupciones y los semáforos, y el `crt` de
 Cadence; a cambio, su BSP asume un mapa de memoria de EVB y hay que sustituirlo, y el depurador
 pasa a ser «XOS + nuestro mapa». Sin XOS hay que escribir 3 ganchos y una tabla de vectores, y no
 hay planificador (el bucle actual basta si el audio se atiende por callback). **Coste de
@@ -451,7 +452,7 @@ Sabemos los registros (2 003 líneas de `apc_reg_venus.h`), no la semántica del
 mezcla, *rate conversion*). El PDF del chip no está (`venus_cp.h:452` lo cita; no está en el
 árbol ni en `extract/`). **Cómo se manifiesta:** códec en silencio, o con la tasa equivocada, sin
 error del driver; el registro que falta no está en ningún `assert`. **Cómo se mitiga:** arrancar
-de la configuración de la imagen A (que funciona) en lugar de inventar una: `ADC_PDM_Control(SR_48KHZ)`,
+de la configuración de la imagen A (que funciona) en lugar de inventar una: `ADC_PDM_Control(CSK_ADCPDM_SR_48KHZ)`,
 AMIC (no DMIC), 16 bits, ganancias del AP. Y comparar registro a registro contra el blob de
 fábrica si hace falta. **Coste si sale mal:** días de prueba y error en la radio, no semanas,
 porque la referencia (imagen A) existe y es observable.
@@ -460,13 +461,14 @@ porque la referencia (imagen A) existe y es observable.
 
 Misma API, distinto binario (§1.7). Un `sc_AMIC_SR_OSR` con otro `rc_ctrl`, o un `ALC` con otros
 máximos, cambia el comportamiento sin fallar. **Mitigación:** validar contra A/B de nivel y
-espectro (fase c), y no fiarse de «compila».
+espectro (fase (c)), y no fiarse de «compila».
 
 ### 4.4 El coste en silicio
 
 31,1 % es un número del ISS: cero *misses*. D-cache 16 KB / 4 vías, I-cache 32 KB, *working set*
 de la etapa ~150 KB. Cada trama recorre el estado y los pesos enteros. Estimación de orden de
-magnitud: 150 KB / 32 B de línea ≈ 4 700 líneas por trama; a 20–40 ciclos por línea son
+magnitud: 150 KB / 32 B de línea ≈ 4 700 líneas por trama (32 B es el tamaño que asumen las
+operaciones de caché del SDK, `docs/INTEGRACION_AP.md:120`); a 20–40 ciclos por línea son
 **94 000–188 000 ciclos/trama (+10–20 %)**, y eso si el *prefetch* ayuda. Si el estado queda en
 PSRAM sin localidad, puede ser peor.
 
@@ -538,8 +540,10 @@ porque no necesitan la radio.
 ## 6. Reproducción de lo que se afirma aquí
 
 ```bash
+H=/home/n0p/src/c62/extract/hal/hal_listenai/csk6/drivers/hifi4
+
 # El esqueleto pasa lo que dice pasar
-cd work/dsp-openfw && make test && make dsp_sim
+cd ~/src/c62/work/dsp-openfw && make test && make dsp_sim
 
 # La imagen no arranca: entry ≠ 0x60000000, y el byte 0 es un literal
 source ~/xtensa/env.sh
@@ -566,8 +570,6 @@ grep -n 'AudioStreamInVenus\|ADC_PDM_Initialize' work/dsp-re/str48k.txt | head
 ls $XTENSA_ROOT/venus_hifi4/xtensa-elf/arch/lib/libxos.a \
    $XTENSA_TOOLS_ROOT/xtensa-elf/src/xos $XTENSA_TOOLS_ROOT/doc/xos-2.10.zip
 ```
-
-`H=/home/n0p/src/c62/extract/hal/hal_listenai/csk6/drivers/hifi4`.
 
 ---
 
