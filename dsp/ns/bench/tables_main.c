@@ -65,7 +65,8 @@ int main(void)
         put1("dct", common.dct_table[i]);
 
     const kiss_fft_state *k = common.kfft;
-    printf("nfft %d scale %d shift %d\n", k->nfft, (int)k->scale, k->shift);
+    printf("nfft %d shift %d\n", k->nfft, k->shift);
+    put1("scale", (float)k->scale);
     for (int i = 0; i < 2 * MAXFACTORS; i++)
         printf("fac %d\n", k->factors[i]);
     for (int i = 0; i < k->nfft; i++)

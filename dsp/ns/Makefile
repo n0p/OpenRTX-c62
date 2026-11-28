@@ -33,6 +33,13 @@ RNSRC   := $(RN)/src/denoise.c $(RN)/src/rnn.c $(RN)/src/rnn_data.c \
            $(RN)/src/pitch.c $(RN)/src/celt_lpc.c $(RN)/src/kiss_fft.c
 NSINC   := -I$(RN)/include -I$(RN)/src -I. -I$(CURDIR)
 DEFS    := -D_GNU_SOURCE -DM_PI=3.14159265358979323846
+# LIBFIX=0 builds lib/rnnoise as published, with its own libm: useful to measure
+# what the tables and log10f cost in bit-exactness terms, and to prove that
+# taking them from ns_tables.h does not change the M33 build's output.
+LIBFIX  ?= 1
+ifeq ($(LIBFIX),1)
+LIBFLAGS := -DRNNOISE_FIXED_TABLES '-Dlog10f(x)=ns_log10f(x)'
+endif
 NUM     := -fsingle-precision-constant -fno-math-errno
 FPCONTRACT ?= off
 NUM     += -ffp-contract=$(FPCONTRACT)
@@ -54,7 +61,7 @@ ifeq ($(SIMD),1)
 V       := -simd
 SIMDFLAG := -DRNNOISE_DSP_KERNELS
 endif
-XTRA    ?= -DRNNOISE_FIXED_TABLES -Dlog10f=ns_log10f $(SIMDFLAG)
+XTRA    ?= $(LIBFLAGS) $(SIMDFLAG)
 XTF     := --xtensa-core=venus_hifi4 -O2 -fno-math-errno \
            -ffp-contract=$(FPCONTRACT) -g -w $(XTRA)
 XTDEFS  := -D_GNU_SOURCE -DM_PI=3.14159265358979323846f
@@ -72,12 +79,12 @@ ARMCC   := arm-none-eabi-gcc
 # measured bit-exact against the port with and without -fno-tree-vectorize.
 # See README, "what bit-exact is measured against".
 ARMFLAGS := -mcpu=cortex-m33 -mthumb -mfpu=fpv5-sp-d16 -mfloat-abi=hard -O2 \
-            $(NUM) -fno-strict-aliasing -g
+            $(NUM) $(LIBFLAGS) -fno-strict-aliasing -g
 QEMU_ARM := qemu-system-arm -M mps2-an505 -nographic \
             -semihosting-config enable=on,target=native
 
 .PHONY: all host dsp dsp-dump m33-dump tables tables-dsp tables-m33 compare \
-        cost m33-cost trace test test-dsp test-host clean
+        cost m33-cost trace test test-dsp test-host crosscheck clean
 
 all: dsp-dump compare
 
@@ -102,8 +109,36 @@ $(B)/rnn_dsp.o: rnn_dsp.c $(RN)/src/rnn.h | $(B)
 	$(XTCLANG) $(XTF) $(NSINC) -c $< -o $@
 
 ifeq ($(SIMD),1)
+$(B)/ns_log10f_arm.o: $(FDLIBM)/ef_log10.c $(FDLIBM)/math_config.h | $(B)
+	$(ARMCC) $(ARMFLAGS) -I$(FDLIBM) $(NSLOG) -c $< -o $@
+
+$(B)/ns_logf_arm.o: $(FDLIBM)/ef_log.c $(FDLIBM)/math_config.h | $(B)
+	$(ARMCC) $(ARMFLAGS) -I$(FDLIBM) $(NSLOG) -c $< -o $@
+
+$(B)/ns_log10f_host.o: $(FDLIBM)/ef_log10.c $(FDLIBM)/math_config.h | $(B)
+	env -i PATH=/usr/bin:/bin HOME=$(HOME) TMPDIR=$(TMPDIR) \
+	  cc -O2 $(NUM) -I$(FDLIBM) $(NSLOG) -c $< -o $@
+
+$(B)/ns_logf_host.o: $(FDLIBM)/ef_log.c $(FDLIBM)/math_config.h | $(B)
+	env -i PATH=/usr/bin:/bin HOME=$(HOME) TMPDIR=$(TMPDIR) \
+	  cc -O2 $(NUM) -I$(FDLIBM) $(NSLOG) -c $< -o $@
+
 XTLIBS := $(B)/ns_log10f.o $(B)/ns_logf.o $(B)/rnn_dsp.o
 else
+$(B)/ns_log10f_arm.o: $(FDLIBM)/ef_log10.c $(FDLIBM)/math_config.h | $(B)
+	$(ARMCC) $(ARMFLAGS) -I$(FDLIBM) $(NSLOG) -c $< -o $@
+
+$(B)/ns_logf_arm.o: $(FDLIBM)/ef_log.c $(FDLIBM)/math_config.h | $(B)
+	$(ARMCC) $(ARMFLAGS) -I$(FDLIBM) $(NSLOG) -c $< -o $@
+
+$(B)/ns_log10f_host.o: $(FDLIBM)/ef_log10.c $(FDLIBM)/math_config.h | $(B)
+	env -i PATH=/usr/bin:/bin HOME=$(HOME) TMPDIR=$(TMPDIR) \
+	  cc -O2 $(NUM) -I$(FDLIBM) $(NSLOG) -c $< -o $@
+
+$(B)/ns_logf_host.o: $(FDLIBM)/ef_log.c $(FDLIBM)/math_config.h | $(B)
+	env -i PATH=/usr/bin:/bin HOME=$(HOME) TMPDIR=$(TMPDIR) \
+	  cc -O2 $(NUM) -I$(FDLIBM) $(NSLOG) -c $< -o $@
+
 XTLIBS := $(B)/ns_log10f.o $(B)/ns_logf.o
 endif
 XTLINK := $(XTLIBS) -lsim -lm
@@ -135,16 +170,17 @@ M33OBJ := $(B)/m33_denoise.o $(B)/m33_rnn.o $(B)/m33_rnn_data.o $(B)/m33_pitch.o
 $(B)/m33_%.o: $(RN)/src/%.c | $(B)
 	$(ARMCC) $(ARMFLAGS) $(DEFS) $(NSINC) -c $< -o $@
 
-m33-dump: $(M33OBJ) | $(B)
+m33-dump: $(M33OBJ) $(B)/ns_log10f_arm.o $(B)/ns_logf_arm.o | $(B)
 	$(ARMCC) $(ARMFLAGS) -c common/startup.c -o $(B)/startup.o
 	$(ARMCC) $(ARMFLAGS) -DNS_DUMP=1 -DNS_ITERS=8 -DNS_RDIMON=1 -DNS_OWN_SBRK=1 \
 	   $(DEFS) $(NSINC) -c bench/bench_main.c -o $(B)/bench_m33.o
 	$(ARMCC) $(ARMFLAGS) -T common/mps2.ld -specs=rdimon.specs -o $(B)/m33_dump.elf \
-	   $(B)/startup.o $(B)/bench_m33.o $(M33OBJ) -lrdimon -lm -lc
+	   $(B)/startup.o $(B)/bench_m33.o $(M33OBJ) $(B)/ns_log10f_arm.o \
+	   $(B)/ns_logf_arm.o -lrdimon -lm -lc
 	$(QEMU_ARM) -kernel $(B)/m33_dump.elf > $(B)/out_m33.txt 2>&1 || true
 	@grep -c '^F' $(B)/out_m33.txt
 
-m33-cost: $(M33OBJ) | $(B)
+m33-cost: $(M33OBJ) $(B)/ns_log10f_arm.o $(B)/ns_logf_arm.o | $(B)
 	$(ARMCC) $(ARMFLAGS) -c common/startup.c -o $(B)/startup.o
 	$(ARMCC) $(ARMFLAGS) -DNS_ITERS=8 -DNS_RDIMON=1 -DNS_OWN_SBRK=1 \
 	   $(DEFS) $(NSINC) -c bench/bench_main.c -o $(B)/bench_m33_cost.o
@@ -162,8 +198,10 @@ test-dsp: $(DSP_SRC) $(XTLIBS) | $(B)
 
 test-host: | $(B)
 	env -i PATH=/usr/bin:/bin HOME=$(HOME) TMPDIR=$(TMPDIR) \
-	  cc -O2 $(NUM) -DNS_OWN_SBRK=1 $(DEFS) $(NSINC) $(RNSRC) ns_dsp.c \
-	   tests/test_ns_dsp.c -o $(B)/test_ns_dsp_host -lm
+	  cc -O2 $(NUM) $(LIBFLAGS) -DNS_OWN_SBRK=1 $(DEFS) $(NSINC) -I$(FDLIBM) \
+	   $(RNSRC) $(FDLIBM)/ef_log10.c $(FDLIBM)/ef_log.c \
+	   -D__ieee754_logf=ns_logf -D__ieee754_log10f=ns_log10f \
+	   ns_dsp.c tests/test_ns_dsp.c -o $(B)/test_ns_dsp_host -lm
 	./$(B)/test_ns_dsp_host > $(B)/out_ns_dsp_host.txt
 	@python3 tools/cmp_int16.py $(B)/out_host.txt $(B)/out_ns_dsp_host.txt
 
@@ -172,6 +210,11 @@ test: test-dsp
 
 compare:
 	python3 tools/cmp_frames.py $(B)/out_m33.txt $(B)/out_dsp$(V).txt
+
+# --- host, Cortex-M33 and HiFi4 on the same frames: the audio path must not
+#     depend on the C library, so all three have to agree bit for bit.
+crosscheck:
+	sh tools/crosscheck.sh $${N:-32}
 
 # --- per-frame cost on the ISS: total instructions with 8 frames minus the same
 #     build with 0 frames, over 8; cycles per frame from the profile.
@@ -190,12 +233,13 @@ tables-dsp: $(DSP_SRC) $(XTLIBS) | $(B)
 	   $(XTLINK) -o $(B)/tables_dsp.elf
 	$(XTRUN) $(B)/tables_dsp.elf > $(B)/tables_dsp.txt 2>&1
 
-tables-m33: $(M33OBJ) | $(B)
+tables-m33: $(M33OBJ) $(B)/ns_log10f_arm.o $(B)/ns_logf_arm.o | $(B)
 	$(ARMCC) $(ARMFLAGS) -c common/startup.c -o $(B)/startup.o
 	$(ARMCC) $(ARMFLAGS) -DNS_RDIMON=1 $(DEFS) $(NSINC) \
 	   -c bench/tables_main.c -o $(B)/tables_m33.o
 	$(ARMCC) $(ARMFLAGS) -T common/mps2.ld -specs=rdimon.specs -o $(B)/tables_m33.elf \
-	   $(B)/startup.o $(B)/tables_m33.o $(M33OBJ) -lrdimon -lm -lc
+	   $(B)/startup.o $(B)/tables_m33.o $(M33OBJ) $(B)/ns_log10f_arm.o \
+	   $(B)/ns_logf_arm.o -lrdimon -lm -lc
 	$(QEMU_ARM) -kernel $(B)/tables_m33.elf > $(B)/tables_m33.txt 2>&1 || true
 
 tables: tables-dsp tables-m33
@@ -207,7 +251,7 @@ ns_tables.h: tables-m33
 	python3 tools/gen_tables.py $(B)/tables_m33.txt $@
 
 # --- stage-by-stage trace of one frame, to find where two builds diverge
-trace: | $(B) $(XTLIBS) $(DSP_SRC)
+trace: $(B)/ns_log10f_arm.o $(B)/ns_logf_arm.o | $(B) $(XTLIBS) $(DSP_SRC)
 	$(XTCLANG) $(XTF) -DNS_TRACE=1 -DNS_ITERS=1 $(XTDEFS) $(NSINC) \
 	   $(B)/src_f32/denoise.c $(DSP_SRC) bench/bench_main.c $(XTLINK) \
 	   -o $(B)/trace_dsp$(V).elf
@@ -222,7 +266,7 @@ trace: | $(B) $(XTLIBS) $(DSP_SRC)
 	$(ARMCC) $(ARMFLAGS) -T common/mps2.ld -specs=rdimon.specs -o $(B)/trace_m33.elf \
 	   $(B)/startup.o $(B)/bench_m33_trace.o $(B)/t_denoise.o $(B)/t_rnn.o \
 	   $(B)/t_rnn_data.o $(B)/t_pitch.o $(B)/t_celt_lpc.o $(B)/t_kiss_fft.o \
-	   -lrdimon -lm -lc
+	   $(B)/ns_log10f_arm.o $(B)/ns_logf_arm.o -lrdimon -lm -lc
 	$(QEMU_ARM) -kernel $(B)/trace_m33.elf > $(B)/trace_m33.txt 2>&1 || true
 	@diff $(B)/trace_m33.txt $(B)/trace_dsp$(V).txt > $(B)/trace.diff && echo "traces identical" \
 	  || (echo "first differences:"; head -6 $(B)/trace.diff)
@@ -231,8 +275,10 @@ trace: | $(B) $(XTLIBS) $(DSP_SRC)
 # the Xtensa tools exported, `cc` picks up the Xtensa assembler.
 host: | $(B)
 	env -i PATH=/usr/bin:/bin HOME=$(HOME) TMPDIR=$(TMPDIR) \
-	  cc -O2 $(NUM) -DNS_DUMP=1 -DNS_OWN_SBRK=1 $(DEFS) $(NSINC) \
-	   $(RNSRC) bench/bench_main.c -o $(B)/host_dump -lm
+	  cc -O2 $(NUM) $(LIBFLAGS) -DNS_DUMP=1 -DNS_OWN_SBRK=1 $(DEFS) $(NSINC) \
+	   -I$(FDLIBM) $(RNSRC) $(FDLIBM)/ef_log10.c $(FDLIBM)/ef_log.c \
+	   -D__ieee754_logf=ns_logf -D__ieee754_log10f=ns_log10f \
+	   bench/bench_main.c -o $(B)/host_dump -lm
 	./$(B)/host_dump > $(B)/out_host.txt
 	@grep -c '^F' $(B)/out_host.txt
 

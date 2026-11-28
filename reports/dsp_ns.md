@@ -1,7 +1,7 @@
 # RNNoise en el HiFi4 del CSK6011B: base medible
 
 Estado: **el procesado de una trama corre en el núcleo DSP, bit-exacto contra el
-M33, y cuesta 671 327 instrucciones por trama de 10 ms** (2,32× menos que el M33
+M33, y cuesta 671 441 instrucciones por trama de 10 ms** (2,32× menos que el M33
 con el mismo arnés).  No está integrado en la imagen ni en el servicio LSF: eso
 es lo que falta (§6).
 
@@ -17,16 +17,20 @@ trabajo `work/dsp-ns`), sobre el toolchain Xtensa que ya está instalado en
 |---|---:|---:|---:|
 | Cortex-M33, este arnés, `-ffp-contract=off` | 1 556 938 | — | 51,9 % (instr.) |
 | Cortex-M33, build publicado del firmware | 1 360 819 | ~1 620 000 | 45 % / 54 % |
-| **HiFi4 (`venus_hifi4`), este port** | **671 327** | **934 801** | **31,2 %** |
+| **HiFi4 (`venus_hifi4`), este port** | **671 441** | **933 066** | **31,1 %** |
 
 * Bit-exactitud: **8/8 tramas, 3 840/3 840 muestras idénticas** contra el build
   del M33 (comparación sobre los bits, no sobre el valor).  También el cuerpo de
-  servicio en int16: 3 840/3 840.
+  servicio en int16: 3 840/3 840.  Y los **tres targets entre sí** (x86/glibc,
+  M33/newlib, HiFi4/Xtensa), 32 tramas, 15 360/15 360 muestras: el camino de
+  audio ya no depende de la libm (`make crosscheck`).
 * El número de instrucciones del ISS es determinista y es el dato duro; los
   ciclos salen del modelo de pipeline del ISS (sin cachés), así que son una
   estimación ideal.  CPI 1,39.
 * El 41,5 % del coste está en las tres capas GRU, con pesos `int8` y entrada
-  `float`.  El intento de vectorizarlas a 2 carriles empeora el coste (§4).
+  `float`.  El intento de vectorizarlas a 2 carriles empeora el coste (§4), y
+  **el criterio de ≤ 25 % no se cumple: se queda en 31,1 %** (§4.2 dice qué
+  habría que bajar y cuánto).
 
 ---
 
@@ -103,10 +107,10 @@ Y sobre el código del port, que es el caso real:
 
 ```console
 $ make cost
-# ISS: 4233468 -> 9606141 instructions, 5995381 -> 13469508 cycles (8 measured frames)
-instructions per 10 ms frame: 671327
-cycles per 10 ms frame:       934801  (CPI 1.392)
-at 300 MHz: 31.2 % of the core, 3.12 ms of CPU per 10 ms of audio
+# ISS: 1370308 -> 6741835 instructions, 1905407 -> 9369931 cycles (8 measured frames)
+instructions per 10 ms frame: 671441
+cycles per 10 ms frame:       933066  (CPI 1.390)
+at 300 MHz: 31.1 % of the core, 3.11 ms of CPU per 10 ms of audio
 ```
 
 El truco de la medida: el mismo binario con 0 y con 8 tramas medidas, y se resta.
@@ -154,6 +158,11 @@ Lo que hubo que resolver para que además sea *idéntico* al M33:
    `ns_tables.h` se genera del volcado del propio build del M33
    (`make ns_tables.h`) y se usa con `-DRNNOISE_FIXED_TABLES`; la reserva y los
    metadatos siguen viniendo de `kiss_fft`.
+   Que tomar las tablas del M33 no cambia nada se comprueba: el build del M33
+   con `LIBFIX=0` (calculándolas con newlib) y con `LIBFIX=1` (de `ns_tables.h`
+   y con el `log10f` de fdlibm) dan **8/8 tramas y 3 840/3 840 muestras
+   idénticas**.  Es decir, el firmware no cambia de salida al quitarle la libm
+   del camino de audio; sólo se vuelve determinista.
 4. **Orden de las operaciones.**  `rnn.c` suma con un acumulador por neurona y
    recorrido ascendente de entradas; se extrajo a `ns_matvec()` (misma suma,
    mismo orden) para que un kernel DSP lo pueda sustituir sin tocar nada más.  Y
@@ -166,7 +175,7 @@ Lo que hubo que resolver para que además sea *idéntico* al M33:
 
 | | instrucciones/trama | ciclos/trama (ISS) | a 300 MHz |
 |---|---:|---:|---|
-| HiFi4, escalar `float` (lo que se entrega) | **671 327** | 934 801 | 31,2 % |
+| HiFi4, escalar `float` (lo que se entrega) | **671 441** | **933 066** | **31,1 %** |
 | HiFi4, kernel SIMD de 2 carriles (§4) | 1 030 213 | 1 301 625 | 43,4 % |
 | M33, mismo arnés y mismas banderas | 1 556 938 | — | 51,9 % (instr.) |
 
@@ -185,35 +194,83 @@ Contra el M33: **2,32× menos instrucciones** con el mismo arnés y las mismas
 banderas.  Contra el número publicado del firmware (1 360 819, GCC con
 contracción FMA activada) es 2,03×.
 
-Criterio del informe `reports/codecs.md` §3.5: «≤ 25 % en QEMU escalar».  Con
-instrucciones se cumple (22,4 %); con los ciclos del modelo del ISS se queda en
-31,2 %.  Con la cuenta del propio informe (6,0 M ciclos por trama de 20 ms de
-presupuesto del DSP) serían **2,8 M ciclos por 20 ms ≈ 47 % de ese presupuesto**
-medido así, y ~19 % si se acepta la estimación de 6,5 instr/MAC del informe para
-el escalar.  Es decir: cabe, pero no sobra; el siguiente escalón es §4.
+Criterio del informe `reports/codecs.md` §3.5: **«≤ 25 % en QEMU escalar»**.  Se
+cumple en instrucciones (22,4 % de 300 MHz) pero **no en ciclos: 31,1 %**.  Con el
+presupuesto que da el propio informe (6,0 M ciclos por trama de 20 ms) son
+**1,87 M ciclos por 20 ms, el 31 % de ese presupuesto**.  Cabe en el DSP, pero no
+cumple el criterio; §4.2 dice exactamente cuántos ciclos hay que quitar (183 066)
+y con qué (GRU `int16`, no más carriles float).
 
 ---
 
-## 4. SIMD: medido, y hoy no paga
+## 4. Por qué son 31,1 % y no 25 %: qué falta y cuánto
+
+### 4.1 El kernel SIMD de 2 carriles sale más lento, y se sabe por qué
 
 `make cost SIMD=1` sustituye `ns_matvec()` por `dsp/ns/rnn_dsp.c`: dos neuronas
-por instrucción (`MUL.S`/`ADD.S` sobre `xtfloatx2`, nunca fusionados, para no
-cambiar el redondeo).  El resultado es **bit-exacto** (8/8 tramas) y **más
-lento**: 1 030 213 instrucciones/trama, 1,53× el escalar.
+por instrucción (`MUL.S`/`ADD.S` sobre `xtfloatx2`, sin fusionar, para no cambiar
+el redondeo).  Es **bit-exacto** (8/8 tramas) y **más lento**:
+**1 030 213 instrucciones/trama**, 1,53× el escalar (933 066 ciclos → 1 301 625,
+43,4 %).
 
-La razón es el formato de los pesos.  Son `int8`, así que cada producto necesita
-una conversión int8→float, y esa conversión cuesta más de lo que ahorran los dos
-carriles; encima clang escalariza el *splat*/empaquetado hecho con uniones y el
-código generado es `mul.s`/`add.s` de un carril con tráfico de memoria extra (se
-comprobó en el desensamblado).
+La causa es el formato de los pesos, no el número de carriles.  Los pesos del
+modelo v0.1.1 son `int8` (87 503 bytes, `rnn_data.c`), así que cada producto
+necesita **convertir int8→float**: el escalar lo hace con
+`l8ui`+`sext`+`float.s` (3 instrucciones por MAC, más carga y `mul`/`add`), y el
+kernel de 2 carriles no ahorra esa conversión — la hace dos veces por par y
+además por memoria: `sext`, `float.s`, almacén y recarga del par, porque clang
+escalariza el *splat* y el empaquetado hechos con uniones (comprobado en el
+desensamblado: todo son `mul.s`/`add.s` de un carril).  Resultado: 2 carriles de
+float convierten 7 instrucciones/MAC en ~10, no en 3,5.
 
-La dirección que sí pagaría, y que no está hecha: camino de 16 bits
-(`AE_MUL16X4`, cuatro neuronas por instrucción) con los pesos ensanchados a
-`int16` una vez en tiempo de compilación (101 KB más de imagen DSP), cuatro
-acumuladores vectoriales y un contrato en coma fija.  Eso **no puede ser
-bit-exacto** y habría que gastar el presupuesto de tolerancia de §5.
+Conclusión medida: **más carriles float no es la dirección**.  El cuello de
+botella es la representación de los pesos.
 
----
+### 4.2 Lo que habría que bajar, con los números del perfil
+
+Presupuesto: 933 066 ciclos/trama = 31,1 % de 300 MHz.
+
+| objetivo | ciclos/trama | hay que quitar |
+|---|---:|---:|
+| criterio del informe, ≤ 25 % | 750 000 | **183 066 (19,6 %)** |
+| criterio de producción en la radio, ≤ 10 % | 300 000 | 633 066 (3,1×) |
+
+Y el reparto actual, en ciclos (perfil muestreado, ±2 %):
+
+| bloque | % | ciclos/trama | qué es |
+|---|---:|---:|---|
+| `compute_gru` | 41,5 | ~387 000 | 3 capas GRU, pesos int8 × entrada float |
+| `rnnoise_process_frame` (propio) | 14,5 | ~135 000 | biquad, energías por banda, interpolación de ganancia |
+| `rnn_fft_impl` + `rnn_fft_c` | 16,0 | ~150 000 | FFT de 960 puntos, dos veces por trama |
+| `pitch` (xcorr, búsqueda, decimación, doblado) | 13,4 | ~125 000 | correlaciones float × float |
+| `compute_dense` | 1,8 | ~17 000 | dos capas densas |
+
+Opciones, en el orden en que pagarían:
+
+1. **GRU con pesos `int16` y `AE_MUL16X4` (4 neuronas por instrucción).**  Es el
+   único cambio que por sí solo cruza el criterio: los 387 000 ciclos de GRU
+   pasan a 65 000–95 000 (4–6×, contando cargas y lazo), es decir **610 000–640 000
+   ciclos/trama ≈ 20–21 %**.  Precio: 101 KB más de imagen DSP (50 640 pesos
+   `int16`) y un contrato en coma fija que **no puede ser bit-exacto** con la
+   referencia float: habría que gastar el presupuesto de tolerancia de §5 y
+   medir la calidad (PESQ/STOI) contra la tabla de `docs/NOISE.md`.
+2. **SIMD float donde los dos operandos son float** (no hay conversión que
+   pagar): `rnn_pitch_xcorr` (45 000 ciclos) y las energías por banda dentro de
+   `rnnoise_process_frame`.  A 2 carriles y ~1,7× eso son ~35 000 ciclos menos
+   (**~4 %**), y puede seguir siendo exacto porque `MUL.S`/`ADD.S` redondean
+   igual que el escalar.
+3. **FFT**: `kiss_fft` (150 000 ciclos) con mariposas de 2 carriles float, ~1,5×
+   ⇒ ~50 000 menos (**~5 %**), también exacto por la misma razón.
+
+Sumando 1+2+3 se queda en **~540 000–570 000 ciclos ≈ 18–19 %**: se cumple el
+criterio del informe (≤ 25 %) con margen, y **no** el de producción (≤ 10 %).
+Para 10 % habría que bajar de 933 000 a 300 000 ciclos, y eso ya no es vectorizar
+sino **reescribir en coma fija Q15 todo el camino** (GRU, FFT, pitch) aceptando
+una tolerancia que hay que justificar con calidad, no con ciclos.  Dicho de otro
+modo: con el código escalar float que entrega esta fase, la reducción de ruido
+**cabe** en el DSP (69 % libre) pero no cumple el criterio de producción; el
+primer escalón que sí lo cumple es el GRU `int16`, y está medido que no es «más
+carriles float».
 
 ## 5. Fase 3: bit-exactitud, y qué la sostiene
 
@@ -247,6 +304,14 @@ M33, que no está versionado aquí.
 La bit-exactitud **depende de dos decisiones de compilación**, y conviene que
 quien integre lo sepa:
 
+* **Nada de libm en el camino de audio**, que es lo que permite exigir igualdad
+  exacta entre *cualquier* target y no sólo contra el M33: las tablas y el estado
+  completo de `kiss_fft` vienen de `ns_tables.h` (sin `malloc` ni `sin`/`cos`) y
+  `log10f` es el fdlibm vendorizado en los tres builds.  Medido:
+  `make crosscheck N=32` da **15 360/15 360 muestras idénticas** entre x86/glibc,
+  M33/newlib y HiFi4/Xtensa.  Antes de esto, host y DSP divergían desde la
+  primera trama (0,002 LSB, 21 % de muestras iguales) porque cada libm calculaba
+  sus propias tablas.
 * **`-ffp-contract=off` en los dos lados.**  Con la contracción por defecto de
   GCC (`fast`, que es la del firmware tal como está), el M33 fusiona
   multiplicación y suma en VFMA donde le toca y el port no puede seguirlo: la
@@ -299,6 +364,8 @@ make test                        # cuerpo de servicio int16, contra el M33
 make tables                      # diferencias de tablas entre las dos libm
 make trace                       # traza por etapas de una trama
 make cost SIMD=1                 # el kernel de 2 carriles (más lento, ver §4)
+make crosscheck N=32             # x86, M33 y HiFi4 entre sí, bit a bit
+make LIBFIX=0 m33-dump           # build sin tablas fijas, para comparar
 ```
 
 **Suite del host.**  No se pudo ejecutar en este árbol de trabajo: `meson test`

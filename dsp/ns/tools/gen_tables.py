@@ -15,19 +15,42 @@ import sys
 
 def main():
     src, dst = sys.argv[1], sys.argv[2]
-    hw, dct, tw = [], [], []
+    hw, dct, tw, brv, fac = [], [], [], [], []
+    nfft = shift = None
+    scale = None
     with open(src) as f:
         for line in f:
             t = line.split()
             if len(t) != 2:
                 continue
             k, v = t
-            if k == "hw":
+            if k == "nfft":
+                continue
+            if k == "brv":
+                brv.append(v)
+            elif k == "fac":
+                fac.append(v)
+            elif k == "scale":
+                scale = v
+            elif k == "hw":
                 hw.append(v)
             elif k == "dct":
                 dct.append(v)
             elif k in ("twr", "twi"):
                 tw.append(v)
+    for line in open(src):
+        if line.startswith("nfft"):
+            parts = line.split()          # "nfft 960 shift -1"
+            nfft, shift = parts[1], parts[3]
+    assert nfft == "960" and shift == "-1", (nfft, shift)
+    assert scale, "no scale in the dump"
+    assert len(brv) == 960, len(brv)
+    assert len(fac) == 16, len(fac)
+    # kiss_fft fills only the factors it uses; the rest of the array is whatever
+    # malloc returned.  Zero the tail so the header is reproducible, and keep the
+    # used ones verbatim.
+    last = max(i for i, v in enumerate(fac) if int(v) != 0)
+    fac = fac[:last + 1] + ["0"] * (16 - last - 1)
     assert len(hw) == 480, len(hw)
     assert len(dct) == 22 * 22, len(dct)
     assert len(tw) == 2 * 960, len(tw)
@@ -56,6 +79,26 @@ def main():
         w("ns_dct_table", "float", [flt(v) for v in dct])
         pairs = [f"{{{flt(tw[2*i])}, {flt(tw[2*i+1])}}}" for i in range(960)]
         w("ns_fft_twiddles", "kiss_twiddle_cpx", pairs, per=2)
+        w("ns_fft_bitrev", "opus_int16", brv)
+        w("ns_fft_factors", "opus_int16", fac)
+        scale_line = "    .scale = %s,\n" % flt(scale)
+        o.write(
+            "/* The whole FFT state, so that check_init() needs neither malloc nor\n"
+            " * sin()/cos(): the twiddles are the reference build's, the factors and the\n"
+            " * bit-reversal table are integers computed by kiss_fft's own kf_factor() and\n"
+            " * are identical on every target. */\n"
+            "static const kiss_fft_state ns_fft_state = {\n"
+            "    .nfft = 960,\n"
+            + scale_line +
+            "    .shift = -1,\n"
+            "    .factors = { %s, %s, %s, %s,\n" % tuple(fac[0:4])
+            + "                 %s, %s, %s, %s,\n" % tuple(fac[4:8])
+            + "                 %s, %s, %s, %s,\n" % tuple(fac[8:12])
+            + "                 %s, %s, %s, %s },\n" % tuple(fac[12:16])
+            + "    .bitrev = ns_fft_bitrev,\n"
+            + "    .twiddles = ns_fft_twiddles,\n"
+            "    .arch_fft = 0,\n"
+            "};\n\n")
         o.write("#endif /* NS_TABLES_H */\n")
     print(f"{dst}: {len(hw)} half-window, {len(dct)} dct, {len(tw)//2} twiddles")
 

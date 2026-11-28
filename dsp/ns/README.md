@@ -37,6 +37,14 @@ tools/                  literal typing, table generation, cost and diff tools
   `third_party/newlib_fdlibm/` compiles that implementation for the DSP under
   `-Dlog10f=ns_log10f`, and it reproduces the M33's values on 2000/2000 sampled
   inputs.  `sqrtf` and `floorf` are IEEE-exact and need nothing.
+* **No libm in the audio path.**  `RNNOISE_FIXED_TABLES` also brings the whole
+  `kiss_fft_state` (twiddles, factors, bit-reversal) from `ns_tables.h`, so
+  `check_init()` neither calls `sin`/`cos` nor `malloc`s, and `log10f` is the
+  vendored fdlibm one in every build (`LIBFIX=1`, the default; `LIBFIX=0` builds
+  the library as published, to measure what the libm costs in bit terms).
+  Result: `make crosscheck N=32` — x86/glibc, Cortex-M33/newlib and the HiFi4 —
+  **15 360/15 360 samples identical**, and the M33 build's own output does not
+  change (`LIBFIX=0` vs `LIBFIX=1`: 3840/3840).
 * **The M33's tables.**  `half_window`, `dct_table` and the FFT twiddles are
   `sin`/`cos` in double, rounded to float.  newlib and the Xtensa libm disagree
   in the last bit on a third of them (237/480, 388/484, 683/960), which is enough
@@ -84,7 +92,7 @@ it:
 |---|---:|---:|---:|
 | Cortex-M33, same harness, `-ffp-contract=off` | 1 556 938 | — | 51.9 % (instr.) |
 | Cortex-M33, shipped build (published) | 1 360 819 | 1 620 000 | 45 / 54 % |
-| **HiFi4, this port** | **671 327** | **934 801** | **31.2 %** |
+| **HiFi4, this port** | **671 441** | **933 066** | **31.1 %** |
 
 CPI on the ISS model is 1.39; the ISS has no caches, so treat the cycle column as
 an ideal-pipeline estimate and the instruction column as the hard number.
@@ -98,6 +106,19 @@ Per frame the cost splits (sampled profile, ±2 %):
  2.2 %  rnn_fft_c
  1.8 %  compute_dense
 ```
+
+## Why 31.1 % and not 25 %
+
+The report's bar is ≤ 25 % of the DSP in the scalar model; this lands at 31.1 %.
+What would close the gap, with the measured shares: the GRU is 41.5 % (387 k
+cycles/frame) and it is the only block that pays on its own — int16 weights with
+`AE_MUL16X4` (four neurons per instruction) would take it to 65–95 k, i.e.
+**610–640 k cycles ≈ 20–21 %**, at the price of 101 KB more image and a fixed
+point contract that cannot be bit-exact.  Vectorising the float × float parts
+(pitch xcorr, band energies) is ~4 % and stays exact; the FFT is ~5 % more.  All
+three together: ~18–19 %.  Reaching the ≤ 10 % in-radio figure needs a Q15
+rewrite of the whole path, not more lanes.  `reports/dsp_ns.md` §4.2 has the
+table.
 
 ## SIMD: measured, and not worth it yet
 
@@ -122,5 +143,6 @@ make m33-cost                   # the same measurement on the M33 (QEMU plugin)
 make test                       # the service body, int16 in and out
 make tables                     # diff the init-time tables of both builds
 make trace                      # stage-by-stage trace of one frame, if they ever diverge
+make crosscheck N=32            # x86, M33 and HiFi4 against each other, bit for bit
 make host                       # x86 build of the harness, sanity only
 ```

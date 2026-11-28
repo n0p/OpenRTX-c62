@@ -210,32 +210,39 @@ static void interp_band_gain(float *g, const float *bandE) {
 CommonState common;
 
 /*
- * [C62 patch 3, opt-in] Tables from the reference build.
+ * [C62 patch 3, opt-in] No libm in the audio path.
  *
  * half_window, dct_table and the FFT twiddles are double-precision sin()/cos()
  * results rounded to float.  Two C libraries disagree in the last bit on a
  * third of them (measured: 237/480 half-window, 388/484 DCT, 683/960 twiddle
- * reals, M33 newlib against Xtensa libm), and one ulp in a twiddle is enough to
- * unbalance every output sample, so a port that must be bit-exact against the
- * M33 cannot compute them again on the other core: it has to use the M33's.
+ * reals, M33 newlib against Xtensa libm, and glibc against either), and one ulp
+ * in a twiddle is enough to change every output sample: whoever computes them
+ * again on another target gets a different denoiser.
  *
- * RNNOISE_FIXED_TABLES takes the values from ns_tables.h, generated from the
- * M33 build's own dump (dsp/ns/tools/gen_tables.py).  The allocation and all
- * the metadata still come from the library.
+ * RNNOISE_FIXED_TABLES takes them, and the whole kiss_fft state, from
+ * ns_tables.h -- generated once from the M33 build's own dump
+ * (dsp/ns/tools/gen_tables.py).  The frame path then calls no trigonometric
+ * function and allocates nothing, so host, Cortex-M33 and HiFi4 produce the
+ * same bytes; log10f is the other libm call on that path and gets the same
+ * treatment (dsp/ns/third_party/newlib_fdlibm).
  */
 #ifdef RNNOISE_FIXED_TABLES
 #include "ns_tables.h"
+/* the fdlibm log10f the M33 runs, compiled for whichever core this is
+ * (dsp/ns/third_party/newlib_fdlibm); the macro in the build flags maps
+ * log10f() calls here without touching the C library's own declarations. */
+float ns_log10f(float x);
 #endif
 
 static void check_init() {
   int i;
   if (common.init) return;
-  common.kfft = rnn_fft_alloc_twiddles(2*FRAME_SIZE, NULL, NULL, NULL, 0);
 #ifdef RNNOISE_FIXED_TABLES
+  common.kfft = (kiss_fft_state *)&ns_fft_state;
   RNN_COPY(common.half_window, ns_half_window, FRAME_SIZE);
   RNN_COPY(common.dct_table, ns_dct_table, NB_BANDS*NB_BANDS);
-  memcpy((void *)common.kfft->twiddles, ns_fft_twiddles, sizeof(ns_fft_twiddles));
 #else
+  common.kfft = rnn_fft_alloc_twiddles(2*FRAME_SIZE, NULL, NULL, NULL, 0);
   for (i=0;i<FRAME_SIZE;i++)
     common.half_window[i] = sin(.5*M_PI*sin(.5*M_PI*(i+.5)/FRAME_SIZE) * sin(.5*M_PI*(i+.5)/FRAME_SIZE));
   for (i=0;i<NB_BANDS;i++) {
