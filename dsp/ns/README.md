@@ -27,9 +27,10 @@ tools/                  literal typing, table generation, cost and diff tools
   already float after the C62 patches; what was left was literal typing: the
   firmware builds with `-fsingle-precision-constant`, and **the Xtensa clang in
   the RI-2021.7 bundle accepts that flag and ignores it**, so `x*1.3` was still
-  a double multiply.  `tools/fp_literals.py` writes the literals out with an `f`
-  suffix for the DSP build (101 soft-double call sites per frame before, 0
-  after).
+  a double multiply (it says so: `warning: optimization flag
+  '-fsingle-precision-constant' is not supported`).  `tools/fp_literals.py`
+  writes the literals out with an `f` suffix for the DSP build; the image had
+  101 call sites into the soft-double helpers, and the frame path has none.
 * **One libm function.**  `log10f` is on the per-frame path (band energies).  The
   Xtensa libm's `log10f` is not correctly rounded — 1414/2000 values differ from
   the correctly rounded one — while the M33 runs newlib's Sun fdlibm version.

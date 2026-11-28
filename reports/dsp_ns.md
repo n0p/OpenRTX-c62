@@ -255,9 +255,11 @@ quien integre lo sepa:
   `-ffp-contract=off` cuando la etapa vive en el DSP, o se acepta esa tolerancia
   como criterio.
 * **Nada más.**  `-fno-tree-vectorize` no cambia nada (medido: bit-exacto con y
-  sin), y las tablas/`log10f`/literales de §3.1 son lo que elimina el resto de
-  la deriva (sin ellas: 0,032 LSB y 0,7 % de muestras idénticas; luego
-  0,002 LSB; luego 0).
+  sin).  El resto de la deriva lo quitan, por este orden, las tres piezas de
+  §3.1, y así se vio en la comparación trama a trama: con las tablas de cada
+  libm, **0,032 LSB y 0,7 % de muestras idénticas**; con las tablas del M33,
+  0,0068 LSB y 11 %; con el `log10f` de newlib, 0,002 LSB y 23 %; con los
+  literales en `float`, **0 y 100 %**.
 
 ---
 
