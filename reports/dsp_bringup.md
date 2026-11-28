@@ -375,3 +375,77 @@ banco compartido a `0x60080000` porque `-M sim` no modela ninguno de los dos
   sólo se ven en el transporte.
 * Que el reparto ADC01/ADC23, el APC o el DMA estén resueltos: es fase (c) y
   necesita la radio.
+
+---
+
+# Fase 1: el audio (actualización, 2026-11-28 tarde)
+
+El código está en `work/dsp-openfw`, rama `bringup`: `76bef38` (etapa, tick y HAL),
+`a0cda41` (push y streamID), `571e297` (captura) y `5e1ef17` (el chequeo de anillo).
+
+## 11. Lo que funciona, medido
+
+| Qué | Evidencia |
+|---|---|
+| Captura completa | `read 100` → **100/100 tramas de 1920 B, 0 muestras distintas**, `drops=0`, `traps=0` |
+| Tick | `[cp] tick armed: period=3000000 cycles`; `tick == blocks+drops+held+idle+pending` en todas las muestras |
+| Un bloque por tick | `blocks=10 drops=0` para 10 lecturas, con `held` e `idle` contados aparte |
+| Cliente del AP | `modules/lib/{urpc,lsf,af}` **sin tocar**, `-m32` (el contrato es ILP32: en 64 bits los punteros de los objetos compartidos se leen como dos campos pegados) |
+| HAL del CP | siete ficheros **sin una modificación**, tres shims; imagen **142 560 B** |
+| `sqrtf` propio | bit-idéntico a glibc en las **2 139 095 040** floats positivas |
+
+## 12. El bloqueo del push, resuelto con datos
+
+El cliente se paraba registrando el push de propiedades (EP4 h4). Instrumentando una copia
+del cliente (`tools/ap_client/probe/ic_property.c`):
+
+```
+[probe] push: eps=4 flags=8 dst=4 src=4 sess=4 pl=00000001 00180000 00
+[probe] find(0,1): count=0 items=(nil)   -> MISS
+```
+
+El handler del AP parsea ese payload como *notify* de `group=0, property=1`, y **aún no ha
+importado ningún grupo** (`lsf_import_properties` llega después, desde
+`AudioSystem_initialize`). El `IC_ASSERT` se queda en `while(1)` **dentro del task async de
+urpc**, que es el que entrega todas las respuestas: por eso el primer `lsf_set()` se colgaba.
+
+La corrección es la del vendor (`lsf_server/src/ic_property.c:875`): **no responder** a
+`PUSH|REQUEST`, sólo guardar la plantilla e intercambiar ids. Implementado así, más
+`srv_prop_notify_uint()` como camino real de notificación.
+
+## 13. La etapa de ruido no se puede ejecutar en QEMU (opcodes AE)
+
+```
+after bench: traps=1 cause=0 epc1=60002daf vaddr=00000000
+trap at 60002daf (ns_dsp_process+47)
+```
+
+`xt-clang` compila `kiss_fft` a instrucciones del **Audio Engine** (`ae_*`): ~470 en `-O2`,
+y también en `-O1`. El modelo `venus_hifi4` **no implementa ninguno**
+(`target/xtensa/translate.c` no tiene casos AE). No es configurable: el modelo no existe.
+
+De ahí, dos reglas para el resto del proyecto:
+
+- La bit-exactitud de la etapa **se mide en el ISS**, que es donde se midió (8/8 tramas,
+  3 840/3 840 muestras).
+- `make noae` **falla el build** si las fuentes propias emiten opcodes AE; `make noae-ns`
+  avisa de los de la etapa sin romper el build.
+
+## 14. La deriva no se mide en QEMU
+
+El CP corre en ventanas de 120 ms de vCPU gobernadas por el cliente, así que su tiempo no
+corre con el reloj de pared: en el escenario libre, el productor adelanta al consumidor
+(`drop` sube) porque el cliente no está siendo planificado, no porque el ritmo esté mal.
+Lo medido y firme: **periodo del tick exactamente 3 000 000 de ciclos** y **un bloque de 480
+muestras por tick**. La deriva contra reloj es una medida de silicio.
+
+## 15. Pendiente para la fase (c)
+
+- **Pin muxing del códec**, vacío a propósito en `src/audio_hw.c`: los números de pad están
+  en el board file del SDK y no en el árbol; inventarlos da códec mudo **sin error**.
+- **Reparto ADC01/ADC23** (micrófono vs. discriminador) y mapeo DAC0/DAC1: pregunta A/B, en
+  la radio.
+- **`register_ISR`/`enable_IRQ`** del HAL, vacías sin XOS: en silicio hay que colgarlas de
+  la tabla de vectores propia.
+- **Coste real con caché**: el 31,1 % es del ISS; 16 KB de D-cache frente a un working set
+  de 150 KB puede moverlo.
