@@ -32,9 +32,13 @@ static struct {
     unsigned char buf[64 * 1024] __attribute__((aligned(8))); ///< DenoiseState
 } ns __attribute__((section(".psram_section")));
 
-/* Measured on the C62 target: see docs/NOISE.md. Instructions per 10 ms frame
- * of the v0.1.1 network at -O2 on the Cortex-M33. */
-#define NS_INSTR_PER_FRAME 1907028
+/* Measured on this library build: 1 360 819 instructions per 10 ms frame of
+ * the v0.1.1 network at -O2 -fsingle-precision-constant on the Cortex-M33
+ * (median of 19 frames, QEMU mps2-an505 with the TCG instruction plugin;
+ * work/nr-probe, docs/NOISE.md "Cost after the float patch").  That is 45 % of
+ * a 300 MHz core in instructions and 54 % in estimated cycles, 5.4 ms of CPU
+ * for 10 ms of audio. */
+#define NS_INSTR_PER_FRAME 1360819
 
 bool noiseSuppress_enabled(void)
 {

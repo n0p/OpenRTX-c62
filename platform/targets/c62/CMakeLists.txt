@@ -356,6 +356,43 @@ if(CONFIG_C62_APRS)
 endif()
 
 #
+# CONFIG_C62_NOISE_SUPPRESS: RNNoise speech enhancement on the analog FM
+# receive path, behind the settings row (Settings > Audio > RX Noise) and off
+# at run time until the operator turns it on.  docs/NOISE.md is the reference:
+# the stage is core/noise_suppress.c and the library is lib/rnnoise (RNNoise
+# v0.1.1, BSD-3-Clause).
+#
+# The library is its own target for two reasons.  Its hot files are built at
+# -O2 (measured 13 % cheaper than the image-wide -Os, see its CMakeLists.txt),
+# and with the option off nothing of it is compiled at all -- not one object,
+# not the 87.5 KiB weight table -- so the image is byte for byte the one this
+# tree builds without the feature.
+#
+if(CONFIG_C62_NOISE_SUPPRESS)
+  add_subdirectory(${OPENRTX_ROOT}/lib/rnnoise ${CMAKE_BINARY_DIR}/rnnoise)
+  # Build it with the Zephyr compiler flags (CPU, FPU, ABI, include paths), as
+  # lib/dmr_vocoder and libtetra are: without them the archive is built for the
+  # default CPU and the link fails on VFP register arguments.
+  target_compile_options(rnnoise PRIVATE
+    $<TARGET_PROPERTY:zephyr_interface,INTERFACE_COMPILE_OPTIONS>)
+  target_compile_definitions(rnnoise PRIVATE
+    $<TARGET_PROPERTY:zephyr_interface,INTERFACE_COMPILE_DEFINITIONS>)
+  target_include_directories(rnnoise PRIVATE
+    $<TARGET_PROPERTY:zephyr_interface,INTERFACE_INCLUDE_DIRECTORIES>)
+  target_include_directories(rnnoise SYSTEM PRIVATE
+    $<TARGET_PROPERTY:zephyr_interface,INTERFACE_SYSTEM_INCLUDE_DIRECTORIES>)
+  # PUBLIC include dirs come with the link: core/noise_suppress.c finds
+  # rnnoise.h through it.
+  target_link_libraries(app PRIVATE rnnoise)
+
+  target_sources(app PRIVATE
+    ${OPENRTX_ROOT}/openrtx/src/core/noise_suppress.c)
+
+  message(STATUS "C62: RNNoise noise suppression on the analog RX path "
+                 "(off at run time, C62_NOISE_SUPPRESS)")
+endif()
+
+#
 # C62_KISS: the packet modem (KISS TNC) and its configuration page.
 # docs/KISS.md is the reference. The service runs in its own thread and only
 # touches the audio path while the operator has it enabled; the protocol layer

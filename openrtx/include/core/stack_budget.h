@@ -85,9 +85,27 @@
  * (-fcallgraph-info=su).  2 KiB is the value that ships; the floor keeps a
  * 0.6 KiB margin over the measurement, so a future "tidy-up" to 1 KiB -- which
  * would sit right on the worst case -- fails the build.
+ *
+ * CONFIG_C62_NOISE_SUPPRESS adds RNNoise to the same thread, inside
+ * captureFrame(), and it is the deepest thing on it by an order of magnitude:
+ * measured with -fstack-usage on the library as this tree builds it (Cortex-M33,
+ * -O2 -fsingle-precision-constant), rnnoise_process_frame 2 832 B + the
+ * compute_rnn frame it calls 3 632 B + compute_gru 1 592 B = 8 056 B, about
+ * 8.9 KiB with the worker's own 0.9 KiB chain.  The DenoiseState itself is in
+ * PSRAM (core/noise_suppress.c), so this is all that is left on the stack.
+ * 12 KiB ships with the feature built in, which leaves ~3 KiB of margin for the
+ * exception frame and the logging path; the floor at 10 KiB fails the build
+ * rather than a radio that reboots the moment someone turns RX Noise on.  With
+ * the option off the numbers are exactly the ones above: the image and the
+ * stack are untouched.
  */
+#ifdef CONFIG_C62_NOISE_SUPPRESS
+#define STACK_BUDGET_CODEC_WORKER      12288
+#define STACK_BUDGET_CODEC_WORKER_MIN  10240
+#else
 #define STACK_BUDGET_CODEC_WORKER      2048
 #define STACK_BUDGET_CODEC_WORKER_MIN  1536
+#endif
 
 /*
  * ---------------------------------------------------------------------------
