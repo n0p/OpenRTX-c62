@@ -404,6 +404,32 @@ void OpMode_P25::update(rtxStatus_t *const rtx, const bool newCfg)
         radio_updateConfiguration();
     }
 
+    /*
+     * PTT first, then the receiver.
+     *
+     * This check used to sit at the end of the receive pass, behind the path
+     * check, the sample read and the 500 ms settle window (SETTLE_SAMPLES).  A
+     * press that landed on any of them was not refused, it was never looked at:
+     * the mode went back to reading samples with the PA off.  With a receiver
+     * that is not delivering -- a codec route the worker did not apply, a
+     * stream that did not start -- the transmitter was unreachable for as long
+     * as that lasted.  OpMode_DMR and OpMode_NXDN ask before they receive, and
+     * that is the rule: what the PTT does may not depend on the receiver.
+     */
+#ifdef CONFIG_P25_TX
+    if (rtx_keyingAllowed(rtx) && (txBlocked == false)) {
+        stopSampling();
+        radio_disableRtx();
+        if (startTx(rtx)) {
+            rtx->opStatus = TX;
+            platform_ledOn(GREEN);
+            return;
+        }
+        txBlocked = true;
+        startRx = true;
+    }
+#endif
+
     if (audioPath_getStatus(basebandPath) != PATH_OPEN) {
         sleepFor(0, 10);
         return;
@@ -438,19 +464,4 @@ void OpMode_P25::update(rtxStatus_t *const rtx, const bool newCfg)
     else
         platform_ledOff(GREEN);
 
-#ifdef CONFIG_P25_TX
-    /* PTT keys the transmitter: the receiver is stopped first, the BK4819 is
-     * half duplex and both directions use the same audio path */
-    if (rtx_keyingAllowed(rtx) && (txBlocked == false)) {
-        stopSampling();
-        radio_disableRtx();
-        if (startTx(rtx)) {
-            rtx->opStatus = TX;
-            platform_ledOn(GREEN);
-            return;
-        }
-        txBlocked = true;
-        startRx = true;
-    }
-#endif
 }

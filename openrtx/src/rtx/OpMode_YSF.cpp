@@ -501,6 +501,33 @@ void OpMode_YSF::update(rtxStatus_t *const rtx, const bool newCfg)
     if (newCfg)
         reset();
 
+    /*
+     * PTT first, then the receiver.
+     *
+     * This check used to sit at the end of the receive pass, after three
+     * `return`s (a path that is not open, a block that did not arrive, the
+     * settle window).  A press that landed on any of them was not refused: it
+     * was never looked at, and the mode went back to waiting for samples with
+     * the PA off and no trace of why -- a receiver that is not delivering (a
+     * codec route that did not apply, a stream that never started) made the
+     * transmitter unreachable for as long as it lasted, which is for ever.  The
+     * other modes ask before they receive (OpMode_DMR, OpMode_NXDN) and that is
+     * the rule: what the PTT does may not depend on the receiver's buffers.
+     */
+#ifdef CONFIG_YSF_TX
+    if (rtx_keyingAllowed(rtx) && (txBlocked == false)) {
+        stopSampling();
+        radio_disableRtx();
+        if (startTx(rtx)) {
+            rtx->opStatus = TX;
+            platform_ledOn(GREEN);
+            return;
+        }
+        txBlocked = true;
+        startRx = true;
+    }
+#endif
+
     if (audioPath_getStatus(basebandPath) != PATH_OPEN) {
         sleepFor(0, 10);
         return;
@@ -534,17 +561,4 @@ void OpMode_YSF::update(rtxStatus_t *const rtx, const bool newCfg)
     else
         platform_ledOff(GREEN);
 
-#ifdef CONFIG_YSF_TX
-    if (rtx_keyingAllowed(rtx) && (txBlocked == false)) {
-        stopSampling();
-        radio_disableRtx();
-        if (startTx(rtx)) {
-            rtx->opStatus = TX;
-            platform_ledOn(GREEN);
-            return;
-        }
-        txBlocked = true;
-        startRx = true;
-    }
-#endif
 }
