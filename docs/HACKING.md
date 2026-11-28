@@ -50,7 +50,7 @@ been one of them waiting for another.
 | main | 2048 | platform init, then the state machine that feeds the watchdog; owns the shutdown path |
 | UI / state | 2048 | `ui_updateFSM()`, draws the screen, applies the VFO and settings to `state` |
 | RTX | 9216 (C62) | `rtx_task()`: configures the radio, runs the current mode's `update()` at the audio block rate, keys and unkeys |
-| codec worker | ~21 KiB | the audio engine: pulls PCM from the active path, feeds the DSP/codec |
+| codec worker | 2048 (12288 with `CONFIG_C62_NOISE_SUPPRESS`) | the audio engine: pulls PCM from the active path, feeds the DSP/codec |
 | pcproto | 4096 | reads the serial port, answers the PC, runs the bench namespace |
 | black box supervisor | 3072 | watches the heartbeats, writes the post-mortem, reboots |
 | keyboard scan | — | matrix scan; feeds key events to the UI |

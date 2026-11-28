@@ -42,6 +42,11 @@ one test of a cached `bool` per DSP frame inside `captureFrame()` — no
 conversion, no buffers touched, nothing allocated (the 62 KiB state is a
 `.psram_section` block that is only initialised on the first enable).
 
+The row, the setting and the hook are all inside
+`#ifdef CONFIG_C62_NOISE_SUPPRESS`; `platform/targets/c62/CMakeLists.txt` is
+what builds `lib/rnnoise` and `core/noise_suppress.c` and links them into the
+image, so a build without the option has neither the row nor the symbols.
+
 ## Where it sits
 
 ```
@@ -79,7 +84,9 @@ the TCG plugin (`work/nr-probe`, `measure.py`); payload is 480‑sample frames o
 real 48 kHz speech mixed with real idle‑engine noise at 10 dB SNR, 20 frames
 after 10 warm‑up frames. Cycles are estimated from the executed instruction mix
 with the ARMv8‑M timing table, so they are an estimate; the instruction counts
-are exact and deterministic.
+are exact and deterministic. The numbers below were measured with `measure.py`'s
+`REPO` pointing at this tree and the library's own flags
+(`-O2 -fsingle-precision-constant -fno-math-errno`).
 
 | build | instructions/frame (median) | min…max | est. cycles/frame | % of 300 MHz |
 |---|---|---|---|---|
@@ -89,14 +96,21 @@ are exact and deterministic.
 | `-O3 -funroll-loops -fsingle-precision-constant` | **1 599 912** | 1 575 182…1 609 769 | 1 993 630 | **66.5 %** |
 | `-Os` | 2 192 946 | 2 166 919…2 207 305 | 2 606 676 | 86.9 % |
 | `-O2 -fsingle-precision-constant`, **no `double` in the frame path** | **1 360 819** | 1 350 221…1 368 164 | 1 620 918 | **54.0 %** |
+| `-Os`, no `double` in the frame path | 1 723 130 | 1 706 494…1 733 108 | 2 109 325 | 70.3 % |
+| `-O3 -funroll-loops -fsingle-precision-constant`, no `double` | 1 151 496 | 1 141 089…1 157 060 | 1 522 456 | 50.7 % |
 
-The last row is the current library: the per-frame `double` arithmetic is gone
-(§ "No `double` in the frame path" below). The other rows are the upstream
-algorithm and are kept as the reference the change is compared against.
+The last three rows are the current library: the per-frame `double` arithmetic
+is gone (§ "No `double` in the frame path" below). The other rows are the
+upstream algorithm and are kept as the reference the change is compared
+against.
 
 The firmware therefore builds the library at `-O2` (per source file: the
 `zephyr_interface` `-Os` is appended after a target's options and would win),
-which is 13 % cheaper than the firmware‑wide `-Os`.
+which is **17 % cheaper** than the firmware‑wide `-Os` on the patched library
+(1 427 148 against 1 723 130 instructions per frame). `-O3 -funroll-loops`
+would take another 15 % off (1 151 496), and is not used: the library's output
+was verified against the reference at the flags it ships with, and at either
+number the stage does not fit the M33 in real time.
 
 The upstream profile (before the local `float` patch) is kept here because it
 says where the money was:
@@ -180,11 +194,18 @@ The difference is the biquad's rounding: in `double` the state kept 53 bits
 between taps, in `float` it keeps 24. It is a noise floor 72 dB below the
 signal, inaudible, and the filter is stable in both.
 
-Memory: **62 312 bytes** of state (18 492 B unmodified; the local patch moves the
-per‑frame scratch in) and **2 856 bytes** of stack (35 400 B unmodified). The
-state lives in `.psram_section`; nothing of it is charged to the internal RAM
-budget. The codec worker's stack grows from 2 KiB to 4 KiB only when the option
-is built in.
+Memory: **62 288 bytes** of state (`rnnoise_get_size()` on this build: 18 492 B
+unmodified, the local patch moves the per‑frame scratch in, which is why the
+`ns` block in `core/noise_suppress.c` is 64 KiB) and **~8 KiB of stack**: with
+`-fstack-usage` on the library as this tree builds it, the deepest chain the
+stage puts on its caller is `rnnoise_process_frame` 2 832 B + the `compute_rnn`
+frame it calls 3 632 B + `compute_gru` 1 592 B = 8 056 B, which against the
+codec worker's own 0.9 KiB chain is 8.9 KiB. The state lives in
+`.psram_section`; nothing of it is charged to the internal RAM budget. The
+codec worker's stack grows from 2 KiB to 12 KiB only when the option is built
+in (`core/stack_budget.h`), not the 4 KiB the first version of this stage
+assumed: at 2 KiB the first processed frame would have overrun the guard
+(`CONFIG_HW_STACK_PROTECTION`) and rebooted the radio.
 
 ### Why the M33 is not viable
 
@@ -267,20 +288,47 @@ resampling or queueing.
 
 ## Flash and RAM
 
-Same configuration for both images: `CONFIG_C62_DMR_RX=y CONFIG_C62_APRS=y`
-(the worst‑case RAM layout), Zephyr's `Memory region` report:
+Same configuration for both images:
+`-DCONFIG_C62_DMR_RX=y -DCONFIG_C62_APRS=y` on top of the board's defaults
+(TETRA, the message store, scan and VFO search on), Zephyr's `Memory region`
+report:
 
 | | FLASH | RAM | PSRAM |
 |---|---|---|---|
-| without the option | 508 092 B (48.46 %) | 195 672 B (74.64 %) | 379 064 B (20.66 %) |
-| `CONFIG_C62_NOISE_SUPPRESS=y` | **611 196 B** (58.29 %) | **201 584 B** (76.90 %) | 449 416 B (24.49 %) |
-| delta | **+103 104 B** | **+5 912 B** (3 864 B of it `.bss` tables) | +70 352 B |
+| without the option | 608 816 B (58.06 %) | 170 328 B (64.97 %) | 471 372 B (25.69 %) |
+| `CONFIG_C62_NOISE_SUPPRESS=y` | **709 728 B** (67.68 %) | **184 440 B** (70.36 %) | **541 724 B** (29.52 %) |
+| delta | **+100 912 B** | **+14 112 B** | **+70 352 B** |
 
-The flash delta is the 87.5 KiB weight table plus ~15 KiB of code (RNNoise
-objects: 87 503 B of `.rodata` for the weights, 15 232 B of `.text`). The 5.9 KiB of
-internal RAM is the codec worker's stack (+2 KiB) and the new call paths; the
-62 KiB state and the de‑interleaving buffer are in PSRAM. RAM stays under the
-80 % ceiling that the DMR‑TX build must respect, with 4 points of headroom.
+ITCM (8 472 B) and DTCM (11 664 B) do not move: nothing of the stage is a
+DTCM/ITCM object.  The absolute FLASH figure moves by a few bytes from build to
+build, because `git describe` is baked into `.rodata` and its length changes
+with the commit count (the same commit measured 931 856 B one commit earlier
+and 931 860 B at the tip); the deltas do not move.
+
+Where the deltas come from, by `arm-none-eabi-size` on the objects:
+
+* **FLASH +100 912 B** — `rnn_data.c` 87 683 B (the 87 503 int8 weights plus a
+  little code), the five RNNoise objects 12 768 B of `.text` and the stage
+  (`core/noise_suppress.c`) 532 B, less 71 B of section padding.
+* **RAM +14 112 B** — the codec worker's stack 10 240 B (2 KiB → 12 KiB,
+  § "Memory" above) and 3 864 B of `.bss`: RNNoise's per-frame scratch, which
+  the local patch moved out of the C stack into a static block.  That block is
+  in internal RAM; it could be moved to PSRAM, and is left where the library
+  puts it.
+* **PSRAM +70 352 B** — the `ns` block (64 KiB of `DenoiseState` + the two
+  480-sample `float` conversion buffers, 69 392 B) and the 960 B de-interleaving
+  buffer `nsSamples`.
+
+RAM ends at 70 % in this configuration and at 79.13 % in the release image
+(all modes, DMR TX included), under the 80 % ceiling that build must respect.
+
+The release image, for the record, moves from FLASH 830 952 B / RAM 193 328 B /
+PSRAM 676 590 B to FLASH 931 856 B / RAM 207 440 B / PSRAM 746 942 B with the
+option on — and with the option off it is **byte for byte** the image the same
+tree builds without the stage: the block of `platform/targets/c62/CMakeLists.txt`
+that adds it is inside `if(CONFIG_C62_NOISE_SUPPRESS)`, so nothing of the library
+is compiled, and the two images differ only in the `GIT_VERSION` string that
+every commit bakes into `.rodata`.
 
 ## The HiFi4 route
 
