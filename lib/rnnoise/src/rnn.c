@@ -76,22 +76,61 @@ static OPUS_INLINE float relu(float x)
    return x < 0 ? 0 : x;
 }
 
+/*
+ * [C62 port] The matrix-vector product, split out of compute_dense() and
+ * compute_gru() so that the DSP can replace it with a vector kernel.
+ *
+ * acc[i] += sum(j = 0..M-1) w[j*stride + i] * x[j], the j loop ascending, one
+ * accumulator per neuron.  That is exactly the order of the original inner
+ * loops, which is what makes the HiFi4 kernel (dsp/ns/rnn_dsp.c) bit-exact
+ * against this one: it only computes two neurons per instruction, it never
+ * reassociates the sum.
+ */
+void ns_matvec(float *acc, const rnn_weight *w, int M, int N, int stride,
+               const float *x, const float *y)
+{
+#ifndef RNNOISE_DSP_KERNELS
+   int i, j;
+   if (y == 0) {
+      for (i=0;i<N;i++)
+      {
+         float sum = acc[i];
+         for (j=0;j<M;j++)
+            sum += w[j*stride + i]*x[j];
+         acc[i] = sum;
+      }
+   } else {
+      /* The output gate's recurrent term reads w*state[j]*r[j], which C
+       * evaluates left to right: (w*state[j]) rounds before the product with
+       * r[j].  Keeping that order is what makes this bit-exact. */
+      for (i=0;i<N;i++)
+      {
+         float sum = acc[i];
+         for (j=0;j<M;j++)
+            sum += (w[j*stride + i]*x[j])*y[j];
+         acc[i] = sum;
+      }
+   }
+#else
+   void ns_matvec_dsp(float *acc, const rnn_weight *w, int M, int N, int stride,
+                      const float *x, const float *y);
+   ns_matvec_dsp(acc, w, M, N, stride, x, y);
+#endif
+}
+
 static void compute_dense(const DenseLayer *layer, float *output, const float *input)
 {
-   int i, j;
+   int i;
    int N, M;
    int stride;
    M = layer->nb_inputs;
    N = layer->nb_neurons;
    stride = N;
    for (i=0;i<N;i++)
-   {
-      /* Compute update gate. */
-      float sum = layer->bias[i];
-      for (j=0;j<M;j++)
-         sum += layer->input_weights[j*stride + i]*input[j];
-      output[i] = WEIGHTS_SCALE*sum;
-   }
+      output[i] = (float)layer->bias[i];
+   ns_matvec(output, layer->input_weights, M, N, stride, input, 0);
+   for (i=0;i<N;i++)
+      output[i] = WEIGHTS_SCALE*output[i];
    if (layer->activation == ACTIVATION_SIGMOID) {
       for (i=0;i<N;i++)
          output[i] = sigmoid_approx(output[i]);
@@ -108,43 +147,34 @@ static void compute_dense(const DenseLayer *layer, float *output, const float *i
 
 static void compute_gru(const GRULayer *gru, float *state, const float *input)
 {
-   int i, j;
+   int i;
    int N, M;
    int stride;
-   float z[MAX_NEURONS];
-   float r[MAX_NEURONS];
-   float h[MAX_NEURONS];
+   float z[MAX_NEURONS] __attribute__((aligned(8)));
+   float r[MAX_NEURONS] __attribute__((aligned(8)));
+   float h[MAX_NEURONS] __attribute__((aligned(8)));
    M = gru->nb_inputs;
    N = gru->nb_neurons;
    stride = 3*N;
    for (i=0;i<N;i++)
-   {
-      /* Compute update gate. */
-      float sum = gru->bias[i];
-      for (j=0;j<M;j++)
-         sum += gru->input_weights[j*stride + i]*input[j];
-      for (j=0;j<N;j++)
-         sum += gru->recurrent_weights[j*stride + i]*state[j];
-      z[i] = sigmoid_approx(WEIGHTS_SCALE*sum);
-   }
+      z[i] = (float)gru->bias[i];
+   ns_matvec(z, gru->input_weights, M, N, stride, input, 0);
+   ns_matvec(z, gru->recurrent_weights, N, N, stride, state, 0);
+   for (i=0;i<N;i++)
+      z[i] = sigmoid_approx(WEIGHTS_SCALE*z[i]);
+   for (i=0;i<N;i++)
+      r[i] = (float)gru->bias[N + i];
+   ns_matvec(r, gru->input_weights + N, M, N, stride, input, 0);
+   ns_matvec(r, gru->recurrent_weights + N, N, N, stride, state, 0);
+   for (i=0;i<N;i++)
+      r[i] = sigmoid_approx(WEIGHTS_SCALE*r[i]);
+   for (i=0;i<N;i++)
+      h[i] = (float)gru->bias[2*N + i];
+   ns_matvec(h, gru->input_weights + 2*N, M, N, stride, input, 0);
+   ns_matvec(h, gru->recurrent_weights + 2*N, N, N, stride, state, r);
    for (i=0;i<N;i++)
    {
-      /* Compute reset gate. */
-      float sum = gru->bias[N + i];
-      for (j=0;j<M;j++)
-         sum += gru->input_weights[N + j*stride + i]*input[j];
-      for (j=0;j<N;j++)
-         sum += gru->recurrent_weights[N + j*stride + i]*state[j];
-      r[i] = sigmoid_approx(WEIGHTS_SCALE*sum);
-   }
-   for (i=0;i<N;i++)
-   {
-      /* Compute output. */
-      float sum = gru->bias[2*N + i];
-      for (j=0;j<M;j++)
-         sum += gru->input_weights[2*N + j*stride + i]*input[j];
-      for (j=0;j<N;j++)
-         sum += gru->recurrent_weights[2*N + j*stride + i]*state[j]*r[j];
+      float sum = h[i];
       if (gru->activation == ACTIVATION_SIGMOID) sum = sigmoid_approx(WEIGHTS_SCALE*sum);
       else if (gru->activation == ACTIVATION_TANH) sum = tansig_approx(WEIGHTS_SCALE*sum);
       else if (gru->activation == ACTIVATION_RELU) sum = relu(WEIGHTS_SCALE*sum);
