@@ -5,6 +5,7 @@
  */
 
 #include "emulator/emulator.h"
+#include "emulator/txbench.h"
 #include "interfaces/radio.h"
 #include "interfaces/delays.h"
 #include <cstdio>
@@ -66,6 +67,18 @@ unsigned radio_linux_refusedCount(void)
 unsigned radio_linux_barrierCount(void)
 {
     return barrierCuts;
+}
+
+/*
+ * Host tests: make the PA refuse every keying, the way a driver whose
+ * transmitter does not come up does.  Its own counter is the one the tests
+ * read, so an injected refusal is told apart from a gate refusal.
+ */
+bool txbenchKeyingRefused;
+
+void txbench_refuseKeying(bool refuse)
+{
+    txbenchKeyingRefused = refuse;
 }
 
 /** Forget the counters (host tests). */
@@ -145,6 +158,13 @@ void radio_enableRx()
 
 void radio_enableTx()
 {
+    /* Host tests: a driver whose PA does not come up (emulator/txbench.h) */
+    if (txbenchKeyingRefused)
+    {
+        keysRefused++;
+        return;
+    }
+
     /* Same contract as the radio: no permitted transmission, no PA */
     if (!rtx_txPermitted())
     {

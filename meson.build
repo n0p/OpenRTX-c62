@@ -449,6 +449,9 @@ linux_src = ['platform/targets/linux/emulator/emulator.c',
              'platform/mcu/x86_64/drivers/rng.cpp',
              'platform/drivers/baseband/radio_linux.cpp',
              'platform/drivers/audio/audio_linux.c',
+             # The transmitter and the microphone the Linux platform used to
+             # declare without a driver behind them.
+             'platform/drivers/audio/audio_linux_rtx.c',
              'platform/drivers/audio/file_source.c',
              'platform/drivers/audio/audio_sdl.cpp',
              'platform/targets/linux/platform.c',
