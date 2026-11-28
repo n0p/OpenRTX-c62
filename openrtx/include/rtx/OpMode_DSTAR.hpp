@@ -41,6 +41,17 @@ public:
     virtual void update(rtxStatus_t *const status, const bool newCfg) override;
     virtual bool rxSquelchOpen() override;
 
+    /**
+     * Who this mode is.  Without it the engine sees a mode object that answers
+     * OPMODE_NONE, destroys it right after constructing it and leaves the radio
+     * idle: the mode never runs, never receives and never keys
+     * (rtx.cpp, switchMode()).
+     */
+    virtual opmode getID() override
+    {
+        return OPMODE_DSTAR;
+    }
+
     /** Force the end of the transmission (PTT supervisor / mode change). */
     virtual void abortTx() override;
 

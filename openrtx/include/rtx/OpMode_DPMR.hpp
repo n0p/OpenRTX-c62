@@ -69,6 +69,17 @@ public:
     virtual void disable() override;
     virtual void update(rtxStatus_t *const status, const bool newCfg) override;
 
+    /**
+     * Who this mode is.  Without it the engine sees a mode object that answers
+     * OPMODE_NONE, destroys it right after constructing it and leaves the radio
+     * idle: the mode never runs, never receives and never keys
+     * (rtx.cpp, switchMode()).
+     */
+    virtual opmode getID() override
+    {
+        return OPMODE_DPMR;
+    }
+
     /** Last status message decoded from an END frame (clause 5.15), -1 none. */
     uint8_t lastStatusMessage() const { return lastStatus; }
 

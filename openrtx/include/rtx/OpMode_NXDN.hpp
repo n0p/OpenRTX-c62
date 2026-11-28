@@ -60,6 +60,17 @@ public:
     bool rxSquelchOpen() override;
 
     /**
+     * Who this mode is.  Without it the engine sees a mode object that answers
+     * OPMODE_NONE, destroys it right after constructing it and leaves the radio
+     * idle: the mode never runs, never receives and never keys
+     * (rtx.cpp, switchMode()).
+     */
+    opmode getID() override
+    {
+        return OPMODE_NXDN;
+    }
+
+    /**
      * The supervisor cut a transmission (stuck PTT, a stream that stopped, the
      * five-minute cap): drop the streams, close the guard and ask for the
      * receiver again -- the OFF branch of update() only re-enters receive with
