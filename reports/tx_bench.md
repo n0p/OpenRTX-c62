@@ -117,15 +117,25 @@ trace calls and nothing else.
 
 ```
 $ ./build_linux/tx_bench
-mode     result                                         keyed  blocks  peak
-------------------------------------------------------------------------------
-FM       TX                                             yes    0       0
-NXDN     TX                                             yes    24      14161
-dPMR     TX                                             yes    25      17438
-D-STAR   TX                                             yes    25      3617
-YSF      TX                                             yes    23      15339
-P25      TX                                             yes    25      29147
-...
+mode     result                                         keyed  blocks  peak   mic
+------------------------------------------------------------------------------------
+FM       TX                                             yes    0       0      0
+NXDN     TX                                             yes    24      14161  4480
+dPMR     TX                                             yes    25      17438  3200
+D-STAR   TX                                             yes    25      3617   0
+YSF      TX                                             yes    23      15339  17600
+P25      TX                                             yes    24      29147  0
+
+mutation: the same bench with a call broken on purpose
+  FM       radio_enableTx(): the PA did not key           named
+  NXDN     audioStream_start(OUT                          named
+  NXDN     radio_enableTx(): the PA did not key           named
+  ...      (the same two for dPMR, D-STAR, YSF and P25)
+
+receiver dead: the PTT may not depend on it
+  FM       PTT keys with the receiver dead                yes
+  ...      (yes for all six)
+
 PASS
 ```
 

@@ -386,11 +386,14 @@ int main()
     std::vector<Result> results;
     bool green = true;
 
+    /* The microphone column is what tells the two families apart: NXDN, dPMR
+     * and YSF encode the operator's voice, D-STAR and P25 send a null voice
+     * source, and all of them key the same PA. */
     printf("\n"
            "mode     result                                         keyed  "
-           "blocks  peak\n"
+           "blocks  peak   mic\n"
            "----------------------------------------------------------------"
-           "--------------\n");
+           "--------------------\n");
 
     for (const auto &m : modes)
     {
@@ -399,8 +402,8 @@ int main()
 
         const std::string what = describe(r);
 
-        printf("%-8s %-46s %-6s %-7u %d\n", m.name, what.c_str(),
-               r.keyed ? "yes" : "no", r.blocks, r.peak);
+        printf("%-8s %-46s %-6s %-7u %-6d %u\n", m.name, what.c_str(),
+               r.keyed ? "yes" : "no", r.blocks, r.peak, r.micSamples);
 
         /*
          * The pass condition, per mode: the PA keyed, the mode reported TX and
